@@ -1,0 +1,39 @@
+<!-- views/partials/app-toolbar.ejs -->
+
+<div class="d-flex flex-stack flex-row-fluid">
+  <!--begin::Toolbar wrapper-->
+  <div class="d-flex flex-column flex-row-fluid">
+    <!--begin::Breadcrumb-->
+    <ul class="breadcrumb breadcrumb-separatorless fw-semibold mb-3">
+      <% breadcrumbs.forEach(function(crumb, index) { %>
+      <!--begin::Item-->
+      <li class="breadcrumb-item text-gray-600 fw-bold lh-1">
+        <% if (crumb.url) { %>
+        <a href="<%= crumb.url %>" class="text-gray-600 text-hover-primary">
+          <%= crumb.label %>
+        </a>
+        <% } else { %> <%= crumb.label %> <% } %>
+      </li>
+      <!--end::Item-->
+      <% if (index < breadcrumbs.length - 1) { %>
+      <!--begin::Separator-->
+      <li class="breadcrumb-item">
+        <i class="ki-duotone ki-right fs-3 text-gray-500 mx-n1"></i>
+      </li>
+      <!--end::Separator-->
+      <% } %> <% }); %>
+    </ul>
+    <!--end::Breadcrumb-->
+
+    <!--begin::Page title-->
+    <div class="page-title d-flex align-items-center me-3">
+      <h1
+        class="page-heading d-flex text-gray-900 fw-bolder fs-1 flex-column justify-content-center my-0"
+      >
+        <%= title %>
+      </h1>
+    </div>
+    <!--end::Page title-->
+  </div>
+  <!--end::Toolbar wrapper-->
+</div>

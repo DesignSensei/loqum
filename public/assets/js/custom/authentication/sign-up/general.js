@@ -10,17 +10,16 @@ var KTSignupGeneral = (function () {
 
   // Handle form
   var handleForm = function (e) {
-    // Init form validation rules. For more info check the FormValidation plugin's official documentation:https://formvalidation.io/
     validator = FormValidation.formValidation(form, {
       fields: {
-        "first-name": {
+        firstName: {
           validators: {
             notEmpty: {
               message: "First Name is required",
             },
           },
         },
-        "last-name": {
+        lastName: {
           validators: {
             notEmpty: {
               message: "Last Name is required",
@@ -35,6 +34,13 @@ var KTSignupGeneral = (function () {
             },
             notEmpty: {
               message: "Email address is required",
+            },
+          },
+        },
+        role: {
+          validators: {
+            notEmpty: {
+              message: "Please select a role",
             },
           },
         },
@@ -53,7 +59,7 @@ var KTSignupGeneral = (function () {
             },
           },
         },
-        "confirm-password": {
+        confirmPassword: {
           validators: {
             notEmpty: {
               message: "The password confirmation is required",
@@ -110,9 +116,9 @@ var KTSignupGeneral = (function () {
             // Enable button
             submitButton.disabled = false;
 
-            // Show message popup. For more info check the plugin's official documentation: https://sweetalert2.github.io/
+            // Show message popup.
             Swal.fire({
-              text: "You have successfully reset your password!",
+              text: "You have successfully created your account!",
               icon: "success",
               buttonsStyling: false,
               confirmButtonText: "Ok, got it!",
@@ -156,11 +162,16 @@ var KTSignupGeneral = (function () {
           validator.updateFieldStatus("password", "NotValidated");
         }
       });
+
+    // Handle Select2 role change
+    $('[name="role"]').on("select2:select", function () {
+      validator.revalidateField("role");
+    });
   };
 
   // Handle form ajax
   var handleFormAjax = function (e) {
-    // Init form validation rules. For more info check the FormValidation plugin's official documentation:https://formvalidation.io/
+    // Init form validation rules.
     validator = FormValidation.formValidation(form, {
       fields: {
         name: {
@@ -178,6 +189,13 @@ var KTSignupGeneral = (function () {
             },
             notEmpty: {
               message: "Email address is required",
+            },
+          },
+        },
+        role: {
+          validators: {
+            notEmpty: {
+              message: "Please select a role",
             },
           },
         },
@@ -245,25 +263,30 @@ var KTSignupGeneral = (function () {
           // Disable button to avoid multiple click
           submitButton.disabled = true;
 
-          // Check axios library docs: https://axios-http.com/docs/intro
           axios
             .post(
               submitButton.closest("form").getAttribute("action"),
               new FormData(form),
             )
             .then(function (response) {
-              if (response) {
+              if (response.data.success) {
                 form.reset();
-
-                const redirectUrl = form.getAttribute("data-kt-redirect-url");
-
-                if (redirectUrl) {
-                  location.href = redirectUrl;
-                }
-              } else {
-                // Show error popup. For more info check the plugin's official documentation: https://sweetalert2.github.io/
                 Swal.fire({
-                  text: "Sorry, looks like there are some errors detected, please try again.",
+                  text: "Account created successfully!",
+                  icon: "success",
+                  buttonsStyling: false,
+                  confirmButtonText: "Ok, got it!",
+                  customClass: {
+                    confirmButton: "btn btn-primary",
+                  },
+                }).then(function () {
+                  location.href = response.data.redirectUrl;
+                });
+              } else {
+                Swal.fire({
+                  text:
+                    response.data.message ||
+                    "Sorry, looks like there are some errors detected, please try again.",
                   icon: "error",
                   buttonsStyling: false,
                   confirmButtonText: "Ok, got it!",
@@ -341,11 +364,7 @@ var KTSignupGeneral = (function () {
         form.querySelector('[data-kt-password-meter="true"]'),
       );
 
-      if (isValidUrl(submitButton.closest("form").getAttribute("action"))) {
-        handleFormAjax();
-      } else {
-        handleForm();
-      }
+      handleFormAjax();
     },
   };
 })();

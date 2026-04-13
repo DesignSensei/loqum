@@ -6,7 +6,7 @@ require("dotenv").config();
 // Core Libraries
 const express = require("express");
 const session = require("express-session");
-const { MongoStore } = require("connect-mongo");
+const MongoStore = require("connect-mongo");
 const methodOverride = require("method-override");
 const expressLayouts = require("express-ejs-layouts");
 
@@ -15,6 +15,9 @@ const connectDB = require("./config/db");
 const logger = require("./utils/logger");
 
 // Routes
+const authRoutes = require("./routes/authRoutes");
+const pharmacistRoutes = require("./routes/pharmacistRoutes");
+const employerRoutes = require("./routes/employerRoutes");
 
 /* ---------- Initialize App ---------- */
 const app = express();
@@ -48,7 +51,6 @@ app.use((req, res, next) => {
 });
 
 /* ---------- Cookies + Session ---------- */
-app.use(cookieParser());
 app.use(
   session({
     secret: process.env.SESSION_SECRET,
@@ -67,6 +69,63 @@ app.use(
     },
   }),
 );
+
+/* ---------- Passport Config ---------- */
+require("./config/passport")(passport);
+
+// Initialize Passport Middleware
+app.use(passport.initialize());
+app.use(passport.session());
+
+/* ---------- Make session user available to all views ---------- */
+app.use((req, res, next) => {
+  res.locals.user = req.session.user || null;
+  next();
+});
+
+/* ---------- Mount Routes ---------- */
+app.use(authRoutes);
+app.use("/dashboard/pharmacist", pharmacistRoutes);
+app.use("/dashboard/employer", employerRoutes);
+
+/* ---------- Catch unmatched routes (404) ---------- */
+app.use((req, res) => {
+  return res.status(404).render("auth/not-found", {
+    layout: "layouts/auth-layout-no-index",
+    title: "Not Found",
+    wfPage: "66b93fd9c65755b8a91df18e",
+  });
+});
+
+/* ---------- Global Error Handler (CSRF + others) ---------- */
+app.use((err, req, res, next) => {
+  // CSRF errors
+  if (err.code === "EBADCSRFTOKEN") {
+    res.status(403);
+    res.locals.error = "Session expired or form tampered with. Please retry.";
+    return res.redirect(req.get("Referer") || "/");
+  }
+
+  if (statusCode === 404) {
+    return res.status(404).render("auth/not-found", {
+      layout: "layouts/auth-layout-no-index",
+      title: "Not Found",
+      wfPage: "66b93fd9c65755b8a91df18e",
+    });
+  }
+
+  // Log and show error page with explicit layout
+  logger.error(
+    `[${statusCode}] ${req.method} ${req.originalUrl} :: ${err.message}\n${err.stack || ""}`,
+  );
+
+  return res.status(statusCode).render("auth/error", {
+    layout: "layouts/auth-layout-no-index",
+    title: "Error",
+    message: err.message || "Something went wrong",
+    wfPage: "66b93fd9c65755b8a91df18e",
+  });
+});
 
 /* ---------- Start server & Connect to database ---------- */
 (async () => {

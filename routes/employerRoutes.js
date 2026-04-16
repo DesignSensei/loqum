@@ -2,11 +2,17 @@
 
 const express = require("express");
 const router = express.Router();
-const employerController = require("../controllers/pharmacistController");
+const {
+  isAuthenticated,
+  isVerified,
+  hasRole,
+} = require("../middleware/authMiddleware");
+const employerController = require("../controllers/employerController");
+
+/* ---------- Middleware ---------- */
+router.use(isAuthenticated, isVerified, hasRole("employer"));
 
 /* ---------- Public pages (GET) ---------- */
 router.get("/", employerController.getDashboard);
-
-/* ---------- Action pages (POST}) ---------- */
 
 module.exports = router;

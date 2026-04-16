@@ -17,6 +17,7 @@
           action="/two-factor/verify"
           method="POST"
         >
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
           <!--begin::Heading-->
           <div class="text-center mb-10">
             <!--begin::Title-->

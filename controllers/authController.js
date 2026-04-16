@@ -8,8 +8,9 @@ exports.getLogin = (req, res) => {
   res.render("auth/login", {
     layout: "layouts/auth-layout",
     title: "Log In",
+    csrfToken: req.csrfToken(),
     scripts: `
-    <script src="/js/login.js"></script>
+    <script src="/js/auth/login.js"></script>
     `,
   });
 };
@@ -19,8 +20,9 @@ exports.getSignup = (req, res) => {
   res.render("auth/signup", {
     layout: "layouts/auth-layout",
     title: "Sign Up",
+    csrfToken: req.csrfToken(),
     scripts: `
-    <script src="/js/signup.js"></script>
+    <script src="/js/auth/signup.js"></script>
     `,
   });
 };
@@ -30,9 +32,10 @@ exports.getResetPassword = (req, res) => {
   res.render("auth/reset-password", {
     layout: "layouts/auth-layout-no-index",
     title: "Reset Password",
+    csrfToken: req.csrfToken(),
     scripts: `
     <script src="assets/js/custom/authentication/reset-password/reset-password.js"></script>
-    <script src="/js/reset-password.js"></script>
+    <script src="/js/auth/reset-password.js"></script>
     `,
   });
 };
@@ -42,9 +45,10 @@ exports.getNewPassword = (req, res) => {
   res.render("auth/new-password", {
     layout: "layouts/auth-layout-no-index",
     title: "New Password",
+    csrfToken: req.csrfToken(),
     scripts: `
     <script src="assets/js/custom/authentication/reset-password/new-password.js"></script>
-    <script src="/js/new-password.js"></script>
+    <script src="/js/auth/new-password.js"></script>
     `,
   });
 };
@@ -61,7 +65,7 @@ exports.getTwoFactor = (req, res) => {
     layout: "layouts/auth-layout-no-index",
     title: "Two Factor",
     scripts: `
-    <script src="/js/two-factor.js"></script>
+    <script src="/js/auth/two-factor.js"></script>
     `,
     user: user,
   });
@@ -155,10 +159,10 @@ exports.postVerifyOTP = async (req, res, next) => {
 
     const user = await AuthService.verifyOTP(userId, otp);
 
-    req.session.user = user;
-
-    req.session.save((err) => {
+    // Let Passport serialize the user into the session
+    req.login(user, (err) => {
       if (err) return next(err);
+
       res.json({
         success: true,
         message: "Email verified successfully!",
@@ -192,5 +196,38 @@ exports.postResendOTP = async (req, res, next) => {
     });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+// Handle Reset Password Form
+exports.postResetPassword = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+    await AuthService.sendResetLink(email);
+    return res.json({
+      success: true,
+      message: "Password reset link sent to your email.",
+    });
+  } catch (error) {
+    return res.status(400).json({ success: false, message: error.message });
+  }
+};
+
+// Handle New Password Form
+exports.postNewPassword = async (req, res, next) => {
+  try {
+    const { token } = req.query;
+    const { newPassword, confirmPassword } = req.body;
+
+    if (!token) throw new Error("Reset token is missing");
+
+    await AuthService.resetPassword(token, newPassword, confirmPassword);
+    return res.json({
+      success: true,
+      message: "Password reset successfully!",
+      redirectUrl: "/login",
+    });
+  } catch (error) {
+    return res.status(400).json({ success: false, message: error.message });
   }
 };

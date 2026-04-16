@@ -1,28 +1,24 @@
-// public/js/login.js
+// public/js/reset-password.js
 
 "use strict";
 
-var LogIn = (function () {
-  var form = document.querySelector("#kt_sign_in_form");
-  var submitButton = document.querySelector("#kt_sign_in_submit");
+var PasswordReset = (function () {
+  var form = document.querySelector("#kt_password_reset_form");
+  var submitButton = document.querySelector("#kt_password_reset_submit");
 
-  function handleLogIn() {
+  function handlePasswordResetSubmission() {
     if (!form || !submitButton) return;
 
+    // Form Validation Setup
     const validator = FormValidation.formValidation(form, {
       fields: {
         email: {
           validators: {
-            notEmpty: { message: "Email address is required." },
+            notEmpty: { message: "Email is required." },
             regexp: {
               regexp: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
               message: "Please enter a valid email address.",
             },
-          },
-        },
-        password: {
-          validators: {
-            notEmpty: { message: "Password is required." },
           },
         },
       },
@@ -36,33 +32,39 @@ var LogIn = (function () {
       },
     });
 
+    // Submit Button Click Handler
     submitButton.addEventListener("click", function (e) {
       e.preventDefault();
 
       validator.validate().then(function (status) {
         if (status === "Valid") {
+          // Show loading indicator
           submitButton.setAttribute("data-kt-indicator", "on");
           submitButton.disabled = true;
 
-          const formData = new FormData(form);
+          // ✅ Automatically includes the hidden _csrf field
+          const data = Object.fromEntries(new FormData(form));
 
           axios
-            .post(form.action, {
-              email: formData.get("email"),
-              password: formData.get("password"),
-            })
+            .post(form.action, data)
             .then(function (response) {
               submitButton.removeAttribute("data-kt-indicator");
               submitButton.disabled = false;
 
               Swal.fire({
-                text: response.data.message,
+                text:
+                  response.data.message ||
+                  "Password reset link has been sent to your email.",
                 icon: "success",
                 buttonsStyling: false,
                 confirmButtonText: "Ok, got it!",
                 customClass: { confirmButton: "btn btn-primary" },
               }).then(function () {
-                window.location.href = response.data.redirectUrl;
+                // Redirect to the URL specified in the form's data attribute
+                const redirectUrl = form.getAttribute("data-kt-redirect-url");
+                if (redirectUrl) {
+                  window.location.href = redirectUrl;
+                }
               });
             })
             .catch(function (error) {
@@ -72,7 +74,7 @@ var LogIn = (function () {
               Swal.fire({
                 text:
                   error.response?.data?.message ||
-                  "Invalid email or password. Please try again.",
+                  "An error occurred. Please try again.",
                 icon: "error",
                 buttonsStyling: false,
                 confirmButtonText: "Ok, got it!",
@@ -81,7 +83,7 @@ var LogIn = (function () {
             });
         } else {
           Swal.fire({
-            text: "Please make sure all required fields are correctly filled out.",
+            text: "Please enter a valid email address.",
             icon: "error",
             buttonsStyling: false,
             confirmButtonText: "Ok, got it!",
@@ -94,11 +96,12 @@ var LogIn = (function () {
 
   return {
     init: function () {
-      handleLogIn();
+      handlePasswordResetSubmission();
     },
   };
 })();
 
+// Initialize when DOM is loaded
 KTUtil.onDOMContentLoaded(function () {
-  LogIn.init();
+  PasswordReset.init();
 });

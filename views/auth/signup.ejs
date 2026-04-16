@@ -1,3 +1,5 @@
+<!-- views/auth/signup.ejs -->
+
 <div class="d-flex flex-column flex-lg-row flex-column-fluid">
   <!--begin::Body-->
   <div
@@ -15,10 +17,13 @@
           action="/signup"
           method="POST"
         >
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
           <!--begin::Heading-->
           <div class="text-center mb-11">
             <!--begin::Title-->
-            <h1 class="text-gray-900 fw-bolder mb-3">Sign Up</h1>
+            <h1 class="text-gray-900 fw-bolder mb-3">
+              Sign Up to <span class="brand-accent">Loqum</span>
+            </h1>
             <!--end::Title-->
             <!--begin::Subtitle-->
             <div class="text-gray-500 fw-semibold fs-6">
@@ -33,7 +38,7 @@
             <div class="col-md-12">
               <!--begin::Google link=-->
               <a
-                href="#"
+                href="/auth/google"
                 class="btn btn-flex btn-outline btn-text-gray-700 btn-active-color-primary bg-state-light flex-center text-nowrap w-100"
               >
                 <img

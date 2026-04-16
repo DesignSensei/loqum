@@ -40,6 +40,9 @@
 <link href="/assets/plugins/global/plugins.bundle.css" rel="stylesheet" />
 <link href="/assets/css/style.bundle.css" rel="stylesheet" />
 
+<!-- Meta CSRF token -->
+<meta name="csrf-token" content="<%= csrfToken %>" />
+
 <script>
   if (window.top !== window.self) {
     window.top.location.replace(window.self.location.href);

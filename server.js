@@ -9,6 +9,9 @@ const session = require("express-session");
 const MongoStore = require("connect-mongo");
 const methodOverride = require("method-override");
 const expressLayouts = require("express-ejs-layouts");
+const csrf = require("@dr.pogodin/csurf");
+const cookieParser = require("cookie-parser");
+const passport = require("passport");
 
 // Pre-defined modules
 const connectDB = require("./config/db");
@@ -25,6 +28,7 @@ const PORT = process.env.PORT || 3000;
 
 /* ---------- App Level Middleware ---------- */
 /* ---------- Parsers & static ---------- */
+app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(methodOverride("_method"));
@@ -77,9 +81,14 @@ require("./config/passport")(passport);
 app.use(passport.initialize());
 app.use(passport.session());
 
-/* ---------- Make session user available to all views ---------- */
+/* ---------- CSRF Middleware ---------- */
+const csrfProtection = csrf({ cookie: true });
+app.use(csrfProtection);
+
+/* ---------- Make session user & CSRF token available to all views ---------- */
 app.use((req, res, next) => {
   res.locals.user = req.session.user || null;
+  res.locals.csrfToken = req.csrfToken();
   next();
 });
 
@@ -90,8 +99,8 @@ app.use("/dashboard/employer", employerRoutes);
 
 /* ---------- Catch unmatched routes (404) ---------- */
 app.use((req, res) => {
-  return res.status(404).render("auth/not-found", {
-    layout: "layouts/auth-layout-no-index",
+  return res.status(404).render("errors/not-found", {
+    layout: "layouts/error-layout",
     title: "Not Found",
     wfPage: "66b93fd9c65755b8a91df18e",
   });
@@ -106,9 +115,11 @@ app.use((err, req, res, next) => {
     return res.redirect(req.get("Referer") || "/");
   }
 
+  const statusCode = err.statusCode || 500;
+
   if (statusCode === 404) {
-    return res.status(404).render("auth/not-found", {
-      layout: "layouts/auth-layout-no-index",
+    return res.status(404).render("errors/not-found", {
+      layout: "layouts/error-layout",
       title: "Not Found",
       wfPage: "66b93fd9c65755b8a91df18e",
     });
@@ -119,8 +130,8 @@ app.use((err, req, res, next) => {
     `[${statusCode}] ${req.method} ${req.originalUrl} :: ${err.message}\n${err.stack || ""}`,
   );
 
-  return res.status(statusCode).render("auth/error", {
-    layout: "layouts/auth-layout-no-index",
+  return res.status(statusCode).render("errors/error", {
+    layout: "layouts/error-layout",
     title: "Error",
     message: err.message || "Something went wrong",
     wfPage: "66b93fd9c65755b8a91df18e",

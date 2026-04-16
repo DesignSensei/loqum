@@ -7,7 +7,7 @@ const logger = require("../utils/logger");
 const EmailService = require("./emailService");
 
 class AuthService {
-  // Login an existing user
+  /* ---------- Login an existing user ---------- */
   static async loginUser({ email, password }) {
     const user = await User.findOne({ email }).select("+password");
     if (!user) throw new Error("Invalid email or password");
@@ -31,7 +31,7 @@ class AuthService {
     };
   }
 
-  // Register a new user
+  /* ---------- Register a new user ---------- */
   static async registerUser({
     firstName,
     lastName,
@@ -76,6 +76,7 @@ class AuthService {
     return newUser;
   }
 
+  /* ---------- Send 6-digit OTP to Email ---------- */
   static async sendOTP(userId) {
     const user = await User.findById(userId).select("+otp +otpExpiry");
     if (!user) throw new Error("User not found");
@@ -102,6 +103,7 @@ class AuthService {
     return true;
   }
 
+  /* ---------- Verify user's OTP ---------- */
   static async verifyOTP(userId, otp) {
     const user = await User.findById(userId).select("+otp +otpExpiry");
     if (!user) throw new Error("User not found");
@@ -128,6 +130,49 @@ class AuthService {
     await user.save();
 
     return user;
+  }
+
+  /* ---------- Send password reset link ---------- */
+  static async sendResetLink(email) {
+    const user = await User.findOne({ email });
+    if (!user) throw new Error("No account found with that email");
+
+    // Generate reset token
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const hashedToken = crypto
+      .createHash("sha256")
+      .update(resetToken)
+      .digest("hex");
+
+    user.resetPasswordToken = hashedToken;
+    user.resetPasswordExpiry = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+    await user.save();
+
+    const resetUrl = `${process.env.BASE_URL}/new-password?token=${resetToken}`;
+    await EmailService.sendResetLink(user.email, resetUrl);
+    return true;
+  }
+
+  /* ---------- Send password reset link ---------- */
+  static async resetPassword(token, newPassword, confirmPassword) {
+    if (newPassword !== confirmPassword)
+      throw new Error("Passwords do not match");
+
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+
+    const user = await User.findOne({
+      resetPasswordToken: hashedToken,
+      resetPasswordExpiry: { $gt: new Date() },
+    });
+
+    if (!user) throw new Error("Invalid or expired reset link");
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpiry = undefined;
+    await user.save();
+
+    return true;
   }
 }
 

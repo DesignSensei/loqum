@@ -9,12 +9,15 @@
       novalidate="novalidate"
       id="kt_sign_in_form"
       data-kt-redirect-url="/index.html"
-      action="#"
+      action="/login"
     >
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
       <!--begin::Heading-->
       <div class="text-center mb-11">
         <!--begin::Title-->
-        <h1 class="text-gray-900 fw-bolder mb-3">Welcome Back!</h1>
+        <h1 class="text-gray-900 fw-bolder mb-3">
+          Log In to <span class="brand-accent">Loqum</span>
+        </h1>
         <!--end::Title-->
         <!--begin::Subtitle-->
         <div class="text-gray-500 fw-semibold fs-6">
@@ -29,7 +32,7 @@
         <div class="col-md-12">
           <!--begin::Google link=-->
           <a
-            href="#"
+            href="/auth/google"
             class="btn btn-flex btn-outline btn-text-gray-700 btn-active-color-primary bg-state-light flex-center text-nowrap w-100"
           >
             <img
@@ -120,7 +123,7 @@
       <!--end::Submit button-->
       <!--begin::Sign up-->
       <div class="text-gray-500 text-center fw-semibold fs-6">
-        Not a Member yet?
+        Not a User yet?
         <a href="/signup" class="link-primary">Sign up</a>
       </div>
       <!--end::Sign up-->

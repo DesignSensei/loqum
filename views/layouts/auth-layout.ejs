@@ -65,7 +65,7 @@
             <a href="#" class="mb-0 mb-lg-12">
               <img
                 alt="Logo"
-                src="assets/images/logo_white.svg"
+                src="/assets/images/logo_white.svg"
                 class="h-60px h-lg-75px"
               />
             </a>
@@ -73,7 +73,7 @@
             <!--begin::Image-->
             <img
               class="d-none d-lg-block mx-auto w-275px w-md-50 w-xl-500px mb-10 mb-lg-20"
-              src="assets/media/misc/auth-screens.png"
+              src="/assets/media/misc/auth-screens.png"
               alt=""
             />
             <!--end::Image-->
@@ -87,8 +87,9 @@
     <!--end::Root-->
 
     <!--begin::Javascript-->
-    <script src="assets/plugins/global/plugins.bundle.js"></script>
-    <script src="assets/js/scripts.bundle.js"></script>
+    <!--begin::Global Javascript Bundle(mandatory for all pages)-->
+    <%- include("../partials/footer") %>
+    <!--end::Global Javascript Bundle-->
 
     <!--begin::Custom Javascript(used for this page only)-->
     <%- typeof scripts !=="undefined" ? scripts : "" %>

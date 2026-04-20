@@ -40,7 +40,6 @@
     data-kt-menu-attach="parent"
     class="menu menu-item py-2 mb-3"
   >
-    <!--begin::Menu link-->
     <span class="menu-link menu-center">
       <span class="menu-icon me-0">
         <i class="ki-duotone ki-calendar fs-2x">
@@ -49,52 +48,70 @@
         </i>
       </span>
     </span>
-    <!--end::Menu link-->
 
-    <!--begin::Menu sub-->
     <div
       class="menu-sub menu-sub-dropdown menu-sub-indention px-2 py-4 w-175px"
       data-kt-menu="true"
       data-bs-placement="right-start"
     >
-      <!--begin::Menu content-->
       <div class="menu-item">
         <div class="menu-content">
           <span class="menu-section fs-5 fw-bolder ps-1 py-1">My Shifts</span>
         </div>
       </div>
-      <!--end::Menu content-->
-
       <div class="menu-item">
         <a class="menu-link" href="/shifts/my?tab=pending">
-          <span class="menu-bullet"
-            ><span class="bullet bullet-dot"></span
-          ></span>
+          <span class="menu-bullet"><span class="bullet bullet-dot"></span></span>
           <span class="menu-title">Pending</span>
         </a>
       </div>
-
       <div class="menu-item">
         <a class="menu-link" href="/shifts/my?tab=confirmed">
-          <span class="menu-bullet"
-            ><span class="bullet bullet-dot"></span
-          ></span>
+          <span class="menu-bullet"><span class="bullet bullet-dot"></span></span>
           <span class="menu-title">Confirmed</span>
         </a>
       </div>
-
       <div class="menu-item">
         <a class="menu-link" href="/shifts/my?tab=completed">
-          <span class="menu-bullet"
-            ><span class="bullet bullet-dot"></span
-          ></span>
+          <span class="menu-bullet"><span class="bullet bullet-dot"></span></span>
           <span class="menu-title">Completed</span>
         </a>
       </div>
     </div>
-    <!--end::Menu sub-->
   </div>
   <!--end::My Shifts-->
+
+  <!--begin::Messages-->
+  <a
+    href="/messages"
+    class="btn btn-icon btn-default mx-auto mb-4"
+    data-bs-toggle="tooltip"
+    data-bs-placement="right"
+    title="Messages"
+  >
+    <i class="ki-duotone ki-message-text-2 fs-1">
+      <span class="path1"></span>
+      <span class="path2"></span>
+      <span class="path3"></span>
+    </i>
+  </a>
+  <!--end::Messages-->
+
+  <!--begin::Profile-->
+  <a
+    href="/profile"
+    class="btn btn-icon btn-default mx-auto mb-4"
+    data-bs-toggle="tooltip"
+    data-bs-placement="right"
+    title="Profile"
+  >
+    <i class="ki-duotone ki-profile-circle fs-1">
+      <span class="path1"></span>
+      <span class="path2"></span>
+      <span class="path3"></span>
+    </i>
+  </a>
+  <!--end::Profile-->
 
   <% } else if (user.role === 'employer') { %>
 
@@ -151,8 +168,6 @@
   </a>
   <!--end::Applicants-->
 
-  <% } %>
-
   <!--begin::Messages-->
   <a
     href="/messages"
@@ -185,6 +200,119 @@
   </a>
   <!--end::Profile-->
 
+  <% } else if (user.role === 'admin') { %>
+
+  <!--begin::User Management-->
+  <div
+    data-kt-menu-trigger="{default: 'click', lg: 'hover'}"
+    data-kt-menu-placement="right-start"
+    data-kt-menu-attach="parent"
+    class="menu menu-item py-2 mb-3"
+  >
+    <span class="menu-link menu-center">
+      <span class="menu-icon me-0">
+        <i class="ki-duotone ki-people fs-2x">
+          <span class="path1"></span>
+          <span class="path2"></span>
+          <span class="path3"></span>
+          <span class="path4"></span>
+          <span class="path5"></span>
+        </i>
+      </span>
+    </span>
+    <div
+      class="menu-sub menu-sub-dropdown menu-sub-indention px-2 py-4 w-175px"
+      data-kt-menu="true"
+      data-bs-placement="right-start"
+    >
+      <div class="menu-item">
+        <div class="menu-content">
+          <span class="menu-section fs-5 fw-bolder ps-1 py-1">Users</span>
+        </div>
+      </div>
+      <div class="menu-item">
+        <a class="menu-link" href="/admin/users?role=employer">
+          <span class="menu-bullet"><span class="bullet bullet-dot"></span></span>
+          <span class="menu-title">Employers</span>
+        </a>
+      </div>
+      <div class="menu-item">
+        <a class="menu-link" href="/admin/users?role=pharmacist">
+          <span class="menu-bullet"><span class="bullet bullet-dot"></span></span>
+          <span class="menu-title">Pharmacists</span>
+        </a>
+      </div>
+    </div>
+  </div>
+  <!--end::User Management-->
+
+  <!--begin::Shift Management-->
+  <div
+    data-kt-menu-trigger="{default: 'click', lg: 'hover'}"
+    data-kt-menu-placement="right-start"
+    data-kt-menu-attach="parent"
+    class="menu menu-item py-2 mb-3"
+  >
+    <span class="menu-link menu-center">
+      <span class="menu-icon me-0">
+        <i class="ki-duotone ki-calendar-tick fs-2x">
+          <span class="path1"></span>
+          <span class="path2"></span>
+          <span class="path3"></span>
+          <span class="path4"></span>
+          <span class="path5"></span>
+          <span class="path6"></span>
+        </i>
+      </span>
+    </span>
+    <div
+      class="menu-sub menu-sub-dropdown menu-sub-indention px-2 py-4 w-175px"
+      data-kt-menu="true"
+      data-bs-placement="right-start"
+    >
+      <div class="menu-item">
+        <div class="menu-content">
+          <span class="menu-section fs-5 fw-bolder ps-1 py-1">Shifts</span>
+        </div>
+      </div>
+      <div class="menu-item">
+        <a class="menu-link" href="/admin/shifts">
+          <span class="menu-bullet"><span class="bullet bullet-dot"></span></span>
+          <span class="menu-title">All Shifts</span>
+        </a>
+      </div>
+      <div class="menu-item">
+        <a class="menu-link" href="/admin/shifts/post">
+          <span class="menu-bullet"><span class="bullet bullet-dot"></span></span>
+          <span class="menu-title">Post on Behalf</span>
+        </a>
+      </div>
+    </div>
+  </div>
+  <!--end::Shift Management-->
+
+  <!--begin::Finance-->
+  <a
+    href="/admin/finance"
+    class="btn btn-icon btn-default mx-auto mb-4"
+    data-bs-toggle="tooltip"
+    data-bs-placement="right"
+    title="Finance"
+  >
+    <i class="ki-duotone ki-dollar fs-1">
+      <span class="path1"></span>
+      <span class="path2"></span>
+      <span class="path3"></span>
+    </i>
+  </a>
+  <!--end::Finance-->
+
+  <% } %>
+
+  <!--begin::Separator-->
+  <div class="separator mb-4 border-gray-300 mx-5"></div>
+  <!--end::Separator-->
+
   <!--begin::Settings-->
   <a
     href="/settings"
@@ -199,10 +327,6 @@
     </i>
   </a>
   <!--end::Settings-->
-
-  <!--begin::Separator-->
-  <div class="separator mb-4 border-gray-300 mx-5"></div>
-  <!--end::Separator-->
 
   <!--begin::Logout-->
   <div class="app-navbar-item flex-center">

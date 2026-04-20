@@ -227,6 +227,7 @@ h1, .h1 {
   color: var(--bs-accent);
 }
 
+
 @media (min-width: 1200px) {
   h1, .h1 {
     font-size: 1.75rem;

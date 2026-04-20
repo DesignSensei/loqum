@@ -16,13 +16,45 @@ const pharmacistProfileSchema = new mongoose.Schema(
       trim: true,
     },
 
+    phoneCode: {
+      type: String,
+      trim: true,
+    },
+
+    specialty: {
+      type: String,
+      enum: [
+        "Community",
+        "Hospital",
+        "Industrial",
+        "Academic",
+        "Administrative",
+      ],
+      required: true,
+    },
+
+    address: {
+      type: String,
+      trim: true,
+    },
+
+    state: {
+      type: String,
+      required: true,
+    },
+
+    lga: {
+      type: String,
+      required: true,
+    },
+
     bio: {
       type: String,
       trim: true,
       maxlength: 500,
     },
 
-    licenseNumber: {
+    licenceNumber: {
       type: String,
       trim: true,
     },

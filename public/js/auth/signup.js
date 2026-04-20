@@ -19,9 +19,11 @@ var SignUp = (function () {
         firstName: {
           validators: { notEmpty: { message: "First Name is required." } },
         },
+
         lastName: {
           validators: { notEmpty: { message: "Last Name is required." } },
         },
+
         email: {
           validators: {
             notEmpty: { message: "Email is required." },
@@ -31,9 +33,11 @@ var SignUp = (function () {
             },
           },
         },
+
         role: {
           validators: { notEmpty: { message: "Please select a role." } },
         },
+
         password: {
           validators: {
             notEmpty: { message: "Password is required." },
@@ -46,6 +50,7 @@ var SignUp = (function () {
             },
           },
         },
+
         confirmPassword: {
           validators: {
             notEmpty: { message: "Please confirm your password." },
@@ -57,16 +62,25 @@ var SignUp = (function () {
             },
           },
         },
+
         toc: {
           validators: {
             notEmpty: { message: "You must accept the terms and conditions." },
           },
         },
       },
+
       plugins: {
+        excluded: new FormValidation.plugins.Excluded({
+          excluded: function (field, element, inputs) {
+            return element.closest(".d-none") !== null;
+          },
+        }),
+
         trigger: new FormValidation.plugins.Trigger({
           event: { password: false },
         }),
+
         bootstrap: new FormValidation.plugins.Bootstrap5({
           rowSelector: ".fv-row",
           eleInvalidClass: "",
@@ -136,8 +150,10 @@ var SignUp = (function () {
           validator.updateFieldStatus("password", "NotValidated");
       });
 
-    $('[name="role"]').on("select2:select", function () {
-      validator.revalidateField("role");
+    form.querySelectorAll('[name="role"]').forEach((input) => {
+      input.addEventListener("change", () => {
+        validator.revalidateField("role");
+      });
     });
   }
 

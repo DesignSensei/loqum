@@ -1,7 +1,11 @@
 {
+  "tabWidth": 2,
+  "printWidth": 100,
+  "trailingComma": "es5",
+  "embeddedLanguageFormatting": "auto",
   "overrides": [
     {
-      "files": "*.ejs",
+      "files": ["*.ejs", "*.html", "*.htm"],
       "options": {
         "parser": "html"
       }

@@ -1,3 +1,5 @@
+// utils/logger.js
+
 const { createLogger, format, transports } = require("winston");
 const path = require("path");
 
@@ -14,13 +16,13 @@ const consoleFormat = format.combine(
     return `[${timestamp}] ${level.toUpperCase().padEnd(5)} ${message} ${metaString}`;
   }),
   // Colorize console output
-  format.colorize({ all: true })
+  format.colorize({ all: true }),
 );
 
 // Define File Format  (for Storage)
 const fileFormat = format.combine(
   format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
-  format.json()
+  format.json(),
 );
 
 const logger = createLogger({

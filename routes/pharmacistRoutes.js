@@ -6,13 +6,14 @@ const {
   isAuthenticated,
   isVerified,
   hasRole,
+  isOnboarded,
 } = require("../middleware/authMiddleware");
 const pharmacistController = require("../controllers/pharmacistController");
 
 /* ---------- Middleware ---------- */
-router.use(isAuthenticated, isVerified, hasRole("pharmacist"));
+router.use(isAuthenticated, isVerified, hasRole("pharmacist"), isOnboarded);
 
 /* ---------- Public pages (GET) ---------- */
-router.get("/", pharmacistController.getDashboard);
+router.get("/dashboard", pharmacistController.getDashboard);
 
 module.exports = router;

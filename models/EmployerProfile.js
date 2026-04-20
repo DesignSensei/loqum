@@ -17,7 +17,18 @@ const employerProfileSchema = new mongoose.Schema(
       trim: true,
     },
 
-    phone: {
+    businessRegistrationNumber: {
+      type: String,
+      trim: true,
+    },
+
+    businessPhoneCode: {
+      type: String,
+      trim: true,
+      default: "+234",
+    },
+
+    businessPhone: {
       type: String,
       trim: true,
     },
@@ -27,19 +38,35 @@ const employerProfileSchema = new mongoose.Schema(
       trim: true,
     },
 
-    city: {
-      type: String,
-      trim: true,
-    },
-
     state: {
       type: String,
+      required: true,
+    },
+
+    lga: {
+      type: String,
+      required: true,
+    },
+
+    contactFirstName: {
+      type: String,
       trim: true,
     },
 
-    businessRegistrationNumber: {
+    contactLastName: {
       type: String,
       trim: true,
+    },
+
+    contactPhone: {
+      type: String,
+      trim: true,
+    },
+
+    contactPhoneCode: {
+      type: String,
+      trim: true,
+      default: "+234",
     },
   },
   {

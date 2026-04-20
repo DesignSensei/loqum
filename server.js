@@ -13,12 +13,16 @@ const csrf = require("@dr.pogodin/csurf");
 const cookieParser = require("cookie-parser");
 const passport = require("passport");
 
+// Utilities
+const { getHomeRoute } = require("./utils/routeHelper");
+
 // Pre-defined modules
 const connectDB = require("./config/db");
 const logger = require("./utils/logger");
 
 // Routes
 const authRoutes = require("./routes/authRoutes");
+const onboardingRoutes = require("./routes/onboardingRoutes");
 const pharmacistRoutes = require("./routes/pharmacistRoutes");
 const employerRoutes = require("./routes/employerRoutes");
 
@@ -71,7 +75,7 @@ app.use(
       secure: process.env.NODE_ENV === "production",
       maxAge: 1000 * 60 * 60 * 24 * 7,
     },
-  }),
+  })
 );
 
 /* ---------- Passport Config ---------- */
@@ -89,13 +93,16 @@ app.use(csrfProtection);
 app.use((req, res, next) => {
   res.locals.user = req.session.user || null;
   res.locals.csrfToken = req.csrfToken();
+  res.locals.userHome = req.user ? getHomeRoute(req.user.role) : "/";
   next();
 });
 
 /* ---------- Mount Routes ---------- */
 app.use(authRoutes);
-app.use("/dashboard/pharmacist", pharmacistRoutes);
-app.use("/dashboard/employer", employerRoutes);
+app.use("/onboarding", onboardingRoutes);
+app.use("/admin", adminRoutes);
+app.use("/pharmacist", pharmacistRoutes);
+app.use("/employer", employerRoutes);
 
 /* ---------- Catch unmatched routes (404) ---------- */
 app.use((req, res) => {
@@ -127,7 +134,7 @@ app.use((err, req, res, next) => {
 
   // Log and show error page with explicit layout
   logger.error(
-    `[${statusCode}] ${req.method} ${req.originalUrl} :: ${err.message}\n${err.stack || ""}`,
+    `[${statusCode}] ${req.method} ${req.originalUrl} :: ${err.message}\n${err.stack || ""}`
   );
 
   return res.status(statusCode).render("errors/error", {
@@ -142,9 +149,7 @@ app.use((err, req, res, next) => {
 (async () => {
   try {
     await connectDB();
-    app.listen(PORT, () =>
-      logger.info(`Server running on http://localhost:${PORT}`),
-    );
+    app.listen(PORT, () => logger.info(`Server running on http://localhost:${PORT}`));
   } catch (err) {
     logger.error("Startup failed:", err);
     process.exit(1);

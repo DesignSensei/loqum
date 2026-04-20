@@ -6,13 +6,14 @@ const {
   isAuthenticated,
   isVerified,
   hasRole,
+  isOnboarded,
 } = require("../middleware/authMiddleware");
 const employerController = require("../controllers/employerController");
 
 /* ---------- Middleware ---------- */
-router.use(isAuthenticated, isVerified, hasRole("employer"));
+router.use(isAuthenticated, isVerified, hasRole("employer"), isOnboarded);
 
 /* ---------- Public pages (GET) ---------- */
-router.get("/", employerController.getDashboard);
+router.get("/dashboard", employerController.getDashboard);
 
 module.exports = router;

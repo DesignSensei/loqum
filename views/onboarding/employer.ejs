@@ -1,0 +1,241 @@
+<!-- views/onboarding/employer.ejs -->
+
+<div class="d-flex flex-column flex-lg-row flex-column-fluid">
+  <div
+    class="d-flex flex-column flex-lg-row-fluid w-lg-50 p-10 order-2 order-lg-1"
+  >
+    <div class="d-flex flex-center flex-column flex-lg-row-fluid">
+      <div class="w-75 w-lg-500px p-10">
+        <div class="text-center mb-11">
+          <h1 class="text-gray-900 fw-bolder mb-3">Pharmacy Profile</h1>
+          <div class="text-gray-500 fw-semibold fs-6">
+            Tell us about your business to start hiring.
+          </div>
+        </div>
+
+        <form
+          action="/onboarding/employer"
+          method="POST"
+          class="form w-100"
+          id="kt_onboarding_employer_form"
+        >
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+          <div class="fv-row mb-8">
+            <label class="form-label required">Pharmacy Name</label>
+            <input
+              type="text"
+              name="pharmacyName"
+              class="form-control bg-transparent"
+              placeholder="Pharmacy Name"
+              autocomplete="off"
+            />
+            <div
+              class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+            ></div>
+          </div>
+
+          <!--begin::PCN Registration Number-->
+          <div class="fv-row mb-8">
+            <label class="form-label required"
+              >PCN Registration Number
+              <span class="text-muted fs-7">
+                <i
+                  class="ki-outline ki-information-2 fs-6"
+                  data-bs-toggle="tooltip"
+                  data-bs-original-title="Your Pharmacy Council of Nigeria registration number."
+                ></i>
+              </span>
+            </label>
+            <input
+              type="text"
+              name="businessRegistrationNumber"
+              class="form-control bg-transparent"
+              placeholder="PCN Registration Number"
+              autocomplete="off"
+            />
+            <div
+              class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+            ></div>
+          </div>
+          <!--end::PCN Registration Number-->
+
+          <!--begin::Business Phone-->
+          <div class="fv-row mb-8">
+            <label class="form-label">Business Phone Number</label>
+            <div class="row g-3">
+              <div class="col-4">
+                <select
+                  name="businessPhoneCode"
+                  class="form-select bg-transparent"
+                  data-kt-select2="true"
+                  data-hide-search="false"
+                  data-placeholder="Code"
+                >
+                  <option value="" disabled selected>Code</option>
+                  <option value="+234">🇳🇬 +234</option>
+                </select>
+              </div>
+              <div class="col-8">
+                <input
+                  type="tel"
+                  name="businessPhone"
+                  class="form-control bg-transparent"
+                  placeholder="08012345678"
+                  autocomplete="off"
+                />
+                <div
+                  class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+                ></div>
+              </div>
+            </div>
+          </div>
+          <!--end::Business Phone-->
+
+          <!--begin::Location Address-->
+          <div class="fv-row mb-8">
+            <label class="form-label required">Location Address</label>
+            <input
+              type="text"
+              name="address"
+              class="form-control bg-transparent"
+              placeholder="Location Address"
+              autocomplete="off"
+            />
+            <div
+              class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+            ></div>
+          </div>
+          <!--end::Location Address-->
+
+          <!--begin::State & LGA-->
+          <div class="row g-9 mb-8">
+            <div class="col-md-6">
+              <label class="form-label required">State</label>
+              <select
+                id="stateSelect"
+                name="state"
+                class="form-select bg-transparent"
+                data-control="select2"
+                data-placeholder="Select State"
+              >
+                <option></option>
+                <% locationData.forEach(item => { %>
+                <option value="<%= item.state %>"><%= item.state %></option>
+                <% }); %>
+              </select>
+              <div
+                class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+              ></div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label required">LGA</label>
+              <select
+                id="lgaSelect"
+                name="lga"
+                class="form-select bg-transparent"
+                data-control="select2"
+                data-placeholder="Select LGA"
+                disabled
+              >
+                <option value="">Select LGA</option>
+              </select>
+              <div class="fv-plugins-message-container invalid-feedback"></div>
+            </div>
+          </div>
+          <!--end::State & LGA-->
+
+          <!--begin::Contact Person First & Last Name-->
+          <div class="row g-9 mb-8">
+            <div class="col-md-6">
+              <label class="form-label required"
+                >Contact Person First Name</label
+              >
+              <input
+                type="text"
+                name="contactFirstName"
+                class="form-control bg-transparent"
+                placeholder="John"
+                autocomplete="off"
+              />
+              <div
+                class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+              ></div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label required"
+                >Contact Person Last Name</label
+              >
+              <input
+                type="text"
+                name="contactLastName"
+                class="form-control bg-transparent"
+                placeholder="Doe"
+                autocomplete="off"
+              />
+              <div
+                class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+              ></div>
+            </div>
+          </div>
+          <!--end::Contact Person First & Last Name-->
+
+          <!--begin::Contact Person Phone Number-->
+          <div class="fv-row mb-8">
+            <label class="form-label required">Contact Phone Number</label>
+            <div class="row g-3">
+              <div class="col-4">
+                <select
+                  name="contactPhoneCode"
+                  class="form-select bg-transparent"
+                  data-kt-select2="true"
+                  data-hide-search="false"
+                  data-placeholder="Code"
+                >
+                  <option value="" disabled selected>Code</option>
+                  <option value="+234">🇳🇬 +234</option>
+                </select>
+              </div>
+              <div class="col-8">
+                <input
+                  type="tel"
+                  name="contactPhone"
+                  class="form-control bg-transparent"
+                  placeholder="08012345678"
+                  autocomplete="off"
+                />
+                <div
+                  class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+                ></div>
+              </div>
+            </div>
+          </div>
+          <!--end::Contact Contact Person Phone Number-->
+
+          <!--begin::Submit Button-->
+          <div class="d-grid mb-10">
+            <button
+              type="submit"
+              id="kt_onboarding_submit"
+              class="btn btn-primary"
+            >
+              <span class="indicator-label">Complete Setup</span>
+              <span class="indicator-progress"
+                >Please wait...
+                <span
+                  class="spinner-border spinner-border-sm align-middle ms-2"
+                ></span>
+              </span>
+            </button>
+          </div>
+          <!--end::Submit Button-->
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Assigning server-side variable 'locationData' and to a browser-side variable 'window.locationData' -->
+<script>
+  window.locationData = <%- locationDataJson %>;
+</script>

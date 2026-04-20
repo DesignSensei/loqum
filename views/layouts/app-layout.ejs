@@ -140,13 +140,13 @@
     <!-- Modals only this page needs -->
 
     <!--begin::Javascript-->
-
+    <!--begin::Global Javascript Bundle(mandatory for all pages)-->
     <%- include("../partials/footer") %>
+    <!--end::Global Javascript Bundle-->
 
     <!--begin::Custom Javascript(used for this page only)-->
     <%- typeof scripts !=="undefined" ? scripts : "" %>
     <!--end::Custom Javascript-->
-
     <!--end::Javascript-->
   </body>
   <!--end::Body-->

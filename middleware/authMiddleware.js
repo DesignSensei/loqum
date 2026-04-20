@@ -38,3 +38,15 @@ exports.hasPendingAuth = (req, res, next) => {
   if (req.isAuthenticated()) return res.redirect(`/dashboard/${req.user.role}`);
   return res.redirect("/login");
 };
+
+/* ---------- Check if user has NOT completed onboarding ---------- */
+exports.isNotOnboarded = (req, res, next) => {
+  if (req.user && !req.user.isOnboarded) return next();
+  return res.redirect(`/dashboard/${req.user.role}`);
+};
+
+/* ---------- Check if user HAS completed onboarding ---------- */
+exports.isOnboarded = (req, res, next) => {
+  if (req.user && req.user.isOnboarded) return next();
+  return res.redirect(`/onboarding/${req.user.role}`);
+};

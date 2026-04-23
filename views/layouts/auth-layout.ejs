@@ -18,8 +18,7 @@
       var themeMode;
       if (document.documentElement) {
         if (document.documentElement.hasAttribute("data-bs-theme-mode")) {
-          themeMode =
-            document.documentElement.getAttribute("data-bs-theme-mode");
+          themeMode = document.documentElement.getAttribute("data-bs-theme-mode");
         } else {
           if (localStorage.getItem("data-bs-theme") !== null) {
             themeMode = localStorage.getItem("data-bs-theme");
@@ -28,22 +27,20 @@
           }
         }
         if (themeMode === "system") {
-          themeMode = window.matchMedia("(prefers-color-scheme: dark)").matches
-            ? "dark"
-            : "light";
+          themeMode = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
         }
         document.documentElement.setAttribute("data-bs-theme", themeMode);
       }
     </script>
     <!--end::Theme mode setup on page load-->
     <!--begin::Root-->
-    <div class="d-flex flex-column flex-root" id="kt_app_root">
+    <div class="d-flex flex-column flex-root" id="kt_app_root" style="min-height: 100vh">
       <!--begin::Authentication - Sign-in -->
 
-      <div class="d-flex flex-column flex-lg-row flex-column-fluid">
+      <div class="d-flex flex-column flex-lg-row flex-column-fluid" style="min-height: 100vh">
         <!--begin::Body-->
         <div
-          class="d-flex flex-column flex-lg-row-fluid w-lg-50 p-10 order-2 order-lg-1"
+          class="d-flex flex-column flex-lg-row-fluid w-lg-50 p-10 order-2 order-lg-1 justify-content-center"
         >
           <!--begin::Form-->
 
@@ -54,29 +51,77 @@
         <!--end::Body-->
         <!--begin::Aside-->
         <div
-          class="d-flex flex-lg-row-fluid w-lg-50 bgi-size-cover bgi-position-center order-1 order-lg-2"
-          style="background-color: #6a23ff"
+          class="d-flex flex-lg-row-fluid w-lg-50 order-2 order-lg-2"
+          style="position: relative; min-height: 40vh; flex-grow: 1"
         >
+          <!--begin::Background Image-->
+          <img
+            src="/assets/images/auth-bg.png"
+            alt=""
+            style="
+              position: absolute;
+              inset: 0;
+              width: 100%;
+              height: 100%;
+              object-fit: cover;
+              max-width: 100%;
+            "
+          />
+          <!--end::Background Image-->
+
+          <!--begin::Overlay-->
+          <div style="position: absolute; inset: 0; background: rgba(0, 0, 0, 0.35)"></div>
+          <!--end::Overlay-->
+
           <!--begin::Content-->
           <div
-            class="d-flex flex-column flex-center py-7 py-lg-15 px-5 px-md-15 w-100"
+            class="d-flex flex-column align-items-center justify-content-center px-8 px-md-16 py-12 w-100"
+            style="position: relative; z-index: 1"
           >
-            <!--begin::Logo-->
-            <a href="#" class="mb-0 mb-lg-12">
-              <img
-                alt="Logo"
-                src="/assets/images/logo_white.svg"
-                class="h-60px h-lg-75px"
-              />
-            </a>
-            <!--end::Logo-->
-            <!--begin::Image-->
-            <img
-              class="d-none d-lg-block mx-auto w-275px w-md-50 w-xl-500px mb-10 mb-lg-20"
-              src="/assets/media/misc/auth-screens.png"
-              alt=""
-            />
-            <!--end::Image-->
+            <div style="max-width: 420px; width: 100%">
+              <!--begin::Tag-->
+              <p
+                class="mb-3"
+                style="color: rgba(255, 255, 255, 0.6); font-size: 0.85rem; letter-spacing: 0.05em"
+              >
+                [ Why They Choose Us? ]
+              </p>
+              <!--end::Tag-->
+
+              <!--begin::Quote-->
+              <blockquote class="mb-6" style="border: none; padding: 0; margin: 0">
+                <p
+                  style="
+                    font-size: clamp(1.1rem, 3vw, 1.6rem);
+                    font-weight: 700;
+                    color: #ffffff;
+                    line-height: 1.4;
+                  "
+                >
+                  "Placeholder quote that highlights the value of your platform.
+                  <span style="font-weight: 400; color: rgba(255, 255, 255, 0.75)">
+                    This is where the rest of the testimonial continues and sells the product."
+                  </span>
+                </p>
+              </blockquote>
+              <!--end::Quote-->
+
+              <!--begin::Person-->
+              <div class="d-flex align-items-center gap-4">
+                <img
+                  src="https://placehold.co/48x48"
+                  alt="Avatar"
+                  style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover"
+                />
+                <div>
+                  <p class="mb-0 fw-bold" style="color: #ffffff">Placeholder Name</p>
+                  <p class="mb-0" style="color: rgba(255, 255, 255, 0.6); font-size: 0.85rem">
+                    Job Title @ Company
+                  </p>
+                </div>
+              </div>
+              <!--end::Person-->
+            </div>
           </div>
           <!--end::Content-->
         </div>

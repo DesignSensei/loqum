@@ -1,136 +1,121 @@
 <!-- views/auth/two-factor.ejs -->
+<div class="d-flex flex-center flex-column flex-lg-row-fluid">
+  <div class="text-center mb-10">
+    <img alt="Logo" src="/assets/images/logo_purple.png" class="h-30px h-lg-40px" />
+  </div>
 
-<div class="d-flex flex-column flex-lg-row flex-column-fluid">
   <!--begin::Body-->
-  <div
-    class="d-flex flex-column flex-lg-row-fluid w-lg-50 p-10 order-2 order-lg-1"
-  >
+  <div class="d-flex flex-column flex-lg-row-fluid w-75 w-lg-500px p-10 order-1 order-lg-1">
     <!--begin::Form-->
     <div class="d-flex flex-center flex-column flex-lg-row-fluid">
-      <!--begin::Wrapper-->
-      <div class="w-lg-500px p-10">
-        <!--begin::Form-->
-        <form
-          class="form w-100 mb-13"
-          novalidate="novalidate"
-          id="kt_sing_in_two_factor_form"
-          action="/two-factor/verify"
-          method="POST"
-        >
-          <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-          <!--begin::Heading-->
-          <div class="text-center mb-10">
-            <!--begin::Title-->
-            <h1 class="text-gray-900 mb-3">Two-Factor Verification</h1>
-            <!--end::Title-->
-            <!--begin::Sub-title-->
-            <div class="text-muted fw-semibold fs-5 mb-5">
-              Enter the verification code we sent to
-            </div>
-            <!--end::Sub-title-->
-            <!--begin::Email address-->
-            <div class="fw-bold text-gray-900 fs-3">
-              <%= user.email.replace(/(.{3}).+(@.+)/, '$1*****$2') %>
-            </div>
-            <!--end::Email address-->
+      <!--begin::Form-->
+      <form
+        class="form w-100 mb-13"
+        novalidate="novalidate"
+        id="kt_sing_in_two_factor_form"
+        action="/two-factor/verify"
+        method="POST"
+      >
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+        <!--begin::Heading-->
+        <div class="text-center mb-10">
+          <h1 class="text-gray-900 mb-3">Two-Factor Verification</h1>
+          <div class="text-muted fw-semibold fs-5 mb-5">Enter the verification code we sent to</div>
+          <div class="fw-bold text-gray-900 fs-3">
+            <%= user.email.replace(/(.{3}).+(@.+)/, '$1*****$2') %>
           </div>
-          <!--end::Heading-->
-          <!--begin::Section-->
-          <div class="mb-10">
-            <!--begin::Label-->
-            <div class="fw-bold text-start text-gray-900 fs-6 mb-1 ms-1">
-              Type your 6 digit security code
-            </div>
-            <!--end::Label-->
-            <!--begin::Input group-->
-            <div class="d-flex flex-wrap flex-stack">
-              <input
-                type="text"
-                name="code_1"
-                min="0"
-                max="9"
-                maxlength="1"
-                class="form-control bg-transparent h-60px w-60px fs-2qx text-center mx-1 my-2"
-                value=""
-              />
-              <input
-                type="text"
-                name="code_2"
-                min="0"
-                max="9"
-                maxlength="1"
-                class="form-control bg-transparent h-60px w-60px fs-2qx text-center mx-1 my-2"
-                value=""
-              />
-              <input
-                type="text"
-                name="code_3"
-                min="0"
-                max="9"
-                maxlength="1"
-                class="form-control bg-transparent h-60px w-60px fs-2qx text-center mx-1 my-2"
-                value=""
-              />
-              <input
-                type="text"
-                name="code_4"
-                min="0"
-                max="9"
-                maxlength="1"
-                class="form-control bg-transparent h-60px w-60px fs-2qx text-center mx-1 my-2"
-                value=""
-              />
-              <input
-                type="text"
-                name="code_5"
-                min="0"
-                max="9"
-                maxlength="1"
-                class="form-control bg-transparent h-60px w-60px fs-2qx text-center mx-1 my-2"
-                value=""
-              />
-              <input
-                type="text"
-                name="code_6"
-                min="0"
-                max="9"
-                maxlength="1"
-                class="form-control bg-transparent h-60px w-60px fs-2qx text-center mx-1 my-2"
-                value=""
-              />
-            </div>
-            <!--begin::Input group-->
-          </div>
-          <!--end::Section-->
-          <!--begin::Submit-->
-          <div class="d-flex flex-center">
-            <button
-              type="button"
-              id="kt_sing_in_two_factor_submit"
-              class="btn btn-lg btn-primary fw-bold"
-            >
-              <span class="indicator-label">Submit</span>
-              <span class="indicator-progress"
-                >Please wait...
-                <span
-                  class="spinner-border spinner-border-sm align-middle ms-2"
-                ></span
-              ></span>
-            </button>
-          </div>
-          <!--end::Submit-->
-        </form>
-        <!--end::Form-->
-        <!--begin::Notice-->
-        <div class="text-center fw-semibold fs-5">
-          <span class="text-muted me-1">Didn’t get the code ?</span>
-          <a href="#" id="kt_resend_otp" class="link-primary fs-5 me-1"
-            >Resend</a
-          >
         </div>
-        <!--end::Notice-->
+        <!--end::Heading-->
+
+        <!--begin::Section-->
+        <div class="mb-10">
+          <div class="fw-bold text-start text-gray-900 fs-6 mb-1 ms-1">
+            Type your 6 digit security code
+          </div>
+          <div class="d-flex flex-wrap flex-stack">
+            <input
+              type="text"
+              name="code_1"
+              min="0"
+              max="9"
+              maxlength="1"
+              class="form-control bg-transparent h-60px w-60px fs-2qx text-center mx-1 my-2"
+              value=""
+            />
+            <input
+              type="text"
+              name="code_2"
+              min="0"
+              max="9"
+              maxlength="1"
+              class="form-control bg-transparent h-60px w-60px fs-2qx text-center mx-1 my-2"
+              value=""
+            />
+            <input
+              type="text"
+              name="code_3"
+              min="0"
+              max="9"
+              maxlength="1"
+              class="form-control bg-transparent h-60px w-60px fs-2qx text-center mx-1 my-2"
+              value=""
+            />
+            <input
+              type="text"
+              name="code_4"
+              min="0"
+              max="9"
+              maxlength="1"
+              class="form-control bg-transparent h-60px w-60px fs-2qx text-center mx-1 my-2"
+              value=""
+            />
+            <input
+              type="text"
+              name="code_5"
+              min="0"
+              max="9"
+              maxlength="1"
+              class="form-control bg-transparent h-60px w-60px fs-2qx text-center mx-1 my-2"
+              value=""
+            />
+            <input
+              type="text"
+              name="code_6"
+              min="0"
+              max="9"
+              maxlength="1"
+              class="form-control bg-transparent h-60px w-60px fs-2qx text-center mx-1 my-2"
+              value=""
+            />
+          </div>
+        </div>
+        <!--end::Section-->
+
+        <!--begin::Submit-->
+        <div class="d-flex flex-center">
+          <button
+            type="button"
+            id="kt_sing_in_two_factor_submit"
+            class="btn btn-lg btn-primary fw-bold"
+          >
+            <span class="indicator-label">Submit</span>
+            <span class="indicator-progress"
+              >Please wait...
+              <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+            </span>
+          </button>
+        </div>
+        <!--end::Submit-->
+      </form>
+      <!--end::Form-->
+
+      <!--begin::Notice-->
+      <div class="text-center fw-semibold fs-5">
+        <span class="text-muted me-1">Didn't get the code ?</span>
+        <a href="#" id="kt_resend_otp" class="link-primary fs-5 me-1">Resend</a>
       </div>
-      <!--end::Wrapper-->
+      <!--end::Notice-->
     </div>
     <!--end::Form-->
   </div>

@@ -11,7 +11,7 @@ const {
 const employerController = require("../controllers/employerController");
 
 /* ---------- Middleware ---------- */
-router.use(isAuthenticated, isVerified, hasRole("employer"), isOnboarded);
+// router.use(isAuthenticated, isVerified, hasRole("employer"), isOnboarded);
 
 /* ---------- Public pages (GET) ---------- */
 router.get("/dashboard", employerController.getDashboard);

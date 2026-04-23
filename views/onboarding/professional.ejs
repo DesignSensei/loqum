@@ -1,0 +1,396 @@
+<!-- views/onboarding/professional.ejs -->
+
+<div class="d-flex flex-column flex-lg-row flex-column-fluid">
+  <div class="d-flex flex-column flex-lg-row-fluid w-lg-50 p-10 order-2 order-lg-1">
+    <div class="d-flex flex-center flex-column flex-lg-row-fluid">
+      <div class="w-75 w-lg-500px p-10">
+        <div class="text-center mb-11">
+          <h1 class="text-gray-900 fw-bolder mb-3">Professional Profile</h1>
+          <div class="text-gray-500 fw-semibold fs-6">
+            Verify your credentials to start finding locum work.
+          </div>
+        </div>
+
+        <form
+          action="/onboarding/professional"
+          method="POST"
+          class="form w-100"
+          id="kt_onboarding_professional_form"
+        >
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+          <!-- PROFESSION TYPE CARDS
+               Only Pharmacist is active now.
+               When scaling: uncomment other cards, change pharmacist col-12 to col-12 col-md-6,
+               and add h-100 to all labels.
+          -->
+          <div class="fv-row mb-8">
+            <div class="row g-4" data-kt-buttons="true">
+              <div class="col-12">
+                <label
+                  class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex align-items-center p-5 w-100 active"
+                  id="pharmacistCard"
+                >
+                  <input
+                    class="btn-check"
+                    type="radio"
+                    name="type"
+                    value="pharmacist"
+                    checked="checked"
+                  />
+                  <i class="ki-duotone ki-address-book fs-2x me-4"></i>
+                  <span class="d-flex flex-column text-start">
+                    <span class="fw-bold fs-6">Pharmacist</span>
+                    <span class="fs-7 text-muted">Licensed pharmacist (PCN)</span>
+                  </span>
+                </label>
+              </div>
+
+              <!--
+              <div class="col-12 col-md-6">
+                <label class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex align-items-center p-5 w-100 h-100" id="pharmacyTechnicianCard">
+                  <input class="btn-check" type="radio" name="type" value="pharmacy_technician" />
+                  <i class="ki-duotone ki-medicine fs-2x me-4"></i>
+                  <span class="d-flex flex-column text-start">
+                    <span class="fw-bold fs-6">Pharmacy Technician</span>
+                    <span class="fs-7 text-muted">Licensed technician (PCN)</span>
+                  </span>
+                </label>
+              </div>
+
+              <div class="col-12 col-md-6">
+                <label class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex align-items-center p-5 w-100 h-100" id="nurseCard">
+                  <input class="btn-check" type="radio" name="type" value="nurse" />
+                  <i class="ki-duotone ki-heart fs-2x me-4"></i>
+                  <span class="d-flex flex-column text-start">
+                    <span class="fw-bold fs-6">Nurse</span>
+                    <span class="fs-7 text-muted">Registered nurse (NMCN)</span>
+                  </span>
+                </label>
+              </div>
+
+              <div class="col-12 col-md-6">
+                <label class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex align-items-center p-5 w-100 h-100" id="doctorCard">
+                  <input class="btn-check" type="radio" name="type" value="doctor" />
+                  <i class="ki-duotone ki-profile-circle fs-2x me-4"></i>
+                  <span class="d-flex flex-column text-start">
+                    <span class="fw-bold fs-6">Doctor</span>
+                    <span class="fs-7 text-muted">Licensed physician (MDCN)</span>
+                  </span>
+                </label>
+              </div>
+
+              <div class="col-12 col-md-6">
+                <label class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex align-items-center p-5 w-100 h-100" id="labScientistCard">
+                  <input class="btn-check" type="radio" name="type" value="lab_scientist" />
+                  <i class="ki-duotone ki-flask fs-2x me-4"></i>
+                  <span class="d-flex flex-column text-start">
+                    <span class="fw-bold fs-6">Lab Scientist</span>
+                    <span class="fs-7 text-muted">Licensed scientist (MLSCN)</span>
+                  </span>
+                </label>
+              </div>
+
+              <div class="col-12 col-md-6">
+                <label class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex align-items-center p-5 w-100 h-100" id="radiographerCard">
+                  <input class="btn-check" type="radio" name="type" value="radiographer" />
+                  <i class="ki-duotone ki-scan fs-2x me-4"></i>
+                  <span class="d-flex flex-column text-start">
+                    <span class="fw-bold fs-6">Radiographer</span>
+                    <span class="fs-7 text-muted">Licensed radiographer (RRBN)</span>
+                  </span>
+                </label>
+              </div>
+
+              <div class="col-12 col-md-6">
+                <label class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex align-items-center p-5 w-100 h-100" id="physiotherapistCard">
+                  <input class="btn-check" type="radio" name="type" value="physiotherapist" />
+                  <i class="ki-duotone ki-personalcard fs-2x me-4"></i>
+                  <span class="d-flex flex-column text-start">
+                    <span class="fw-bold fs-6">Physiotherapist</span>
+                    <span class="fs-7 text-muted">Licensed physiotherapist (MRPN)</span>
+                  </span>
+                </label>
+              </div>
+              -->
+            </div>
+          </div>
+
+          <!-- DYNAMIC LICENCE NUMBER
+               Each field is tied to a profession type.
+               Only the active type's field is visible and enabled.
+               When scaling: uncomment the matching field alongside its card above.
+          -->
+          <div class="fv-row mb-8">
+            <!-- Pharmacist: PCN -->
+            <div id="field-pharmacist" class="licence-field">
+              <label class="form-label required">
+                PCN Licence Number
+                <span class="text-muted fs-7">
+                  <i
+                    class="ki-outline ki-information-2 fs-6"
+                    data-bs-toggle="tooltip"
+                    data-bs-original-title="Your licence will be verified against the PCN database."
+                  ></i>
+                </span>
+              </label>
+              <input
+                type="text"
+                name="licenceNumber"
+                class="form-control bg-transparent"
+                placeholder="e.g. PH/12345/RN"
+                autocomplete="off"
+              />
+              <div
+                class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+              ></div>
+            </div>
+
+            <!-- Pharmacy Technician: PCN
+            <div id="field-pharmacy_technician" class="licence-field" style="display: none;">
+              <label class="form-label required">
+                PCN Licence Number
+                <span class="text-muted fs-7">
+                  <i class="ki-outline ki-information-2 fs-6" data-bs-toggle="tooltip"
+                    data-bs-original-title="Your licence will be verified against the PCN database."></i>
+                </span>
+              </label>
+              <input type="text" name="licenceNumber" class="form-control bg-transparent"
+                placeholder="e.g. PT/12345/RN" autocomplete="off" disabled />
+              <div class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"></div>
+            </div>
+            -->
+
+            <!-- Nurse: NMCN
+            <div id="field-nurse" class="licence-field" style="display: none;">
+              <label class="form-label required">
+                NMCN Licence Number
+                <span class="text-muted fs-7">
+                  <i class="ki-outline ki-information-2 fs-6" data-bs-toggle="tooltip"
+                    data-bs-original-title="Your licence will be verified against the NMCN database."></i>
+                </span>
+              </label>
+              <input type="text" name="licenceNumber" class="form-control bg-transparent"
+                placeholder="e.g. NM/12345/RN" autocomplete="off" disabled />
+              <div class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"></div>
+            </div>
+            -->
+
+            <!-- Doctor: MDCN
+            <div id="field-doctor" class="licence-field" style="display: none;">
+              <label class="form-label required">
+                MDCN Licence Number
+                <span class="text-muted fs-7">
+                  <i class="ki-outline ki-information-2 fs-6" data-bs-toggle="tooltip"
+                    data-bs-original-title="Your licence will be verified against the MDCN database."></i>
+                </span>
+              </label>
+              <input type="text" name="licenceNumber" class="form-control bg-transparent"
+                placeholder="e.g. MD/12345/RN" autocomplete="off" disabled />
+              <div class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"></div>
+            </div>
+            -->
+
+            <!-- Lab Scientist: MLSCN
+            <div id="field-lab_scientist" class="licence-field" style="display: none;">
+              <label class="form-label required">
+                MLSCN Licence Number
+                <span class="text-muted fs-7">
+                  <i class="ki-outline ki-information-2 fs-6" data-bs-toggle="tooltip"
+                    data-bs-original-title="Your licence will be verified against the MLSCN database."></i>
+                </span>
+              </label>
+              <input type="text" name="licenceNumber" class="form-control bg-transparent"
+                placeholder="e.g. LS/12345/RN" autocomplete="off" disabled />
+              <div class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"></div>
+            </div>
+            -->
+
+            <!-- Radiographer: RRBN
+            <div id="field-radiographer" class="licence-field" style="display: none;">
+              <label class="form-label required">
+                RRBN Licence Number
+                <span class="text-muted fs-7">
+                  <i class="ki-outline ki-information-2 fs-6" data-bs-toggle="tooltip"
+                    data-bs-original-title="Your licence will be verified against the RRBN database."></i>
+                </span>
+              </label>
+              <input type="text" name="licenceNumber" class="form-control bg-transparent"
+                placeholder="e.g. RG/12345/RN" autocomplete="off" disabled />
+              <div class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"></div>
+            </div>
+            -->
+
+            <!-- Physiotherapist: MRPN
+            <div id="field-physiotherapist" class="licence-field" style="display: none;">
+              <label class="form-label required">
+                MRPN Licence Number
+                <span class="text-muted fs-7">
+                  <i class="ki-outline ki-information-2 fs-6" data-bs-toggle="tooltip"
+                    data-bs-original-title="Your licence will be verified against the MRPN database."></i>
+                </span>
+              </label>
+              <input type="text" name="licenceNumber" class="form-control bg-transparent"
+                placeholder="e.g. PT/12345/RN" autocomplete="off" disabled />
+              <div class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"></div>
+            </div>
+            -->
+          </div>
+
+          <!-- Phone Number -->
+          <div class="fv-row mb-8">
+            <label class="form-label required">Phone Number</label>
+            <div class="row g-3">
+              <div class="col-4">
+                <select
+                  name="phoneCode"
+                  class="form-select bg-transparent"
+                  data-kt-select2="true"
+                  data-hide-search="false"
+                  data-placeholder="Code"
+                >
+                  <option value="" disabled selected>Code</option>
+                  <option value="+234" selected>🇳🇬 +234</option>
+                </select>
+              </div>
+              <div class="col-8">
+                <input
+                  type="tel"
+                  name="phone"
+                  class="form-control bg-transparent"
+                  placeholder="08012345678"
+                  autocomplete="off"
+                />
+                <div
+                  class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+                ></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Primary Practice Area (Specialty) — populated dynamically by SpecialtyPicker -->
+          <div class="fv-row mb-8">
+            <label class="form-label required">Primary Practice Area</label>
+            <select
+              id="specialtySelect"
+              name="specialty"
+              class="form-select bg-transparent"
+              data-control="select2"
+              data-placeholder="Select your specialty"
+              disabled
+            >
+              <option value="">Select Specialty</option>
+            </select>
+            <div
+              class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+            ></div>
+          </div>
+
+          <!-- Years of Experience -->
+          <div class="fv-row mb-8">
+            <label class="form-label">Years of Experience</label>
+            <input
+              type="number"
+              name="yearsOfExperience"
+              class="form-control bg-transparent"
+              placeholder="e.g. 3"
+              min="0"
+              autocomplete="off"
+            />
+            <div
+              class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+            ></div>
+          </div>
+
+          <!-- Location Address -->
+          <div class="fv-row mb-8">
+            <label class="form-label required">Location Address</label>
+            <input
+              type="text"
+              name="address"
+              class="form-control bg-transparent"
+              placeholder="Location Address"
+              autocomplete="off"
+            />
+            <div
+              class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+            ></div>
+          </div>
+
+          <!-- State & LGA -->
+          <div class="row g-9 mb-8">
+            <div class="col-md-6">
+              <label class="form-label required">State</label>
+              <select
+                id="stateSelect"
+                name="state"
+                class="form-select bg-transparent"
+                data-control="select2"
+                data-placeholder="Select State"
+              >
+                <option></option>
+                <option value="">Select State</option>
+              </select>
+              <div
+                class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+              ></div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label required">LGA</label>
+              <select
+                id="lgaSelect"
+                name="lga"
+                class="form-select bg-transparent"
+                data-control="select2"
+                data-placeholder="Select LGA"
+                disabled
+              >
+                <option value="">Select LGA</option>
+              </select>
+              <div class="fv-plugins-message-container invalid-feedback"></div>
+            </div>
+          </div>
+
+          <!-- Professional Bio -->
+          <div class="fv-row mb-10">
+            <label class="form-label">
+              Professional Bio
+              <span class="text-muted fs-7">
+                <i
+                  class="ki-outline ki-information-2 fs-6"
+                  data-bs-toggle="tooltip"
+                  data-bs-original-title="Briefly describe your clinical experience or specialties."
+                ></i>
+              </span>
+            </label>
+            <textarea
+              name="bio"
+              class="form-control bg-transparent"
+              rows="4"
+              placeholder="Briefly describe your clinical experience or specialties..."
+            ></textarea>
+            <div
+              class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+            ></div>
+          </div>
+
+          <!-- Submit -->
+          <div class="d-grid mb-10 mt-10">
+            <button type="submit" id="kt_onboarding_professional_submit" class="btn btn-primary">
+              <span class="indicator-label">Complete My Profile</span>
+              <span class="indicator-progress">
+                Processing...
+                <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+              </span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  window.locations = <%- locations %>;
+  window.specialtyConfig = <%- specialtyConfig %>;
+</script>

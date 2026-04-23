@@ -11,7 +11,13 @@ const employerProfileSchema = new mongoose.Schema(
       unique: true,
     },
 
-    pharmacyName: {
+    type: {
+      type: String,
+      enum: ["pharmacy", "clinic", "hospital", "laboratory"],
+      required: true,
+    },
+
+    businessName: {
       type: String,
       required: true,
       trim: true,
@@ -68,10 +74,27 @@ const employerProfileSchema = new mongoose.Schema(
       trim: true,
       default: "+234",
     },
+
+    reviews: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Review",
+      },
+    ],
+
+    averageRating: {
+      type: Number,
+      default: 0,
+    },
+
+    totalReviews: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,
-  },
+  }
 );
 
 module.exports = mongoose.model("EmployerProfile", employerProfileSchema);

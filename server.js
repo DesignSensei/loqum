@@ -22,9 +22,11 @@ const logger = require("./utils/logger");
 
 // Routes
 const authRoutes = require("./routes/authRoutes");
+const adminRoutes = require("./routes/adminRoutes");
 const onboardingRoutes = require("./routes/onboardingRoutes");
-const pharmacistRoutes = require("./routes/pharmacistRoutes");
+const professionalRoutes = require("./routes/professionalRoutes");
 const employerRoutes = require("./routes/employerRoutes");
+// const reviewRoutes = require("./routes/reviewRoutes");
 
 /* ---------- Initialize App ---------- */
 const app = express();
@@ -93,7 +95,7 @@ app.use(csrfProtection);
 app.use((req, res, next) => {
   res.locals.user = req.session.user || null;
   res.locals.csrfToken = req.csrfToken();
-  res.locals.userHome = req.user ? getHomeRoute(req.user.role) : "/";
+  res.locals.userHome = req.session.user ? getHomeRoute(req.session.user.role) : "/";
   next();
 });
 
@@ -101,8 +103,9 @@ app.use((req, res, next) => {
 app.use(authRoutes);
 app.use("/onboarding", onboardingRoutes);
 app.use("/admin", adminRoutes);
-app.use("/pharmacist", pharmacistRoutes);
+app.use("/professional", professionalRoutes);
 app.use("/employer", employerRoutes);
+// app.use("/reviews", reviewRoutes);
 
 /* ---------- Catch unmatched routes (404) ---------- */
 app.use((req, res) => {

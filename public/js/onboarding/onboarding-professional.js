@@ -1,48 +1,58 @@
-// public/js/onboarding-employer.js
+// public/js/onboarding-professional.js
 
 "use strict";
 
-var OnboardingEmployer = (function () {
-  var form = document.querySelector("#kt_onboarding_employer_form");
-  var submitButton = document.querySelector("#kt_onboarding_submit");
+var OnboardingProfessional = (function () {
+  var form = document.querySelector("#kt_onboarding_professional_form");
+  var submitButton = document.querySelector("#kt_onboarding_professional_submit");
+  var validator = null;
 
-  // Registration field config per type
-  // When scaling: add new types here — no other changes needed
+  // Type config — registration body per profession
+  // When scaling: uncomment new types here and in the EJS
   var typeConfig = {
-    pharmacy: {
-      fieldId: "field-pharmacy",
-      validatorMessage: "PCN registration number is required.",
+    pharmacist: {
+      fieldId: "field-pharmacist",
+      validatorMessage: "PCN licence number is required.",
     },
-    // clinic: {
-    //   fieldId: "field-clinic",
-    //   validatorMessage: "CAC registration number is required.",
+    // pharmacy_technician: {
+    //   fieldId: "field-pharmacy_technician",
+    //   validatorMessage: "PCN licence number is required.",
     // },
-    // hospital: {
-    //   fieldId: "field-hospital",
-    //   validatorMessage: "HEFAMAA / State MOH registration number is required.",
+    // nurse: {
+    //   fieldId: "field-nurse",
+    //   validatorMessage: "NMCN licence number is required.",
     // },
-    // laboratory: {
-    //   fieldId: "field-laboratory",
-    //   validatorMessage: "MLSCN registration number is required.",
+    // doctor: {
+    //   fieldId: "field-doctor",
+    //   validatorMessage: "MDCN licence number is required.",
+    // },
+    // lab_scientist: {
+    //   fieldId: "field-lab_scientist",
+    //   validatorMessage: "MLSCN licence number is required.",
+    // },
+    // radiographer: {
+    //   fieldId: "field-radiographer",
+    //   validatorMessage: "RRBN licence number is required.",
+    // },
+    // physiotherapist: {
+    //   fieldId: "field-physiotherapist",
+    //   validatorMessage: "MRPN licence number is required.",
     // },
   };
 
-  var validator = null;
-
-  // Handle dynamic registration field switching
   function handleTypeSwitching() {
     var radios = document.querySelectorAll('input[name="type"]');
     if (!radios.length) return;
 
     function switchField(selectedType) {
-      // Hide all, disable all inputs
-      document.querySelectorAll(".registration-field").forEach(function (field) {
+      // Hide all, disable all
+      document.querySelectorAll(".licence-field").forEach(function (field) {
         field.style.display = "none";
         var input = field.querySelector("input");
         if (input) input.disabled = true;
       });
 
-      // Show and enable the selected type's field
+      // Show and enable active field
       var config = typeConfig[selectedType];
       if (!config) return;
 
@@ -53,11 +63,11 @@ var OnboardingEmployer = (function () {
         if (input) input.disabled = false;
       }
 
-      // Update the validator message to match the selected type
+      // Update validator message
       if (validator) {
-        validator.updateFieldStatus("businessRegistrationNumber", "NotValidated");
+        validator.updateFieldStatus("licenceNumber", "NotValidated");
         validator.updateValidatorOption(
-          "businessRegistrationNumber",
+          "licenceNumber",
           "notEmpty",
           "message",
           config.validatorMessage
@@ -77,56 +87,28 @@ var OnboardingEmployer = (function () {
     });
   }
 
-  // Handle form validation and submission
   function handleFormSubmission() {
     if (!form || !submitButton) return;
 
     validator = FormValidation.formValidation(form, {
       fields: {
-        businessName: {
-          validators: {
-            notEmpty: { message: "Business name is required." },
-          },
+        licenceNumber: {
+          validators: { notEmpty: { message: "Licence number is required." } },
         },
-        businessRegistrationNumber: {
-          validators: {
-            notEmpty: { message: "Registration number is required." },
-          },
+        phone: {
+          validators: { notEmpty: { message: "Phone number is required." } },
+        },
+        specialty: {
+          validators: { notEmpty: { message: "Please select your specialty." } },
         },
         address: {
-          validators: {
-            notEmpty: { message: "Business address is required." },
-          },
+          validators: { notEmpty: { message: "Work/Base address is required." } },
         },
         state: {
-          validators: {
-            notEmpty: { message: "Please select a state." },
-          },
+          validators: { notEmpty: { message: "Please select a state." } },
         },
         lga: {
-          validators: {
-            notEmpty: { message: "Please select an LGA." },
-          },
-        },
-        businessPhone: {
-          validators: {
-            notEmpty: { message: "Business phone number is required" },
-          },
-        },
-        contactFirstName: {
-          validators: {
-            notEmpty: { message: "Contact person's first name is required." },
-          },
-        },
-        contactLastName: {
-          validators: {
-            notEmpty: { message: "Contact person's last name is required." },
-          },
-        },
-        contactPhone: {
-          validators: {
-            notEmpty: { message: "Contact phone number is required." },
-          },
+          validators: { notEmpty: { message: "Please select an LGA." } },
         },
       },
       plugins: {
@@ -156,7 +138,7 @@ var OnboardingEmployer = (function () {
               submitButton.removeAttribute("data-kt-indicator");
 
               Swal.fire({
-                text: response.data.message || "Business profile setup complete!",
+                text: response.data.message || "Profile completed!",
                 icon: "success",
                 buttonsStyling: false,
                 confirmButtonText: "Go to Dashboard",
@@ -170,7 +152,7 @@ var OnboardingEmployer = (function () {
               submitButton.disabled = false;
 
               Swal.fire({
-                text: error.response?.data?.message || "An error occurred during setup.",
+                text: error.response?.data?.message || "An error occurred.",
                 icon: "error",
                 buttonsStyling: false,
                 confirmButtonText: "Ok, got it!",
@@ -185,6 +167,7 @@ var OnboardingEmployer = (function () {
   return {
     init: function () {
       LocationPicker.init("#stateSelect", "#lgaSelect");
+      SpecialtyPicker.init('input[name="type"]', "#specialtySelect");
       handleFormSubmission();
       handleTypeSwitching();
     },
@@ -192,5 +175,5 @@ var OnboardingEmployer = (function () {
 })();
 
 KTUtil.onDOMContentLoaded(function () {
-  OnboardingEmployer.init();
+  OnboardingProfessional.init();
 });

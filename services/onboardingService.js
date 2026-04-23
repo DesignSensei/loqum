@@ -1,13 +1,14 @@
 // services/onboardingService.js
 
-const PharmacistProfile = require("../models/PharmacistProfile");
+const ProfessionalProfile = require("../models/ProfessionalProfile");
 const EmployerProfile = require("../models/EmployerProfile");
 const User = require("../models/User");
 const logger = require("../utils/logger");
 
 class OnboardingService {
-  static async completePharmacistOnboarding(userId, data) {
+  static async completeProfessionalOnboarding(userId, data) {
     const {
+      type,
       licenceNumber,
       phoneCode,
       phone,
@@ -20,17 +21,18 @@ class OnboardingService {
     } = data;
 
     // 1. Validation Logic
-    if (!licenceNumber || !phone || !phoneCode || !state || !lga) {
+    if (!type || !licenceNumber || !phone || !phoneCode || !specialty || !state || !lga) {
       throw new Error("Missing required professional or location fields");
     }
 
     // 2. Check for existence (Atomic check)
-    const existing = await PharmacistProfile.findOne({ user: userId });
+    const existing = await ProfessionalProfile.findOne({ user: userId });
     if (existing) throw new Error("Profile already exists");
 
     // 3. Save Profile
-    const profile = new PharmacistProfile({
+    const profile = new ProfessionalProfile({
       user: userId,
+      type,
       licenceNumber,
       phoneCode,
       phone,
@@ -47,17 +49,18 @@ class OnboardingService {
     // 4. Update User State
     await User.findByIdAndUpdate(userId, {
       isOnboarded: true,
-      pharmacistProfile: profile._id,
+      professionalProfile: profile._id,
     });
 
-    logger.info(`Pharmacist profile created for user: ${userId}`);
+    logger.info(`Professional profile created for user: ${userId}`);
     return profile;
   }
 
   static async completeEmployerOnboarding(
     userId,
     {
-      pharmacyName,
+      type,
+      businessName,
       businessRegistrationNumber,
       businessPhoneCode,
       businessPhone,
@@ -68,15 +71,9 @@ class OnboardingService {
       contactLastName,
       contactPhoneCode,
       contactPhone,
-    },
+    }
   ) {
-    if (
-      !pharmacyName ||
-      !businessRegistrationNumber ||
-      !state ||
-      !lga ||
-      !contactPhone
-    )
+    if (!type || !businessName || !businessRegistrationNumber || !state || !lga || !contactPhone)
       throw new Error("All required fields must be filled");
 
     // Check if profile already exists
@@ -85,7 +82,8 @@ class OnboardingService {
 
     const profile = new EmployerProfile({
       user: userId,
-      pharmacyName,
+      type,
+      businessName,
       businessRegistrationNumber,
       businessPhoneCode,
       businessPhone,

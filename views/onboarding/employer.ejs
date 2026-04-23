@@ -1,13 +1,11 @@
 <!-- views/onboarding/employer.ejs -->
 
 <div class="d-flex flex-column flex-lg-row flex-column-fluid">
-  <div
-    class="d-flex flex-column flex-lg-row-fluid w-lg-50 p-10 order-2 order-lg-1"
-  >
+  <div class="d-flex flex-column flex-lg-row-fluid w-lg-50 p-10 order-2 order-lg-1">
     <div class="d-flex flex-center flex-column flex-lg-row-fluid">
       <div class="w-75 w-lg-500px p-10">
         <div class="text-center mb-11">
-          <h1 class="text-gray-900 fw-bolder mb-3">Pharmacy Profile</h1>
+          <h1 class="text-gray-900 fw-bolder mb-3">Business Profile</h1>
           <div class="text-gray-500 fw-semibold fs-6">
             Tell us about your business to start hiring.
           </div>
@@ -21,94 +19,214 @@
         >
           <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
 
+          <!-- TYPE CARDS
+               Only Pharmacy is active now.
+               When scaling: uncomment the other cards, change pharmacy col-12 back to col-12 col-md-6,
+               and add h-100 back to all labels.
+          -->
           <div class="fv-row mb-8">
-            <label class="form-label required">Pharmacy Name</label>
-            <input
-              type="text"
-              name="pharmacyName"
-              class="form-control bg-transparent"
-              placeholder="Pharmacy Name"
-              autocomplete="off"
-            />
-            <div
-              class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
-            ></div>
-          </div>
-
-          <!--begin::PCN Registration Number-->
-          <div class="fv-row mb-8">
-            <label class="form-label required"
-              >PCN Registration Number
-              <span class="text-muted fs-7">
-                <i
-                  class="ki-outline ki-information-2 fs-6"
-                  data-bs-toggle="tooltip"
-                  data-bs-original-title="Your Pharmacy Council of Nigeria registration number."
-                ></i>
-              </span>
-            </label>
-            <input
-              type="text"
-              name="businessRegistrationNumber"
-              class="form-control bg-transparent"
-              placeholder="PCN Registration Number"
-              autocomplete="off"
-            />
-            <div
-              class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
-            ></div>
-          </div>
-          <!--end::PCN Registration Number-->
-
-          <!--begin::Business Phone-->
-          <div class="fv-row mb-8">
-            <label class="form-label">Business Phone Number</label>
-            <div class="row g-3">
-              <div class="col-4">
-                <select
-                  name="businessPhoneCode"
-                  class="form-select bg-transparent"
-                  data-kt-select2="true"
-                  data-hide-search="false"
-                  data-placeholder="Code"
+            <div class="row g-4" data-kt-buttons="true">
+              <div class="col-12">
+                <label
+                  class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex align-items-center p-5 w-100 active"
+                  id="pharmacyCard"
                 >
-                  <option value="" disabled selected>Code</option>
-                  <option value="+234">🇳🇬 +234</option>
-                </select>
+                  <input
+                    class="btn-check"
+                    type="radio"
+                    name="type"
+                    value="pharmacy"
+                    checked="checked"
+                  />
+                  <i class="ki-duotone ki-address-book fs-2x me-4"></i>
+                  <span class="d-flex flex-column text-start">
+                    <span class="fw-bold fs-6">Pharmacy</span>
+                    <span class="fs-7 text-muted">Retail or community pharmacy</span>
+                  </span>
+                </label>
               </div>
-              <div class="col-8">
-                <input
-                  type="tel"
-                  name="businessPhone"
-                  class="form-control bg-transparent"
-                  placeholder="08012345678"
-                  autocomplete="off"
-                />
-                <div
-                  class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
-                ></div>
+
+              <!--
+              <div class="col-12 col-md-6">
+                <label
+                  class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex align-items-center p-5 w-100 h-100"
+                  id="clinicCard"
+                >
+                  <input class="btn-check" type="radio" name="type" value="clinic" />
+                  <i class="ki-duotone ki-clinic fs-2x me-4"></i>
+                  <span class="d-flex flex-column text-start">
+                    <span class="fw-bold fs-6">Clinic</span>
+                    <span class="fs-7 text-muted">Outpatient clinic</span>
+                  </span>
+                </label>
               </div>
+
+              <div class="col-12 col-md-6">
+                <label
+                  class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex align-items-center p-5 w-100 h-100"
+                  id="hospitalCard"
+                >
+                  <input class="btn-check" type="radio" name="type" value="hospital" />
+                  <i class="ki-duotone ki-hospital fs-2x me-4"></i>
+                  <span class="d-flex flex-column text-start">
+                    <span class="fw-bold fs-6">Hospital</span>
+                    <span class="fs-7 text-muted">Inpatient or specialist hospital</span>
+                  </span>
+                </label>
+              </div>
+
+              <div class="col-12 col-md-6">
+                <label
+                  class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex align-items-center p-5 w-100 h-100"
+                  id="laboratoryCard"
+                >
+                  <input class="btn-check" type="radio" name="type" value="laboratory" />
+                  <i class="ki-duotone ki-flask fs-2x me-4"></i>
+                  <span class="d-flex flex-column text-start">
+                    <span class="fw-bold fs-6">Laboratory</span>
+                    <span class="fs-7 text-muted">Diagnostic or research lab</span>
+                  </span>
+                </label>
+              </div>
+              -->
             </div>
           </div>
-          <!--end::Business Phone-->
 
-          <!--begin::Location Address-->
+          <!-- Business Name -->
+          <div class="fv-row mb-8">
+            <label class="form-label required">Business Name</label>
+            <input
+              type="text"
+              name="businessName"
+              class="form-control bg-transparent"
+              placeholder="e.g. Mediplus Pharmacy"
+              autocomplete="off"
+            />
+            <div
+              class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+            ></div>
+          </div>
+
+          <!-- DYNAMIC REGISTRATION NUMBER
+               Each field is tied to a business type.
+               Only the active type's field is visible and enabled.
+               Pharmacy (PCN) is shown by default; the rest are hidden and disabled.
+               When scaling: uncomment the other cards above and these fields will activate automatically.
+          -->
+          <div class="fv-row mb-8">
+            <!-- Pharmacy: PCN -->
+            <div id="field-pharmacy" class="registration-field">
+              <label class="form-label required">
+                PCN Registration Number
+                <span class="text-muted fs-7">
+                  <i
+                    class="ki-outline ki-information-2 fs-6"
+                    data-bs-toggle="tooltip"
+                    data-bs-original-title="Your Pharmacy Council of Nigeria (PCN) registration number."
+                  ></i>
+                </span>
+              </label>
+              <input
+                type="text"
+                name="businessRegistrationNumber"
+                class="form-control bg-transparent"
+                placeholder="PCN-XXXXXXXX"
+                autocomplete="off"
+              />
+              <div
+                class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+              ></div>
+            </div>
+
+            <!-- Clinic: CAC
+            <div id="field-clinic" class="registration-field" style="display: none;">
+              <label class="form-label required">
+                CAC Registration Number
+                <span class="text-muted fs-7">
+                  <i
+                    class="ki-outline ki-information-2 fs-6"
+                    data-bs-toggle="tooltip"
+                    data-bs-original-title="Your Corporate Affairs Commission (CAC) business registration number."
+                  ></i>
+                </span>
+              </label>
+              <input
+                type="text"
+                name="businessRegistrationNumber"
+                class="form-control bg-transparent"
+                placeholder="CAC-XXXXXXXX"
+                autocomplete="off"
+                disabled
+              />
+              <div class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"></div>
+            </div>
+            -->
+
+            <!-- Hospital: HEFAMAA / State MOH
+            <div id="field-hospital" class="registration-field" style="display: none;">
+              <label class="form-label required">
+                HEFAMAA / State MOH Registration Number
+                <span class="text-muted fs-7">
+                  <i
+                    class="ki-outline ki-information-2 fs-6"
+                    data-bs-toggle="tooltip"
+                    data-bs-original-title="Your hospital facility registration number issued by HEFAMAA or your State Ministry of Health."
+                  ></i>
+                </span>
+              </label>
+              <input
+                type="text"
+                name="businessRegistrationNumber"
+                class="form-control bg-transparent"
+                placeholder="MOH-XXXXXXXX"
+                autocomplete="off"
+                disabled
+              />
+              <div class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"></div>
+            </div>
+            -->
+
+            <!-- Laboratory: MLSCN
+            <div id="field-laboratory" class="registration-field" style="display: none;">
+              <label class="form-label required">
+                MLSCN Registration Number
+                <span class="text-muted fs-7">
+                  <i
+                    class="ki-outline ki-information-2 fs-6"
+                    data-bs-toggle="tooltip"
+                    data-bs-original-title="Your Medical Laboratory Science Council of Nigeria (MLSCN) registration number."
+                  ></i>
+                </span>
+              </label>
+              <input
+                type="text"
+                name="businessRegistrationNumber"
+                class="form-control bg-transparent"
+                placeholder="MLSCN-XXXXXXXX"
+                autocomplete="off"
+                disabled
+              />
+              <div class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"></div>
+            </div>
+            -->
+          </div>
+
+          <!-- Location Address -->
           <div class="fv-row mb-8">
             <label class="form-label required">Location Address</label>
             <input
               type="text"
               name="address"
               class="form-control bg-transparent"
-              placeholder="Location Address"
+              placeholder="Street address"
               autocomplete="off"
             />
             <div
               class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
             ></div>
           </div>
-          <!--end::Location Address-->
 
-          <!--begin::State & LGA-->
+          <!-- State & LGA -->
           <div class="row g-9 mb-8">
             <div class="col-md-6">
               <label class="form-label required">State</label>
@@ -120,9 +238,7 @@
                 data-placeholder="Select State"
               >
                 <option></option>
-                <% locationData.forEach(item => { %>
-                <option value="<%= item.state %>"><%= item.state %></option>
-                <% }); %>
+                <option value="">Select State</option>
               </select>
               <div
                 class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
@@ -143,14 +259,42 @@
               <div class="fv-plugins-message-container invalid-feedback"></div>
             </div>
           </div>
-          <!--end::State & LGA-->
 
-          <!--begin::Contact Person First & Last Name-->
+          <!-- Business Phone -->
+          <div class="fv-row mb-8">
+            <label class="form-label">Business Phone Number</label>
+            <div class="row g-3">
+              <div class="col-4">
+                <select
+                  name="businessPhoneCode"
+                  class="form-select bg-transparent"
+                  data-kt-select2="true"
+                  data-hide-search="false"
+                  data-placeholder="Code"
+                >
+                  <option value="" disabled selected>Code</option>
+                  <option value="+234" selected>🇳🇬 +234</option>
+                </select>
+              </div>
+              <div class="col-8">
+                <input
+                  type="tel"
+                  name="businessPhone"
+                  class="form-control bg-transparent"
+                  placeholder="08012345678"
+                  autocomplete="off"
+                />
+                <div
+                  class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+                ></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Contact Person -->
           <div class="row g-9 mb-8">
             <div class="col-md-6">
-              <label class="form-label required"
-                >Contact Person First Name</label
-              >
+              <label class="form-label required">Contact First Name</label>
               <input
                 type="text"
                 name="contactFirstName"
@@ -163,9 +307,7 @@
               ></div>
             </div>
             <div class="col-md-6">
-              <label class="form-label required"
-                >Contact Person Last Name</label
-              >
+              <label class="form-label required">Contact Last Name</label>
               <input
                 type="text"
                 name="contactLastName"
@@ -178,9 +320,8 @@
               ></div>
             </div>
           </div>
-          <!--end::Contact Person First & Last Name-->
 
-          <!--begin::Contact Person Phone Number-->
+          <!-- Contact Phone -->
           <div class="fv-row mb-8">
             <label class="form-label required">Contact Phone Number</label>
             <div class="row g-3">
@@ -193,7 +334,7 @@
                   data-placeholder="Code"
                 >
                   <option value="" disabled selected>Code</option>
-                  <option value="+234">🇳🇬 +234</option>
+                  <option value="+234" selected>🇳🇬 +234</option>
                 </select>
               </div>
               <div class="col-8">
@@ -210,32 +351,23 @@
               </div>
             </div>
           </div>
-          <!--end::Contact Contact Person Phone Number-->
 
-          <!--begin::Submit Button-->
+          <!-- Submit -->
           <div class="d-grid mb-10">
-            <button
-              type="submit"
-              id="kt_onboarding_submit"
-              class="btn btn-primary"
-            >
+            <button type="submit" id="kt_onboarding_submit" class="btn btn-primary">
               <span class="indicator-label">Complete Setup</span>
-              <span class="indicator-progress"
-                >Please wait...
-                <span
-                  class="spinner-border spinner-border-sm align-middle ms-2"
-                ></span>
+              <span class="indicator-progress">
+                Please wait...
+                <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
               </span>
             </button>
           </div>
-          <!--end::Submit Button-->
         </form>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Assigning server-side variable 'locationData' and to a browser-side variable 'window.locationData' -->
 <script>
-  window.locationData = <%- locationDataJson %>;
+  window.locations = <%- locations %>;
 </script>

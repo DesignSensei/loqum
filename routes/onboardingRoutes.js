@@ -3,31 +3,27 @@
 const express = require("express");
 const router = express.Router();
 const onboardingController = require("../controllers/onboardingController");
-const {
-  isAuthenticated,
-  isNotOnboarded,
-  isOnboarded,
-} = require("../middleware/authMiddleware");
+const { isAuthenticated, isNotOnboarded, isOnboarded } = require("../middleware/authMiddleware");
 
 /* ---------- Public pages (GET) ---------- */
 router.get(
-  "/pharmacist",
+  "/professional",
   // isAuthenticated,
   // isNotOnboarded,
-  onboardingController.getPharmacistOnboarding,
+  onboardingController.getProfessionalOnboarding
 );
 router.get(
   "/employer",
   // isAuthenticated,
   // isNotOnboarded,
-  onboardingController.getEmployerOnboarding,
+  onboardingController.getEmployerOnboarding
 );
 
 /* ---------- Action pages (POST}) ---------- */
 /* router.post(
-  "/pharmacist",
+  "/professional",
   isAuthenticated,
-  onboardingController.postPharmacistOnboarding,
+  onboardingController.postProfessionalOnboarding,
 );
 
 router.post(

@@ -110,8 +110,7 @@ exports.postSignup = async (req, res, next) => {
       throw new Error("Missing required fields");
     }
 
-    const { firstName, lastName, email, password, confirmPassword, role } =
-      req.body;
+    const { firstName, lastName, email, password, confirmPassword, role } = req.body;
 
     const newUser = await AuthService.registerUser({
       firstName,
@@ -152,10 +151,7 @@ exports.postVerifyOTP = async (req, res, next) => {
         message: "Session expired. Please try again.",
       });
 
-    if (!otp)
-      return res
-        .status(400)
-        .json({ success: false, message: "OTP is required" });
+    if (!otp) return res.status(400).json({ success: false, message: "OTP is required" });
 
     const user = await AuthService.verifyOTP(userId, otp);
 

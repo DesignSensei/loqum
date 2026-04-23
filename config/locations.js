@@ -1,6 +1,4 @@
-// utils/locations.js
-
-// utils/locations.js
+// config/locations.js
 
 const locations = [
   {

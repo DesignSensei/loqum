@@ -1,24 +1,24 @@
 // controllers/onboardingController.js
 
-const User = require("../models/User");
-const PharmacistProfile = require("../models/PharmacistProfile");
-const EmployerProfile = require("../models/EmployerProfile");
 const OnboardingService = require("../services/onboardingService");
-const locations = require("../utils/locations");
+const locations = require("../config/locations");
+const specialtyConfig = require("../config/specialtyConfig");
+const logger = require("../utils/logger");
 
 //─────────────────────────────── AUTH RENDER BLOCK (GET ROUTES) ───────────────────────────────//
 
-// Renders the Pharmacist setup page
-exports.getPharmacistOnboarding = (req, res) => {
-  res.render("onboarding/pharmacist", {
+// Renders the Professional setup page
+exports.getProfessionalOnboarding = (req, res) => {
+  res.render("onboarding/professional", {
     layout: "layouts/auth-layout-no-index",
     title: "Professional Profile",
-    locationData: locations,
-    locationDataJson: JSON.stringify(locations),
+    locations: JSON.stringify(locations),
+    specialtyConfig: JSON.stringify(specialtyConfig),
     csrfToken: req.csrfToken(),
     scripts: `
     <script src="/js/location-picker.js"></script>
-    <script src="/js//onboarding/onboarding-pharmacist.js"></script>
+    <script src="/js/specialty-picker.js"></script>
+    <script src="/js/onboarding/onboarding-professional.js"></script>
     `,
   });
 };
@@ -27,8 +27,7 @@ exports.getEmployerOnboarding = (req, res) => {
   res.render("onboarding/employer", {
     layout: "layouts/auth-layout-no-index",
     title: "Pharmacy Profile",
-    locationData: locations,
-    locationDataJson: JSON.stringify(locations),
+    locations: JSON.stringify(locations),
     csrfToken: req.csrfToken(),
     scripts: `
     <script src="/js/location-picker.js"></script>
@@ -39,7 +38,7 @@ exports.getEmployerOnboarding = (req, res) => {
 
 //─────────────────────────────── AUTH ACTIONS (POST ROUTES) ───────────────────────────────//
 
-exports.postPharmacistOnboarding = async (req, res) => {
+exports.postProfessionalOnboarding = async (req, res, next) => {
   try {
     const userId = req.session.user?._id;
 
@@ -49,10 +48,7 @@ exports.postPharmacistOnboarding = async (req, res) => {
         message: "Session expired. Please log in again.",
       });
 
-    const profile = await OnboardingService.completePharmacistOnboarding(
-      userId,
-      req.body,
-    );
+    await OnboardingService.completeProfessionalOnboarding(userId, req.body);
 
     req.session.user.isOnboarded = true;
 
@@ -60,8 +56,8 @@ exports.postPharmacistOnboarding = async (req, res) => {
       if (err) return next(err);
       res.json({
         success: true,
-        message: "Profile completed successfully!",
-        redirectUrl: "/dashboard/pharmacist",
+        message: "Professional profile completed successfully!",
+        redirectUrl: "/dashboard/professional",
       });
     });
   } catch (error) {
@@ -80,10 +76,7 @@ exports.postEmployerOnboarding = async (req, res, next) => {
         message: "Session expired. Please log in again.",
       });
 
-    const profile = await OnboardingService.completeEmployerOnboarding(
-      userId,
-      req.body,
-    );
+    await OnboardingService.completeEmployerOnboarding(userId, req.body);
 
     req.session.user.isOnboarded = true;
 
@@ -91,7 +84,7 @@ exports.postEmployerOnboarding = async (req, res, next) => {
       if (err) return next(err);
       res.json({
         success: true,
-        message: "Pharmacy profile completed successfully!",
+        message: "Business profile completed successfully!",
         redirectUrl: "/dashboard/employer",
       });
     });

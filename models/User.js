@@ -43,13 +43,13 @@ const userSchema = new mongoose.Schema(
     /* ---------- Access Control ---------- */
     role: {
       type: String,
-      enum: ["admin", "pharmacist", "employer"],
+      enum: ["admin", "professional", "employer"],
       required: true,
     },
 
-    pharmacistProfile: {
+    professionalProfile: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "PharmacistProfile",
+      ref: "ProfessionalProfile",
     },
 
     employerProfile: {
@@ -108,7 +108,7 @@ const userSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
-  },
+  }
 );
 
 /* ---------- Pre-save Middleware (Password Hashing) ---------- */

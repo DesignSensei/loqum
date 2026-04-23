@@ -1,233 +1,171 @@
 <!-- views/auth/signup.ejs -->
 
-<div class="d-flex flex-column flex-lg-row flex-column-fluid">
-  <div
-    class="d-flex flex-column flex-lg-row-fluid w-lg-50 p-10 order-2 order-lg-1"
-  >
-    <div class="d-flex flex-center flex-column flex-lg-row-fluid">
-      <div class="w-75 w-lg-500px p-10">
-        <div class="text-center mb-11">
-          <h1 class="text-gray-900 fw-bolder mb-3">
-            Sign Up to <span class="brand-accent">Loqum</span>
-          </h1>
-          <div class="text-gray-500 fw-semibold fs-6">
-            Start managing shifts or finding work
-          </div>
-        </div>
-        <div class="row g-3 mb-9">
-          <div class="col-md-12">
-            <a
-              href="/auth/google"
-              class="btn btn-flex btn-outline btn-text-gray-700 btn-active-color-primary bg-state-light flex-center text-nowrap w-100"
-            >
-              <img
-                alt="Logo"
-                src="assets/media/svg/brand-logos/google-icon.svg"
-                class="h-15px me-3"
-              />
-              Sign in with Google
-            </a>
-          </div>
-        </div>
-        <div class="separator separator-content my-14">
-          <span class="w-125px text-gray-500 fw-semibold fs-7"
-            >Or with email</span
-          >
-        </div>
+<div class="d-flex flex-center flex-column flex-lg-row-fluid">
+  <div class="text-center mb-10">
+    <img alt="Logo" src="/assets/images/logo_purple.png" class="h-30px h-lg-40px" />
+  </div>
+  <div class="d-flex flex-column flex-lg-row-fluid w-75 w-lg-500px p-10 order-1 order-lg-1">
+    <div class="text-center mb-11">
+      <h1 class="text-gray-900 fw-bolder mb-3">
+        Sign Up to <span class="brand-accent">Loqum</span>
+      </h1>
+      <div class="text-gray-500 fw-semibold fs-6">Start managing shifts or finding work</div>
+    </div>
 
-        <!-- Signup Form -->
-        <form
-          class="form w-100"
-          novalidate="novalidate"
-          id="kt_sign_up_form"
-          action="/signup"
-          method="POST"
+    <div class="row g-3 mb-9">
+      <div class="col-md-12">
+        <a
+          href="/auth/google"
+          class="btn btn-flex btn-outline btn-text-gray-700 btn-active-color-primary bg-state-light flex-center text-nowrap w-100"
         >
-          <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-
-          <!-- Role cards (Pharmacist & Pharmacy)-->
-          <div class="fv-row mb-10">
-            <div class="row g-9" data-kt-buttons="true">
-              <div class="col-6">
-                <label
-                  class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex justify-content-center align-items-center p-6 active"
-                >
-                  <input
-                    class="btn-check"
-                    type="radio"
-                    name="role"
-                    value="pharmacist"
-                    checked="checked"
-                  />
-                  <i class="ki-duotone ki-address-book fs-2x me-5">
-                    <span class="path1"></span><span class="path2"></span
-                    ><span class="path3"></span>
-                  </i>
-                  <span class="d-flex flex-column text-start">
-                    <span class="fw-bold fs-3">Pharmacist</span>
-                    <span class="fs-7 text-muted">Find locum work</span>
-                  </span>
-                </label>
-              </div>
-
-              <div class="col-6">
-                <label
-                  class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex justify-content-center align-items-center p-6"
-                >
-                  <input
-                    class="btn-check"
-                    type="radio"
-                    name="role"
-                    value="employer"
-                  />
-                  <i class="ki-duotone ki-bank fs-2x me-5">
-                    <span class="path1"></span><span class="path2"></span>
-                  </i>
-                  <span class="d-flex flex-column text-start">
-                    <span class="fw-bold fs-3">Pharmacy</span>
-                    <span class="fs-7 text-muted">Hire staff</span>
-                  </span>
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <div
-            class="hover-scroll-y px-5"
-            style="max-height: 400px; overflow-x: hidden"
-          >
-            <!-- First name -->
-            <div class="fv-row mb-8">
-              <input
-                type="text"
-                placeholder="First Name"
-                name="firstName"
-                class="form-control bg-transparent"
-                required
-              />
-            </div>
-
-            <!-- Last name -->
-            <div class="fv-row mb-8">
-              <input
-                type="text"
-                placeholder="Last Name"
-                name="lastName"
-                class="form-control bg-transparent"
-                required
-              />
-            </div>
-
-            <!-- Email address -->
-            <div class="fv-row mb-8">
-              <input
-                type="email"
-                placeholder="Email"
-                name="email"
-                class="form-control bg-transparent"
-                required
-              />
-            </div>
-
-            <!-- Password -->
-            <div class="fv-row mb-8" data-kt-password-meter="true">
-              <div class="mb-1">
-                <div class="position-relative mb-3">
-                  <input
-                    class="form-control bg-transparent"
-                    type="password"
-                    placeholder="Password"
-                    name="password"
-                    autocomplete="off"
-                    required
-                  />
-                  <span
-                    class="btn btn-sm btn-icon position-absolute translate-middle top-50 end-0 me-n2"
-                    data-kt-password-meter-control="visibility"
-                  >
-                    <i class="ki-duotone ki-eye-slash fs-2"></i>
-                    <i class="ki-duotone ki-eye fs-2 d-none"></i>
-                  </span>
-                </div>
-                <div
-                  class="d-flex align-items-center mb-3"
-                  data-kt-password-meter-control="highlight"
-                >
-                  <div
-                    class="flex-grow-1 bg-secondary bg-active-success rounded h-5px me-2"
-                  ></div>
-                  <div
-                    class="flex-grow-1 bg-secondary bg-active-success rounded h-5px me-2"
-                  ></div>
-                  <div
-                    class="flex-grow-1 bg-secondary bg-active-success rounded h-5px me-2"
-                  ></div>
-                  <div
-                    class="flex-grow-1 bg-secondary bg-active-success rounded h-5px"
-                  ></div>
-                </div>
-              </div>
-              <div class="text-muted">
-                Use 8+ characters with a mix of letters, numbers & symbols.
-              </div>
-            </div>
-
-            <!-- Confirm password -->
-            <div class="fv-row mb-8">
-              <input
-                class="form-control bg-transparent"
-                type="password"
-                placeholder="Repeat Password"
-                name="confirmPassword"
-                autocomplete="off"
-                required
-              />
-              <span
-                class="btn btn-sm btn-icon position-absolute translate-middle top-50 end-0 me-n2"
-                data-kt-password-meter-control="visibility"
-              >
-                <i class="ki-duotone ki-eye-slash fs-2"></i>
-                <i class="ki-duotone ki-eye fs-2 d-none"></i>
-              </span>
-            </div>
-
-            <!-- Terms and conditions -->
-            <div class="fv-row mb-8">
-              <label class="form-check form-check-inline">
-                <input
-                  class="form-check-input"
-                  type="checkbox"
-                  name="toc"
-                  value="1"
-                />
-                <span
-                  class="form-check-label fw-semibold text-gray-700 fs-base ms-1"
-                >
-                  I Accept the
-                  <a href="#" class="ms-1 link-primary">Terms</a> and
-                  <a href="#" class="ms-1 link-primary">Conditions</a>
-                </span>
-              </label>
-            </div>
-          </div>
-
-          <div class="d-grid mb-10 mt-10">
-            <button
-              type="submit"
-              id="kt_sign_up_submit"
-              class="btn btn-primary"
-            >
-              <span class="indicator-label">Create Account & Continue</span>
-              <span class="indicator-progress"
-                >Please wait...
-                <span
-                  class="spinner-border spinner-border-sm align-middle ms-2"
-                ></span>
-              </span>
-            </button>
-          </div>
-        </form>
+          <img alt="Logo" src="assets/media/svg/brand-logos/google-icon.svg" class="h-15px me-3" />
+          Sign in with Google
+        </a>
       </div>
     </div>
+
+    <div class="separator separator-content my-14">
+      <span class="w-125px text-gray-500 fw-semibold fs-7">Or with email</span>
+    </div>
+
+    <form
+      class="form w-100"
+      novalidate="novalidate"
+      id="kt_sign_up_form"
+      action="/signup"
+      method="POST"
+    >
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+      <div class="fv-row mb-10">
+        <div class="row g-9" data-kt-buttons="true">
+          <div class="col-6">
+            <label
+              class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex justify-content-center align-items-center p-6 active"
+            >
+              <input
+                class="btn-check"
+                type="radio"
+                name="role"
+                value="pharmacist"
+                checked="checked"
+              />
+              <i class="ki-duotone ki-address-book fs-2x me-5">
+                <span class="path1"></span><span class="path2"></span><span class="path3"></span>
+              </i>
+              <span class="d-flex flex-column text-start">
+                <span class="fw-bold fs-3">Pharmacist</span>
+                <span class="fs-7 text-muted">Find locum work</span>
+              </span>
+            </label>
+          </div>
+          <div class="col-6">
+            <label
+              class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex justify-content-center align-items-center p-6"
+            >
+              <input class="btn-check" type="radio" name="role" value="employer" />
+              <i class="ki-duotone ki-bank fs-2x me-5">
+                <span class="path1"></span><span class="path2"></span>
+              </i>
+              <span class="d-flex flex-column text-start">
+                <span class="fw-bold fs-3">Pharmacy</span>
+                <span class="fs-7 text-muted">Hire staff</span>
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="fv-row mb-8">
+        <input
+          type="text"
+          placeholder="First Name"
+          name="firstName"
+          class="form-control bg-transparent"
+          required
+        />
+      </div>
+
+      <div class="fv-row mb-8">
+        <input
+          type="text"
+          placeholder="Last Name"
+          name="lastName"
+          class="form-control bg-transparent"
+          required
+        />
+      </div>
+
+      <div class="fv-row mb-8">
+        <input
+          type="email"
+          placeholder="Email"
+          name="email"
+          class="form-control bg-transparent"
+          required
+        />
+      </div>
+
+      <div class="fv-row mb-8" data-kt-password-meter="true">
+        <div class="mb-1">
+          <div class="position-relative mb-3">
+            <input
+              class="form-control bg-transparent"
+              type="password"
+              placeholder="Password"
+              name="password"
+              autocomplete="off"
+              required
+            />
+            <span
+              class="btn btn-sm btn-icon position-absolute translate-middle top-50 end-0 me-n2"
+              data-kt-password-meter-control="visibility"
+            >
+              <i class="ki-duotone ki-eye-slash fs-2"></i>
+              <i class="ki-duotone ki-eye fs-2 d-none"></i>
+            </span>
+          </div>
+          <div class="d-flex align-items-center mb-3" data-kt-password-meter-control="highlight">
+            <div class="flex-grow-1 bg-secondary bg-active-success rounded h-5px me-2"></div>
+            <div class="flex-grow-1 bg-secondary bg-active-success rounded h-5px me-2"></div>
+            <div class="flex-grow-1 bg-secondary bg-active-success rounded h-5px me-2"></div>
+            <div class="flex-grow-1 bg-secondary bg-active-success rounded h-5px"></div>
+          </div>
+        </div>
+        <div class="text-muted">Use 8+ characters with a mix of letters, numbers & symbols.</div>
+      </div>
+
+      <div class="fv-row mb-8">
+        <input
+          class="form-control bg-transparent"
+          type="password"
+          placeholder="Repeat Password"
+          name="confirmPassword"
+          autocomplete="off"
+          required
+        />
+      </div>
+
+      <div class="fv-row mb-8">
+        <label class="form-check form-check-inline">
+          <input class="form-check-input" type="checkbox" name="toc" value="1" />
+          <span class="form-check-label fw-semibold text-gray-700 fs-base ms-1">
+            I Accept the
+            <a href="#" class="ms-1 link-primary">Terms</a> and
+            <a href="#" class="ms-1 link-primary">Conditions</a>
+          </span>
+        </label>
+      </div>
+
+      <div class="d-grid mb-10">
+        <button type="submit" id="kt_sign_up_submit" class="btn btn-primary">
+          <span class="indicator-label">Create Account & Continue</span>
+          <span class="indicator-progress"
+            >Please wait...
+            <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+          </span>
+        </button>
+      </div>
+    </form>
   </div>
 </div>

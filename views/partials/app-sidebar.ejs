@@ -3,7 +3,7 @@
 <div class="app-navbar flex-column flex-center py-4">
   <!--begin::Home-->
   <a
-    href="/dashboard/<%= user.role %>"
+    href="<%= userHome %>"
     class="btn btn-icon btn-default mx-auto mb-4"
     data-bs-toggle="tooltip"
     data-bs-placement="right"
@@ -16,7 +16,7 @@
   </a>
   <!--end::Home-->
 
-  <% if (user.role === 'pharmacist') { %>
+  <% if (user && user.role === 'pharmacist') { %>
 
   <!--begin::Find Shifts-->
   <a
@@ -113,7 +113,7 @@
   </a>
   <!--end::Profile-->
 
-  <% } else if (user.role === 'employer') { %>
+  <% } else if (user && user.role === 'employer') { %>
 
   <!--begin::Post Shift-->
   <a
@@ -200,7 +200,7 @@
   </a>
   <!--end::Profile-->
 
-  <% } else if (user.role === 'admin') { %>
+  <% } else if (user && user.role === 'admin') { %>
 
   <!--begin::User Management-->
   <div

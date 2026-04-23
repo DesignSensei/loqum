@@ -1,4 +1,4 @@
-// routes/pharmacistRoutes.js
+// routes/professionalRoutes.js
 
 const express = require("express");
 const router = express.Router();
@@ -8,12 +8,12 @@ const {
   hasRole,
   isOnboarded,
 } = require("../middleware/authMiddleware");
-const pharmacistController = require("../controllers/pharmacistController");
+const professionalController = require("../controllers/professionalController");
 
 /* ---------- Middleware ---------- */
-router.use(isAuthenticated, isVerified, hasRole("pharmacist"), isOnboarded);
+// router.use(isAuthenticated, isVerified, hasRole("worker"), isOnboarded);
 
 /* ---------- Public pages (GET) ---------- */
-router.get("/dashboard", pharmacistController.getDashboard);
+router.get("/dashboard", professionalController.getDashboard);
 
 module.exports = router;

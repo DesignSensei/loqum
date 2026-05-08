@@ -51,3 +51,46 @@ exports.isOnboarded = (req, res, next) => {
   if (req.user && req.user.isOnboarded) return next();
   return res.redirect(`/onboarding/${req.user.role}`);
 };
+
+/* ---------- Resolve Employer Context ---------- */
+exports.resolveEmployerContext = async (req, res, next) => {
+  try {
+    if (!req.user || req.user.role !== "employer") return next();
+
+    const EmployerProfile = require("../models/EmployerProfile");
+    const EmployerMember = require("../models/EmployerMember");
+
+    // Check if they are an owner
+    const profile = await EmployerProfile.findOne({ user: req.user._id });
+    if (profile) {
+      req.employer = {
+        type: "owner",
+        business: profile._id,
+        branch: null,
+        role: "owner",
+        profile,
+      };
+      return next();
+    }
+
+    // Check if they are an invited member
+    const member = await EmployerMember.findOne({ user: req.user._id })
+      .populate("business")
+      .populate("branch");
+
+    if (member) {
+      req.employer = {
+        type: "member",
+        business: member.business._id,
+        branch: member.branch._id,
+        role: member.role,
+        profile: member,
+      };
+      return next();
+    }
+
+    return res.status(403).json({ message: "Employer profile not found" });
+  } catch (error) {
+    next(error);
+  }
+};

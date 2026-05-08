@@ -55,9 +55,9 @@ exports.getNewPassword = (req, res) => {
 
 // Render Two Factor Page
 exports.getTwoFactor = (req, res) => {
-  const user = req.session.user || {};
+  const otpContext = req.session.otpContext;
 
-  if (!user.email) {
+  if (!otpContext || !otpContext.email) {
     return res.redirect("/login");
   }
 
@@ -65,9 +65,11 @@ exports.getTwoFactor = (req, res) => {
     layout: "layouts/auth-layout-no-index",
     title: "Two Factor",
     scripts: `
-    <script src="/js/auth/two-factor.js"></script>
+      <script src="/js/auth/two-factor.js"></script>
     `,
-    user: user,
+    user: {
+      email: otpContext.email,
+    },
   });
 };
 
@@ -79,8 +81,19 @@ exports.postLogin = async (req, res, next) => {
     const result = await AuthService.loginUser(req.body);
 
     if (result.requiresTwoFactor) {
-      req.session.pendingAuth = result.pendingAuth;
-      return res.redirect("/two-factor");
+      await AuthService.sendOTP(result.pendingAuth.userId);
+
+      req.session.otpContext = {
+        userId: result.pendingAuth.userId,
+        email: result.pendingAuth.email,
+        purpose: "login_2fa",
+      };
+
+      return res.json({
+        success: true,
+        message: "Enter the OTP sent to your email.",
+        redirectUrl: "/two-factor",
+      });
     }
 
     req.session.user = result.user;
@@ -124,7 +137,11 @@ exports.postSignup = async (req, res, next) => {
     // Send OTP
     await AuthService.sendOTP(newUser._id);
 
-    req.session.user = newUser;
+    req.session.otpContext = {
+      userId: newUser._id,
+      email: newUser.email,
+      purpose: "email_verification",
+    };
 
     req.session.save((err) => {
       if (err) return next(err);
@@ -143,36 +160,73 @@ exports.postSignup = async (req, res, next) => {
 exports.postVerifyOTP = async (req, res, next) => {
   try {
     const { otp } = req.body;
-    const userId = req.session.user?._id;
+    const otpContext = req.session.otpContext;
 
-    if (!userId)
+    if (!otpContext || !otpContext.userId) {
       return res.status(401).json({
         success: false,
         message: "Session expired. Please try again.",
       });
+    }
 
-    if (!otp) return res.status(400).json({ success: false, message: "OTP is required" });
+    if (!otp) {
+      return res.status(400).json({
+        success: false,
+        message: "OTP is required",
+      });
+    }
 
-    const user = await AuthService.verifyOTP(userId, otp);
+    const user = await AuthService.verifyOTP(otpContext.userId, otp);
 
-    // Let Passport serialize the user into the session
     req.login(user, (err) => {
       if (err) return next(err);
 
-      res.json({
-        success: true,
-        message: "Email verified successfully!",
-        redirectUrl: "/dashboard",
+      req.session.user = {
+        _id: user._id,
+        email: user.email,
+        role: user.role,
+        isVerified: user.isVerified,
+        isOnboarded: user.isOnboarded,
+      };
+
+      const purpose = otpContext.purpose;
+
+      delete req.session.otpContext;
+
+      let redirectUrl;
+
+      if (purpose === "email_verification") {
+        redirectUrl = user.isOnboarded ? "/dashboard" : "/onboarding";
+      } else if (purpose === "login_2fa") {
+        redirectUrl = user.isOnboarded ? "/dashboard" : "/onboarding";
+      } else {
+        redirectUrl = "/";
+      }
+
+      req.session.save((err) => {
+        if (err) return next(err);
+
+        return res.json({
+          success: true,
+          message:
+            purpose === "email_verification"
+              ? "Email verified successfully!"
+              : "Login verified successfully!",
+          redirectUrl,
+        });
       });
     });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
 exports.postResendOTP = async (req, res, next) => {
   try {
-    const userId = req.session.user?._id;
+    const userId = req.session.otpContext?.userId;
 
     if (!userId)
       return res.status(401).json({
@@ -183,7 +237,11 @@ exports.postResendOTP = async (req, res, next) => {
     try {
       await AuthService.sendOTP(userId);
     } catch (error) {
-      logger.error(`Failed to send OTP: ${otpError.message}`);
+      logger.error(`Failed to send OTP: ${error.message}`);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send OTP. Please try again.",
+      });
     }
 
     res.json({

@@ -28,6 +28,11 @@ const employerProfileSchema = new mongoose.Schema(
       trim: true,
     },
 
+    cacVerified: {
+      type: Boolean,
+      default: false,
+    },
+
     businessPhoneCode: {
       type: String,
       trim: true,
@@ -42,6 +47,11 @@ const employerProfileSchema = new mongoose.Schema(
     address: {
       type: String,
       trim: true,
+    },
+
+    coordinates: {
+      lat: { type: Number },
+      lng: { type: Number },
     },
 
     state: {
@@ -75,6 +85,33 @@ const employerProfileSchema = new mongoose.Schema(
       default: "+234",
     },
 
+    // --- FINANCIAL ---
+
+    outstandingInvoices: {
+      type: Number,
+      default: 0,
+    },
+
+    totalShiftsPaid: {
+      type: Number,
+      default: 0,
+    },
+
+    totalAmountSpent: {
+      type: Number,
+      default: 0,
+    },
+
+    // --- ACCOUNT STATUS ---
+
+    accountStatus: {
+      type: String,
+      enum: ["active", "restricted", "suspended"],
+      default: "active",
+    },
+
+    // --- REPUTATION ---
+
     reviews: [
       {
         type: mongoose.Schema.Types.ObjectId,
@@ -88,6 +125,16 @@ const employerProfileSchema = new mongoose.Schema(
     },
 
     totalReviews: {
+      type: Number,
+      default: 0,
+    },
+
+    totalShiftsPosted: {
+      type: Number,
+      default: 0,
+    },
+
+    totalShiftsCompleted: {
       type: Number,
       default: 0,
     },

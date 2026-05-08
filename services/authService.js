@@ -32,23 +32,9 @@ class AuthService {
   }
 
   /* ---------- Register a new user ---------- */
-  static async registerUser({
-    firstName,
-    lastName,
-    email,
-    password,
-    confirmPassword,
-    role,
-  }) {
+  static async registerUser({ firstName, lastName, email, password, confirmPassword, role }) {
     // Validate input (ensure all fields are provided)
-    if (
-      !firstName ||
-      !lastName ||
-      !email ||
-      !password ||
-      !confirmPassword ||
-      !role
-    )
+    if (!firstName || !lastName || !email || !password || !confirmPassword || !role)
       throw new Error("All fields are required");
 
     if (password !== confirmPassword) throw new Error("Passwords do not match");
@@ -57,15 +43,12 @@ class AuthService {
     const existingUser = await User.findOne({ email });
     if (existingUser) throw new Error("User with this email already exists");
 
-    // Hash the password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
     // Create new user instance
     const newUser = new User({
       firstName,
       lastName,
       email,
-      password: hashedPassword,
+      password,
       role,
       isVerified: false,
       twoFactorEnabled: false,
@@ -84,8 +67,7 @@ class AuthService {
     // Rate limit
     if (user.otpLastSentAt) {
       const secondsSinceLastSent = (Date.now() - user.otpLastSentAt) / 1000;
-      if (secondsSinceLastSent < 60)
-        throw new Error("Please wait before requesting another OTP");
+      if (secondsSinceLastSent < 60) throw new Error("Please wait before requesting another OTP");
     }
 
     // Generate OTP
@@ -108,8 +90,7 @@ class AuthService {
     const user = await User.findById(userId).select("+otp +otpExpiry");
     if (!user) throw new Error("User not found");
 
-    if (user.otpAttempts >= 5)
-      throw new Error("Too many attempts. Please request a new OTP");
+    if (user.otpAttempts >= 5) throw new Error("Too many attempts. Please request a new OTP");
 
     if (!user.otpExpiry || user.otpExpiry < new Date())
       throw new Error("OTP has expired. Please request a new one");
@@ -117,9 +98,7 @@ class AuthService {
     if (user.otp !== otp) {
       user.otpAttempts += 1;
       await user.save();
-      throw new Error(
-        `Invalid OTP. ${5 - user.otpAttempts} attempts remaining`,
-      );
+      throw new Error(`Invalid OTP. ${5 - user.otpAttempts} attempts remaining`);
     }
 
     // Clear OTP and mark as verified
@@ -139,10 +118,7 @@ class AuthService {
 
     // Generate reset token
     const resetToken = crypto.randomBytes(32).toString("hex");
-    const hashedToken = crypto
-      .createHash("sha256")
-      .update(resetToken)
-      .digest("hex");
+    const hashedToken = crypto.createHash("sha256").update(resetToken).digest("hex");
 
     user.resetPasswordToken = hashedToken;
     user.resetPasswordExpiry = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
@@ -155,8 +131,7 @@ class AuthService {
 
   /* ---------- Send password reset link ---------- */
   static async resetPassword(token, newPassword, confirmPassword) {
-    if (newPassword !== confirmPassword)
-      throw new Error("Passwords do not match");
+    if (newPassword !== confirmPassword) throw new Error("Passwords do not match");
 
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
 

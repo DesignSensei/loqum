@@ -1556,3 +1556,31 @@
 {"level":"info","message":"GET /two-factor 302","timestamp":"2026-04-22 04:28:28","user":"Guest"}
 {"level":"info","message":"GET /login 200","timestamp":"2026-04-22 04:28:28","user":"Guest"}
 {"level":"info","message":"GET /login 200","timestamp":"2026-04-23 03:41:56","user":"Guest"}
+{"level":"info","message":"Connected to MongoDB","timestamp":"2026-04-23 13:25:40"}
+{"level":"info","message":"Server running on http://localhost:3000","timestamp":"2026-04-23 13:25:40"}
+{"level":"info","message":"GET / 404","timestamp":"2026-04-23 13:25:42","user":"Guest"}
+{"level":"info","message":"GET /login 200","timestamp":"2026-04-23 13:25:49","user":"Guest"}
+{"level":"info","message":"GET /login 200","timestamp":"2026-04-24 02:20:11","user":"Guest"}
+{"level":"info","message":"Connected to MongoDB","timestamp":"2026-04-26 15:50:35"}
+{"level":"info","message":"Server running on http://localhost:3000","timestamp":"2026-04-26 15:50:35"}
+{"level":"info","message":"GET / 404","timestamp":"2026-04-26 15:50:37","user":"Guest"}
+{"level":"info","message":"GET /login 200","timestamp":"2026-04-26 15:50:44","user":"Guest"}
+{"level":"info","message":"GET /signup 200","timestamp":"2026-04-26 15:50:52","user":"Guest"}
+{"level":"info","message":"GET /onboarding/employer/ 200","timestamp":"2026-04-26 15:51:30","user":"Guest"}
+{"level":"info","message":"GET /onboarding/professional/ 200","timestamp":"2026-04-26 15:52:29","user":"Guest"}
+{"level":"info","message":"GET /new-password 200","timestamp":"2026-04-26 15:53:12","user":"Guest"}
+{"level":"info","message":"GET /reset-password 200","timestamp":"2026-04-26 15:53:18","user":"Guest"}
+{"level":"info","message":"Connected to MongoDB","timestamp":"2026-05-07 00:10:45"}
+{"level":"info","message":"Server running on http://localhost:3000","timestamp":"2026-05-07 00:10:45"}
+{"level":"info","message":"GET / 404","timestamp":"2026-05-07 00:10:48","user":"Guest"}
+{"level":"info","message":"GET /signup 200","timestamp":"2026-05-07 00:10:57","user":"Guest"}
+{"level":"info","message":"POST /signup 400","timestamp":"2026-05-07 00:11:18","user":"Guest"}
+{"level":"info","message":"GET /signup 200","timestamp":"2026-05-07 00:18:36","user":"Guest"}
+{"level":"info","message":"User registered successfully: obilomizuchukwu@gmail.com","timestamp":"2026-05-07 00:19:00"}
+{"level":"info","message":"OTP for obilomizuchukwu@gmail.com: 147600","timestamp":"2026-05-07 00:19:00"}
+{"level":"info","message":"OTP sent to obilomizuchukwu@gmail.com","timestamp":"2026-05-07 00:19:01"}
+{"level":"info","message":"POST /signup 200","timestamp":"2026-05-07 00:19:01","user":"Guest"}
+{"level":"info","message":"GET /two-factor 200","timestamp":"2026-05-07 00:19:02","user":"Guest"}
+{"level":"info","message":"POST /two-factor/verify 302","timestamp":"2026-05-07 00:19:08","user":"Guest"}
+{"level":"info","message":"GET /two-factor 200","timestamp":"2026-05-07 00:19:08","user":"Guest"}
+{"level":"info","message":"GET /undefined 404","timestamp":"2026-05-07 00:19:10","user":"Guest"}

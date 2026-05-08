@@ -22,6 +22,12 @@ const reviewSchema = new mongoose.Schema(
       enum: ["ProfessionalProfile", "EmployerProfile"],
     },
 
+    shift: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Shift",
+      required: true,
+    },
+
     rating: {
       type: Number,
       required: true,
@@ -39,7 +45,7 @@ const reviewSchema = new mongoose.Schema(
 );
 
 // Prevent a user from reviewing the same target more than once
-reviewSchema.index({ reviewer: 1, target: 1 }, { unique: true });
+reviewSchema.index({ reviewer: 1, target: 1, shift: 1 }, { unique: true });
 
 /* ---------- Static Method (Ratings Recalculation) ---------- */
 // Recomputes and updates averageRating and totalReviews on the target profile whenever a review is created or deleted.

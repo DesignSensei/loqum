@@ -1,4 +1,5 @@
 // controllers/adminController.js
+
 const logger = require("../utils/logger");
 
 exports.getDashboard = (req, res) => {

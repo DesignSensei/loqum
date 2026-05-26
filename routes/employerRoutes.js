@@ -8,10 +8,11 @@ const {
   hasRole,
   isOnboarded,
 } = require("../middleware/authMiddleware");
+const { attachEmployerProfile } = require("../middleware/employerMiddleware");
 const employerController = require("../controllers/employerController");
 
 /* ---------- Middleware ---------- */
-// router.use(isAuthenticated, isVerified, hasRole("employer"), isOnboarded);
+// router.use(isAuthenticated, isVerified, hasRole("employer"), isOnboarded, attachEmployerProfile);
 
 /* ---------- Public pages (GET) ---------- */
 router.get("/dashboard", employerController.getDashboard);

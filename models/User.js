@@ -18,6 +18,12 @@ const userSchema = new mongoose.Schema(
       trim: true,
     },
 
+    displayName: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
     email: {
       type: String,
       required: true,
@@ -28,8 +34,17 @@ const userSchema = new mongoose.Schema(
 
     password: {
       type: String,
-      required: true,
+      required: function () {
+        return this.authProvider === "local";
+      },
       select: false,
+    },
+
+    /* ---------- Auth Provider ---------- */
+    authProvider: {
+      type: String,
+      enum: ["local", "google"],
+      default: "local",
     },
 
     /* ---------- OAuth Configuration ---------- */
@@ -38,6 +53,11 @@ const userSchema = new mongoose.Schema(
       index: true,
       unique: true,
       sparse: true,
+    },
+
+    photo: {
+      type: String,
+      default: "",
     },
 
     /* ---------- Access Control ---------- */
@@ -69,7 +89,6 @@ const userSchema = new mongoose.Schema(
     },
 
     /* ---------- Onboarding Status ---------- */
-    // Crucial for the isNotOnboarded/isOnboarded middleware logic
     isOnboarded: {
       type: Boolean,
       default: false,
@@ -112,10 +131,8 @@ const userSchema = new mongoose.Schema(
 );
 
 /* ---------- Pre-save Middleware (Password Hashing) ---------- */
-// This runs automatically before the document is saved to MongoDB.
 userSchema.pre("save", async function () {
-  // Only hash the password if it has been modified (or is new)
-  if (!this.isModified("password")) return;
+  if (!this.isModified("password") || !this.password) return;
 
   try {
     const salt = await bcrypt.genSalt(10);
@@ -126,8 +143,9 @@ userSchema.pre("save", async function () {
 });
 
 /* ---------- Instance Method (Password Verification) ---------- */
-// Allows you to check if a login password matches the hashed version in the DB.
 userSchema.methods.comparePassword = async function (candidatePassword) {
+  if (!this.password) return false;
+
   return await bcrypt.compare(candidatePassword, this.password);
 };
 

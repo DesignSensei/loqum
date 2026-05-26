@@ -10,10 +10,20 @@ class AuthService {
   /* ---------- Login an existing user ---------- */
   static async loginUser({ email, password }) {
     const user = await User.findOne({ email }).select("+password");
-    if (!user) throw new Error("Invalid email or password");
+
+    if (!user) {
+      throw new Error("Invalid email or password");
+    }
+
+    if (user.authProvider === "google" && !user.password) {
+      throw new Error("This account was created with Google. Please sign in with Google.");
+    }
 
     const passwordMatches = await bcrypt.compare(password, user.password);
-    if (!passwordMatches) throw new Error("Invalid email or password");
+
+    if (!passwordMatches) {
+      throw new Error("Invalid email or password");
+    }
 
     if (user.twoFactorEnabled) {
       return {
@@ -33,29 +43,36 @@ class AuthService {
 
   /* ---------- Register a new user ---------- */
   static async registerUser({ firstName, lastName, email, password, confirmPassword, role }) {
-    // Validate input (ensure all fields are provided)
-    if (!firstName || !lastName || !email || !password || !confirmPassword || !role)
+    if (!firstName || !lastName || !email || !password || !confirmPassword || !role) {
       throw new Error("All fields are required");
+    }
 
-    if (password !== confirmPassword) throw new Error("Passwords do not match");
+    if (password !== confirmPassword) {
+      throw new Error("Passwords do not match");
+    }
 
-    // Check if user is existing user
     const existingUser = await User.findOne({ email });
-    if (existingUser) throw new Error("User with this email already exists");
 
-    // Create new user instance
+    if (existingUser) {
+      throw new Error("User with this email already exists");
+    }
+
     const newUser = new User({
       firstName,
       lastName,
       email,
       password,
       role,
+      authProvider: "local",
       isVerified: false,
+      isOnboarded: false,
       twoFactorEnabled: false,
     });
 
     await newUser.save();
+
     logger.info(`User registered successfully: ${email}`);
+
     return newUser;
   }
 
@@ -142,9 +159,10 @@ class AuthService {
 
     if (!user) throw new Error("Invalid or expired reset link");
 
-    user.password = await bcrypt.hash(newPassword, 10);
+    user.password = newPassword;
     user.resetPasswordToken = undefined;
     user.resetPasswordExpiry = undefined;
+
     await user.save();
 
     return true;

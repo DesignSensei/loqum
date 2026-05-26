@@ -138,8 +138,12 @@
                 type="text"
                 name="licenceNumber"
                 class="form-control bg-transparent"
-                placeholder="e.g. PH/12345/RN"
+                placeholder="e.g. 012345"
                 autocomplete="off"
+                inputmode="numeric"
+                maxlength="6"
+                pattern="[0-9]{6}"
+                oninput="this.value = this.value.replace(/\D/g, '').slice(0, 6)"
               />
               <div
                 class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
@@ -302,21 +306,6 @@
             ></div>
           </div>
 
-          <!-- Location Address -->
-          <div class="fv-row mb-8">
-            <label class="form-label required">Location Address</label>
-            <input
-              type="text"
-              name="address"
-              class="form-control bg-transparent"
-              placeholder="Location Address"
-              autocomplete="off"
-            />
-            <div
-              class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
-            ></div>
-          </div>
-
           <!-- State & LGA -->
           <div class="row g-9 mb-8">
             <div class="col-md-6">
@@ -349,6 +338,28 @@
               </select>
               <div class="fv-plugins-message-container invalid-feedback"></div>
             </div>
+          </div>
+
+          <!-- Location Address -->
+          <div class="fv-row mb-8">
+            <label class="form-label required">Location Address</label>
+
+            <input
+              type="text"
+              id="addressInput"
+              name="address"
+              class="form-control bg-transparent"
+              placeholder="Location Address"
+              autocomplete="off"
+            />
+
+            <input type="hidden" id="latitudeInput" name="latitude" />
+            <input type="hidden" id="longitudeInput" name="longitude" />
+            <input type="hidden" id="googlePlaceIdInput" name="googlePlaceId" />
+
+            <div
+              class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+            ></div>
           </div>
 
           <!-- Professional Bio -->

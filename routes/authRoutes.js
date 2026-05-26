@@ -14,13 +14,50 @@ router.get("/new-password", authController.getNewPassword);
 router.get("/two-factor", hasPendingAuth, authController.getTwoFactor);
 
 /* ---------- Google OAuth ---------- */
-router.get("/auth/google", passport.authenticate("google", { scope: ["profile", "email"] }));
+router.get("/auth/google", (req, res, next) => {
+  const { intent, role } = req.query;
+
+  const allowedRoles = ["professional", "employer"];
+
+  req.session.oauthContext = {
+    intent: intent === "signup" ? "signup" : "login",
+    role: allowedRoles.includes(role) ? role : null,
+  };
+
+  req.session.save((err) => {
+    if (err) return next(err);
+
+    passport.authenticate("google", {
+      scope: ["profile", "email"],
+    })(req, res, next);
+  });
+});
+
 router.get(
   "/auth/google/callback",
   passport.authenticate("google", { failureRedirect: "/login" }),
-  (req, res) => {
-    // Successful Google login
-    res.redirect(`/dashboard/${req.user.role}`);
+  (req, res, next) => {
+    if (!req.user) {
+      return res.redirect("/login");
+    }
+
+    req.session.user = {
+      _id: req.user._id,
+      email: req.user.email,
+      role: req.user.role,
+      isVerified: req.user.isVerified,
+      isOnboarded: req.user.isOnboarded,
+    };
+
+    req.session.save((err) => {
+      if (err) return next(err);
+
+      if (!req.user.role || !req.user.isOnboarded) {
+        return res.redirect(`/${req.user.role}/onboarding`);
+      }
+
+      return res.redirect(`/${req.user.role}/dashboard`);
+    });
   }
 );
 
@@ -31,5 +68,6 @@ router.post("/two-factor/verify", hasPendingAuth, authController.postVerifyOTP);
 router.post("/two-factor/resend", hasPendingAuth, authController.postResendOTP);
 router.post("/reset-password", authController.postResetPassword);
 router.post("/new-password", authController.postNewPassword);
+router.post("/logout", authController.logout);
 
 module.exports = router;

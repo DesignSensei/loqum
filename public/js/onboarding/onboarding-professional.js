@@ -93,7 +93,15 @@ var OnboardingProfessional = (function () {
     validator = FormValidation.formValidation(form, {
       fields: {
         licenceNumber: {
-          validators: { notEmpty: { message: "Licence number is required." } },
+          validators: {
+            notEmpty: {
+              message: "Licence number is required.",
+            },
+            regexp: {
+              regexp: /^[0-9]{6}$/,
+              message: "Licence number must be exactly 6 digits.",
+            },
+          },
         },
         phone: {
           validators: { notEmpty: { message: "Phone number is required." } },
@@ -126,6 +134,22 @@ var OnboardingProfessional = (function () {
 
       validator.validate().then(function (status) {
         if (status === "Valid") {
+          const latitudeInput = document.querySelector("#latitudeInput");
+          const longitudeInput = document.querySelector("#longitudeInput");
+          const googlePlaceIdInput = document.querySelector("#googlePlaceIdInput");
+
+          if (!latitudeInput?.value || !longitudeInput?.value || !googlePlaceIdInput?.value) {
+            Swal.fire({
+              text: "Please select a valid address from the suggestions.",
+              icon: "error",
+              buttonsStyling: false,
+              confirmButtonText: "Ok, got it!",
+              customClass: { confirmButton: "btn btn-primary" },
+            });
+
+            return;
+          }
+
           submitButton.setAttribute("data-kt-indicator", "on");
           submitButton.disabled = true;
 
@@ -173,6 +197,55 @@ var OnboardingProfessional = (function () {
     },
   };
 })();
+
+window.initAddressAutocomplete = function () {
+  var addressInput = document.querySelector("#addressInput");
+  var latitudeInput = document.querySelector("#latitudeInput");
+  var longitudeInput = document.querySelector("#longitudeInput");
+  var googlePlaceIdInput = document.querySelector("#googlePlaceIdInput");
+
+  if (
+    !addressInput ||
+    !latitudeInput ||
+    !longitudeInput ||
+    !googlePlaceIdInput ||
+    !window.google ||
+    !google.maps ||
+    !google.maps.places
+  ) {
+    return;
+  }
+
+  var autocomplete = new google.maps.places.Autocomplete(addressInput, {
+    componentRestrictions: { country: "ng" },
+    fields: ["formatted_address", "geometry", "place_id"],
+    types: ["geocode"],
+  });
+
+  // Clear old coordinates if the user manually edits the address
+  addressInput.addEventListener("input", function () {
+    latitudeInput.value = "";
+    longitudeInput.value = "";
+    googlePlaceIdInput.value = "";
+  });
+
+  // Fill coordinates when the user selects a Google suggestion
+  autocomplete.addListener("place_changed", function () {
+    var place = autocomplete.getPlace();
+
+    if (!place.geometry || !place.geometry.location) {
+      latitudeInput.value = "";
+      longitudeInput.value = "";
+      googlePlaceIdInput.value = "";
+      return;
+    }
+
+    addressInput.value = place.formatted_address || addressInput.value;
+    latitudeInput.value = place.geometry.location.lat();
+    longitudeInput.value = place.geometry.location.lng();
+    googlePlaceIdInput.value = place.place_id || "";
+  });
+};
 
 KTUtil.onDOMContentLoaded(function () {
   OnboardingProfessional.init();

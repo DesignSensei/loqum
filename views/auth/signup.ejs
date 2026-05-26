@@ -4,28 +4,13 @@
   <div class="text-center mb-10">
     <img alt="Logo" src="/assets/images/logo_purple.png" class="h-30px h-lg-40px" />
   </div>
+
   <div class="d-flex flex-column flex-lg-row-fluid w-75 w-lg-500px p-10 order-1 order-lg-1">
     <div class="text-center mb-11">
       <h1 class="text-gray-900 fw-bolder mb-3">
         Sign Up to <span class="brand-accent">Loqum</span>
       </h1>
-      <div class="text-gray-500 fw-semibold fs-6">Start managing shifts or finding work</div>
-    </div>
-
-    <div class="row g-3 mb-9">
-      <div class="col-md-12">
-        <a
-          href="/auth/google"
-          class="btn btn-flex btn-outline btn-text-gray-700 btn-active-color-primary bg-state-light flex-center text-nowrap w-100"
-        >
-          <img alt="Logo" src="assets/media/svg/brand-logos/google-icon.svg" class="h-15px me-3" />
-          Sign in with Google
-        </a>
-      </div>
-    </div>
-
-    <div class="separator separator-content my-14">
-      <span class="w-125px text-gray-500 fw-semibold fs-7">Or with email</span>
+      <div class="text-gray-500 fw-semibold fs-6">Choose how you want to use Loqum</div>
     </div>
 
     <form
@@ -37,7 +22,15 @@
     >
       <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
 
+      <!-- Account Type -->
       <div class="fv-row mb-10">
+        <div class="text-center mb-5">
+          <div class="text-gray-900 fw-bold fs-5">Choose your account type</div>
+          <div class="text-gray-500 fw-semibold fs-7">
+            This helps us set up the right experience for you.
+          </div>
+        </div>
+
         <div class="row g-9" data-kt-buttons="true">
           <div class="col-6">
             <label
@@ -50,32 +43,63 @@
                 value="professional"
                 checked="checked"
               />
+
               <i class="ki-duotone ki-address-book fs-2x me-5">
-                <span class="path1"></span><span class="path2"></span><span class="path3"></span>
+                <span class="path1"></span>
+                <span class="path2"></span>
+                <span class="path3"></span>
               </i>
+
               <span class="d-flex flex-column text-start">
                 <span class="fw-bold fs-3">Pharmacist</span>
                 <span class="fs-7 text-muted">Find locum work</span>
               </span>
             </label>
           </div>
+
           <div class="col-6">
             <label
               class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex justify-content-center align-items-center p-6"
             >
               <input class="btn-check" type="radio" name="role" value="employer" />
+
               <i class="ki-duotone ki-bank fs-2x me-5">
-                <span class="path1"></span><span class="path2"></span>
+                <span class="path1"></span>
+                <span class="path2"></span>
               </i>
+
               <span class="d-flex flex-column text-start">
                 <span class="fw-bold fs-3">Pharmacy</span>
-                <span class="fs-7 text-muted">Hire staff</span>
+                <span class="fs-7 text-muted">Hire locums</span>
               </span>
             </label>
           </div>
         </div>
       </div>
 
+      <!-- Google Signup -->
+      <div class="row g-3 mb-9">
+        <div class="col-md-12">
+          <button
+            type="button"
+            id="googleSignupBtn"
+            class="btn btn-flex btn-outline btn-text-gray-700 btn-active-color-primary bg-state-light flex-center text-nowrap w-100"
+          >
+            <img
+              alt="Google Logo"
+              src="assets/media/svg/brand-logos/google-icon.svg"
+              class="h-15px me-3"
+            />
+            Sign up with Google
+          </button>
+        </div>
+      </div>
+
+      <div class="separator separator-content my-14">
+        <span class="w-125px text-gray-500 fw-semibold fs-7">Or with email</span>
+      </div>
+
+      <!-- First Name -->
       <div class="fv-row mb-8">
         <input
           type="text"
@@ -86,6 +110,7 @@
         />
       </div>
 
+      <!-- Last Name -->
       <div class="fv-row mb-8">
         <input
           type="text"
@@ -96,6 +121,7 @@
         />
       </div>
 
+      <!-- Email -->
       <div class="fv-row mb-8">
         <input
           type="email"
@@ -106,6 +132,7 @@
         />
       </div>
 
+      <!-- Password -->
       <div class="fv-row mb-8" data-kt-password-meter="true">
         <div class="mb-1">
           <div class="position-relative mb-3">
@@ -117,6 +144,7 @@
               autocomplete="off"
               required
             />
+
             <span
               class="btn btn-sm btn-icon position-absolute translate-middle top-50 end-0 me-n2"
               data-kt-password-meter-control="visibility"
@@ -125,6 +153,7 @@
               <i class="ki-duotone ki-eye fs-2 d-none"></i>
             </span>
           </div>
+
           <div class="d-flex align-items-center mb-3" data-kt-password-meter-control="highlight">
             <div class="flex-grow-1 bg-secondary bg-active-success rounded h-5px me-2"></div>
             <div class="flex-grow-1 bg-secondary bg-active-success rounded h-5px me-2"></div>
@@ -132,9 +161,11 @@
             <div class="flex-grow-1 bg-secondary bg-active-success rounded h-5px"></div>
           </div>
         </div>
+
         <div class="text-muted">Use 8+ characters with a mix of letters, numbers & symbols.</div>
       </div>
 
+      <!-- Confirm Password -->
       <div class="fv-row mb-8">
         <input
           class="form-control bg-transparent"
@@ -146,26 +177,38 @@
         />
       </div>
 
+      <!-- Terms -->
       <div class="fv-row mb-8">
         <label class="form-check form-check-inline">
           <input class="form-check-input" type="checkbox" name="toc" value="1" />
+
           <span class="form-check-label fw-semibold text-gray-700 fs-base ms-1">
             I Accept the
-            <a href="#" class="ms-1 link-primary">Terms</a> and
+            <a href="#" class="ms-1 link-primary">Terms</a>
+            and
             <a href="#" class="ms-1 link-primary">Conditions</a>
           </span>
         </label>
       </div>
 
+      <!-- Submit -->
       <div class="d-grid mb-10">
         <button type="submit" id="kt_sign_up_submit" class="btn btn-primary">
-          <span class="indicator-label">Create Account & Continue</span>
-          <span class="indicator-progress"
-            >Please wait...
+          <span class="indicator-label">Continue</span>
+          <span class="indicator-progress">
+            Please wait...
             <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
           </span>
         </button>
       </div>
+      <!--end::Submit button-->
+
+      <!--begin::Log in-->
+      <div class="text-gray-500 text-center fw-semibold fs-6">
+        Already a User?
+        <a href="/login" class="link-primary">Log In</a>
+      </div>
+      <!--end::Log in-->
     </form>
   </div>
 </div>

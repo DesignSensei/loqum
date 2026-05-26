@@ -5,23 +5,56 @@
 var SignUp = (function () {
   var form = document.querySelector("#kt_sign_up_form");
   var submitButton = document.querySelector("#kt_sign_up_submit");
+  var googleSignupButton = document.querySelector("#googleSignupBtn");
   var passwordMeter;
+
+  function getSelectedRole() {
+    return form.querySelector('input[name="role"]:checked')?.value;
+  }
+
+  function handleGoogleSignup() {
+    if (!form || !googleSignupButton) return;
+
+    googleSignupButton.addEventListener("click", function (e) {
+      e.preventDefault();
+
+      const selectedRole = getSelectedRole();
+
+      if (!selectedRole) {
+        Swal.fire({
+          text: "Please select an account type before continuing with Google.",
+          icon: "error",
+          buttonsStyling: false,
+          confirmButtonText: "Ok, got it!",
+          customClass: { confirmButton: "btn btn-primary" },
+        });
+
+        return;
+      }
+
+      window.location.href = `/auth/google?intent=signup&role=${encodeURIComponent(selectedRole)}`;
+    });
+  }
 
   function handleSignupSubmission() {
     if (!form || !submitButton) return;
 
     passwordMeter = KTPasswordMeter.getInstance(
-      form.querySelector('[data-kt-password-meter="true"]'),
+      form.querySelector('[data-kt-password-meter="true"]')
     );
 
     const validator = FormValidation.formValidation(form, {
       fields: {
         firstName: {
-          validators: { notEmpty: { message: "First Name is required." } },
+          validators: {
+            notEmpty: { message: "First Name is required." },
+          },
         },
 
         lastName: {
-          validators: { notEmpty: { message: "Last Name is required." } },
+          validators: {
+            notEmpty: { message: "Last Name is required." },
+          },
         },
 
         email: {
@@ -35,7 +68,9 @@ var SignUp = (function () {
         },
 
         role: {
-          validators: { notEmpty: { message: "Please select a role." } },
+          validators: {
+            notEmpty: { message: "Please select a role." },
+          },
         },
 
         password: {
@@ -44,8 +79,11 @@ var SignUp = (function () {
             callback: {
               message: "Please enter a valid password.",
               callback: function (input) {
-                if (input.value.length > 0)
+                if (input.value.length > 0) {
                   return passwordMeter.getScore() > 50;
+                }
+
+                return false;
               },
             },
           },
@@ -65,14 +103,16 @@ var SignUp = (function () {
 
         toc: {
           validators: {
-            notEmpty: { message: "You must accept the terms and conditions." },
+            notEmpty: {
+              message: "You must accept the terms and conditions.",
+            },
           },
         },
       },
 
       plugins: {
         excluded: new FormValidation.plugins.Excluded({
-          excluded: function (field, element, inputs) {
+          excluded: function (field, element) {
             return element.closest(".d-none") !== null;
           },
         }),
@@ -122,9 +162,7 @@ var SignUp = (function () {
               submitButton.disabled = false;
 
               Swal.fire({
-                text:
-                  error.response?.data?.message ||
-                  "An error occurred. Please try again.",
+                text: error.response?.data?.message || "An error occurred. Please try again.",
                 icon: "error",
                 buttonsStyling: false,
                 confirmButtonText: "Ok, got it!",
@@ -143,15 +181,14 @@ var SignUp = (function () {
       });
     });
 
-    form
-      .querySelector('input[name="password"]')
-      .addEventListener("input", function () {
-        if (this.value.length > 0)
-          validator.updateFieldStatus("password", "NotValidated");
-      });
+    form.querySelector('input[name="password"]').addEventListener("input", function () {
+      if (this.value.length > 0) {
+        validator.updateFieldStatus("password", "NotValidated");
+      }
+    });
 
-    form.querySelectorAll('[name="role"]').forEach((input) => {
-      input.addEventListener("change", () => {
+    form.querySelectorAll('[name="role"]').forEach(function (input) {
+      input.addEventListener("change", function () {
         validator.revalidateField("role");
       });
     });
@@ -159,6 +196,7 @@ var SignUp = (function () {
 
   return {
     init: function () {
+      handleGoogleSignup();
       handleSignupSubmission();
     },
   };

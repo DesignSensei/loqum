@@ -8,29 +8,20 @@ const { isAuthenticated, isNotOnboarded, isOnboarded } = require("../middleware/
 /* ---------- Public pages (GET) ---------- */
 router.get(
   "/professional",
-  // isAuthenticated,
-  // isNotOnboarded,
+  isAuthenticated,
+  isNotOnboarded,
   onboardingController.getProfessionalOnboarding
 );
 router.get(
   "/employer",
-  // isAuthenticated,
-  // isNotOnboarded,
+  isAuthenticated,
+  isNotOnboarded,
   onboardingController.getEmployerOnboarding
 );
 
-/* ---------- Action pages (POST}) ---------- */
-/* router.post(
-  "/professional",
-  isAuthenticated,
-  onboardingController.postProfessionalOnboarding,
-);
+/* ---------- Action pages (POST) ---------- */
+router.post("/professional", isAuthenticated, onboardingController.postProfessionalOnboarding);
 
-router.post(
-  "/employer",
-  isAuthenticated,
-  onboardingController.postEmployerOnboarding,
-);
-*/
+router.post("/employer", isAuthenticated, onboardingController.postEmployerOnboarding);
 
 module.exports = router;

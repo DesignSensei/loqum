@@ -2,6 +2,16 @@
 
 const mongoose = require("mongoose");
 
+/**
+ * OVERLAP ENFORCEMENT:
+ * The service layer checks for time conflicts at two points:
+ *   1. On application — soft guard, blocks applying to shifts that clash
+ *      with already confirmed/assigned shifts. Saves wasted applications.
+ *   2. On assignment — hard enforcement, final check before committing.
+ *
+ * This model does not enforce overlap — that is a service layer concern.
+ */
+
 const shiftApplicationSchema = new mongoose.Schema(
   {
     shift: {
@@ -22,7 +32,16 @@ const shiftApplicationSchema = new mongoose.Schema(
       default: "pending",
     },
 
-    withdrawnAt: {
+    note: {
+      type: String,
+      trim: true,
+      maxlength: 500,
+      default: null,
+      // Optional message from the professional when applying.
+      // e.g. "I have 3 years of experience in emergency pharmacy."
+    },
+
+    acceptedAt: {
       type: Date,
       default: null,
     },
@@ -32,7 +51,7 @@ const shiftApplicationSchema = new mongoose.Schema(
       default: null,
     },
 
-    acceptedAt: {
+    withdrawnAt: {
       type: Date,
       default: null,
     },
@@ -42,11 +61,15 @@ const shiftApplicationSchema = new mongoose.Schema(
   }
 );
 
-// One professional can only apply once per shift
+// --- INDEXES ---
+
+// One application per professional per shift
 shiftApplicationSchema.index({ shift: 1, professional: 1 }, { unique: true });
 
-// Efficient querying — all applications for a shift, all applications by a professional
+// All applications for a shift — employer reviewing candidates
 shiftApplicationSchema.index({ shift: 1, status: 1 });
+
+// All applications by a professional — their application history
 shiftApplicationSchema.index({ professional: 1, status: 1 });
 
 module.exports = mongoose.model("ShiftApplication", shiftApplicationSchema);

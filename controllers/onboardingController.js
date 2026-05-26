@@ -15,10 +15,16 @@ exports.getProfessionalOnboarding = (req, res) => {
     locations: JSON.stringify(locations),
     specialtyConfig: JSON.stringify(specialtyConfig),
     csrfToken: req.csrfToken(),
+    googleMapsApiKey: process.env.GOOGLE_MAPS_BROWSER_KEY,
     scripts: `
-    <script src="/js/location-picker.js"></script>
-    <script src="/js/specialty-picker.js"></script>
-    <script src="/js/onboarding/onboarding-professional.js"></script>
+      <script src="/js/location-picker.js"></script>
+      <script src="/js/specialty-picker.js"></script>
+      <script src="/js/onboarding/onboarding-professional.js"></script>
+      <script
+        async
+        defer
+        src="https://maps.googleapis.com/maps/api/js?key=${process.env.GOOGLE_MAPS_BROWSER_KEY}&libraries=places&callback=initAddressAutocomplete"
+      ></script>
     `,
   });
 };
@@ -29,9 +35,15 @@ exports.getEmployerOnboarding = (req, res) => {
     title: "Pharmacy Profile",
     locations: JSON.stringify(locations),
     csrfToken: req.csrfToken(),
+    googleMapsApiKey: process.env.GOOGLE_MAPS_BROWSER_KEY,
     scripts: `
-    <script src="/js/location-picker.js"></script>
-    <script src="/js/onboarding/onboarding-employer.js"></script>
+      <script src="/js/location-picker.js"></script>
+      <script src="/js/onboarding/onboarding-employer.js"></script>
+      <script
+        async
+        defer
+        src="https://maps.googleapis.com/maps/api/js?key=${process.env.GOOGLE_MAPS_BROWSER_KEY}&libraries=places&callback=initAddressAutocomplete"
+      ></script>
     `,
   });
 };
@@ -40,24 +52,32 @@ exports.getEmployerOnboarding = (req, res) => {
 
 exports.postProfessionalOnboarding = async (req, res, next) => {
   try {
-    const userId = req.session.user?._id;
+    const userId = req.session.user?._id || req.user?._id;
 
-    if (!userId)
+    if (!userId) {
       return res.status(401).json({
         success: false,
         message: "Session expired. Please log in again.",
       });
+    }
 
     await OnboardingService.completeProfessionalOnboarding(userId, req.body);
 
-    req.session.user.isOnboarded = true;
+    if (req.session.user) {
+      req.session.user.isOnboarded = true;
+    }
+
+    if (req.user) {
+      req.user.isOnboarded = true;
+    }
 
     req.session.save((err) => {
       if (err) return next(err);
+
       res.json({
         success: true,
         message: "Professional profile completed successfully!",
-        redirectUrl: "/dashboard/professional",
+        redirectUrl: "/professional/dashboard",
       });
     });
   } catch (error) {
@@ -68,24 +88,32 @@ exports.postProfessionalOnboarding = async (req, res, next) => {
 
 exports.postEmployerOnboarding = async (req, res, next) => {
   try {
-    const userId = req.session.user?._id;
+    const userId = req.session.user?._id || req.user?._id;
 
-    if (!userId)
+    if (!userId) {
       return res.status(401).json({
         success: false,
         message: "Session expired. Please log in again.",
       });
+    }
 
     await OnboardingService.completeEmployerOnboarding(userId, req.body);
 
-    req.session.user.isOnboarded = true;
+    if (req.session.user) {
+      req.session.user.isOnboarded = true;
+    }
+
+    if (req.user) {
+      req.user.isOnboarded = true;
+    }
 
     req.session.save((err) => {
       if (err) return next(err);
+
       res.json({
         success: true,
         message: "Business profile completed successfully!",
-        redirectUrl: "/dashboard/employer",
+        redirectUrl: "/employer/dashboard",
       });
     });
   } catch (error) {

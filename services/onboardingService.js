@@ -4,6 +4,7 @@ const ProfessionalProfile = require("../models/ProfessionalProfile");
 const EmployerProfile = require("../models/EmployerProfile");
 const User = require("../models/User");
 const logger = require("../utils/logger");
+const { buildGeoPoint } = require("../utils/geo");
 
 class OnboardingService {
   static async completeProfessionalOnboarding(userId, data) {
@@ -16,28 +17,53 @@ class OnboardingService {
       address,
       state,
       lga,
+      latitude,
+      longitude,
+      googlePlaceId,
       yearsOfExperience,
       bio,
     } = data;
 
-    // 1. Validation Logic
-    if (!type || !licenceNumber || !phone || !phoneCode || !specialty || !state || !lga) {
+    if (
+      !type ||
+      !licenceNumber ||
+      !phone ||
+      !phoneCode ||
+      !specialty ||
+      !address ||
+      !state ||
+      !lga
+    ) {
       throw new Error("Missing required professional or location fields");
     }
 
-    // 2. Check for existence (Atomic check)
+    if (type === "pharmacist" && !/^[0-9]{6}$/.test(String(licenceNumber).trim())) {
+      throw new Error("PCN licence number must be exactly 6 digits.");
+    }
+
+    if (!String(googlePlaceId || "").trim()) {
+      throw new Error("Please select a valid address from the suggestions.");
+    }
+
+    const location = buildGeoPoint(
+      latitude,
+      longitude,
+      "Please select a valid address from the suggestions."
+    );
+
     const existing = await ProfessionalProfile.findOne({ user: userId });
     if (existing) throw new Error("Profile already exists");
 
-    // 3. Save Profile
     const profile = new ProfessionalProfile({
       user: userId,
       type,
-      licenceNumber,
+      licenceNumber: String(licenceNumber).trim(),
       phoneCode,
       phone,
       specialty,
-      address,
+      address: String(address).trim(),
+      googlePlaceId: String(googlePlaceId).trim(),
+      location,
       state,
       lga,
       yearsOfExperience: yearsOfExperience || 0,
@@ -46,7 +72,6 @@ class OnboardingService {
 
     await profile.save();
 
-    // 4. Update User State
     await User.findByIdAndUpdate(userId, {
       isOnboarded: true,
       professionalProfile: profile._id,
@@ -56,9 +81,8 @@ class OnboardingService {
     return profile;
   }
 
-  static async completeEmployerOnboarding(
-    userId,
-    {
+  static async completeEmployerOnboarding(userId, data) {
+    const {
       type,
       businessName,
       businessRegistrationNumber,
@@ -67,16 +91,37 @@ class OnboardingService {
       address,
       state,
       lga,
+      latitude,
+      longitude,
+      googlePlaceId,
       contactFirstName,
       contactLastName,
       contactPhoneCode,
       contactPhone,
-    }
-  ) {
-    if (!type || !businessName || !businessRegistrationNumber || !state || !lga || !contactPhone)
-      throw new Error("All required fields must be filled");
+    } = data;
 
-    // Check if profile already exists
+    if (
+      !type ||
+      !businessName ||
+      !businessRegistrationNumber ||
+      !address ||
+      !state ||
+      !lga ||
+      !contactPhone
+    ) {
+      throw new Error("All required fields must be filled");
+    }
+
+    if (!String(googlePlaceId || "").trim()) {
+      throw new Error("Please select a valid business address from the suggestions.");
+    }
+
+    const location = buildGeoPoint(
+      latitude,
+      longitude,
+      "Please select a valid business address from the suggestions."
+    );
+
     const existing = await EmployerProfile.findOne({ user: userId });
     if (existing) throw new Error("Profile already exists");
 
@@ -87,7 +132,9 @@ class OnboardingService {
       businessRegistrationNumber,
       businessPhoneCode,
       businessPhone,
-      address,
+      address: String(address).trim(),
+      googlePlaceId: String(googlePlaceId).trim(),
+      location,
       state,
       lga,
       contactFirstName,
@@ -98,7 +145,6 @@ class OnboardingService {
 
     await profile.save();
 
-    // Mark user as onboarded
     await User.findByIdAndUpdate(userId, {
       isOnboarded: true,
       employerProfile: profile._id,

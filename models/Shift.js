@@ -2,6 +2,19 @@
 
 const mongoose = require("mongoose");
 
+/**
+ * PAYMENT ARCHITECTURE:
+ * All shifts use escrow universally. No direct bank charges per shift.
+ * Flow: Employer Wallet → Escrow Wallet (on confirmation) → Professional Wallet (on settlement)
+ * Paystack is only involved at wallet funding (DVA) and professional withdrawal.
+ *
+ * ATTENDANCE:
+ * Both PINs are generated at shift creation.
+ * Check-in PIN: visible to employer from shortly before start time.
+ * Check-out PIN: revealed to employer only after successful check-in.
+ * No check-in → no check-out. No check-out → no settlement.
+ */
+
 const shiftSchema = new mongoose.Schema(
   {
     // --- CORE IDENTITY ---
@@ -9,7 +22,7 @@ const shiftSchema = new mongoose.Schema(
     referenceCode: {
       type: String,
       unique: true,
-      // e.g. LQ-8821 — generated on creation
+      // e.g. LQM-8821 — generated on creation
     },
 
     business: {
@@ -26,8 +39,8 @@ const shiftSchema = new mongoose.Schema(
 
     postedBy: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "User", // owner or branch manager who posted
-      required: true,
+      ref: "User",
+      required: true, // owner or branch manager who posted
     },
 
     department: {
@@ -69,11 +82,16 @@ const shiftSchema = new mongoose.Schema(
 
     breakDuration: {
       type: Number,
-      default: 0, // in minutes — e.g. 30, 60
+      default: 0,
+      // In minutes. Informational only — tells the professional
+      // what break they can expect during the shift.
+      // Not used in settlement calculation.
     },
 
     billableHours: {
-      type: Number, // calculated: (endTime - startTime - breakDuration) in hours
+      type: Number,
+      // checkedOutAt - effectiveStartTime in hours
+      // effectiveStartTime = checkedInAt or missedCheckInRequest.approvedStartTime
     },
 
     // --- FINANCIALS ---
@@ -84,17 +102,28 @@ const shiftSchema = new mongoose.Schema(
     },
 
     totalPayout: {
-      type: Number, // hourlyRate * billableHours — what professional takes home before commission
+      type: Number,
+      // hourlyRate * billableHours — gross amount before commission
+      // calculated at settlement
+    },
+
+    commissionRate: {
+      type: Number,
+      default: null,
+      // Snapshotted at assignment time from professional's tier.
+      // Immutable after that — protects professional from mid-shift rate changes.
+      // newcomer → 0.075, accredited → 0.0625, elite → 0.05 (example)
+    },
+
+    commissionAmount: {
+      type: Number,
+      default: null, // calculated at settlement: totalPayout * commissionRate
     },
 
     professionalEarnings: {
-      type: Number, // totalPayout after 5% commission deducted
-    },
-
-    paymentTimeline: {
-      type: String,
-      enum: ["instant", "next_day", "end_of_week"],
-      default: "instant",
+      type: Number,
+      // totalPayout - commissionAmount — net amount credited to professional wallet
+      // calculated at settlement
     },
 
     // --- PAYMENT STATE ---
@@ -102,18 +131,174 @@ const shiftSchema = new mongoose.Schema(
     paymentStatus: {
       type: String,
       enum: [
-        "unpaid", // pharmacy hasn't paid yet
-        "held", // payment received, sitting in Paystack
-        "swept", // payout sent to professional's NUBAN
-        "failed", // sweep failed — cron will retry
-        "refunded", // shift cancelled or no-show, pharmacy refunded
+        "unpaid", // escrow not yet funded — shift not confirmed
+        "escrowed", // funds held in escrow wallet — shift confirmed
+        "released", // professional wallet credited — settlement complete
+        "failed", // settlement or escrow step failed — cron will retry
+        "refunded", // shift cancelled — escrow returned to employer wallet
       ],
       default: "unpaid",
     },
 
-    paystackReference: {
+    // --- PROFESSIONAL ASSIGNMENT ---
+
+    assignedProfessional: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ProfessionalProfile",
+      default: null,
+    },
+
+    // --- APPLICATIONS ---
+
+    totalApplications: {
+      type: Number,
+      default: 0,
+    },
+
+    // --- SHIFT STATUS ---
+
+    status: {
       type: String,
-      trim: true, // Paystack payment reference for this shift
+      enum: [
+        "open", // visible, accepting applications
+        "assigned", // professional selected, awaiting escrow funding
+        "confirmed", // escrow funded, shift locked in
+        "in_progress", // professional checked in
+        "pending_settlement", // professional checked out, settlement calculating
+        "completed", // settlement done, professional wallet credited
+        "cancelled", // cancelled before shift started
+        "disputed", // conflict raised, escrow held pending review
+        "no_show", // professional did not check in within grace window
+      ],
+      default: "open",
+    },
+
+    // --- PINS ---
+
+    checkInPin: {
+      type: String,
+      default: null,
+      // Generated at shift creation.
+      // Visible to employer from shortly before start time only.
+      // Never exposed to the professional.
+    },
+
+    checkOutPin: {
+      type: String,
+      default: null,
+      // Generated at shift creation.
+      // Revealed to employer only after successful check-in.
+      // Professional enters it on departure.
+    },
+
+    // --- ATTENDANCE ---
+
+    attendanceStatus: {
+      type: String,
+      enum: [
+        "not_started",
+        "checked_in",
+        "checked_out",
+        "missed_checkin_review",
+        "disputed",
+        "settled",
+      ],
+      default: "not_started",
+    },
+
+    checkedInAt: {
+      type: Date,
+      default: null,
+    },
+
+    checkedOutAt: {
+      type: Date,
+      default: null,
+    },
+
+    checkInLocation: {
+      latitude: { type: Number, default: null },
+      longitude: { type: Number, default: null },
+      accuracy: { type: Number, default: null },
+      capturedAt: { type: Date, default: null },
+    },
+
+    checkOutLocation: {
+      latitude: { type: Number, default: null },
+      longitude: { type: Number, default: null },
+      accuracy: { type: Number, default: null },
+      capturedAt: { type: Date, default: null },
+    },
+
+    // --- MISSED CHECK-IN REQUEST ---
+    // Triggered when professional attempts check-out without a valid check-in.
+    // Location captured at submission time only — cannot prove earlier arrival.
+
+    missedCheckInRequest: {
+      claimedStartTime: { type: Date, default: null },
+      submittedAt: { type: Date, default: null },
+
+      locationAtSubmission: {
+        latitude: { type: Number, default: null },
+        longitude: { type: Number, default: null },
+        accuracy: { type: Number, default: null }, // metres — from browser Geolocation API
+        capturedAt: { type: Date, default: null }, // moment of browser permission grant
+      },
+
+      reviewedAt: { type: Date, default: null },
+      reviewedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        default: null,
+      },
+      outcome: {
+        type: String,
+        enum: ["approved", "rejected", null],
+        default: null,
+      },
+      approvedStartTime: {
+        type: Date,
+        default: null,
+        // Used instead of checkedInAt in settlement calculation when approved.
+        // Service layer: effectiveStartTime = approvedStartTime ?? checkedInAt
+      },
+      rejectionReason: { type: String, trim: true, default: null },
+    },
+
+    // --- PIN ISSUE REPORT ---
+    // Triggered when professional is physically present but cannot obtain a PIN.
+    // Location is captured as evidence of presence at the branch.
+
+    pinIssueReport: {
+      type: {
+        type: String,
+        enum: ["checkin", "checkout", null],
+        default: null,
+      },
+      reason: { type: String, trim: true, default: null },
+      submittedAt: { type: Date, default: null },
+
+      locationAtSubmission: {
+        latitude: { type: Number, default: null },
+        longitude: { type: Number, default: null },
+        accuracy: { type: Number, default: null }, // metres
+        capturedAt: { type: Date, default: null },
+      },
+
+      resolvedAt: { type: Date, default: null },
+      resolvedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        default: null,
+      },
+      outcome: {
+        type: String,
+        enum: ["pin_provided", "overridden", "rejected", null],
+        default: null,
+        // pin_provided → admin resent or shared the PIN
+        // overridden   → admin manually marked attendance without PIN
+        // rejected     → report deemed invalid
+      },
     },
 
     // --- REQUIREMENTS & SCOPE ---
@@ -127,55 +312,13 @@ const shiftSchema = new mongoose.Schema(
 
     dressCode: {
       type: String,
-      trim: true, // e.g. "Blue scrubs", "Business formal"
+      trim: true,
     },
 
     description: {
       type: String,
       trim: true,
       maxlength: 500,
-    },
-
-    // --- APPLICATIONS ---
-
-    totalApplications: {
-      type: Number,
-      default: 0, // incremented each time a ShiftApplication is created
-    },
-
-    assignedProfessional: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "ProfessionalProfile",
-      default: null,
-    },
-
-    // --- SHIFT STATUS ---
-
-    status: {
-      type: String,
-      enum: [
-        "open", // visible, accepting applications
-        "assigned", // professional selected, awaiting payment
-        "paid", // pharmacy has paid, shift confirmed
-        "in_progress", // professional checked in
-        "completed", // both parties confirmed
-        "cancelled", // cancelled before shift started
-        "disputed", // conflict raised, under review
-        "no_show", // professional did not check in
-      ],
-      default: "open",
-    },
-
-    // --- CONFIRMATION ---
-
-    employerConfirmed: {
-      type: Boolean,
-      default: false,
-    },
-
-    professionalConfirmed: {
-      type: Boolean,
-      default: false,
     },
 
     // --- CANCELLATION ---
@@ -205,10 +348,17 @@ const shiftSchema = new mongoose.Schema(
 // --- INDEXES ---
 
 shiftSchema.index({ status: 1 });
-shiftSchema.index({ branch: 1 });
+shiftSchema.index({ attendanceStatus: 1 });
+// cron: find checked_out shifts pending settlement
+// cron: find in_progress shifts past endTime with no check-out (no_show candidates)
+
 shiftSchema.index({ business: 1 });
+shiftSchema.index({ branch: 1 });
+shiftSchema.index({ assignedProfessional: 1 });
 shiftSchema.index({ professionalType: 1 });
 shiftSchema.index({ startTime: 1 });
-shiftSchema.index({ "branch.coordinates": "2dsphere" }); // for geolocation queries
+shiftSchema.index({ paymentStatus: 1, status: 1 });
+// cron: find escrowed shifts that failed settlement and need retry
+shiftSchema.index({ assignedProfessional: 1, startTime: 1, endTime: 1 });
 
 module.exports = mongoose.model("Shift", shiftSchema);

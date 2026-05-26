@@ -1,3 +1,5 @@
+// controllers/authController.js
+
 const User = require("../models/User");
 const AuthService = require("../services/authService");
 const logger = require("../utils/logger");
@@ -284,4 +286,15 @@ exports.postNewPassword = async (req, res, next) => {
   } catch (error) {
     return res.status(400).json({ success: false, message: error.message });
   }
+};
+
+exports.logout = (req, res, next) => {
+  req.logout((err) => {
+    if (err) return next(err);
+
+    req.session.destroy(() => {
+      res.clearCookie("connect.sid");
+      res.redirect("/login");
+    });
+  });
 };

@@ -1,4 +1,4 @@
-<!-- views/partials/nav-header.ejs -->
+<!-- views/partials/app-header.ejs -->
 
 <div id="kt_app_header" class="app-header">
   <!--begin::Header container-->
@@ -1328,9 +1328,16 @@
             <!--end::Menu item-->
             <!--begin::Menu item-->
             <div class="menu-item px-5">
-              <a href="authentication/layouts/corporate/sign-in.html" class="menu-link px-5"
-                >Sign Out</a
-              >
+              <form action="/logout" method="POST" class="m-0">
+                <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+                <button
+                  type="submit"
+                  class="menu-link px-5 border-0 bg-transparent w-100 text-start"
+                >
+                  Sign Out
+                </button>
+              </form>
             </div>
             <!--end::Menu item-->
           </div>

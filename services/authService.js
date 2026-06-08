@@ -43,37 +43,48 @@ class AuthService {
 
   /* ---------- Register a new user ---------- */
   static async registerUser({ firstName, lastName, email, password, confirmPassword, role }) {
-    if (!firstName || !lastName || !email || !password || !confirmPassword || !role) {
-      throw new Error("All fields are required");
+    try {
+      if (!firstName || !lastName || !email || !password || !confirmPassword || !role) {
+        throw new Error("All fields are required");
+      }
+
+      if (password !== confirmPassword) {
+        throw new Error("Passwords do not match");
+      }
+
+      const normalizedEmail = email.toLowerCase().trim();
+
+      const existingUser = await User.findOne({ email: normalizedEmail });
+
+      if (existingUser) {
+        throw new Error("An account with this email already exists. Please log in instead.");
+      }
+
+      const newUser = new User({
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        displayName: `${firstName.trim()} ${lastName.trim()}`,
+        email: normalizedEmail,
+        password,
+        role,
+        authProvider: "local",
+        isVerified: false,
+        isOnboarded: false,
+        twoFactorEnabled: false,
+      });
+
+      await newUser.save();
+
+      logger.info(`User registered successfully: ${normalizedEmail}`);
+
+      return newUser;
+    } catch (error) {
+      if (error.code === 11000 && error.keyPattern?.email) {
+        throw new Error("An account with this email already exists. Please log in instead.");
+      }
+
+      throw error;
     }
-
-    if (password !== confirmPassword) {
-      throw new Error("Passwords do not match");
-    }
-
-    const existingUser = await User.findOne({ email });
-
-    if (existingUser) {
-      throw new Error("User with this email already exists");
-    }
-
-    const newUser = new User({
-      firstName,
-      lastName,
-      email,
-      password,
-      role,
-      authProvider: "local",
-      isVerified: false,
-      isOnboarded: false,
-      twoFactorEnabled: false,
-    });
-
-    await newUser.save();
-
-    logger.info(`User registered successfully: ${email}`);
-
-    return newUser;
   }
 
   /* ---------- Send 6-digit OTP to Email ---------- */

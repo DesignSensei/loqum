@@ -88,6 +88,12 @@ const userSchema = new mongoose.Schema(
       default: false,
     },
 
+    accountStatus: {
+      type: String,
+      enum: ["active", "restricted", "suspended", "deactivated", "banned"],
+      default: "active",
+    },
+
     /* ---------- Onboarding Status ---------- */
     isOnboarded: {
       type: Boolean,

@@ -30,7 +30,8 @@ const employerMemberSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      unique: true, // one membership record per user across the platform
+      // One membership record per user across the platform.
+      // This means a user cannot belong to two different employer businesses at once.
     },
 
     business: {
@@ -40,8 +41,8 @@ const employerMemberSchema = new mongoose.Schema(
     },
 
     // --- BUSINESS-LEVEL ROLE ---
-    // admin → full business access, not tied to a specific branch
-    // branch_manager / branch_staff → access determined by branches array below
+    // admin: full business access, not tied to a specific branch.
+    // branch_manager / branch_staff: access is determined by the branches array.
 
     role: {
       type: String,
@@ -50,13 +51,16 @@ const employerMemberSchema = new mongoose.Schema(
     },
 
     // --- BRANCH ASSIGNMENTS ---
-    // Empty for admins (they have full access)
-    // One or more entries for branch_manager and branch_staff
+    // Empty for admins.
+    // One or more entries for branch_manager and branch_staff.
+    // A member can be assigned to multiple branches under the same business.
 
     branches: {
       type: [branchAssignmentSchema],
       default: [],
     },
+
+    // --- STATUS ---
 
     accountStatus: {
       type: String,
@@ -71,11 +75,19 @@ const employerMemberSchema = new mongoose.Schema(
 
 // --- INDEXES ---
 
-// Efficient lookup — all members of a business
+employerMemberSchema.index({ user: 1 }, { unique: true });
+
+// Efficient lookup: all members of a business
 employerMemberSchema.index({ business: 1 });
 
-// Efficient lookup — all members assigned to a specific branch
+// Efficient lookup: all members assigned to a specific branch
 employerMemberSchema.index({ "branches.branch": 1 });
+
+// Useful for member access checks
+employerMemberSchema.index({ user: 1, business: 1 });
+
+// Useful for filtering active/restricted/suspended members
+employerMemberSchema.index({ business: 1, accountStatus: 1 });
 
 // --- VALIDATION ---
 
@@ -94,10 +106,29 @@ employerMemberSchema.pre("validate", function (next) {
   }
 
   // No duplicate branch assignments
-  const branchIds = this.branches.map((b) => b.branch.toString());
+  const branchIds = this.branches.map((assignment) => assignment.branch.toString());
   const uniqueBranchIds = new Set(branchIds);
+
   if (branchIds.length !== uniqueBranchIds.size) {
     return next(new Error("Duplicate branch assignments are not allowed."));
+  }
+
+  // Keep top-level role aligned with branch assignment roles.
+  // If any branch assignment is branch_manager, the member's top-level role
+  // must also be branch_manager.
+
+  const hasManagerBranch = this.branches.some((assignment) => assignment.role === "branch_manager");
+
+  if (this.role === "branch_staff" && hasManagerBranch) {
+    return next(
+      new Error(
+        "A member with a branch manager assignment must have branch_manager as top-level role."
+      )
+    );
+  }
+
+  if (this.role === "branch_manager" && !hasManagerBranch) {
+    return next(new Error("A branch_manager member must manage at least one branch."));
   }
 
   next();

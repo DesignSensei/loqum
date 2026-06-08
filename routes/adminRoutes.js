@@ -2,13 +2,20 @@
 
 const express = require("express");
 const router = express.Router();
-const { isAuthenticated, isVerified, hasRole } = require("../middleware/authMiddleware");
+
+const {
+  isAuthenticated,
+  isVerified,
+  isAccountAllowed,
+  hasRole,
+} = require("../middleware/authMiddleware");
+
 const adminController = require("../controllers/adminController");
 
 /* ---------- Middleware ---------- */
-// router.use(isAuthenticated, isVerified, hasRole("admin"));
+router.use(isAuthenticated, isVerified, isAccountAllowed, hasRole("admin"));
 
-/* ---------- Public pages (GET) ---------- */
+/* ---------- Admin pages (GET) ---------- */
 router.get("/dashboard", adminController.getDashboard);
 
 module.exports = router;

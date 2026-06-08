@@ -1,4 +1,4 @@
-// public/js//onboarding/onboarding-employer.js
+// public/js/onboarding/onboarding-employer.js
 
 "use strict";
 
@@ -6,73 +6,49 @@ var OnboardingEmployer = (function () {
   var form = document.querySelector("#kt_onboarding_employer_form");
   var submitButton = document.querySelector("#kt_onboarding_submit");
 
-  // Registration field config per type
-  // When scaling: add new types here — no other changes needed
-  var typeConfig = {
-    pharmacy: {
-      fieldId: "field-pharmacy",
-      validatorMessage: "PCN registration number is required.",
-    },
-    // clinic: {
-    //   fieldId: "field-clinic",
-    //   validatorMessage: "CAC registration number is required.",
-    // },
-    // hospital: {
-    //   fieldId: "field-hospital",
-    //   validatorMessage: "HEFAMAA / State MOH registration number is required.",
-    // },
-    // laboratory: {
-    //   fieldId: "field-laboratory",
-    //   validatorMessage: "MLSCN registration number is required.",
-    // },
-  };
-
   var validator = null;
 
   // Handle dynamic registration field switching
   function handleTypeSwitching() {
     var radios = document.querySelectorAll('input[name="type"]');
+
     if (!radios.length) return;
 
-    function switchField(selectedType) {
-      // Hide all, disable all inputs
+    function switchField(selectedRadio) {
+      var selectedFieldId = selectedRadio.dataset.registrationField;
+      var validatorMessage = selectedRadio.dataset.validatorMessage;
+
       document.querySelectorAll(".registration-field").forEach(function (field) {
-        field.style.display = "none";
-        var input = field.querySelector("input");
-        if (input) input.disabled = true;
+        var isActive = field.id === selectedFieldId;
+
+        field.style.display = isActive ? "block" : "none";
+
+        field.querySelectorAll("input, select, textarea").forEach(function (input) {
+          input.disabled = !isActive;
+        });
       });
 
-      // Show and enable the selected type's field
-      var config = typeConfig[selectedType];
-      if (!config) return;
+      if (validator && validatorMessage) {
+        validator.updateFieldStatus("regulatoryRegistrationNumber", "NotValidated");
 
-      var activeField = document.getElementById(config.fieldId);
-      if (activeField) {
-        activeField.style.display = "block";
-        var input = activeField.querySelector("input");
-        if (input) input.disabled = false;
-      }
-
-      // Update the validator message to match the selected type
-      if (validator) {
-        validator.updateFieldStatus("businessRegistrationNumber", "NotValidated");
         validator.updateValidatorOption(
-          "businessRegistrationNumber",
+          "regulatoryRegistrationNumber",
           "notEmpty",
           "message",
-          config.validatorMessage
+          validatorMessage
         );
       }
     }
 
-    // Set initial state on load
     var defaultRadio = document.querySelector('input[name="type"]:checked');
-    if (defaultRadio) switchField(defaultRadio.value);
 
-    // Listen for changes
+    if (defaultRadio) {
+      switchField(defaultRadio);
+    }
+
     radios.forEach(function (radio) {
       radio.addEventListener("change", function () {
-        switchField(this.value);
+        switchField(this);
       });
     });
   }
@@ -85,52 +61,104 @@ var OnboardingEmployer = (function () {
       fields: {
         businessName: {
           validators: {
-            notEmpty: { message: "Business name is required." },
+            notEmpty: {
+              message: "Business name is required.",
+            },
           },
         },
-        businessRegistrationNumber: {
+
+        cacRegistrationNumber: {
           validators: {
-            notEmpty: { message: "Registration number is required." },
+            notEmpty: {
+              message: "CAC registration number is required.",
+            },
+            regexp: {
+              regexp: /^(RC|BN|IT|LP|LLP)\s?\d{4,10}$/i,
+              message: "Enter a valid CAC number, e.g. RC1234567 or BN1234567.",
+            },
           },
         },
+
+        regulatoryRegistrationNumber: {
+          validators: {
+            notEmpty: {
+              message: "PCN premises registration number is required.",
+            },
+            regexp: {
+              regexp: /^[A-Z0-9/\\\- ]{4,30}$/i,
+              message: "Enter the PCN number exactly as shown on your premises certificate.",
+            },
+          },
+        },
+
         address: {
           validators: {
-            notEmpty: { message: "Business address is required." },
+            notEmpty: {
+              message: "Business address is required.",
+            },
           },
         },
+
         state: {
           validators: {
-            notEmpty: { message: "Please select a state." },
+            notEmpty: {
+              message: "Please select a state.",
+            },
           },
         },
+
         lga: {
           validators: {
-            notEmpty: { message: "Please select an LGA." },
+            notEmpty: {
+              message: "Please select an LGA.",
+            },
           },
         },
+
         businessPhone: {
           validators: {
-            notEmpty: { message: "Business phone number is required" },
+            notEmpty: {
+              message: "Business phone number is required.",
+            },
           },
         },
+
         contactFirstName: {
           validators: {
-            notEmpty: { message: "Contact person's first name is required." },
+            notEmpty: {
+              message: "Contact person's first name is required.",
+            },
           },
         },
+
         contactLastName: {
           validators: {
-            notEmpty: { message: "Contact person's last name is required." },
+            notEmpty: {
+              message: "Contact person's last name is required.",
+            },
           },
         },
+
+        contactRole: {
+          validators: {
+            notEmpty: {
+              message: "Contact role is required.",
+            },
+          },
+        },
+
         contactPhone: {
           validators: {
-            notEmpty: { message: "Contact phone number is required." },
+            notEmpty: {
+              message: "Contact phone number is required.",
+            },
           },
         },
       },
+
       plugins: {
         trigger: new FormValidation.plugins.Trigger(),
+
         bootstrap: new FormValidation.plugins.Bootstrap5({
           rowSelector: ".fv-row, .col-md-6",
           eleInvalidClass: "",
@@ -143,41 +171,45 @@ var OnboardingEmployer = (function () {
       e.preventDefault();
 
       validator.validate().then(function (status) {
-        if (status === "Valid") {
-          submitButton.setAttribute("data-kt-indicator", "on");
-          submitButton.disabled = true;
+        if (status !== "Valid") return;
 
-          const formData = new FormData(form);
-          const data = Object.fromEntries(formData);
+        submitButton.setAttribute("data-kt-indicator", "on");
+        submitButton.disabled = true;
 
-          axios
-            .post(form.action, data)
-            .then(function (response) {
-              submitButton.removeAttribute("data-kt-indicator");
+        var formData = new FormData(form);
+        var data = Object.fromEntries(formData);
 
-              Swal.fire({
-                text: response.data.message || "Business profile setup complete!",
-                icon: "success",
-                buttonsStyling: false,
-                confirmButtonText: "Go to Dashboard",
-                customClass: { confirmButton: "btn btn-primary" },
-              }).then(function () {
-                window.location.href = response.data.redirectUrl;
-              });
-            })
-            .catch(function (error) {
-              submitButton.removeAttribute("data-kt-indicator");
-              submitButton.disabled = false;
+        axios
+          .post(form.action, data)
+          .then(function (response) {
+            submitButton.removeAttribute("data-kt-indicator");
 
-              Swal.fire({
-                text: error.response?.data?.message || "An error occurred during setup.",
-                icon: "error",
-                buttonsStyling: false,
-                confirmButtonText: "Ok, got it!",
-                customClass: { confirmButton: "btn btn-primary" },
-              });
+            Swal.fire({
+              text: response.data.message || "Business profile setup complete!",
+              icon: "success",
+              buttonsStyling: false,
+              confirmButtonText: "Go to Dashboard",
+              customClass: {
+                confirmButton: "btn btn-primary",
+              },
+            }).then(function () {
+              window.location.href = response.data.redirectUrl;
             });
-        }
+          })
+          .catch(function (error) {
+            submitButton.removeAttribute("data-kt-indicator");
+            submitButton.disabled = false;
+
+            Swal.fire({
+              text: error.response?.data?.message || "An error occurred during setup.",
+              icon: "error",
+              buttonsStyling: false,
+              confirmButtonText: "Ok, got it!",
+              customClass: {
+                confirmButton: "btn btn-primary",
+              },
+            });
+          });
       });
     });
   }
@@ -185,6 +217,7 @@ var OnboardingEmployer = (function () {
   return {
     init: function () {
       LocationPicker.init("#stateSelect", "#lgaSelect");
+
       handleFormSubmission();
       handleTypeSwitching();
     },
@@ -210,7 +243,9 @@ window.initAddressAutocomplete = function () {
   }
 
   var autocomplete = new google.maps.places.Autocomplete(addressInput, {
-    componentRestrictions: { country: "ng" },
+    componentRestrictions: {
+      country: "ng",
+    },
     fields: ["formatted_address", "geometry", "place_id"],
     types: ["geocode"],
   });

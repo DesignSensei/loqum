@@ -2,18 +2,30 @@
 
 const express = require("express");
 const router = express.Router();
+
 const {
   isAuthenticated,
   isVerified,
+  isAccountAllowed,
   hasRole,
   isOnboarded,
 } = require("../middleware/authMiddleware");
+
+const { attachProfessionalProfile } = require("../middleware/professionalMiddleware");
+
 const professionalController = require("../controllers/professionalController");
 
 /* ---------- Middleware ---------- */
-// router.use(isAuthenticated, isVerified, hasRole("worker"), isOnboarded);
+router.use(
+  isAuthenticated,
+  isVerified,
+  isAccountAllowed,
+  hasRole("professional"),
+  isOnboarded,
+  attachProfessionalProfile
+);
 
-/* ---------- Public pages (GET) ---------- */
+/* ---------- Protected pages (GET) ---------- */
 router.get("/dashboard", professionalController.getDashboard);
 
 module.exports = router;

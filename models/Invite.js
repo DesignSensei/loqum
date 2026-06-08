@@ -38,7 +38,6 @@ const inviteSchema = new mongoose.Schema(
 
     token: {
       type: String,
-      unique: true,
       default: () => crypto.randomBytes(32).toString("hex"),
     },
 
@@ -58,10 +57,17 @@ const inviteSchema = new mongoose.Schema(
   }
 );
 
-// Auto-expire — index expiresAt for efficient querying
-inviteSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
-
 // Prevent duplicate pending invites for the same email and branch
-inviteSchema.index({ email: 1, branch: 1, status: 1 });
+inviteSchema.index({ token: 1 }, { unique: true });
+
+inviteSchema.index(
+  { email: 1, branch: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      status: "pending",
+    },
+  }
+);
 
 module.exports = mongoose.model("Invite", inviteSchema);

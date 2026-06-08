@@ -1,4 +1,4 @@
-//config/passport.js
+// config/passport.js
 
 const LocalStrategy = require("passport-local").Strategy;
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
@@ -6,32 +6,40 @@ const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 
 module.exports = function (passport) {
-  /* --------------------------- Local Strategy (Email + Password) --------------------------- */
+  /* --------------------------- Local Strategy --------------------------- */
   passport.use(
     new LocalStrategy({ usernameField: "email" }, async (email, password, done) => {
       try {
-        // Find user by email
-        const user = await User.findOne({ email }).select("+password");
+        const normalizedEmail = email?.toLowerCase().trim();
+
+        if (!normalizedEmail || !password) {
+          return done(null, false, { message: "Invalid credentials" });
+        }
+
+        const user = await User.findOne({ email: normalizedEmail }).select("+password");
 
         if (!user) {
           return done(null, false, { message: "Invalid credentials" });
         }
 
-        // Skip password for Google logins
-        if (user.authProvider === "google" && !user.password) {
+        if (user.authProvider === "google") {
           return done(null, false, {
             message: "This account was created with Google. Please sign in with Google.",
           });
         }
 
-        // Compare inputted password with hashed password in DB
+        if (!user.password) {
+          return done(null, false, {
+            message: "Password login is not available for this account.",
+          });
+        }
+
         const isMatch = await bcrypt.compare(password, user.password);
 
         if (!isMatch) {
           return done(null, false, { message: "Invalid credentials" });
         }
 
-        // Success: return user (Passport will attach this to req.user)
         return done(null, user);
       } catch (err) {
         return done(err);
@@ -39,7 +47,7 @@ module.exports = function (passport) {
     })
   );
 
-  /* --------------------------- GOOGLE Strategy (OAuth 2.0) --------------------------- */
+  /* --------------------------- Google Strategy --------------------------- */
   passport.use(
     new GoogleStrategy(
       {
@@ -52,13 +60,14 @@ module.exports = function (passport) {
         try {
           const googleId = profile.id;
 
-          const email = profile.emails && profile.emails[0] ? profile.emails[0].value : null;
+          const email = profile.emails?.[0]?.value?.toLowerCase().trim() || null;
 
           const displayName = profile.displayName || "";
 
-          const photo = profile.photos && profile.photos[0] ? profile.photos[0].value : "";
+          const photo = profile.photos?.[0]?.value || "";
 
           const firstName = profile.name?.givenName || displayName.split(" ")[0] || "";
+
           const lastName =
             profile.name?.familyName || displayName.split(" ").slice(1).join(" ") || "";
 
@@ -68,22 +77,55 @@ module.exports = function (passport) {
             });
           }
 
-          let user = await User.findOne({
-            $or: [{ googleId }, { email }],
-          });
+          let user = await User.findOne({ googleId });
 
           if (user) {
-            if (!user.googleId) {
-              user.googleId = googleId;
-            }
-
             if (!user.photo && photo) {
               user.photo = photo;
+            }
+
+            if (!user.displayName && displayName) {
+              user.displayName = displayName;
+            }
+
+            if (!user.isVerified) {
+              user.isVerified = true;
             }
 
             await user.save();
 
             delete req.session.oauthContext;
+
+            return done(null, user);
+          }
+
+          user = await User.findOne({ email });
+
+          if (user) {
+            delete req.session.oauthContext;
+
+            if (user.authProvider !== "google") {
+              return done(null, false, {
+                message:
+                  "An account with this email already exists. Please log in with email and password.",
+              });
+            }
+
+            user.googleId = googleId;
+
+            if (!user.photo && photo) {
+              user.photo = photo;
+            }
+
+            if (!user.displayName && displayName) {
+              user.displayName = displayName;
+            }
+
+            if (!user.isVerified) {
+              user.isVerified = true;
+            }
+
+            await user.save();
 
             return done(null, user);
           }
@@ -113,18 +155,23 @@ module.exports = function (passport) {
 
           return done(null, user);
         } catch (err) {
+          if (err.code === 11000) {
+            return done(null, false, {
+              message: "An account with this email already exists. Please log in instead.",
+            });
+          }
+
           return done(err);
         }
       }
     )
   );
 
-  // Serialize: only store user ID in session
+  /* --------------------------- Session Handling --------------------------- */
   passport.serializeUser((user, done) => {
     done(null, user.id);
   });
 
-  // Deserialize: retrieve full user object (without password)
   passport.deserializeUser(async (id, done) => {
     try {
       const user = await User.findById(id).select("-password");

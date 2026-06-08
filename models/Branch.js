@@ -47,15 +47,25 @@ const branchSchema = new mongoose.Schema(
     // GeoJSON Point — required for 2dsphere index.
     // coordinates: [longitude, latitude] — note the order.
 
-    coordinates: {
+    location: {
       type: {
         type: String,
         enum: ["Point"],
-        default: "Point",
+        default: undefined,
       },
       coordinates: {
         type: [Number], // [longitude, latitude]
         default: undefined,
+        validate: {
+          validator: function (value) {
+            if (value == null) return true;
+            if (!Array.isArray(value) || value.length !== 2) return false;
+
+            const [lng, lat] = value;
+            return lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90;
+          },
+          message: "Coordinates must be [longitude, latitude] with valid ranges.",
+        },
       },
     },
 
@@ -86,7 +96,7 @@ branchSchema.index({ business: 1 });
 branchSchema.index({ business: 1, isActive: 1 });
 // Active branches for an employer — used when posting a shift
 
-branchSchema.index({ coordinates: "2dsphere" }, { sparse: true });
+branchSchema.index({ location: "2dsphere" }, { sparse: true });
 // Geospatial queries — find branches near a location.
 // Sparse because coordinates are optional at creation.
 

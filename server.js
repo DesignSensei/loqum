@@ -93,9 +93,12 @@ app.use(csrfProtection);
 
 /* ---------- Make session user & CSRF token available to all views ---------- */
 app.use((req, res, next) => {
-  res.locals.user = req.session.user || null;
+  const currentUser = req.user || req.session.user || null;
+
+  res.locals.user = currentUser;
   res.locals.csrfToken = req.csrfToken();
-  res.locals.userHome = req.session.user ? getHomeRoute(req.session.user.role) : "/";
+  res.locals.userHome = currentUser ? getHomeRoute(currentUser.role) : "/";
+
   next();
 });
 

@@ -2,6 +2,23 @@
 
 const mongoose = require("mongoose");
 
+/**
+ * DVA MODEL:
+ * Stores the employer's Paystack Dedicated Virtual Account details.
+ *
+ * DVA is a payment rail, not the wallet.
+ *
+ * Each employer receives a DVA after onboarding.
+ * Employers transfer money to this account from their banking app.
+ *
+ * Paystack confirms the deposit through webhook.
+ * Loqum credits the employer wallet.
+ *
+ * DVA should only fund employer wallet top-up.
+ * DVA should not directly fund a shift.
+ * DVA should not directly credit escrow.
+ */
+
 const dvaSchema = new mongoose.Schema(
   {
     // --- OWNERSHIP ---
@@ -23,12 +40,14 @@ const dvaSchema = new mongoose.Schema(
     customerCode: {
       type: String,
       trim: true,
-      required: true, // e.g. CUS_xxxxxxxxxxxx
+      required: true,
+      // e.g. CUS_xxxxxxxxxxxx
     },
 
     dedicatedAccountId: {
       type: Number,
-      required: true, // Paystack's internal DVA id
+      required: true,
+      // Paystack's internal DVA id.
     },
 
     accountNumber: {
@@ -63,9 +82,10 @@ const dvaSchema = new mongoose.Schema(
 
     // --- STATUS ---
 
-    active: {
-      type: Boolean,
-      default: true,
+    status: {
+      type: String,
+      enum: ["active", "inactive", "deactivated", "failed"],
+      default: "active",
     },
 
     assignedAt: {
@@ -75,6 +95,13 @@ const dvaSchema = new mongoose.Schema(
 
     deactivatedAt: {
       type: Date,
+      default: null,
+    },
+
+    failureReason: {
+      type: String,
+      trim: true,
+      maxlength: 300,
       default: null,
     },
   },
@@ -90,14 +117,18 @@ dvaSchema.index(
   { employer: 1 },
   {
     unique: true,
-    sparse: true,
     partialFilterExpression: {
-      active: true,
+      status: "active",
       employer: { $type: "objectId" },
     },
   }
 );
 
-dvaSchema.index({ accountNumber: 1 });
+// Prevent the same bank account from being assigned twice
+dvaSchema.index({ bankCode: 1, accountNumber: 1 }, { unique: true });
+
+// Paystack customer and dedicated account references should not duplicate
+dvaSchema.index({ customerCode: 1 }, { unique: true });
+dvaSchema.index({ dedicatedAccountId: 1 }, { unique: true });
 
 module.exports = mongoose.model("DVA", dvaSchema);

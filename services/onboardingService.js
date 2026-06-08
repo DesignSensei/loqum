@@ -2,9 +2,32 @@
 
 const ProfessionalProfile = require("../models/ProfessionalProfile");
 const EmployerProfile = require("../models/EmployerProfile");
+const Wallet = require("../models/Wallet");
+// const DVAService = require("./dvaService");
 const User = require("../models/User");
 const logger = require("../utils/logger");
 const { buildGeoPoint } = require("../utils/geo");
+
+const normalizeCACRegistrationNumber = (value) => {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "");
+};
+
+const normalizeRegulatoryRegistrationNumber = (value) => {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ");
+};
+
+const isValidCACRegistrationNumber = (value) => {
+  return /^(RC|BN|IT|LP|LLP)\d{4,10}$/i.test(value);
+};
+
+const isValidRegulatoryRegistrationNumber = (value) => {
+  return /^[A-Z0-9/\\\- ]{4,30}$/i.test(value);
+};
 
 class OnboardingService {
   static async completeProfessionalOnboarding(userId, data) {
@@ -51,33 +74,52 @@ class OnboardingService {
       "Please select a valid address from the suggestions."
     );
 
-    const existing = await ProfessionalProfile.findOne({ user: userId });
-    if (existing) throw new Error("Profile already exists");
-
-    const profile = new ProfessionalProfile({
-      user: userId,
+    const profileData = {
       type,
       licenceNumber: String(licenceNumber).trim(),
-      phoneCode,
-      phone,
-      specialty,
+      phoneCode: String(phoneCode).trim(),
+      phone: String(phone).trim(),
+      specialty: String(specialty).trim(),
       address: String(address).trim(),
       googlePlaceId: String(googlePlaceId).trim(),
       location,
-      state,
-      lga,
-      yearsOfExperience: yearsOfExperience || 0,
-      bio: bio || "",
-    });
+      state: String(state).trim(),
+      lga: String(lga).trim(),
+      yearsOfExperience: Number(yearsOfExperience) || 0,
+      bio: String(bio || "").trim(),
+    };
 
-    await profile.save();
+    const profile = await ProfessionalProfile.findOneAndUpdate(
+      { user: userId },
+      {
+        $set: profileData,
+        $setOnInsert: {
+          user: userId,
+        },
+      },
+      {
+        returnDocument: "after",
+        upsert: true,
+        runValidators: true,
+        setDefaultsOnInsert: true,
+        context: "query",
+      }
+    );
 
-    await User.findByIdAndUpdate(userId, {
-      isOnboarded: true,
-      professionalProfile: profile._id,
-    });
+    await User.findByIdAndUpdate(
+      userId,
+      {
+        isOnboarded: true,
+        professionalProfile: profile._id,
+      },
+      {
+        returnDocument: "after",
+        runValidators: true,
+      }
+    );
 
-    logger.info(`Professional profile created for user: ${userId}`);
+    logger.info(`Professional profile completed for user: ${userId}`);
+
     return profile;
   }
 
@@ -85,31 +127,53 @@ class OnboardingService {
     const {
       type,
       businessName,
-      businessRegistrationNumber,
-      businessPhoneCode,
-      businessPhone,
-      address,
+      cacRegistrationNumber,
+      regulatoryRegistrationNumber,
       state,
       lga,
+      address,
       latitude,
       longitude,
       googlePlaceId,
+      businessPhoneCode,
+      businessPhone,
       contactFirstName,
       contactLastName,
+      contactRole,
       contactPhoneCode,
       contactPhone,
     } = data;
 
+    const regulatoryBodyByType = {
+      pharmacy: "pcn",
+      clinic: "state_moh",
+      hospital: "state_moh",
+      laboratory: "mlscn",
+    };
+
+    const regulatoryBody = regulatoryBodyByType[type];
+
+    if (!regulatoryBody) {
+      throw new Error("Invalid employer type selected.");
+    }
+
     if (
       !type ||
       !businessName ||
-      !businessRegistrationNumber ||
-      !address ||
+      !cacRegistrationNumber ||
+      !regulatoryRegistrationNumber ||
       !state ||
       !lga ||
+      !address ||
+      !businessPhoneCode ||
+      !businessPhone ||
+      !contactFirstName ||
+      !contactLastName ||
+      !contactRole ||
+      !contactPhoneCode ||
       !contactPhone
     ) {
-      throw new Error("All required fields must be filled");
+      throw new Error("Missing required employer onboarding fields");
     }
 
     if (!String(googlePlaceId || "").trim()) {
@@ -122,35 +186,121 @@ class OnboardingService {
       "Please select a valid business address from the suggestions."
     );
 
-    const existing = await EmployerProfile.findOne({ user: userId });
-    if (existing) throw new Error("Profile already exists");
+    const normalizedCACRegistrationNumber = normalizeCACRegistrationNumber(cacRegistrationNumber);
 
-    const profile = new EmployerProfile({
-      user: userId,
-      type,
-      businessName,
-      businessRegistrationNumber,
-      businessPhoneCode,
-      businessPhone,
+    const normalizedRegulatoryRegistrationNumber = normalizeRegulatoryRegistrationNumber(
+      regulatoryRegistrationNumber
+    );
+
+    if (!isValidCACRegistrationNumber(normalizedCACRegistrationNumber)) {
+      throw new Error("Enter a valid CAC number, e.g. RC1234567 or BN1234567.");
+    }
+
+    if (!isValidRegulatoryRegistrationNumber(normalizedRegulatoryRegistrationNumber)) {
+      throw new Error(
+        "Enter the PCN premises registration number exactly as shown on the certificate."
+      );
+    }
+
+    const profileData = {
+      type: String(type).trim(),
+      businessName: String(businessName).trim(),
+
+      cacRegistrationNumber: normalizedCACRegistrationNumber,
+
+      regulatoryBody,
+      regulatoryRegistrationNumber: normalizedRegulatoryRegistrationNumber,
+
+      businessPhoneCode: String(businessPhoneCode).trim(),
+      businessPhone: String(businessPhone).trim(),
+
       address: String(address).trim(),
       googlePlaceId: String(googlePlaceId).trim(),
       location,
-      state,
-      lga,
-      contactFirstName,
-      contactLastName,
-      contactPhoneCode,
-      contactPhone,
-    });
+      state: String(state).trim(),
+      lga: String(lga).trim(),
 
-    await profile.save();
+      contactFirstName: String(contactFirstName).trim(),
+      contactLastName: String(contactLastName).trim(),
+      contactRole: String(contactRole).trim(),
+      contactPhoneCode: String(contactPhoneCode).trim(),
+      contactPhone: String(contactPhone).trim(),
+    };
 
-    await User.findByIdAndUpdate(userId, {
-      isOnboarded: true,
-      employerProfile: profile._id,
-    });
+    const profile = await EmployerProfile.findOneAndUpdate(
+      { user: userId },
+      {
+        $set: profileData,
+        $setOnInsert: {
+          user: userId,
+        },
+      },
+      {
+        returnDocument: "after",
+        upsert: true,
+        runValidators: true,
+        setDefaultsOnInsert: true,
+        context: "query",
+      }
+    );
 
-    logger.info(`Employer profile created for user: ${userId}`);
+    const wallet = await Wallet.findOneAndUpdate(
+      {
+        ownerType: "employer",
+        employer: profile._id,
+      },
+      {
+        $setOnInsert: {
+          ownerType: "employer",
+          employer: profile._id,
+          currency: "NGN",
+          availableBalance: 0,
+          pendingBalance: 0,
+          outstandingBalance: 0,
+          status: "active",
+        },
+      },
+      {
+        returnDocument: "after",
+        upsert: true,
+        runValidators: true,
+        setDefaultsOnInsert: true,
+        context: "query",
+      }
+    );
+
+    logger.info(`Employer wallet ready for profile: ${profile._id}, wallet: ${wallet._id}`);
+
+    // DVA creation is temporarily disabled until Paystack merchant approval.
+    // Once Paystack approves the account, uncomment this block.
+
+    /*
+try {
+  await DVAService.createEmployerDVA({
+    userId,
+    employerProfileId: profile._id,
+  });
+
+  logger.info(`Employer DVA created for profile: ${profile._id}`);
+} catch (error) {
+  logger.error(`Employer DVA creation failed for profile ${profile._id}: ${error.message}`);
+}
+*/
+
+    await User.findByIdAndUpdate(
+      userId,
+      {
+        isOnboarded: true,
+        employerProfile: profile._id,
+      },
+      {
+        returnDocument: "after",
+        runValidators: true,
+      }
+    );
+
+    logger.info(`Employer profile completed for user: ${userId}`);
+
     return profile;
   }
 }

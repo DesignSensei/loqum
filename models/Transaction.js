@@ -55,7 +55,7 @@ const mongoose = require("mongoose");
  *
  * PLATFORM FEE:
  * Loqum's fee is employer-side.
- * There is no pharmacist-side commission deduction at launch.
+ * There is no professional-side commission deduction at launch.
  *
  * SETTLEMENT:
  * Escrow releases professional pay to professional wallet.
@@ -115,25 +115,18 @@ const transactionSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
-      // e.g. TXN-20260602-xxxxxx.
-      // Generated in service layer before insert.
     },
 
     groupReference: {
       type: String,
       trim: true,
       default: null,
-      // Links multiple transactions from one larger event.
-      // Example: one shift settlement may create escrow debit,
-      // professional wallet credit, and platform wallet credit records.
     },
 
     idempotencyKey: {
       type: String,
       trim: true,
       default: null,
-      // Used to prevent duplicate processing of the same webhook,
-      // payout retry, admin action, or internal transfer.
     },
 
     // --- EXTERNAL PROVIDER REFERENCES ---
@@ -142,23 +135,18 @@ const transactionSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: null,
-      // Present for Paystack Checkout payments, DVA deposits,
-      // or reversal-related Paystack records.
     },
 
     paystackTransferCode: {
       type: String,
       trim: true,
       default: null,
-      // Useful for withdrawals sent through Paystack Transfer.
     },
 
     providerEventId: {
       type: String,
       trim: true,
       default: null,
-      // Webhook event id where available.
-      // Helps prevent duplicate webhook processing.
     },
 
     provider: {
@@ -173,63 +161,21 @@ const transactionSchema = new mongoose.Schema(
       type: String,
       required: true,
       enum: [
-        // --- WALLET FUNDING ---
         "wallet_funding",
-        // Employer wallet top-up.
-        // For MVP, this should come through Paystack DVA only.
-
-        // --- SHIFT FUNDING ---
         "shift_funding",
-        // Used when a shift is funded.
-        // Fund with Wallet: employer wallet debited, escrow wallet credited.
-        // Pay with Paystack: escrow wallet credited after Paystack confirms payment.
-
         "shift_topup",
-        // Extra funding for approved overtime.
-        // Can come from employer wallet balance or Paystack Checkout.
-
         "shift_refund",
-        // Escrow debited, employer wallet credited after cancellation or proration.
-
-        // --- PROFESSIONAL PAYOUT ---
         "professional_payout",
-        // Escrow debited, professional wallet credited.
-
-        // --- PLATFORM REVENUE ---
         "platform_fee",
-        // Escrow debited, platform wallet credited.
-
-        // --- OBLIGATIONS ---
         "outstanding_charge",
-        // Employer outstandingBalance increased.
-        // Example: approved overtime top-up not yet funded.
-
         "outstanding_settlement",
-        // Employer outstandingBalance reduced after funding an obligation.
-
-        // --- WITHDRAWALS ---
         "withdrawal",
-        // Wallet debited for transfer to linked bank account.
-
         "withdrawal_reversal",
-        // Failed withdrawal swept back to wallet.
-
-        // --- DISPUTES / ADMIN ---
         "dispute_refund",
-        // Dispute resolved and funds returned to the entitled party.
-
         "cancellation_fee",
-        // Cancellation fee charged or moved.
-
         "penalty_debit",
-        // Platform-imposed penalty.
-
         "adjustment",
-        // Manual correction by Loqum admin.
-
-        // --- FUTURE CREDITS ---
         "credit_purchase",
-        // Future use if professionals can buy Credits.
       ],
     },
 
@@ -253,9 +199,6 @@ const transactionSchema = new mongoose.Schema(
         null,
       ],
       default: null,
-      // More specific reason for the transaction.
-      // type tells what kind of ledger event this is.
-      // purpose tells why it happened.
     },
 
     // --- DIRECTION ---
@@ -264,9 +207,6 @@ const transactionSchema = new mongoose.Schema(
       type: String,
       enum: ["credit", "debit"],
       required: true,
-      // credit means this wallet-side entry increases value or reduces an obligation.
-      // debit means this wallet-side entry removes value or increases an obligation.
-      // balanceDelta gives the exact field-level movement.
     },
 
     // --- WALLET ---
@@ -275,15 +215,12 @@ const transactionSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Wallet",
       required: true,
-      // The wallet this ledger entry belongs to.
     },
 
     counterpartyWallet: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Wallet",
       default: null,
-      // The other side of an internal wallet-to-wallet transfer.
-      // Null for external inflows such as Paystack Checkout or DVA wallet top-up.
     },
 
     // --- AMOUNTS ---
@@ -294,28 +231,35 @@ const transactionSchema = new mongoose.Schema(
       min: [0.01, "Transaction amount must be greater than zero."],
     },
 
+    countryCode: {
+      type: String,
+      default: "NG",
+      uppercase: true,
+      trim: true,
+      required: true,
+    },
+
     currency: {
       type: String,
-      enum: ["NGN"],
       default: "NGN",
+      uppercase: true,
+      trim: true,
+      required: true,
     },
 
     providerFee: {
       type: Number,
       default: 0,
       min: 0,
-      // Optional payment provider fee where applicable.
     },
 
     netAmount: {
       type: Number,
       default: null,
       min: 0,
-      // Optional. Useful if provider fees are deducted.
     },
 
     // --- BALANCE SNAPSHOT ---
-    // Full wallet state captured at write time for audit.
 
     balanceBefore: {
       type: balanceSnapshotSchema,
@@ -330,9 +274,6 @@ const transactionSchema = new mongoose.Schema(
     balanceDelta: {
       type: balanceDeltaSchema,
       default: () => ({}),
-      // Exact movement applied to wallet balances.
-      // Example:
-      // availableBalance: -53750
     },
 
     // --- LINKED RECORDS ---
@@ -353,29 +294,24 @@ const transactionSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "DVA",
       default: null,
-      // Populated only for DVA-related employer wallet funding.
     },
 
     bankAccount: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "BankAccount",
       default: null,
-      // Populated for withdrawals and withdrawal reversals.
     },
 
     dispute: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Dispute",
       default: null,
-      // Populated for dispute-related records.
     },
 
     relatedTransaction: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Transaction",
       default: null,
-      // Cross-links paired internal transfer entries,
-      // or links a refund/reversal back to its originating transaction.
     },
 
     // --- PAYMENT RAIL ---
@@ -394,24 +330,6 @@ const transactionSchema = new mongoose.Schema(
         null,
       ],
       default: null,
-      // How this transaction was funded or triggered.
-      //
-      // wallet_balance:
-      // Employer wallet funds a shift or approved top-up obligation.
-      //
-      // paystack_checkout:
-      // Paystack Checkout funds a specific shift directly,
-      // or a future professional Credit purchase.
-      // It should not be used for employer wallet top-up in the MVP.
-      //
-      // paystack_dva:
-      // Paystack DVA funds employer wallet top-up only.
-      //
-      // paystack_transfer:
-      // Paystack Transfer sends withdrawal to a bank account.
-      //
-      // internal_transfer:
-      // Wallet-to-wallet movement inside Loqum.
     },
 
     // --- EXTERNAL PAYMENT STATUS ---
@@ -420,7 +338,6 @@ const transactionSchema = new mongoose.Schema(
       type: String,
       enum: ["pending", "success", "failed", "reversed", null],
       default: null,
-      // Tracks Paystack's status independently of internal transaction status.
     },
 
     // --- INTERNAL STATUS ---
@@ -473,7 +390,6 @@ const transactionSchema = new mongoose.Schema(
         type: mongoose.Schema.Types.ObjectId,
         ref: "User",
         default: null,
-        // Null when system, cron, or webhook triggered.
       },
 
       role: {
@@ -490,15 +406,11 @@ const transactionSchema = new mongoose.Schema(
       trim: true,
       maxlength: 500,
       default: null,
-      // Human-readable explanation.
-      // Example: "Platform fee for shift LQM-8821"
     },
 
     metadata: {
       type: mongoose.Schema.Types.Mixed,
       default: {},
-      // Paystack webhook payloads, proration breakdowns,
-      // shift hours/rates, settlement calculation, admin notes, etc.
     },
   },
   {
@@ -509,9 +421,6 @@ const transactionSchema = new mongoose.Schema(
 // --- INDEXES ---
 
 transactionSchema.index({ reference: 1 }, { unique: true });
-
-// Unique nullable fields should use partial indexes.
-// This avoids duplicate key errors for many documents with null values.
 
 transactionSchema.index(
   { idempotencyKey: 1 },
@@ -569,11 +478,29 @@ transactionSchema.index({ type: 1, status: 1 });
 transactionSchema.index({ purpose: 1, status: 1 });
 transactionSchema.index({ paymentRail: 1, status: 1 });
 
+transactionSchema.index({ countryCode: 1 });
+transactionSchema.index({ currency: 1 });
+transactionSchema.index({ countryCode: 1, currency: 1 });
+transactionSchema.index({ countryCode: 1, currency: 1, createdAt: -1 });
+transactionSchema.index({ type: 1, countryCode: 1, currency: 1, createdAt: -1 });
+transactionSchema.index({ wallet: 1, countryCode: 1, currency: 1, createdAt: -1 });
+
 transactionSchema.index({ createdAt: -1 });
 
 // --- VALIDATION ---
 
-transactionSchema.pre("validate", function (next) {
+transactionSchema.pre("validate", function () {
+  if (!this.countryCode) {
+    this.countryCode = "NG";
+  }
+
+  if (!this.currency) {
+    this.currency = "NGN";
+  }
+
+  this.countryCode = String(this.countryCode).toUpperCase().trim();
+  this.currency = String(this.currency).toUpperCase().trim();
+
   const shiftRelatedTypes = [
     "shift_funding",
     "shift_topup",
@@ -587,44 +514,42 @@ transactionSchema.pre("validate", function (next) {
   ];
 
   if (shiftRelatedTypes.includes(this.type) && !this.shift) {
-    return next(new Error(`${this.type} transaction must reference a shift.`));
+    throw new Error(`${this.type} transaction must reference a shift.`);
   }
 
   if (this.type === "wallet_funding") {
     if (this.purpose !== "wallet_topup") {
-      return next(new Error("Wallet funding transaction must have wallet_topup purpose."));
+      throw new Error("Wallet funding transaction must have wallet_topup purpose.");
     }
 
     if (this.paymentRail !== "paystack_dva") {
-      return next(new Error("Employer wallet funding must use Paystack DVA."));
+      throw new Error("Employer wallet funding must use Paystack DVA.");
     }
   }
 
   if (this.paymentRail === "paystack_dva") {
     if (this.type !== "wallet_funding") {
-      return next(new Error("Paystack DVA can only be used for wallet funding."));
+      throw new Error("Paystack DVA can only be used for wallet funding.");
     }
 
     if (this.purpose !== "wallet_topup") {
-      return next(new Error("Paystack DVA transactions must have wallet_topup purpose."));
+      throw new Error("Paystack DVA transactions must have wallet_topup purpose.");
     }
 
     if (!this.dva) {
-      return next(new Error("Paystack DVA wallet funding transaction must reference a DVA."));
+      throw new Error("Paystack DVA wallet funding transaction must reference a DVA.");
     }
   }
 
   if (this.dva && this.paymentRail !== "paystack_dva") {
-    return next(new Error("DVA should only be linked to Paystack DVA wallet funding."));
+    throw new Error("DVA should only be linked to Paystack DVA wallet funding.");
   }
 
   if (["shift_funding", "shift_topup"].includes(this.type)) {
     const allowedShiftFundingRails = ["wallet_balance", "paystack_checkout"];
 
     if (!allowedShiftFundingRails.includes(this.paymentRail)) {
-      return next(
-        new Error(`${this.type} must be funded through wallet balance or Paystack Checkout.`)
-      );
+      throw new Error(`${this.type} must be funded through wallet balance or Paystack Checkout.`);
     }
   }
 
@@ -634,26 +559,24 @@ transactionSchema.pre("validate", function (next) {
     this.paymentRail === "platform_wallet"
   ) {
     if (!this.counterpartyWallet) {
-      return next(
-        new Error(`${this.paymentRail} transaction must reference a counterparty wallet.`)
-      );
+      throw new Error(`${this.paymentRail} transaction must reference a counterparty wallet.`);
     }
   }
 
   if (this.paymentRail === "paystack_checkout") {
     if (this.type === "wallet_funding") {
-      return next(
-        new Error("Paystack Checkout should not be used for employer wallet funding in the MVP.")
+      throw new Error(
+        "Paystack Checkout should not be used for employer wallet funding in the MVP."
       );
     }
 
     if (this.provider !== "paystack") {
-      return next(new Error("Paystack Checkout transaction must have paystack as provider."));
+      throw new Error("Paystack Checkout transaction must have paystack as provider.");
     }
   }
 
   if (this.paymentRail === "paystack_dva" && this.provider !== "paystack") {
-    return next(new Error("Paystack DVA transaction must have paystack as provider."));
+    throw new Error("Paystack DVA transaction must have paystack as provider.");
   }
 
   if (
@@ -661,21 +584,21 @@ transactionSchema.pre("validate", function (next) {
     this.status === "completed" &&
     !this.paystackReference
   ) {
-    return next(new Error(`${this.paymentRail} transaction must reference Paystack payment.`));
+    throw new Error(`${this.paymentRail} transaction must reference Paystack payment.`);
   }
 
   if (this.paymentRail === "paystack_transfer") {
     if (this.type !== "withdrawal") {
-      return next(new Error("Paystack Transfer should only be used for withdrawals."));
+      throw new Error("Paystack Transfer should only be used for withdrawals.");
     }
 
     if (!this.bankAccount) {
-      return next(new Error("Paystack Transfer withdrawal must reference a bank account."));
+      throw new Error("Paystack Transfer withdrawal must reference a bank account.");
     }
   }
 
   if (["withdrawal", "withdrawal_reversal"].includes(this.type) && !this.bankAccount) {
-    return next(new Error(`${this.type} transaction must reference a bank account.`));
+    throw new Error(`${this.type} transaction must reference a bank account.`);
   }
 
   const balanceFields = ["availableBalance", "pendingBalance", "outstandingBalance"];
@@ -690,10 +613,8 @@ transactionSchema.pre("validate", function (next) {
       const difference = Math.abs(after - expectedAfter);
 
       if (difference > 0.001) {
-        return next(
-          new Error(
-            `Invalid balanceDelta for ${field}. Expected balanceAfter.${field} to be ${expectedAfter}.`
-          )
+        throw new Error(
+          `Invalid balanceDelta for ${field}. Expected balanceAfter.${field} to be ${expectedAfter}.`
         );
       }
     }
@@ -724,8 +645,6 @@ transactionSchema.pre("validate", function (next) {
     this.reversedAt = null;
     this.reversalReason = null;
   }
-
-  next();
 });
 
 module.exports = mongoose.model("Transaction", transactionSchema);

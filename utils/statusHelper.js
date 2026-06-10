@@ -1,4 +1,4 @@
-// utils/kycStatus.js
+// utils/statusHelper.js
 
 const badgeClass = {
   pending: "badge-light-warning",
@@ -10,6 +10,8 @@ const badgeClass = {
   needs_review: "badge-light-info",
   active: "badge-light-success",
   suspended: "badge-light-danger",
+  frozen: "badge-light-danger",
+  closed: "badge-light-dark",
 
   visible: "badge-light-success",
   hidden: "badge-light-warning",
@@ -131,6 +133,31 @@ exports.getEmployerKycStatus = (profile) => {
     successMessage: "Your business is verified. You can post shifts.",
     pendingMessage:
       "Your business profile is under review. You’ll be able to post shifts once your CAC, facility, and approval checks are complete.",
+    items,
+    badgeClass,
+    formatStatus,
+  };
+};
+
+exports.getWalletStatus = (wallet) => {
+  const walletStatus = wallet?.status || "not_started";
+
+  const items = [
+    {
+      label: "Wallet status",
+      status: walletStatus,
+      passed: walletStatus === "active",
+    },
+  ];
+
+  const isEligible = items.every((item) => item.passed);
+
+  return {
+    title: "Wallet Status",
+    isEligible,
+    successMessage: "Your wallet is active and ready for transactions.",
+    pendingMessage:
+      "Your wallet is not active yet. Some wallet actions may be unavailable until this is resolved.",
     items,
     badgeClass,
     formatStatus,

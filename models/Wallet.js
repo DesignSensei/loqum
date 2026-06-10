@@ -13,21 +13,22 @@ const mongoose = require("mongoose");
  *
  * 1. Fund with Wallet:
  *    Employer wallet availableBalance is debited.
- *    Escrow wallet availableBalance is credited.
+ *    Escrow wallet is credited.
  *
- * 2. Fund with Transfer:
- *    Employer transfers into their assigned DVA for a specific shift funding
- *    instruction. Once Paystack confirms the payment, escrow wallet
- *    availableBalance is credited directly for that shift.
+ * 2. Fund with Paystack Checkout:
+ *    Employer pays the exact shift amount through Paystack Checkout.
+ *    Once Paystack confirms the payment, escrow wallet is credited directly
+ *    for that shift.
  *
- * Random DVA deposits that are not tied to a specific shift funding instruction
- * should only top up the employer wallet. They should not automatically fund
- * any shift.
+ * DVA WALLET TOP-UP:
+ * DVA is only for employer wallet top-up.
+ * DVA should not directly fund shifts.
+ * DVA should not directly credit escrow.
  *
  * professional:
  * Stores professional earnings after completed and cleared shifts.
  * Professionals receive their approved shift pay.
- * No pharmacist-side commission deduction at launch.
+ * No professional-side commission deduction at launch.
  *
  * escrow:
  * Platform-owned wallet used as the Protected Shift holding balance.
@@ -55,10 +56,10 @@ const mongoose = require("mongoose");
  *
  * IMPORTANT:
  * Wallets are internal ledger records.
- * The DVA is only the payment rail that receives bank transfers.
+ * The DVA is only the payment rail that receives wallet top-up bank transfers.
  * The Wallet is where usable platform balance is recorded.
  *
- * Protected Shift money lives in escrow, not in employer heldBalance.
+ * Protected shift money lives in escrow, not in employer heldBalance.
  *
  * No wallet balance should go negative.
  * Service layer must enforce all debit checks before updating balances.
@@ -84,6 +85,24 @@ const walletSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "ProfessionalProfile",
       default: null,
+    },
+
+    // --- COUNTRY / CURRENCY ---
+
+    countryCode: {
+      type: String,
+      default: "NG",
+      uppercase: true,
+      trim: true,
+      required: true,
+    },
+
+    currency: {
+      type: String,
+      default: "NGN",
+      uppercase: true,
+      trim: true,
+      required: true,
     },
 
     // --- BALANCES ---
@@ -124,29 +143,22 @@ const walletSchema = new mongoose.Schema(
       // Cumulative value ever debited from this wallet.
     },
 
-    currency: {
-      type: String,
-      enum: ["NGN"],
-      default: "NGN",
-    },
-
     // --- LIMITS ---
 
     maximumBalance: {
       type: Number,
       default: null,
       min: 0,
-      // Optional employer wallet cap.
-      // Useful to prevent employers from parking unlimited funds on Loqum.
-      // If null, service layer can fall back to platform config.
+      // Optional wallet-specific balance cap.
+      // Employer wallets may fall back to PlatformSettings.maximumEmployerWalletBalance.
     },
 
     minimumWithdrawalAmount: {
       type: Number,
       default: null,
       min: 0,
-      // Optional professional withdrawal threshold.
-      // If null, service layer can fall back to platform config.
+      // Optional wallet-specific withdrawal threshold.
+      // If null, service layer can fall back to PlatformSettings.
     },
 
     // --- STATUS ---
@@ -176,6 +188,12 @@ const walletSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+
+    lastTransactionAt: {
+      type: Date,
+      default: null,
+      // Updated by wallet service after successful wallet movement.
+    },
   },
   {
     timestamps: true,
@@ -184,9 +202,11 @@ const walletSchema = new mongoose.Schema(
 
 // --- INDEXES ---
 
-// One wallet per employer
+// One employer wallet per country and currency.
+// Launch: one NGN wallet per employer.
+// Future: allows same employer to have separate wallets if Loqum expands.
 walletSchema.index(
-  { employer: 1 },
+  { employer: 1, countryCode: 1, currency: 1 },
   {
     unique: true,
     partialFilterExpression: {
@@ -196,9 +216,10 @@ walletSchema.index(
   }
 );
 
-// One wallet per professional
+// One professional wallet per country and currency.
+// Launch: one NGN wallet per professional.
 walletSchema.index(
-  { professional: 1 },
+  { professional: 1, countryCode: 1, currency: 1 },
   {
     unique: true,
     partialFilterExpression: {
@@ -208,9 +229,11 @@ walletSchema.index(
   }
 );
 
-// One escrow wallet and one platform wallet
+// One escrow wallet per country and currency.
+// One platform wallet per country and currency.
+// Launch: one NGN escrow wallet and one NGN platform wallet.
 walletSchema.index(
-  { ownerType: 1 },
+  { ownerType: 1, countryCode: 1, currency: 1 },
   {
     unique: true,
     partialFilterExpression: {
@@ -219,44 +242,80 @@ walletSchema.index(
   }
 );
 
+// General lookup indexes
 walletSchema.index({ ownerType: 1 });
 walletSchema.index({ status: 1 });
+walletSchema.index({ countryCode: 1 });
 walletSchema.index({ currency: 1 });
+walletSchema.index({ countryCode: 1, currency: 1 });
+walletSchema.index({ ownerType: 1, status: 1 });
+walletSchema.index({ lastTransactionAt: -1 });
 
-// --- VALIDATION ---
+// --- VALIDATION / AUTO-CLEANUP ---
 
-walletSchema.pre("validate", function (next) {
+walletSchema.pre("validate", function () {
+  if (!this.countryCode) {
+    this.countryCode = "NG";
+  }
+
+  if (!this.currency) {
+    this.currency = "NGN";
+  }
+
+  this.countryCode = String(this.countryCode).toUpperCase().trim();
+  this.currency = String(this.currency).toUpperCase().trim();
+
   if (this.ownerType === "employer") {
     if (!this.employer) {
-      return next(new Error("Employer wallet must reference an employer profile."));
+      throw new Error("Employer wallet must reference an employer profile.");
     }
 
     if (this.professional) {
-      return next(new Error("Employer wallet cannot reference a professional profile."));
+      throw new Error("Employer wallet cannot reference a professional profile.");
     }
   }
 
   if (this.ownerType === "professional") {
     if (!this.professional) {
-      return next(new Error("Professional wallet must reference a professional profile."));
+      throw new Error("Professional wallet must reference a professional profile.");
     }
 
     if (this.employer) {
-      return next(new Error("Professional wallet cannot reference an employer profile."));
+      throw new Error("Professional wallet cannot reference an employer profile.");
     }
   }
 
   if (this.ownerType === "escrow" || this.ownerType === "platform") {
     if (this.employer || this.professional) {
-      return next(
-        new Error("System wallets cannot reference an employer or professional profile.")
-      );
+      throw new Error("System wallets cannot reference an employer or professional profile.");
     }
   }
 
-  // Only employer wallets can carry unpaid obligations.
   if (this.ownerType !== "employer" && this.outstandingBalance > 0) {
-    return next(new Error("Only employer wallets can have outstanding balance."));
+    throw new Error("Only employer wallets can have outstanding balance.");
+  }
+
+  if (this.availableBalance < 0 || this.pendingBalance < 0 || this.outstandingBalance < 0) {
+    throw new Error("Wallet balances cannot be negative.");
+  }
+
+  if (this.lifetimeCredit < 0 || this.lifetimeDebit < 0) {
+    throw new Error("Wallet lifetime totals cannot be negative.");
+  }
+
+  if (this.status === "frozen") {
+    if (!this.frozenAt) {
+      this.frozenAt = new Date();
+    }
+
+    if (!this.frozenReason) {
+      this.frozenReason = "Wallet frozen pending review.";
+    }
+  }
+
+  if (this.status !== "frozen") {
+    this.frozenReason = null;
+    this.frozenAt = null;
   }
 
   if (this.status === "closed") {
@@ -264,11 +323,17 @@ walletSchema.pre("validate", function (next) {
       this.availableBalance > 0 || this.pendingBalance > 0 || this.outstandingBalance > 0;
 
     if (hasBalance) {
-      return next(new Error("Wallet balance must be zero before closing."));
+      throw new Error("Wallet balance must be zero before closing.");
+    }
+
+    if (!this.closedAt) {
+      this.closedAt = new Date();
     }
   }
 
-  next();
+  if (this.status !== "closed") {
+    this.closedAt = null;
+  }
 });
 
 module.exports = mongoose.model("Wallet", walletSchema);

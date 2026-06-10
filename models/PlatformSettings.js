@@ -21,6 +21,55 @@ const mongoose = require("mongoose");
  * creditsEnabled must remain false until the Credits system is deliberately activated.
  */
 
+const countrySettingSchema = new mongoose.Schema(
+  {
+    countryCode: {
+      type: String,
+      required: true,
+      uppercase: true,
+      trim: true,
+    },
+
+    currency: {
+      type: String,
+      required: true,
+      uppercase: true,
+      trim: true,
+    },
+
+    platformFeeRate: {
+      type: Number,
+      default: 0.075,
+      min: 0,
+      max: 1,
+    },
+
+    maximumEmployerWalletBalance: {
+      type: Number,
+      default: 1000000,
+      min: 0,
+    },
+
+    minimumEmployerWithdrawalAmount: {
+      type: Number,
+      default: 5000,
+      min: 0,
+    },
+
+    minimumProfessionalWithdrawalAmount: {
+      type: Number,
+      default: 5000,
+      min: 0,
+    },
+
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  { _id: false }
+);
+
 const platformSettingsSchema = new mongoose.Schema(
   {
     // --- IDENTITY ---
@@ -69,6 +118,25 @@ const platformSettingsSchema = new mongoose.Schema(
       validate: {
         validator: (currencies) => Array.isArray(currencies) && currencies.length > 0,
         message: "At least one supported currency is required.",
+      },
+    },
+
+    countrySettings: {
+      type: [countrySettingSchema],
+      default: [
+        {
+          countryCode: "NG",
+          currency: "NGN",
+          platformFeeRate: 0.075,
+          maximumEmployerWalletBalance: 1000000,
+          minimumEmployerWithdrawalAmount: 5000,
+          minimumProfessionalWithdrawalAmount: 5000,
+          isActive: true,
+        },
+      ],
+      validate: {
+        validator: (settings) => Array.isArray(settings) && settings.length > 0,
+        message: "At least one country setting is required.",
       },
     },
 

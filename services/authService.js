@@ -1,4 +1,4 @@
-// public/services/authService.js
+// services/authService.js
 
 const User = require("../models/User.js");
 const bcrypt = require("bcryptjs");
@@ -25,6 +25,16 @@ class AuthService {
       throw new Error("Invalid email or password");
     }
 
+    if (!user.isVerified) {
+      return {
+        requiresEmailVerification: true,
+        pendingAuth: {
+          userId: user._id,
+          email: user.email,
+        },
+      };
+    }
+
     if (user.twoFactorEnabled) {
       return {
         requiresTwoFactor: true,
@@ -36,6 +46,7 @@ class AuthService {
     }
 
     return {
+      requiresEmailVerification: false,
       requiresTwoFactor: false,
       user,
     };
@@ -70,7 +81,7 @@ class AuthService {
         authProvider: "local",
         isVerified: false,
         isOnboarded: false,
-        twoFactorEnabled: false,
+        twoFactorEnabled: true,
       });
 
       await newUser.save();

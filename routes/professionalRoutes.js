@@ -18,8 +18,8 @@ const professionalController = require("../controllers/professionalController");
 /* ---------- Middleware ---------- */
 router.use(
   isAuthenticated,
-  isVerified,
   isAccountAllowed,
+  isVerified,
   hasRole("professional"),
   isOnboarded,
   attachProfessionalProfile

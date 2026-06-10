@@ -1,12 +1,15 @@
 // services/onboardingService.js
 
+const mongoose = require("mongoose");
+
 const ProfessionalProfile = require("../models/ProfessionalProfile");
 const EmployerProfile = require("../models/EmployerProfile");
-const Wallet = require("../models/Wallet");
-// const DVAService = require("./dvaService");
 const User = require("../models/User");
+
 const logger = require("../utils/logger");
 const { buildGeoPoint } = require("../utils/geo");
+const walletService = require("./walletService");
+const DVAService = require("./dvaService");
 
 const normalizeCACRegistrationNumber = (value) => {
   return String(value || "")
@@ -75,7 +78,7 @@ class OnboardingService {
     );
 
     const profileData = {
-      type,
+      type: String(type).trim(),
       licenceNumber: String(licenceNumber).trim(),
       phoneCode: String(phoneCode).trim(),
       phone: String(phone).trim(),
@@ -89,38 +92,54 @@ class OnboardingService {
       bio: String(bio || "").trim(),
     };
 
-    const profile = await ProfessionalProfile.findOneAndUpdate(
-      { user: userId },
-      {
-        $set: profileData,
-        $setOnInsert: {
-          user: userId,
-        },
-      },
-      {
-        returnDocument: "after",
-        upsert: true,
-        runValidators: true,
-        setDefaultsOnInsert: true,
-        context: "query",
-      }
-    );
+    const session = await mongoose.startSession();
 
-    await User.findByIdAndUpdate(
-      userId,
-      {
-        isOnboarded: true,
-        professionalProfile: profile._id,
-      },
-      {
-        returnDocument: "after",
-        runValidators: true,
-      }
-    );
+    let profile;
+    let wallet;
 
-    logger.info(`Professional profile completed for user: ${userId}`);
+    try {
+      await session.withTransaction(async () => {
+        profile = await ProfessionalProfile.findOneAndUpdate(
+          { user: userId },
+          {
+            $set: profileData,
+            $setOnInsert: {
+              user: userId,
+            },
+          },
+          {
+            returnDocument: "after",
+            upsert: true,
+            runValidators: true,
+            setDefaultsOnInsert: true,
+            context: "query",
+            session,
+          }
+        );
 
-    return profile;
+        wallet = await walletService.createProfessionalWalletIfMissing(profile, { session });
+
+        await User.findByIdAndUpdate(
+          userId,
+          {
+            isOnboarded: true,
+            professionalProfile: profile._id,
+          },
+          {
+            returnDocument: "after",
+            runValidators: true,
+            session,
+          }
+        );
+      });
+
+      logger.info(`Professional wallet ready for profile: ${profile._id}, wallet: ${wallet._id}`);
+      logger.info(`Professional profile completed for user: ${userId}`);
+
+      return profile;
+    } finally {
+      await session.endSession();
+    }
   }
 
   static async completeEmployerOnboarding(userId, data) {
@@ -198,7 +217,7 @@ class OnboardingService {
 
     if (!isValidRegulatoryRegistrationNumber(normalizedRegulatoryRegistrationNumber)) {
       throw new Error(
-        "Enter the PCN premises registration number exactly as shown on the certificate."
+        "Enter a valid regulatory registration number exactly as shown on the certificate."
       );
     }
 
@@ -227,81 +246,66 @@ class OnboardingService {
       contactPhone: String(contactPhone).trim(),
     };
 
-    const profile = await EmployerProfile.findOneAndUpdate(
-      { user: userId },
-      {
-        $set: profileData,
-        $setOnInsert: {
-          user: userId,
-        },
-      },
-      {
-        returnDocument: "after",
-        upsert: true,
-        runValidators: true,
-        setDefaultsOnInsert: true,
-        context: "query",
+    const session = await mongoose.startSession();
+
+    let profile;
+    let wallet;
+
+    try {
+      await session.withTransaction(async () => {
+        profile = await EmployerProfile.findOneAndUpdate(
+          { user: userId },
+          {
+            $set: profileData,
+            $setOnInsert: {
+              user: userId,
+            },
+          },
+          {
+            returnDocument: "after",
+            upsert: true,
+            runValidators: true,
+            setDefaultsOnInsert: true,
+            context: "query",
+            session,
+          }
+        );
+
+        wallet = await walletService.createEmployerWalletIfMissing(profile, { session });
+
+        await User.findByIdAndUpdate(
+          userId,
+          {
+            isOnboarded: true,
+            employerProfile: profile._id,
+          },
+          {
+            returnDocument: "after",
+            runValidators: true,
+            session,
+          }
+        );
+      });
+
+      logger.info(`Employer wallet ready for profile: ${profile._id}, wallet: ${wallet._id}`);
+
+      try {
+        await DVAService.createEmployerDVA({
+          userId,
+          employerProfileId: profile._id,
+        });
+
+        logger.info(`Employer DVA created for profile: ${profile._id}`);
+      } catch (error) {
+        logger.error(`Employer DVA creation failed for profile ${profile._id}: ${error.message}`);
       }
-    );
 
-    const wallet = await Wallet.findOneAndUpdate(
-      {
-        ownerType: "employer",
-        employer: profile._id,
-      },
-      {
-        $setOnInsert: {
-          ownerType: "employer",
-          employer: profile._id,
-          currency: "NGN",
-          availableBalance: 0,
-          pendingBalance: 0,
-          outstandingBalance: 0,
-          status: "active",
-        },
-      },
-      {
-        returnDocument: "after",
-        upsert: true,
-        runValidators: true,
-        setDefaultsOnInsert: true,
-        context: "query",
-      }
-    );
+      logger.info(`Employer profile completed for user: ${userId}`);
 
-    logger.info(`Employer wallet ready for profile: ${profile._id}, wallet: ${wallet._id}`);
-
-    // DVA creation is temporarily disabled until Paystack merchant approval.
-    // Once Paystack approves the account, uncomment this block.
-
-    /*
-try {
-  await DVAService.createEmployerDVA({
-    userId,
-    employerProfileId: profile._id,
-  });
-
-  logger.info(`Employer DVA created for profile: ${profile._id}`);
-} catch (error) {
-  logger.error(`Employer DVA creation failed for profile ${profile._id}: ${error.message}`);
-}
-*/
-
-    await User.findByIdAndUpdate(
-      userId,
-      {
-        isOnboarded: true,
-        employerProfile: profile._id,
-      },
-      {
-        returnDocument: "after",
-        runValidators: true,
-      }
-    );
-
-    logger.info(`Employer profile completed for user: ${userId}`);
-
-    return profile;
+      return profile;
+    } finally {
+      await session.endSession();
+    }
   }
 }
 

@@ -21,11 +21,15 @@ const mongoose = require("mongoose");
  *    Employer wallet availableBalance is debited.
  *    Escrow wallet is credited.
  *
- * 2. Fund with Transfer:
- *    Employer transfers to the Paystack-generated account details or transfer
- *    instruction shown for that specific shift funding attempt.
+ * 2. Fund with Paystack Checkout:
+ *    Employer pays the exact shift amount through Paystack Checkout.
  *    When Paystack confirms payment, escrow is credited directly.
  *    The money does not become employer available wallet balance first.
+ *
+ * DVA WALLET TOP-UP:
+ * DVA is only for employer wallet top-up.
+ * DVA should not directly fund shifts.
+ * DVA should not directly credit escrow.
  *
  * GENERAL WALLET TOP-UP:
  * If the employer intentionally tops up their wallet, or sends a transfer
@@ -61,6 +65,22 @@ const employerProfileSchema = new mongoose.Schema(
       required: true,
     },
 
+    countryCode: {
+      type: String,
+      default: "NG",
+      uppercase: true,
+      trim: true,
+      required: true,
+    },
+
+    currency: {
+      type: String,
+      default: "NGN",
+      uppercase: true,
+      trim: true,
+      required: true,
+    },
+
     businessName: {
       type: String,
       required: true,
@@ -76,11 +96,13 @@ const employerProfileSchema = new mongoose.Schema(
     businessPhone: {
       type: String,
       trim: true,
+      required: true,
     },
 
     address: {
       type: String,
       trim: true,
+      required: true,
     },
 
     googlePlaceId: {
@@ -282,11 +304,13 @@ const employerProfileSchema = new mongoose.Schema(
     contactFirstName: {
       type: String,
       trim: true,
+      required: true,
     },
 
     contactLastName: {
       type: String,
       trim: true,
+      required: true,
     },
 
     contactRole: {
@@ -314,6 +338,7 @@ const employerProfileSchema = new mongoose.Schema(
     contactPhone: {
       type: String,
       trim: true,
+      required: true,
     },
 
     // --- FINANCIAL SUMMARY ---
@@ -485,6 +510,7 @@ const employerProfileSchema = new mongoose.Schema(
 );
 
 // --- INDEXES ---
+employerProfileSchema.index({ user: 1 }, { unique: true });
 
 employerProfileSchema.index({ accountStatus: 1 });
 employerProfileSchema.index({ type: 1 });
@@ -492,10 +518,11 @@ employerProfileSchema.index({ type: 1 });
 employerProfileSchema.index({ state: 1, lga: 1 });
 employerProfileSchema.index({ location: "2dsphere" });
 
-employerProfileSchema.index({ cacRegistrationNumber: 1 }, { unique: true });
+employerProfileSchema.index({ countryCode: 1, cacRegistrationNumber: 1 }, { unique: true });
 
 employerProfileSchema.index(
   {
+    countryCode: 1,
     regulatoryBody: 1,
     regulatoryRegistrationNumber: 1,
   },

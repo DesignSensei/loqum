@@ -8,18 +8,18 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 class EmailService {
   static async sendOTP(email, otp) {
     try {
-      await resend.emails.send({
+      const { data, error } = await resend.emails.send({
         from: `Loqum <${process.env.EMAIL_FROM}>`,
         to: email,
         subject: "Your One-Time Password",
         html: `
-          <div style="font-family: "Quicksand", sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
+        <div style="font-family: 'Fustat', Arial, Helvetica, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
           
           <!-- Header -->
           <div style="background: #08A562; padding: 40px 40px 30px; text-align: center;">
             <img 
-              src="https://app.loqum.com/assets/images/logo_white.png" 
-              alt="Loqum" 
+              src="https://findloqum.com/assets/images/logo-white.png" 
+              alt="Loqum logo" 
               style="height: 40px; width: auto;"
               onerror="this.style.display='none'; this.nextElementSibling.style.display='block';"
             />
@@ -60,10 +60,15 @@ class EmailService {
           </div>
 
         </div>
-        `,
+      `,
       });
 
-      logger.info(`OTP sent to ${email}`);
+      if (error) {
+        logger.error(`Resend OTP error for ${email}: ${JSON.stringify(error)}`);
+        throw new Error(error.message || "Failed to send OTP email");
+      }
+
+      logger.info(`OTP sent to ${email}. Resend email ID: ${data?.id}`);
     } catch (error) {
       logger.error(`Failed to send OTP to ${email}: ${error.message}`);
       throw new Error("Failed to send OTP email");
@@ -77,13 +82,13 @@ class EmailService {
         to: email,
         subject: "Reset Your Password",
         html: `
-        <div style="font-family: 'Fustat', sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
+        <div style="font-family: 'Fustat', Arial, Helvetica, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
         
         <!-- Header -->
         <div style="background: #08A562; padding: 40px 40px 30px; text-align: center;">
           <img 
-            src="https://app.loqum.com/assets/images/logo_white.png" 
-            alt="Loqum" 
+            src="https://findloqum.com/assets/images/logo-white.png" 
+            alt="Loqum logo" 
             style="height: 40px; width: auto;"
             onerror="this.style.display='none'; this.nextElementSibling.style.display='block';"
           />
@@ -141,13 +146,13 @@ class EmailService {
         to: email,
         subject: "You've Been Invited to Join Loqum",
         html: `
-        <div style="font-family: 'Fustat', sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
+        <div style="font-family: 'Fustat', Arial, Helvetica, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.08);">
 
           <!-- Header -->
           <div style="background: #08A562; padding: 40px 40px 30px; text-align: center;">
             <img 
-              src="https://app.loqum.com/assets/images/logo_white.png" 
-              alt="Loqum" 
+              src="https://findloqum.com/assets/images/logo-white.png" 
+              alt="Loqum logo" 
               style="height: 40px; width: auto;"
               onerror="this.style.display='none'; this.nextElementSibling.style.display='block';"
             />

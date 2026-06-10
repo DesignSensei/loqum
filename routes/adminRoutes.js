@@ -13,7 +13,7 @@ const {
 const adminController = require("../controllers/adminController");
 
 /* ---------- Middleware ---------- */
-router.use(isAuthenticated, isVerified, isAccountAllowed, hasRole("admin"));
+router.use(isAuthenticated, isAccountAllowed, isVerified, hasRole("admin"));
 
 /* ---------- Admin pages (GET) ---------- */
 router.get("/dashboard", adminController.getDashboard);

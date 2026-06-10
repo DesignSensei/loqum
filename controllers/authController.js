@@ -4,6 +4,16 @@ const User = require("../models/User");
 const AuthService = require("../services/authService");
 const logger = require("../utils/logger");
 
+const { getHomeRoute, getOnboardingRoute } = require("../utils/routeHelper");
+
+const getPostAuthRedirect = (user) => {
+  if (!user.isOnboarded) {
+    return getOnboardingRoute(user.role);
+  }
+
+  return getHomeRoute(user.role);
+};
+
 //─────────────────────────────── AUTH RENDER BLOCK (GET ROUTES) ───────────────────────────────//
 // Render Login Page
 exports.getLogin = (req, res) => {
@@ -66,6 +76,7 @@ exports.getTwoFactor = (req, res) => {
   res.render("auth/two-factor", {
     layout: "layouts/auth-layout-no-index",
     title: "Two Factor",
+    csrfToken: req.csrfToken(),
     scripts: `
       <script src="/js/auth/two-factor.js"></script>
     `,
@@ -82,6 +93,26 @@ exports.postLogin = async (req, res, next) => {
   try {
     const result = await AuthService.loginUser(req.body);
 
+    if (result.requiresEmailVerification) {
+      await AuthService.sendOTP(result.pendingAuth.userId);
+
+      req.session.otpContext = {
+        userId: result.pendingAuth.userId,
+        email: result.pendingAuth.email,
+        purpose: "email_verification",
+      };
+
+      return req.session.save((err) => {
+        if (err) return next(err);
+
+        return res.json({
+          success: true,
+          message: "Please verify your email with the OTP sent to you.",
+          redirectUrl: "/two-factor",
+        });
+      });
+    }
+
     if (result.requiresTwoFactor) {
       await AuthService.sendOTP(result.pendingAuth.userId);
 
@@ -91,18 +122,38 @@ exports.postLogin = async (req, res, next) => {
         purpose: "login_2fa",
       };
 
-      return res.json({
-        success: true,
-        message: "Enter the OTP sent to your email.",
-        redirectUrl: "/two-factor",
+      return req.session.save((err) => {
+        if (err) return next(err);
+
+        return res.json({
+          success: true,
+          message: "Enter the OTP sent to your email.",
+          redirectUrl: "/two-factor",
+        });
       });
     }
 
-    req.session.user = result.user;
-    return res.json({
-      success: true,
-      message: "You have successfully logged in!",
-      redirectUrl: "/dashboard",
+    return req.login(result.user, (err) => {
+      if (err) return next(err);
+
+      req.session.user = {
+        _id: result.user._id,
+        email: result.user.email,
+        role: result.user.role,
+        isVerified: result.user.isVerified,
+        isOnboarded: result.user.isOnboarded,
+        twoFactorEnabled: result.user.twoFactorEnabled,
+      };
+
+      return req.session.save((err) => {
+        if (err) return next(err);
+
+        return res.json({
+          success: true,
+          message: "You have successfully logged in!",
+          redirectUrl: getPostAuthRedirect(result.user),
+        });
+      });
     });
   } catch (error) {
     return res.status(400).json({ success: false, message: error.message });
@@ -189,21 +240,14 @@ exports.postVerifyOTP = async (req, res, next) => {
         role: user.role,
         isVerified: user.isVerified,
         isOnboarded: user.isOnboarded,
+        twoFactorEnabled: user.twoFactorEnabled,
       };
 
       const purpose = otpContext.purpose;
 
       delete req.session.otpContext;
 
-      let redirectUrl;
-
-      if (purpose === "email_verification") {
-        redirectUrl = user.isOnboarded ? "/dashboard" : "/onboarding";
-      } else if (purpose === "login_2fa") {
-        redirectUrl = user.isOnboarded ? "/dashboard" : "/onboarding";
-      } else {
-        redirectUrl = "/";
-      }
+      const redirectUrl = getPostAuthRedirect(user);
 
       req.session.save((err) => {
         if (err) return next(err);

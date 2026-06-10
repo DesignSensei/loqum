@@ -1,4 +1,4 @@
-// public/js/two-factor.js
+// public/js/auth/two-factor.js
 
 "use strict";
 
@@ -8,55 +8,24 @@ var TwoFactor = (function () {
   var resendButton = document.querySelector("#kt_resend_otp");
   var inputs;
 
+  function getCsrfToken() {
+    var csrfInput = form.querySelector('input[name="_csrf"]');
+    return csrfInput ? csrfInput.value : "";
+  }
+
   function handleSubmit() {
     submitButton.addEventListener("click", function (e) {
       e.preventDefault();
 
       var isValid = true;
 
-      inputs.map(function (input) {
+      inputs.forEach(function (input) {
         if (input.value === "" || input.value.length === 0) {
           isValid = false;
         }
       });
 
-      if (isValid) {
-        submitButton.setAttribute("data-kt-indicator", "on");
-        submitButton.disabled = true;
-
-        const otp = inputs.map((input) => input.value).join("");
-
-        axios
-          .post("/two-factor/verify", { otp })
-          .then(function (response) {
-            Swal.fire({
-              text: response.data.message,
-              icon: "success",
-              buttonsStyling: false,
-              confirmButtonText: "Ok, got it!",
-              customClass: { confirmButton: "btn btn-primary" },
-            }).then(function () {
-              window.location.href = response.data.redirectUrl;
-            });
-          })
-          .catch(function (error) {
-            Swal.fire({
-              text:
-                error.response?.data?.message ||
-                "Please enter a valid security code and try again.",
-              icon: "error",
-              buttonsStyling: false,
-              confirmButtonText: "Ok, got it!",
-              customClass: { confirmButton: "btn fw-bold btn-light-primary" },
-            }).then(function () {
-              KTUtil.scrollTop();
-            });
-          })
-          .then(function () {
-            submitButton.removeAttribute("data-kt-indicator");
-            submitButton.disabled = false;
-          });
-      } else {
+      if (!isValid) {
         Swal.fire({
           text: "Please enter a valid security code and try again.",
           icon: "error",
@@ -66,16 +35,73 @@ var TwoFactor = (function () {
         }).then(function () {
           KTUtil.scrollTop();
         });
+
+        return;
       }
+
+      submitButton.setAttribute("data-kt-indicator", "on");
+      submitButton.disabled = true;
+
+      var otp = inputs
+        .map(function (input) {
+          return input.value;
+        })
+        .join("");
+
+      axios
+        .post("/two-factor/verify", {
+          otp: otp,
+          _csrf: getCsrfToken(),
+        })
+        .then(function (response) {
+          var data = response.data || {};
+
+          if (!data.success || !data.redirectUrl) {
+            throw new Error(
+              data.message || "Verification completed, but no redirect was returned."
+            );
+          }
+
+          Swal.fire({
+            text: data.message,
+            icon: "success",
+            buttonsStyling: false,
+            confirmButtonText: "Ok, got it!",
+            customClass: { confirmButton: "btn btn-primary" },
+          }).then(function () {
+            window.location.href = data.redirectUrl;
+          });
+        })
+        .catch(function (error) {
+          Swal.fire({
+            text:
+              error.response?.data?.message ||
+              error.message ||
+              "Please enter a valid security code and try again.",
+            icon: "error",
+            buttonsStyling: false,
+            confirmButtonText: "Ok, got it!",
+            customClass: { confirmButton: "btn fw-bold btn-light-primary" },
+          }).then(function () {
+            KTUtil.scrollTop();
+          });
+        })
+        .then(function () {
+          submitButton.removeAttribute("data-kt-indicator");
+          submitButton.disabled = false;
+        });
     });
   }
 
   function handleAutoFocus() {
+    if (!inputs.length) return;
+
     inputs[0].focus();
 
     inputs.forEach(function (input, index) {
       input.addEventListener("input", function () {
         this.value = this.value.replace(/[^0-9]/g, "").slice(0, 1);
+
         if (this.value.length === 1 && index < inputs.length - 1) {
           inputs[index + 1].focus();
         }
@@ -86,13 +112,11 @@ var TwoFactor = (function () {
           inputs[index - 1].focus();
         }
       });
-    });
 
-    // Paste on any input
-    inputs.forEach(function (input) {
       input.addEventListener("paste", function (e) {
         e.preventDefault();
-        const pastedData = e.clipboardData
+
+        var pastedData = e.clipboardData
           .getData("text")
           .replace(/[^0-9]/g, "")
           .slice(0, 6);
@@ -101,7 +125,10 @@ var TwoFactor = (function () {
           if (inputs[idx]) inputs[idx].value = digit;
         });
 
-        const nextEmpty = inputs.find((input) => input.value === "");
+        var nextEmpty = inputs.find(function (input) {
+          return input.value === "";
+        });
+
         if (nextEmpty) {
           nextEmpty.focus();
         } else {
@@ -116,10 +143,13 @@ var TwoFactor = (function () {
 
     resendButton.addEventListener("click", function (e) {
       e.preventDefault();
+
       resendButton.classList.add("disabled");
 
       axios
-        .post("/two-factor/resend")
+        .post("/two-factor/resend", {
+          _csrf: getCsrfToken(),
+        })
         .then(function (response) {
           Swal.fire({
             text: response.data.message,
@@ -135,10 +165,9 @@ var TwoFactor = (function () {
         })
         .catch(function (error) {
           resendButton.classList.remove("disabled");
+
           Swal.fire({
-            text:
-              error.response?.data?.message ||
-              "Failed to resend OTP. Please try again.",
+            text: error.response?.data?.message || "Failed to resend OTP. Please try again.",
             icon: "error",
             buttonsStyling: false,
             confirmButtonText: "Ok, got it!",
@@ -150,8 +179,10 @@ var TwoFactor = (function () {
 
   return {
     init: function () {
-      // Destroy inputmask on OTP inputs if it exists
+      if (!form || !submitButton) return;
+
       var rawInputs = form.querySelectorAll('input[maxlength="1"]');
+
       rawInputs.forEach(function (input) {
         if (input.inputmask) {
           input.inputmask.remove();
@@ -159,7 +190,6 @@ var TwoFactor = (function () {
       });
 
       inputs = [].slice.call(rawInputs);
-      console.log("inputs found:", inputs.length);
 
       handleSubmit();
       handleAutoFocus();

@@ -149,6 +149,7 @@ module.exports = function (passport) {
             authProvider: "google",
             isVerified: true,
             isOnboarded: false,
+            twoFactorEnabled: true,
           });
 
           delete req.session.oauthContext;

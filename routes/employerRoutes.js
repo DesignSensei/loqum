@@ -18,8 +18,8 @@ const employerController = require("../controllers/employerController");
 /* ---------- Middleware ---------- */
 router.use(
   isAuthenticated,
-  isVerified,
   isAccountAllowed,
+  isVerified,
   hasRole("employer"),
   isOnboarded,
   attachEmployerProfile

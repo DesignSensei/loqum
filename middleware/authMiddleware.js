@@ -38,6 +38,19 @@ exports.hasRole = (...roles) => {
   };
 };
 
+/* ---------- Check if user has completed required two-factor setup ---------- */
+exports.hasTwoFactor = (req, res, next) => {
+  if (!req.isAuthenticated || !req.isAuthenticated() || !req.user) {
+    return res.redirect("/login");
+  }
+
+  if (req.user.twoFactorEnabled) {
+    return next();
+  }
+
+  return res.redirect("/two-factor");
+};
+
 /* ---------- Check if user is verified ---------- */
 exports.isVerified = (req, res, next) => {
   if (!req.isAuthenticated || !req.isAuthenticated() || !req.user) {
@@ -51,9 +64,9 @@ exports.isVerified = (req, res, next) => {
   return next();
 };
 
-/* ---------- Check if user has a pending two-factor session ---------- */
+/* ---------- Check if user has a pending OTP session ---------- */
 exports.hasPendingAuth = (req, res, next) => {
-  if (req.session.user && !req.session.user.isVerified) {
+  if (req.session.otpContext?.userId && req.session.otpContext?.email) {
     return next();
   }
 

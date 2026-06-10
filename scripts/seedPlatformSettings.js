@@ -21,6 +21,18 @@ const seedPlatformSettings = async () => {
     minimumEmployerWithdrawalAmount: 5000,
     minimumProfessionalWithdrawalAmount: 5000,
 
+    countrySettings: [
+      {
+        countryCode: "NG",
+        currency: "NGN",
+        platformFeeRate: 0.075,
+        maximumEmployerWalletBalance: 1000000,
+        minimumEmployerWithdrawalAmount: 5000,
+        minimumProfessionalWithdrawalAmount: 5000,
+        isActive: true,
+      },
+    ],
+
     overtimeResponseHours: 24,
 
     checkInPinVisibilityMinutes: 30,

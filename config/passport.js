@@ -3,14 +3,19 @@
 const LocalStrategy = require("passport-local").Strategy;
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const bcrypt = require("bcryptjs");
+
 const User = require("../models/User");
+const InviteService = require("../services/inviteService");
 
 module.exports = function (passport) {
   /* --------------------------- Local Strategy --------------------------- */
+
   passport.use(
     new LocalStrategy({ usernameField: "email" }, async (email, password, done) => {
       try {
-        const normalizedEmail = email?.toLowerCase().trim();
+        const normalizedEmail = String(email || "")
+          .toLowerCase()
+          .trim();
 
         if (!normalizedEmail || !password) {
           return done(null, false, { message: "Invalid credentials" });
@@ -48,6 +53,7 @@ module.exports = function (passport) {
   );
 
   /* --------------------------- Google Strategy --------------------------- */
+
   passport.use(
     new GoogleStrategy(
       {
@@ -60,21 +66,42 @@ module.exports = function (passport) {
         try {
           const googleId = profile.id;
 
-          const email = profile.emails?.[0]?.value?.toLowerCase().trim() || null;
+          const email = String(profile.emails?.[0]?.value || "")
+            .toLowerCase()
+            .trim();
 
           const displayName = profile.displayName || "";
-
           const photo = profile.photos?.[0]?.value || "";
 
-          const firstName = profile.name?.givenName || displayName.split(" ")[0] || "";
+          const firstName = profile.name?.givenName || displayName.split(" ")[0] || "Google";
 
           const lastName =
-            profile.name?.familyName || displayName.split(" ").slice(1).join(" ") || "";
+            profile.name?.familyName || displayName.split(" ").slice(1).join(" ") || "User";
 
           if (!email) {
             return done(null, false, {
               message: "Google account does not have an email address.",
             });
+          }
+
+          const oauthContext = req.session.oauthContext || {};
+          const inviteToken = String(oauthContext.inviteToken || "").trim();
+
+          /**
+           * Important:
+           * If this is a Google invite signup, validate the invite before creating
+           * a new user. This prevents creating an orphan Google user when the Google
+           * email does not match the invite email.
+           */
+          if (inviteToken) {
+            const invite = await InviteService.validateInviteToken(inviteToken);
+            const inviteEmail = InviteService.normalizeEmail(invite.email);
+
+            if (inviteEmail !== email) {
+              return done(null, false, {
+                message: "This invite was sent to a different email address.",
+              });
+            }
           }
 
           let user = await User.findOne({ googleId });
@@ -94,16 +121,12 @@ module.exports = function (passport) {
 
             await user.save();
 
-            delete req.session.oauthContext;
-
             return done(null, user);
           }
 
           user = await User.findOne({ email });
 
           if (user) {
-            delete req.session.oauthContext;
-
             if (user.authProvider !== "google") {
               return done(null, false, {
                 message:
@@ -130,8 +153,6 @@ module.exports = function (passport) {
             return done(null, user);
           }
 
-          const oauthContext = req.session.oauthContext;
-
           if (!oauthContext || oauthContext.intent !== "signup" || !oauthContext.role) {
             return done(null, false, {
               message: "Please select an account type before signing up with Google.",
@@ -147,13 +168,30 @@ module.exports = function (passport) {
             lastName,
             role: oauthContext.role,
             authProvider: "google",
+
+            /**
+             * Google has authenticated ownership of this email.
+             */
             isVerified: true,
+
+            /**
+             * User still needs onboarding or invite finalization.
+             * Invite acceptance happens in authRoutes.js after Passport returns.
+             */
             isOnboarded: false,
+
+            /**
+             * Keeping your existing behavior.
+             * If you do not want Google signup users to go through Loqum OTP
+             * immediately after Google auth, set this to false.
+             */
             twoFactorEnabled: true,
           });
 
-          delete req.session.oauthContext;
-
+          /**
+           * Do not delete req.session.oauthContext here.
+           * authRoutes.js still needs inviteToken after Passport finishes.
+           */
           return done(null, user);
         } catch (err) {
           if (err.code === 11000) {
@@ -169,6 +207,7 @@ module.exports = function (passport) {
   );
 
   /* --------------------------- Session Handling --------------------------- */
+
   passport.serializeUser((user, done) => {
     done(null, user.id);
   });
@@ -176,6 +215,7 @@ module.exports = function (passport) {
   passport.deserializeUser(async (id, done) => {
     try {
       const user = await User.findById(id).select("-password");
+
       done(null, user);
     } catch (err) {
       done(err);

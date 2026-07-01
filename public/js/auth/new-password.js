@@ -1,4 +1,4 @@
-// public/js/new-password.js
+// public/js/auth/new-password.js
 
 "use strict";
 
@@ -12,7 +12,7 @@ var NewPassword = (function () {
 
     // Initialize Password Meter
     passwordMeter = KTPasswordMeter.getInstance(
-      form.querySelector('[data-kt-password-meter="true"]'),
+      form.querySelector('[data-kt-password-meter="true"]')
     );
 
     // Form Validation Setup
@@ -83,9 +83,7 @@ var NewPassword = (function () {
               submitButton.disabled = false;
 
               Swal.fire({
-                text:
-                  response.data.message ||
-                  "Password has been reset successfully.",
+                text: response.data.message || "Password has been reset successfully.",
                 icon: "success",
                 buttonsStyling: false,
                 confirmButtonText: "Ok, got it!",
@@ -93,8 +91,7 @@ var NewPassword = (function () {
               }).then(function () {
                 // Redirect to the URL specified in the form or response
                 window.location.href =
-                  response.data.redirectUrl ||
-                  form.getAttribute("data-kt-redirect-url");
+                  response.data.redirectUrl || form.getAttribute("data-kt-redirect-url");
               });
             })
             .catch(function (error) {
@@ -124,13 +121,11 @@ var NewPassword = (function () {
     });
 
     // Live validation for password field
-    form
-      .querySelector('input[name="password"]')
-      .addEventListener("input", function () {
-        if (this.value.length > 0) {
-          validator.updateFieldStatus("password", "NotValidated");
-        }
-      });
+    form.querySelector('input[name="password"]').addEventListener("input", function () {
+      if (this.value.length > 0) {
+        validator.updateFieldStatus("password", "NotValidated");
+      }
+    });
   }
 
   return {

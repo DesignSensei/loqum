@@ -1,4 +1,4 @@
-// public/js/reset-password.js
+// public/js/auth/reset-password.js
 
 "use strict";
 
@@ -52,9 +52,7 @@ var PasswordReset = (function () {
               submitButton.disabled = false;
 
               Swal.fire({
-                text:
-                  response.data.message ||
-                  "Password reset link has been sent to your email.",
+                text: response.data.message || "Password reset link has been sent to your email.",
                 icon: "success",
                 buttonsStyling: false,
                 confirmButtonText: "Ok, got it!",
@@ -72,9 +70,7 @@ var PasswordReset = (function () {
               submitButton.disabled = false;
 
               Swal.fire({
-                text:
-                  error.response?.data?.message ||
-                  "An error occurred. Please try again.",
+                text: error.response?.data?.message || "An error occurred. Please try again.",
                 icon: "error",
                 buttonsStyling: false,
                 confirmButtonText: "Ok, got it!",

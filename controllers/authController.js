@@ -1,42 +1,59 @@
 // controllers/authController.js
 
-const User = require("../models/User");
 const AuthService = require("../services/authService");
+const InviteService = require("../services/inviteService");
 const logger = require("../utils/logger");
 
-const { getHomeRoute, getOnboardingRoute } = require("../utils/routeHelper");
+const { getPostAuthRedirect } = require("../utils/routeHelper");
 
-const getPostAuthRedirect = (user) => {
-  if (!user.isOnboarded) {
-    return getOnboardingRoute(user.role);
-  }
+const { saveSession, loginUserToRequest, getSessionUser } = require("../utils/sessionHelper");
 
-  return getHomeRoute(user.role);
+const getInviteTokenFromRequest = (req) => {
+  return String(req.body?.inviteToken || req.query?.inviteToken || "").trim();
 };
 
 //─────────────────────────────── AUTH RENDER BLOCK (GET ROUTES) ───────────────────────────────//
+
 // Render Login Page
-exports.getLogin = (req, res) => {
-  res.render("auth/login", {
-    layout: "layouts/auth-layout",
-    title: "Log In",
-    csrfToken: req.csrfToken(),
-    scripts: `
-    <script src="/js/auth/login.js"></script>
-    `,
-  });
+exports.getLogin = async (req, res, next) => {
+  try {
+    const loginView = await InviteService.getLoginInviteContext(req.query.inviteToken);
+
+    return res.render("auth/login", {
+      layout: "layouts/auth-layout",
+      title: loginView.pageTitle,
+      csrfToken: req.csrfToken(),
+
+      loginView,
+
+      scripts: `
+        <script src="/js/auth/login.js"></script>
+      `,
+    });
+  } catch (error) {
+    return next(error);
+  }
 };
 
 // Render Signup Page
-exports.getSignup = (req, res) => {
-  res.render("auth/signup", {
-    layout: "layouts/auth-layout",
-    title: "Sign Up",
-    csrfToken: req.csrfToken(),
-    scripts: `
-    <script src="/js/auth/signup.js"></script>
-    `,
-  });
+exports.getSignup = async (req, res, next) => {
+  try {
+    const signupView = await InviteService.getSignupInviteContext(req.query.inviteToken);
+
+    return res.render("auth/signup", {
+      layout: "layouts/auth-layout",
+      title: signupView.pageTitle,
+      csrfToken: req.csrfToken(),
+
+      signupView,
+
+      scripts: `
+        <script src="/js/auth/signup.js"></script>
+      `,
+    });
+  } catch (error) {
+    return next(error);
+  }
 };
 
 // Render Reset Password Page
@@ -46,8 +63,8 @@ exports.getResetPassword = (req, res) => {
     title: "Reset Password",
     csrfToken: req.csrfToken(),
     scripts: `
-    <script src="assets/js/custom/authentication/reset-password/reset-password.js"></script>
-    <script src="/js/auth/reset-password.js"></script>
+      <script src="assets/js/custom/authentication/reset-password/reset-password.js"></script>
+      <script src="/js/auth/reset-password.js"></script>
     `,
   });
 };
@@ -59,8 +76,8 @@ exports.getNewPassword = (req, res) => {
     title: "New Password",
     csrfToken: req.csrfToken(),
     scripts: `
-    <script src="assets/js/custom/authentication/reset-password/new-password.js"></script>
-    <script src="/js/auth/new-password.js"></script>
+      <script src="assets/js/custom/authentication/reset-password/new-password.js"></script>
+      <script src="/js/auth/new-password.js"></script>
     `,
   });
 };
@@ -73,7 +90,7 @@ exports.getTwoFactor = (req, res) => {
     return res.redirect("/login");
   }
 
-  res.render("auth/two-factor", {
+  return res.render("auth/two-factor", {
     layout: "layouts/auth-layout-no-index",
     title: "Two Factor",
     csrfToken: req.csrfToken(),
@@ -89,8 +106,10 @@ exports.getTwoFactor = (req, res) => {
 //─────────────────────────────── AUTH ACTIONS (POST ROUTES) ───────────────────────────────//
 
 // Handle Login Form
-exports.postLogin = async (req, res, next) => {
+exports.postLogin = async (req, res) => {
   try {
+    const inviteToken = getInviteTokenFromRequest(req);
+
     const result = await AuthService.loginUser(req.body);
 
     if (result.requiresEmailVerification) {
@@ -100,16 +119,15 @@ exports.postLogin = async (req, res, next) => {
         userId: result.pendingAuth.userId,
         email: result.pendingAuth.email,
         purpose: "email_verification",
+        inviteToken: inviteToken || null,
       };
 
-      return req.session.save((err) => {
-        if (err) return next(err);
+      await saveSession(req);
 
-        return res.json({
-          success: true,
-          message: "Please verify your email with the OTP sent to you.",
-          redirectUrl: "/two-factor",
-        });
+      return res.json({
+        success: true,
+        message: "Please verify your email with the OTP sent to you.",
+        redirectUrl: "/two-factor",
       });
     }
 
@@ -120,50 +138,86 @@ exports.postLogin = async (req, res, next) => {
         userId: result.pendingAuth.userId,
         email: result.pendingAuth.email,
         purpose: "login_2fa",
+        inviteToken: inviteToken || null,
       };
 
-      return req.session.save((err) => {
-        if (err) return next(err);
+      await saveSession(req);
 
-        return res.json({
-          success: true,
-          message: "Enter the OTP sent to your email.",
-          redirectUrl: "/two-factor",
-        });
+      return res.json({
+        success: true,
+        message: "Enter the OTP sent to your email.",
+        redirectUrl: "/two-factor",
       });
     }
 
-    return req.login(result.user, (err) => {
-      if (err) return next(err);
+    await loginUserToRequest(req, result.user);
 
-      req.session.user = {
-        _id: result.user._id,
-        email: result.user.email,
-        role: result.user.role,
-        isVerified: result.user.isVerified,
-        isOnboarded: result.user.isOnboarded,
-        twoFactorEnabled: result.user.twoFactorEnabled,
-      };
+    let authenticatedUser = result.user;
+    let redirectUrl = getPostAuthRedirect(authenticatedUser);
+    let message = "You have successfully logged in!";
 
-      return req.session.save((err) => {
-        if (err) return next(err);
-
-        return res.json({
-          success: true,
-          message: "You have successfully logged in!",
-          redirectUrl: getPostAuthRedirect(result.user),
-        });
+    if (inviteToken) {
+      const inviteResult = await InviteService.acceptLoginInvite({
+        token: inviteToken,
+        userId: authenticatedUser._id,
       });
+
+      authenticatedUser = inviteResult.user || authenticatedUser;
+      redirectUrl = inviteResult.redirectTo || getPostAuthRedirect(authenticatedUser);
+      message = "You have successfully logged in and accepted the invite!";
+    }
+
+    req.session.user = getSessionUser(authenticatedUser);
+
+    await saveSession(req);
+
+    return res.json({
+      success: true,
+      message,
+      redirectUrl,
     });
   } catch (error) {
-    return res.status(400).json({ success: false, message: error.message });
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
 // Handle Signup Form
-exports.postSignup = async (req, res, next) => {
+exports.postSignup = async (req, res) => {
   try {
-    // Check if req.body is not undefined or empty
+    const inviteToken = getInviteTokenFromRequest(req);
+
+    if (inviteToken) {
+      const { firstName, lastName, password, confirmPassword } = req.body;
+
+      const result = await InviteService.acceptSignupInvite({
+        token: inviteToken,
+        firstName,
+        lastName,
+        password,
+        confirmPassword,
+      });
+
+      await AuthService.sendOTP(result.pendingAuth.userId);
+
+      req.session.otpContext = {
+        userId: result.pendingAuth.userId,
+        email: result.user.email,
+        purpose: "signup_invite_verification",
+        inviteToken: result.pendingAuth.inviteToken,
+      };
+
+      await saveSession(req);
+
+      return res.json({
+        success: true,
+        message: "Account created! Please check your email for your OTP.",
+        redirectUrl: "/two-factor",
+      });
+    }
+
     if (
       !req.body ||
       !req.body.firstName ||
@@ -187,29 +241,33 @@ exports.postSignup = async (req, res, next) => {
       role,
     });
 
-    // Send OTP
     await AuthService.sendOTP(newUser._id);
 
     req.session.otpContext = {
       userId: newUser._id,
       email: newUser.email,
       purpose: "email_verification",
+      inviteToken: null,
     };
 
-    req.session.save((err) => {
-      if (err) return next(err);
-      res.json({
-        success: true,
-        message: "Account created! Please check your email for your OTP.",
-        redirectUrl: "/two-factor",
-      });
+    await saveSession(req);
+
+    return res.json({
+      success: true,
+      message: "Account created! Please check your email for your OTP.",
+      redirectUrl: "/two-factor",
     });
   } catch (error) {
-    console.error(error);
-    res.status(400).json({ success: false, message: error.message });
+    logger.error("Signup error:", error);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
+// Verify OTP
 exports.postVerifyOTP = async (req, res, next) => {
   try {
     const { otp } = req.body;
@@ -229,38 +287,80 @@ exports.postVerifyOTP = async (req, res, next) => {
       });
     }
 
-    const user = await AuthService.verifyOTP(otpContext.userId, otp);
+    let user = await AuthService.verifyOTP(otpContext.userId, otp);
 
-    req.login(user, (err) => {
-      if (err) return next(err);
+    let redirectUrl = getPostAuthRedirect(user);
+    let message =
+      otpContext.purpose === "login_2fa"
+        ? "Login verified successfully!"
+        : "Email verified successfully!";
 
-      req.session.user = {
-        _id: user._id,
-        email: user.email,
-        role: user.role,
-        isVerified: user.isVerified,
-        isOnboarded: user.isOnboarded,
-        twoFactorEnabled: user.twoFactorEnabled,
-      };
-
-      const purpose = otpContext.purpose;
-
-      delete req.session.otpContext;
-
-      const redirectUrl = getPostAuthRedirect(user);
-
-      req.session.save((err) => {
-        if (err) return next(err);
-
-        return res.json({
-          success: true,
-          message:
-            purpose === "email_verification"
-              ? "Email verified successfully!"
-              : "Login verified successfully!",
-          redirectUrl,
-        });
+    if (otpContext.inviteToken) {
+      const inviteResult = await InviteService.acceptLoginInvite({
+        token: otpContext.inviteToken,
+        userId: user._id,
       });
+
+      user = inviteResult.user || user;
+
+      redirectUrl =
+        inviteResult.redirectTo || inviteResult.redirectUrl || getPostAuthRedirect(user);
+
+      message =
+        otpContext.purpose === "login_2fa"
+          ? "Login verified and invite accepted successfully!"
+          : "Email verified and invite accepted successfully!";
+    }
+
+    await loginUserToRequest(req, user);
+
+    req.session.user = getSessionUser(user);
+
+    delete req.session.otpContext;
+
+    await saveSession(req);
+
+    return res.json({
+      success: true,
+      message,
+      redirectUrl,
+    });
+  } catch (error) {
+    logger.error("OTP verification error:", error);
+
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+// Resend OTP
+exports.postResendOTP = async (req, res) => {
+  try {
+    const userId = req.session.otpContext?.userId;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Session expired. Please sign up again.",
+      });
+    }
+
+    try {
+      await AuthService.sendOTP(userId);
+    } catch (error) {
+      logger.error(`Failed to send OTP: ${error.message}`);
+
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send OTP. Please try again.",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "A new OTP has been sent to your email.",
     });
   } catch (error) {
     return res.status(400).json({
@@ -270,75 +370,58 @@ exports.postVerifyOTP = async (req, res, next) => {
   }
 };
 
-exports.postResendOTP = async (req, res, next) => {
-  try {
-    const userId = req.session.otpContext?.userId;
-
-    if (!userId)
-      return res.status(401).json({
-        success: false,
-        message: "Session expired. Please sign up again.",
-      });
-
-    try {
-      await AuthService.sendOTP(userId);
-    } catch (error) {
-      logger.error(`Failed to send OTP: ${error.message}`);
-      return res.status(500).json({
-        success: false,
-        message: "Failed to send OTP. Please try again.",
-      });
-    }
-
-    res.json({
-      success: true,
-      message: "A new OTP has been sent to your email.",
-    });
-  } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
-  }
-};
-
 // Handle Reset Password Form
-exports.postResetPassword = async (req, res, next) => {
+exports.postResetPassword = async (req, res) => {
   try {
     const { email } = req.body;
+
     await AuthService.sendResetLink(email);
+
     return res.json({
       success: true,
       message: "Password reset link sent to your email.",
     });
   } catch (error) {
-    return res.status(400).json({ success: false, message: error.message });
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
 // Handle New Password Form
-exports.postNewPassword = async (req, res, next) => {
+exports.postNewPassword = async (req, res) => {
   try {
     const { token } = req.query;
     const { newPassword, confirmPassword } = req.body;
 
-    if (!token) throw new Error("Reset token is missing");
+    if (!token) {
+      throw new Error("Reset token is missing");
+    }
 
     await AuthService.resetPassword(token, newPassword, confirmPassword);
+
     return res.json({
       success: true,
       message: "Password reset successfully!",
       redirectUrl: "/login",
     });
   } catch (error) {
-    return res.status(400).json({ success: false, message: error.message });
+    return res.status(400).json({
+      success: false,
+      message: error.message,
+    });
   }
 };
 
+// Logout
 exports.logout = (req, res, next) => {
   req.logout((err) => {
     if (err) return next(err);
 
     req.session.destroy(() => {
       res.clearCookie("connect.sid");
-      res.redirect("/login");
+      return res.redirect("/login");
     });
   });
 };

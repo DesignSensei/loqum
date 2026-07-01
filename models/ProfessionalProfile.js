@@ -675,7 +675,7 @@ professionalProfileSchema.index({
 
 // --- VALIDATION / AUTO-CLEANUP ---
 
-professionalProfileSchema.pre("validate", function (next) {
+professionalProfileSchema.pre("validate", function () {
   if (this.strikes) {
     const noShows = Number(this.strikes.noShows || 0);
     const lateArrivals = Number(this.strikes.lateArrivals || 0);
@@ -697,8 +697,6 @@ professionalProfileSchema.pre("validate", function (next) {
   if (["restricted", "suspended"].includes(this.accountStatus)) {
     this.marketplaceStatus = "hidden";
   }
-
-  next();
 });
 
 module.exports = mongoose.model("ProfessionalProfile", professionalProfileSchema);

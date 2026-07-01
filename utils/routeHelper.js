@@ -4,9 +4,6 @@ exports.normalizeRole = (role) => {
   const roleMap = {
     admin: "admin",
     employer: "employer",
-
-    // Backward compatibility
-    pharmacist: "professional",
     professional: "professional",
   };
 
@@ -22,7 +19,7 @@ exports.getHomeRoute = (role) => {
     professional: "/professional/dashboard",
   };
 
-  return routes[normalizedRole] || "/auth/login";
+  return routes[normalizedRole] || "/login";
 };
 
 exports.getOnboardingRoute = (role) => {
@@ -33,7 +30,23 @@ exports.getOnboardingRoute = (role) => {
     professional: "/onboarding/professional",
   };
 
-  return routes[normalizedRole] || "/auth/login";
+  return routes[normalizedRole] || "/login";
+};
+
+exports.getPostAuthRedirect = (user) => {
+  if (!user) {
+    return "/login";
+  }
+
+  if (user.role === "admin") {
+    return exports.getHomeRoute(user.role);
+  }
+
+  if (!user.isOnboarded) {
+    return exports.getOnboardingRoute(user.role);
+  }
+
+  return exports.getHomeRoute(user.role);
 };
 
 exports.userHasRole = (userRole, allowedRoles = []) => {

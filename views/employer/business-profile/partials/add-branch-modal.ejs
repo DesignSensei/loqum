@@ -1,0 +1,171 @@
+<!-- views/employer/business-profile/partials/add-branch-modal.ejs -->
+
+<div
+  class="modal fade"
+  id="addBranchModal"
+  tabindex="-1"
+  aria-hidden="true"
+  data-bs-backdrop="static"
+  data-bs-keyboard="false"
+>
+  <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable mw-650px">
+    <div class="modal-content rounded">
+      <div class="modal-header pb-0 border-0 justify-content-end">
+        <button
+          type="button"
+          class="btn btn-icon btn-sm btn-active-secondary"
+          data-bs-dismiss="modal"
+          aria-label="Close"
+        >
+          <i class="ki-duotone ki-cross fs-1">
+            <span class="path1"></span>
+            <span class="path2"></span>
+          </i>
+        </button>
+      </div>
+
+      <form method="POST" action="/employer/branches" id="kt_add_branch_form" novalidate>
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+        <div class="modal-body scroll-y px-10 px-lg-15 pt-0 pb-5">
+          <div class="mb-13 text-center">
+            <h1 class="mb-3">Add Branch</h1>
+            <div class="text-muted fw-semibold fs-5">
+              Add a pharmacy branch under your business account.
+            </div>
+          </div>
+
+          <div class="fv-row mb-7">
+            <label class="form-label required">Branch Name</label>
+            <input
+              type="text"
+              name="name"
+              class="form-control"
+              placeholder="Example: Ikeja Branch"
+              autocomplete="off"
+            />
+          </div>
+
+          <div class="row">
+            <div class="col-lg-6 fv-row mb-7">
+              <label class="form-label required">State</label>
+              <select
+                id="addBranchStateSelect"
+                name="state"
+                class="form-select"
+                data-control="select2"
+                data-placeholder="Select State"
+                data-dropdown-parent="#addBranchModal"
+              >
+                <option></option>
+                <option value="">Select State</option>
+              </select>
+            </div>
+
+            <div class="col-lg-6 fv-row mb-7">
+              <label class="form-label required">LGA</label>
+              <select
+                id="addBranchLgaSelect"
+                name="lga"
+                class="form-select"
+                data-control="select2"
+                data-placeholder="Select LGA"
+                data-dropdown-parent="#addBranchModal"
+                disabled
+              >
+                <option value="">Select LGA</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="fv-row mb-7">
+            <label class="form-label required">Branch Address</label>
+            <input
+              type="text"
+              id="addBranchAddressInput"
+              name="address"
+              class="form-control"
+              placeholder="Start typing and select a Google address suggestion"
+              autocomplete="off"
+            />
+
+            <input type="hidden" id="addBranchLatitudeInput" name="latitude" />
+            <input type="hidden" id="addBranchLongitudeInput" name="longitude" />
+            <input type="hidden" id="addBranchGooglePlaceIdInput" name="googlePlaceId" />
+
+            <div class="form-text">
+              Please select an address from the Google suggestions so the branch coordinates can be
+              saved.
+            </div>
+          </div>
+
+          <!-- Branch Contact Phone -->
+          <div class="fv-row mb-7">
+            <label class="form-label">Branch Contact Phone</label>
+
+            <div class="row g-3">
+              <div class="col-4">
+                <select
+                  name="contactPhoneCode"
+                  class="form-select"
+                  data-kt-select2="true"
+                  data-hide-search="false"
+                  data-placeholder="Code"
+                  data-dropdown-parent="#addBranchModal"
+                >
+                  <option value="" disabled>Code</option>
+                  <option value="+234" selected>🇳🇬 +234</option>
+                </select>
+              </div>
+
+              <div class="col-8">
+                <input
+                  type="tel"
+                  name="contactPhone"
+                  class="form-control"
+                  placeholder="08012345678"
+                  autocomplete="off"
+                />
+
+                <div class="form-text">
+                  Optional. Add this if the branch has a separate contact line.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div
+            class="notice d-flex bg-light-warning rounded border-warning border border-dashed p-6"
+          >
+            <i class="ki-duotone ki-information-5 fs-2tx text-warning me-4">
+              <span class="path1"></span>
+              <span class="path2"></span>
+              <span class="path3"></span>
+            </i>
+
+            <div class="d-flex flex-stack flex-grow-1">
+              <div class="fw-semibold">
+                <div class="fs-6 text-gray-700">
+                  Coordinates are required because branch locations will be used for location-based
+                  shift clocking.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer d-flex justify-content-center">
+          <button type="button" class="btn btn-light me-3" data-bs-dismiss="modal">Cancel</button>
+
+          <button type="submit" id="kt_add_branch_submit" class="btn btn-primary">
+            <span class="indicator-label">Save Branch</span>
+            <span class="indicator-progress">
+              Please wait...
+              <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+            </span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

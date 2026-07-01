@@ -52,16 +52,112 @@ const mongoose = require("mongoose");
  * -> Loqum platform fee recorded separately
  *
  * ATTENDANCE:
- * Both PINs are generated at shift creation.
- * Check-in PIN is visible to the employer shortly before start time.
- * Check-out PIN is revealed to the employer only after successful check-in.
+ * Professional check-in and check-out are validated using geofencing.
  *
- * No valid check-in means no automatic settlement.
- * No check-out means settlement requires employer confirmation or admin fallback.
+ * The professional's device submits latitude, longitude, accuracy, and timestamp.
+ * The service layer compares that location with the assigned branch location.
+ *
+ * Branch.location is the source of truth for the pharmacy/branch position.
+ * Branch.geofenceRadiusMeters defines the allowed attendance radius.
+ * Default expected radius is 100 meters.
+ *
+ * The result is snapshotted on this shift so historical attendance records remain
+ * accurate even if the branch location or radius changes later.
+ *
+ * No valid geofence check-in means no automatic settlement.
+ * No valid check-out means settlement requires employer confirmation or admin fallback.
  * Late check-out does not automatically mean paid overtime.
  * If the professional checks out after endTime, the UI should ask whether they
  * are only checking out late or requesting overtime.
  */
+
+const attendanceLocationSchema = new mongoose.Schema(
+  {
+    // Professional/device location captured from the browser or mobile app
+    latitude: {
+      type: Number,
+      default: null,
+      min: -90,
+      max: 90,
+    },
+
+    longitude: {
+      type: Number,
+      default: null,
+      min: -180,
+      max: 180,
+    },
+
+    accuracyMeters: {
+      type: Number,
+      default: null,
+      min: 0,
+      // GPS accuracy reported by the device/browser.
+      // Example: 15 means the location may be accurate within about 15 meters.
+    },
+
+    capturedAt: {
+      type: Date,
+      default: null,
+    },
+
+    // Branch location snapshot at the time attendance was attempted
+    branchLatitude: {
+      type: Number,
+      default: null,
+      min: -90,
+      max: 90,
+    },
+
+    branchLongitude: {
+      type: Number,
+      default: null,
+      min: -180,
+      max: 180,
+    },
+
+    geofenceRadiusMeters: {
+      type: Number,
+      default: null,
+      min: 1,
+      // Snapshotted from Branch.geofenceRadiusMeters.
+    },
+
+    distanceFromBranchMeters: {
+      type: Number,
+      default: null,
+      min: 0,
+      // Calculated by the service layer.
+    },
+
+    withinGeofence: {
+      type: Boolean,
+      default: null,
+      // true means the professional was within the allowed branch radius.
+    },
+
+    locationSource: {
+      type: String,
+      enum: ["browser", "mobile_app", "admin_override", "employer_confirmation", null],
+      default: null,
+    },
+
+    failureReason: {
+      type: String,
+      enum: [
+        "outside_geofence",
+        "location_permission_denied",
+        "gps_accuracy_too_low",
+        "branch_location_missing",
+        "professional_location_missing",
+        "system_error",
+        null,
+      ],
+      default: null,
+    },
+  },
+  { _id: false }
+);
 
 const shiftSchema = new mongoose.Schema(
   {
@@ -176,119 +272,92 @@ const shiftSchema = new mongoose.Schema(
       max: 1,
       // Snapshotted from PlatformSettings when the shift is posted.
       // Example: 0.075 means 7.50%.
-      // This preserves the exact fee used for this shift,
-      // even if Loqum changes the global fee later.
     },
 
     pricingLockedAt: {
       type: Date,
       default: null,
-      // Set when the shift is posted and the employer is shown the estimated charge.
-      // After this point, platformFeeRate and estimated charge fields should not
-      // change except through a controlled admin correction flow.
     },
 
     pricingLockedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       default: null,
-      // User who posted the shift and caused pricing to be locked.
     },
 
     estimatedProfessionalPay: {
       type: Number,
       default: null,
-      // scheduledHours * hourlyRate.
-      // This is what the professional is expected to earn before the shift happens.
     },
 
     estimatedPlatformFee: {
       type: Number,
       default: null,
-      // estimatedProfessionalPay * platformFeeRate.
     },
 
     estimatedEmployerCharge: {
       type: Number,
       default: null,
-      // estimatedProfessionalPay + estimatedPlatformFee.
-      // This is what the employer must fund before the shift is confirmed.
     },
 
     fundedAmount: {
       type: Number,
       default: 0,
-      // Amount actually credited to this shift's Protected Shift balance.
-      // Can come from employer wallet or Paystack Checkout.
     },
 
     baseProfessionalPay: {
       type: Number,
       default: null,
-      // Pay for approved scheduled/base hours only.
-      // This excludes overtime.
     },
 
     basePlatformFee: {
       type: Number,
       default: null,
-      // Platform fee on baseProfessionalPay using this shift's platformFeeRate.
     },
 
     baseEmployerCharge: {
       type: Number,
       default: null,
-      // baseProfessionalPay + basePlatformFee.
     },
 
     overtimeProfessionalPay: {
       type: Number,
       default: null,
-      // Pay for approved overtime only.
     },
 
     overtimePlatformFee: {
       type: Number,
       default: null,
-      // Platform fee on approved overtimeProfessionalPay using this shift's platformFeeRate.
     },
 
     overtimeEmployerCharge: {
       type: Number,
       default: null,
-      // overtimeProfessionalPay + overtimePlatformFee.
     },
 
     finalProfessionalPay: {
       type: Number,
       default: null,
-      // Final amount the professional should receive.
-      // baseProfessionalPay + approved overtimeProfessionalPay.
     },
 
     finalPlatformFee: {
       type: Number,
       default: null,
-      // Final Loqum fee earned on the shift.
-      // basePlatformFee + approved overtimePlatformFee.
     },
 
     finalEmployerCharge: {
       type: Number,
       default: null,
-      // finalProfessionalPay + finalPlatformFee.
     },
 
     topUpRequired: {
       type: Number,
       default: 0,
-      // Extra amount employer must pay if approved finalEmployerCharge exceeds fundedAmount.
     },
 
     refundedAmount: {
       type: Number,
       default: 0,
-      // Unused funded amount returned to employer wallet if finalEmployerCharge is lower.
     },
 
     // --- PAYMENT STATE ---
@@ -297,35 +366,15 @@ const shiftSchema = new mongoose.Schema(
       type: String,
       enum: [
         "unpaid",
-        // Shift has not been funded.
-
         "funded",
-        // Employer has funded the estimatedEmployerCharge.
-        // Shift can now be confirmed.
-
         "base_release_pending",
-        // Base shift pay is ready for release after checkout/completion checks.
-
         "base_released",
-        // Base pay has been released but overtime may still be unresolved.
-
         "awaiting_overtime_review",
-        // Overtime was requested and employer must approve, reject, or dispute.
-
         "awaiting_topup",
-        // Overtime or extra approved cost requires employer top-up.
-
         "released",
-        // All cleared professional payout has been released.
-
         "failed",
-        // Funding, top-up, payout, refund, or settlement failed and needs retry.
-
         "refunded",
-        // Full funded amount returned to employer.
-
         "partially_refunded",
-        // Part of funded amount returned to employer.
       ],
       default: "unpaid",
     },
@@ -336,31 +385,24 @@ const shiftSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Transaction",
       default: null,
-      // Employer funding transaction for the original estimatedEmployerCharge.
-      // Can represent Fund from Wallet or Pay with Paystack.
     },
 
     topUpTransaction: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Transaction",
       default: null,
-      // Employer top-up transaction, usually for approved overtime.
-      // Can represent wallet funding or Paystack Checkout funding.
     },
 
     refundTransaction: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Transaction",
       default: null,
-      // Refund transaction back to employer wallet where applicable.
     },
 
     payoutTransactions: [
       {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Transaction",
-        // Professional payout transaction records.
-        // More than one is allowed because base pay and overtime pay may be released separately.
       },
     ],
 
@@ -368,8 +410,6 @@ const shiftSchema = new mongoose.Schema(
       {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Transaction",
-        // Loqum fee transaction records.
-        // More than one is allowed if base fee and overtime fee are recorded separately.
       },
     ],
 
@@ -415,7 +455,7 @@ const shiftSchema = new mongoose.Schema(
         // Employer has funded the shift. Shift is now secured.
 
         "in_progress",
-        // Professional has checked in.
+        // Professional has checked in through valid geofence attendance.
 
         "pending_settlement",
         // Professional has checked out or shift needs completion review.
@@ -435,36 +475,31 @@ const shiftSchema = new mongoose.Schema(
       default: "open",
     },
 
-    // --- PINS ---
-
-    checkInPin: {
-      type: String,
-      default: null,
-      // Generated at shift creation.
-      // Visible to employer shortly before start time only.
-      // Never exposed to the professional.
-    },
-
-    checkOutPin: {
-      type: String,
-      default: null,
-      // Generated at shift creation.
-      // Revealed to employer only after successful check-in.
-      // Professional enters it when leaving.
-    },
-
     // --- ATTENDANCE ---
 
     attendanceStatus: {
       type: String,
       enum: [
         "not_started",
+        // No valid check-in yet.
+
         "checked_in",
+        // Professional successfully checked in within the geofence.
+
         "checked_out",
+        // Professional successfully checked out within the geofence.
+
         "missed_checkin_review",
+        // Professional claims they worked but did not complete valid check-in.
+
         "checkout_fallback_review",
+        // Professional could not complete valid checkout.
+
         "disputed",
+        // Attendance is under dispute.
+
         "settled",
+        // Attendance has been accepted for settlement.
       ],
       default: "not_started",
     },
@@ -480,23 +515,75 @@ const shiftSchema = new mongoose.Schema(
     },
 
     checkInLocation: {
-      latitude: { type: Number, default: null },
-      longitude: { type: Number, default: null },
-      accuracy: { type: Number, default: null },
-      capturedAt: { type: Date, default: null },
-
-      distanceFromBranchMeters: { type: Number, default: null },
-      withinAllowedRadius: { type: Boolean, default: null },
+      type: attendanceLocationSchema,
+      default: () => ({}),
     },
 
     checkOutLocation: {
-      latitude: { type: Number, default: null },
-      longitude: { type: Number, default: null },
-      accuracy: { type: Number, default: null },
-      capturedAt: { type: Date, default: null },
+      type: attendanceLocationSchema,
+      default: () => ({}),
+    },
 
-      distanceFromBranchMeters: { type: Number, default: null },
-      withinAllowedRadius: { type: Boolean, default: null },
+    // --- ATTENDANCE REVIEW / OVERRIDE ---
+    // Used when geofence attendance fails but employer/admin confirms presence.
+
+    attendanceOverride: {
+      used: {
+        type: Boolean,
+        default: false,
+      },
+
+      type: {
+        type: String,
+        enum: ["checkin", "checkout", "both", null],
+        default: null,
+      },
+
+      reason: {
+        type: String,
+        enum: [
+          "branch_location_incorrect",
+          "gps_accuracy_issue",
+          "location_permission_issue",
+          "network_issue",
+          "employer_confirmed_presence",
+          "admin_confirmed_presence",
+          "system_error",
+          "other",
+          null,
+        ],
+        default: null,
+      },
+
+      approvedStartTime: {
+        type: Date,
+        default: null,
+        // Used as effective start time if check-in override is approved.
+      },
+
+      approvedEndTime: {
+        type: Date,
+        default: null,
+        // Used as effective end time if check-out override is approved.
+      },
+
+      reviewedAt: {
+        type: Date,
+        default: null,
+      },
+
+      reviewedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        default: null,
+      },
+
+      notes: {
+        type: String,
+        trim: true,
+        maxlength: 300,
+        default: null,
+      },
     },
 
     // --- LATE CHECKOUT ---
@@ -505,7 +592,10 @@ const shiftSchema = new mongoose.Schema(
     // The professional must intentionally request overtime if they want extra pay.
 
     lateCheckout: {
-      occurred: { type: Boolean, default: false },
+      occurred: {
+        type: Boolean,
+        default: false,
+      },
 
       minutesLate: {
         type: Number,
@@ -516,8 +606,6 @@ const shiftSchema = new mongoose.Schema(
         type: String,
         enum: ["normal_late_checkout", "overtime_requested", null],
         default: null,
-        // normal_late_checkout means the professional is only clocking out late.
-        // overtime_requested means the professional says they worked approved extra time.
       },
 
       reason: {
@@ -551,14 +639,19 @@ const shiftSchema = new mongoose.Schema(
     // Settlement can continue only after employer confirmation or admin review.
 
     checkoutFallback: {
-      required: { type: Boolean, default: false },
+      required: {
+        type: Boolean,
+        default: false,
+      },
 
       reason: {
         type: String,
         enum: [
           "professional_forgot",
           "system_timeout",
-          "pin_issue",
+          "outside_geofence",
+          "gps_accuracy_too_low",
+          "location_permission_denied",
           "employer_confirmed",
           "admin_override",
           "other",
@@ -598,21 +691,48 @@ const shiftSchema = new mongoose.Schema(
     },
 
     // --- MISSED CHECK-IN REQUEST ---
-    // Triggered when professional attempts check-out without a valid check-in.
-    // Location captured at submission time only. It cannot prove earlier arrival.
+    // Triggered when professional claims they arrived/worked but did not complete
+    // a valid geofence check-in.
+    //
+    // Location captured at submission time only.
+    // It cannot prove earlier arrival by itself.
 
     missedCheckInRequest: {
-      claimedStartTime: { type: Date, default: null },
-      submittedAt: { type: Date, default: null },
-
-      locationAtSubmission: {
-        latitude: { type: Number, default: null },
-        longitude: { type: Number, default: null },
-        accuracy: { type: Number, default: null },
-        capturedAt: { type: Date, default: null },
+      claimedStartTime: {
+        type: Date,
+        default: null,
       },
 
-      reviewedAt: { type: Date, default: null },
+      submittedAt: {
+        type: Date,
+        default: null,
+      },
+
+      reason: {
+        type: String,
+        enum: [
+          "forgot_to_checkin",
+          "outside_geofence",
+          "gps_accuracy_too_low",
+          "location_permission_denied",
+          "branch_location_incorrect",
+          "network_issue",
+          "system_error",
+          "other",
+          null,
+        ],
+        default: null,
+      },
+
+      locationAtSubmission: {
+        type: attendanceLocationSchema,
+        default: () => ({}),
+      },
+
+      reviewedAt: {
+        type: Date,
+        default: null,
+      },
 
       reviewedBy: {
         type: mongoose.Schema.Types.ObjectId,
@@ -636,57 +756,8 @@ const shiftSchema = new mongoose.Schema(
       rejectionReason: {
         type: String,
         trim: true,
+        maxlength: 300,
         default: null,
-      },
-    },
-
-    // --- PIN ISSUE REPORT ---
-    // Triggered when professional is physically present but cannot obtain a PIN.
-    // Location is captured as evidence of presence at the branch.
-
-    pinIssueReport: {
-      type: {
-        type: String,
-        enum: ["checkin", "checkout", null],
-        default: null,
-      },
-
-      reason: {
-        type: String,
-        trim: true,
-        default: null,
-      },
-
-      submittedAt: {
-        type: Date,
-        default: null,
-      },
-
-      locationAtSubmission: {
-        latitude: { type: Number, default: null },
-        longitude: { type: Number, default: null },
-        accuracy: { type: Number, default: null },
-        capturedAt: { type: Date, default: null },
-      },
-
-      resolvedAt: {
-        type: Date,
-        default: null,
-      },
-
-      resolvedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-        default: null,
-      },
-
-      outcome: {
-        type: String,
-        enum: ["pin_provided", "overridden", "rejected", null],
-        default: null,
-        // pin_provided means admin resent or shared the PIN.
-        // overridden means admin manually marked attendance without PIN.
-        // rejected means the report was invalid.
       },
     },
 
@@ -771,13 +842,11 @@ const shiftSchema = new mongoose.Schema(
       employerResponseOverdueAt: {
         type: Date,
         default: null,
-        // Set by cron/service when employer misses the response deadline.
       },
 
       restrictionTriggeredAt: {
         type: Date,
         default: null,
-        // Set when employer account restrictions are triggered because overtime was ignored.
       },
 
       approvedAt: {
@@ -823,7 +892,6 @@ const shiftSchema = new mongoose.Schema(
       topUpAmount: {
         type: Number,
         default: null,
-        // Extra employer payment required for approved overtime.
       },
 
       topUpPaid: {
@@ -895,8 +963,14 @@ shiftSchema.index({ endTime: 1 });
 
 shiftSchema.index({ assignedProfessional: 1, startTime: 1, endTime: 1 });
 
+shiftSchema.index({ "checkInLocation.withinGeofence": 1 });
+shiftSchema.index({ "checkOutLocation.withinGeofence": 1 });
+
 shiftSchema.index({ "lateCheckout.occurred": 1 });
 shiftSchema.index({ "checkoutFallback.required": 1 });
+
+shiftSchema.index({ "missedCheckInRequest.outcome": 1 });
+shiftSchema.index({ "attendanceOverride.used": 1 });
 
 shiftSchema.index({ "overtime.status": 1 });
 shiftSchema.index({ "overtime.topUpPaid": 1 });

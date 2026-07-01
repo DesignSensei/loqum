@@ -1,0 +1,188 @@
+<!-- views/employer/business-profile/partials/branches.ejs -->
+
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">
+      <h3 class="fw-bold m-0">Branches</h3>
+    </div>
+
+    <div class="card-toolbar">
+      <button
+        type="button"
+        class="btn btn-sm btn-primary"
+        data-bs-toggle="modal"
+        data-bs-target="#addBranchModal"
+      >
+        <i class="ki-duotone ki-plus fs-2"></i>
+        Add Branch
+      </button>
+    </div>
+  </div>
+
+  <div class="card-body">
+    <% if (branches && branches.length > 0) { %>
+    <div class="table-responsive">
+      <table class="table align-middle table-row-dashed fs-6 gy-5 min-w-800px">
+        <thead>
+          <tr class="text-start text-gray-600 fw-bold fs-7 text-uppercase gs-0">
+            <th class="min-w-175px">Branch</th>
+            <th class="min-w-250px">Address</th>
+            <th class="min-w-140px">Location</th>
+            <th class="min-w-100px">Status</th>
+            <th class="text-end min-w-100px">Actions</th>
+          </tr>
+        </thead>
+
+        <tbody class="fw-semibold text-gray-700">
+          <% branches.forEach((branch) => { %>
+          <tr>
+            <td>
+              <div class="fw-bold text-gray-900"><%= branch.name || "-" %></div>
+
+              <div class="text-muted fs-7 mt-1">
+                Manager:
+                <span class="text-gray-700"> <%= branch.managerName || "Not assigned" %> </span>
+              </div>
+
+              <% if (branch.contactPhone) { %>
+              <div class="text-muted fs-7 mt-1">
+                <%= branch.contactPhoneCode || "+234" %> <%= branch.contactPhone %>
+              </div>
+              <% } %>
+            </td>
+
+            <td>
+              <div class="text-gray-700"><%= branch.address || "-" %></div>
+            </td>
+
+            <td>
+              <div class="text-gray-900"><%= branch.state || "-" %></div>
+              <div class="text-muted fs-7"><%= branch.lga || "-" %></div>
+            </td>
+
+            <td>
+              <% if (branch.isActive) { %>
+              <span class="badge badge-light-success">Active</span>
+              <% } else { %>
+              <span class="badge badge-light-secondary">Inactive</span>
+              <% } %>
+            </td>
+
+            <td class="text-end">
+              <button
+                type="button"
+                class="btn btn-sm btn-light btn-active-light-primary"
+                data-kt-menu-trigger="click"
+                data-kt-menu-placement="bottom-end"
+              >
+                Actions
+                <i class="ki-duotone ki-down fs-5 ms-1"></i>
+              </button>
+
+              <div
+                class="menu menu-sub menu-sub-dropdown menu-column menu-rounded menu-gray-600 menu-state-bg-light-primary fw-semibold fs-7 w-150px py-3"
+                data-kt-menu="true"
+              >
+                <div class="menu-item px-3">
+                  <a
+                    href="#"
+                    class="menu-link px-3 js-view-branch"
+                    data-bs-toggle="modal"
+                    data-bs-target="#viewBranchModal"
+                    data-branch-id="<%= branch._id %>"
+                    data-branch-name="<%= branch.name || '-' %>"
+                    data-branch-address="<%= branch.address || '-' %>"
+                    data-branch-state="<%= branch.state || '-' %>"
+                    data-branch-lga="<%= branch.lga || '-' %>"
+                    data-branch-manager="<%= branch.managerName || 'Not assigned' %>"
+                    data-branch-manager-id="<%= branch.managerMemberId || '' %>"
+                    data-branch-phone-code="<%= branch.contactPhoneCode || '+234' %>"
+                    data-branch-phone="<%= branch.contactPhone || '' %>"
+                    data-branch-geofence-radius="<%= branch.geofenceRadiusMeters || 100 %>"
+                    data-branch-status="<%= branch.isActive ? 'active' : 'inactive' %>"
+                    data-branch-latitude="<%= branch.latitude || '' %>"
+                    data-branch-longitude="<%= branch.longitude || '' %>"
+                    data-branch-google-place-id="<%= branch.googlePlaceId || '' %>"
+                  >
+                    View
+                  </a>
+                </div>
+
+                <div class="menu-item px-3">
+                  <a
+                    href="#"
+                    class="menu-link px-3 js-edit-branch"
+                    data-bs-toggle="modal"
+                    data-bs-target="#editBranchModal"
+                    data-branch-id="<%= branch._id %>"
+                    data-branch-name="<%= branch.name || '' %>"
+                    data-branch-address="<%= branch.address || '' %>"
+                    data-branch-state="<%= branch.state || '' %>"
+                    data-branch-lga="<%= branch.lga || '' %>"
+                    data-branch-manager="<%= branch.managerName || 'Not assigned' %>"
+                    data-branch-manager-id="<%= branch.managerMemberId || '' %>"
+                    data-branch-phone-code="<%= branch.contactPhoneCode || '+234' %>"
+                    data-branch-phone="<%= branch.contactPhone || '' %>"
+                    data-branch-geofence-radius="<%= branch.geofenceRadiusMeters || 100 %>"
+                    data-branch-latitude="<%= branch.latitude || '' %>"
+                    data-branch-longitude="<%= branch.longitude || '' %>"
+                    data-branch-google-place-id="<%= branch.googlePlaceId || '' %>"
+                  >
+                    Edit
+                  </a>
+                </div>
+
+                <div class="menu-item px-3">
+                  <% if (branch.isActive) { %>
+                  <a
+                    href="#"
+                    class="menu-link px-3 text-danger js-toggle-branch-status"
+                    data-branch-id="<%= branch._id %>"
+                    data-branch-action="deactivate"
+                  >
+                    Deactivate
+                  </a>
+                  <% } else { %>
+                  <a
+                    href="#"
+                    class="menu-link px-3 text-success js-toggle-branch-status"
+                    data-branch-id="<%= branch._id %>"
+                    data-branch-action="activate"
+                  >
+                    Reactivate
+                  </a>
+                  <% } %>
+                </div>
+              </div>
+            </td>
+          </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+    <% } else { %>
+    <div class="text-center py-10">
+      <i class="ki-duotone ki-geolocation fs-3x text-gray-400 mb-5">
+        <span class="path1"></span>
+        <span class="path2"></span>
+      </i>
+
+      <div class="fw-bold fs-5 text-gray-800 mb-2">No branches added yet</div>
+
+      <div class="text-muted fw-semibold mb-6">
+        Add your pharmacy branch locations so shifts can be tied to the correct workplace.
+      </div>
+
+      <button
+        type="button"
+        class="btn btn-primary"
+        data-bs-toggle="modal"
+        data-bs-target="#addBranchModal"
+      >
+        <i class="ki-duotone ki-plus fs-2"></i>
+        Add First Branch
+      </button>
+    </div>
+    <% } %>
+  </div>
+</div>

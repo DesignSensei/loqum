@@ -87,6 +87,13 @@ const employerProfileSchema = new mongoose.Schema(
       trim: true,
     },
 
+    businessEmail: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      required: true,
+    },
+
     businessPhoneCode: {
       type: String,
       trim: true,
@@ -543,7 +550,7 @@ employerProfileSchema.index({
 
 // --- VALIDATION / AUTO-CLEANUP ---
 
-employerProfileSchema.pre("validate", function (next) {
+employerProfileSchema.pre("validate", function () {
   if (this.cacVerificationStatus === "verified") {
     if (!this.cacVerifiedAt) {
       this.cacVerifiedAt = new Date();
@@ -571,8 +578,6 @@ employerProfileSchema.pre("validate", function (next) {
   if (typeof this.isModified === "function" && this.isModified("accountStatus")) {
     this.accountStatusUpdatedAt = new Date();
   }
-
-  next();
 });
 
 module.exports = mongoose.model("EmployerProfile", employerProfileSchema);

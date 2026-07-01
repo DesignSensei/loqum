@@ -1,0 +1,254 @@
+<!-- views/employer/business-profile/partials/team-member-modals.ejs -->
+
+<div class="modal fade" id="viewTeamMemberModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered mw-650px">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div class="text-center w-100">
+          <h2 class="fw-bold mb-1">Team Member</h2>
+          <div class="text-muted fw-semibold fs-6">View team member details</div>
+        </div>
+
+        <button
+          type="button"
+          class="btn btn-sm btn-icon btn-active-light-primary"
+          data-bs-dismiss="modal"
+        >
+          <i class="ki-duotone ki-cross fs-1"></i>
+        </button>
+      </div>
+
+      <div class="modal-body py-10 px-lg-12">
+        <div class="mb-7">
+          <div class="text-muted fw-semibold mb-1">Name</div>
+          <div class="fw-bold fs-5 text-gray-900 js-view-team-member-name">-</div>
+        </div>
+
+        <div class="mb-7">
+          <div class="text-muted fw-semibold mb-1">Email</div>
+          <div class="fw-semibold text-gray-800 js-view-team-member-email">-</div>
+        </div>
+
+        <div class="row g-6 mb-7">
+          <div class="col-md-6">
+            <div class="text-muted fw-semibold mb-1">Role</div>
+            <span class="badge badge-light-primary js-view-team-member-role">-</span>
+          </div>
+
+          <div class="col-md-6">
+            <div class="text-muted fw-semibold mb-1">Status</div>
+            <span class="badge badge-light-success js-view-team-member-status">-</span>
+          </div>
+        </div>
+
+        <div class="mb-7">
+          <div class="text-muted fw-semibold mb-2">Branch Assignments</div>
+          <div class="js-view-team-member-branches">
+            <div class="text-muted">No branch assignment.</div>
+          </div>
+        </div>
+
+        <div class="js-view-team-member-removed-section d-none">
+          <div class="separator separator-dashed my-7"></div>
+
+          <div class="mb-5">
+            <div class="text-muted fw-semibold mb-1">Removal Reason</div>
+            <div class="fw-semibold text-gray-800 js-view-team-member-removal-reason">-</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="editTeamMemberModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered mw-700px">
+    <div class="modal-content">
+      <form id="kt_edit_team_member_form" method="post">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+        <input
+          type="hidden"
+          name="memberStatus"
+          value="<%= memberStatusView && memberStatusView.activeStatus ? memberStatusView.activeStatus : 'active' %>"
+        />
+
+        <div class="modal-header">
+          <div class="text-center w-100">
+            <h2 class="fw-bold mb-1">Edit Team Member</h2>
+            <div class="text-muted fw-semibold fs-6 js-edit-team-member-subtitle">
+              Update team member access
+            </div>
+          </div>
+
+          <button
+            type="button"
+            class="btn btn-sm btn-icon btn-active-light-primary"
+            data-bs-dismiss="modal"
+          >
+            <i class="ki-duotone ki-cross fs-1"></i>
+          </button>
+        </div>
+
+        <div class="modal-body py-10 px-lg-12">
+          <div class="mb-7">
+            <div class="text-muted fw-semibold mb-1">Team Member</div>
+            <div class="fw-bold fs-5 text-gray-900 js-edit-team-member-name">-</div>
+            <div class="text-muted fw-semibold js-edit-team-member-email">-</div>
+          </div>
+
+          <div class="row g-6 mb-7">
+            <div class="col-md-6 fv-row">
+              <label class="form-label fw-bold">Role</label>
+              <select
+                class="form-select"
+                name="role"
+                id="editTeamMemberRole"
+                data-control="select2"
+                data-placeholder="Select role"
+                data-hide-search="true"
+                data-dropdown-parent="#editTeamMemberModal"
+              >
+                <option value="">Select role</option>
+                <option value="admin">Admin</option>
+                <option value="branch_manager">Branch Manager</option>
+                <option value="branch_staff">Branch Staff</option>
+              </select>
+            </div>
+
+            <div class="col-md-6 fv-row">
+              <label class="form-label fw-bold">Status</label>
+              <select
+                class="form-select"
+                name="accountStatus"
+                id="editTeamMemberStatus"
+                data-control="select2"
+                data-placeholder="Select status"
+                data-hide-search="true"
+                data-dropdown-parent="#editTeamMemberModal"
+              >
+                <option value="">Select status</option>
+                <option value="active">Active</option>
+                <option value="restricted">Restricted</option>
+                <option value="suspended">Suspended</option>
+              </select>
+            </div>
+          </div>
+
+          <div
+            class="mb-7 fv-row js-edit-team-member-branches-section"
+            id="editTeamMemberBranchField"
+          >
+            <label class="form-label fw-bold">Branch Assignment</label>
+
+            <% if (branches && branches.length > 0) { %>
+            <select
+              class="form-select"
+              name="branchIds"
+              id="editTeamMemberBranchSelect"
+              multiple
+              data-control="select2"
+              data-placeholder="Select branches"
+              data-dropdown-parent="#editTeamMemberModal"
+            >
+              <% branches.forEach((branch) => { %>
+              <option value="<%= branch._id %>">
+                <%= branch.name || "Unnamed branch" %> <% if (branch.state || branch.lga) { %> — <%=
+                branch.state || "-" %><%= branch.lga ? " • " + branch.lga : "" %> <% } %>
+              </option>
+              <% }) %>
+            </select>
+
+            <div class="form-text">
+              Branch managers and branch staff must be assigned to at least one branch.
+            </div>
+            <% } else { %>
+            <div class="alert alert-warning mb-0">
+              Add a branch before assigning branch-level team members.
+            </div>
+            <% } %>
+          </div>
+        </div>
+
+        <div class="modal-footer flex-center">
+          <button type="button" class="btn btn-light me-3" data-bs-dismiss="modal">Cancel</button>
+
+          <button type="submit" id="kt_edit_team_member_submit" class="btn btn-primary">
+            <span class="indicator-label">Save Changes</span>
+            <span class="indicator-progress">
+              Please wait...
+              <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+            </span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="removeTeamMemberModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered mw-600px">
+    <div class="modal-content">
+      <form id="kt_remove_team_member_form" method="post">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+        <input
+          type="hidden"
+          name="memberStatus"
+          value="<%= memberStatusView && memberStatusView.activeStatus ? memberStatusView.activeStatus : 'active' %>"
+        />
+
+        <div class="modal-header">
+          <div class="text-center w-100">
+            <h2 class="fw-bold mb-1">Remove Team Member</h2>
+            <div class="text-muted fw-semibold fs-6">
+              This member will lose access to this business.
+            </div>
+          </div>
+
+          <button
+            type="button"
+            class="btn btn-sm btn-icon btn-active-light-primary"
+            data-bs-dismiss="modal"
+          >
+            <i class="ki-duotone ki-cross fs-1"></i>
+          </button>
+        </div>
+
+        <div class="modal-body py-10 px-lg-12">
+          <div class="alert alert-warning">
+            You are about to remove
+            <span class="fw-bold js-remove-team-member-name">this team member</span>
+            from the business team.
+          </div>
+
+          <div class="mb-7">
+            <div class="text-muted fw-semibold mb-1">Email</div>
+            <div class="fw-semibold text-gray-800 js-remove-team-member-email">-</div>
+          </div>
+
+          <div>
+            <label class="form-label fw-bold">Removal Reason</label>
+            <textarea
+              class="form-control"
+              id="removeTeamMemberReason"
+              name="removalReason"
+              rows="3"
+              placeholder="Optional reason for audit record"
+            ></textarea>
+          </div>
+        </div>
+
+        <div class="modal-footer flex-center">
+          <button type="button" class="btn btn-light me-3" data-bs-dismiss="modal">Cancel</button>
+
+          <button type="submit" id="kt_remove_team_member_submit" class="btn btn-danger">
+            <span class="indicator-label">Remove Member</span>
+            <span class="indicator-progress">
+              Please wait...
+              <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+            </span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

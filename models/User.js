@@ -32,6 +32,19 @@ const userSchema = new mongoose.Schema(
       trim: true,
     },
 
+    /* ---------- Contact Information ---------- */
+    phoneCode: {
+      type: String,
+      trim: true,
+      default: "+234",
+    },
+
+    phoneNumber: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
     password: {
       type: String,
       required: function () {

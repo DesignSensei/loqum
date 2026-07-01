@@ -5,11 +5,17 @@ const mongoose = require("mongoose");
 /**
  * GEOLOCATION:
  * Coordinates are stored in GeoJSON Point format required for MongoDB 2dsphere indexing.
- * Note: GeoJSON uses [longitude, latitude] order, not [latitude, longitude].
  *
- * Branch coordinates are used by the service layer when reviewing PIN issue reports —
- * comparing the professional's submitted location against the branch position
- * to assess whether they were physically present.
+ * Note:
+ * GeoJSON uses [longitude, latitude] order, not [latitude, longitude].
+ *
+ * Branch coordinates are used by the attendance service to validate whether
+ * a professional is physically within the allowed geofence radius during
+ * check-in and check-out.
+ *
+ * Example:
+ * location.coordinates = [3.3792, 6.5244]
+ * geofenceRadiusMeters = 100
  */
 
 const branchSchema = new mongoose.Schema(
@@ -35,17 +41,25 @@ const branchSchema = new mongoose.Schema(
 
     state: {
       type: String,
+      trim: true,
       required: true,
     },
 
     lga: {
       type: String,
+      trim: true,
       required: true,
     },
 
     // --- GEOLOCATION ---
-    // GeoJSON Point — required for 2dsphere index.
-    // coordinates: [longitude, latitude] — note the order.
+    // GeoJSON Point.
+    // coordinates: [longitude, latitude]
+
+    googlePlaceId: {
+      type: String,
+      trim: true,
+      default: "",
+    },
 
     location: {
       type: {
@@ -53,8 +67,9 @@ const branchSchema = new mongoose.Schema(
         enum: ["Point"],
         default: undefined,
       },
+
       coordinates: {
-        type: [Number], // [longitude, latitude]
+        type: [Number],
         default: undefined,
         validate: {
           validator: function (value) {
@@ -62,6 +77,7 @@ const branchSchema = new mongoose.Schema(
             if (!Array.isArray(value) || value.length !== 2) return false;
 
             const [lng, lat] = value;
+
             return lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90;
           },
           message: "Coordinates must be [longitude, latitude] with valid ranges.",
@@ -69,13 +85,27 @@ const branchSchema = new mongoose.Schema(
       },
     },
 
+    geofenceRadiusMeters: {
+      type: Number,
+      default: 100,
+      min: 20,
+      max: 1000,
+      // Default attendance radius is 100 meters.
+      // Can be adjusted per branch if needed.
+    },
+
     // --- CONTACT ---
+
+    contactPhoneCode: {
+      type: String,
+      trim: true,
+      default: "+234",
+    },
 
     contactPhone: {
       type: String,
       trim: true,
     },
-
     // --- STATUS ---
 
     isActive: {
@@ -91,16 +121,16 @@ const branchSchema = new mongoose.Schema(
 // --- INDEXES ---
 
 branchSchema.index({ business: 1 });
-// All branches belonging to an employer
+// All branches belonging to an employer.
 
 branchSchema.index({ business: 1, isActive: 1 });
-// Active branches for an employer — used when posting a shift
+// Active branches for an employer, used when posting a shift.
 
 branchSchema.index({ location: "2dsphere" }, { sparse: true });
-// Geospatial queries — find branches near a location.
-// Sparse because coordinates are optional at creation.
+// Geospatial queries.
+// Sparse because branch coordinates may be added after branch creation.
 
 branchSchema.index({ state: 1, lga: 1 });
-// Location-based filtering
+// Location-based filtering.
 
 module.exports = mongoose.model("Branch", branchSchema);

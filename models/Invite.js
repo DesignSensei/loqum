@@ -3,6 +3,9 @@
 const mongoose = require("mongoose");
 const crypto = require("crypto");
 
+const allowedInviteRoles = ["admin", "branch_manager", "branch_staff"];
+const branchScopedRoles = ["branch_manager", "branch_staff"];
+
 const inviteSchema = new mongoose.Schema(
   {
     email: {
@@ -18,15 +21,19 @@ const inviteSchema = new mongoose.Schema(
       required: true,
     },
 
+    /**
+     * Admin invites are business-wide and should not have a branch.
+     * Branch managers and branch staff must be assigned to a branch.
+     */
     branch: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Branch",
-      required: true,
+      default: undefined,
     },
 
     role: {
       type: String,
-      enum: ["admin", "hr", "branch_manager", "branch_staff"],
+      enum: allowedInviteRoles,
       required: true,
     },
 
@@ -38,6 +45,7 @@ const inviteSchema = new mongoose.Schema(
 
     token: {
       type: String,
+      required: true,
       default: () => crypto.randomBytes(32).toString("hex"),
     },
 
@@ -45,6 +53,16 @@ const inviteSchema = new mongoose.Schema(
       type: String,
       enum: ["pending", "accepted", "expired", "revoked"],
       default: "pending",
+    },
+
+    acceptedAt: {
+      type: Date,
+      default: undefined,
+    },
+
+    revokedAt: {
+      type: Date,
+      default: undefined,
     },
 
     expiresAt: {
@@ -57,11 +75,24 @@ const inviteSchema = new mongoose.Schema(
   }
 );
 
-// Prevent duplicate pending invites for the same email and branch
-inviteSchema.index({ token: 1 }, { unique: true });
+/* ---------- INDEXES ---------- */
 
+inviteSchema.index({ token: 1 }, { unique: true });
+inviteSchema.index({ business: 1, status: 1, createdAt: -1 });
+
+/**
+ * Prevent more than one pending invite for the same email
+ * under the same employer business.
+ *
+ * This keeps invite logic simple:
+ * - admin invite
+ * - branch manager invite
+ * - branch staff invite
+ *
+ * Only one pending invite can exist at a time.
+ */
 inviteSchema.index(
-  { email: 1, branch: 1 },
+  { email: 1, business: 1 },
   {
     unique: true,
     partialFilterExpression: {
@@ -69,5 +100,18 @@ inviteSchema.index(
     },
   }
 );
+
+/* ---------- VALIDATION ---------- */
+
+inviteSchema.pre("validate", function () {
+  if (this.role === "admin") {
+    this.branch = undefined;
+    return;
+  }
+
+  if (branchScopedRoles.includes(this.role) && !this.branch) {
+    throw new Error("Branch managers and branch staff must be assigned to a branch.");
+  }
+});
 
 module.exports = mongoose.model("Invite", inviteSchema);

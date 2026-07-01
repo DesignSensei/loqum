@@ -10,6 +10,7 @@ const logger = require("../utils/logger");
 const seedPlatformSettings = async () => {
   const defaultSettings = {
     key: "global",
+
     activeCountryCodes: ["NG"],
     supportedCurrencies: ["NGN"],
     defaultCountryCode: "NG",
@@ -35,8 +36,17 @@ const seedPlatformSettings = async () => {
 
     overtimeResponseHours: 24,
 
-    checkInPinVisibilityMinutes: 30,
+    // --- GEOFENCE ATTENDANCE RULES ---
+
+    checkInWindowBeforeMinutes: 30,
     noShowGraceMinutes: 30,
+
+    defaultGeofenceRadiusMeters: 100,
+    minimumGeofenceRadiusMeters: 20,
+    maximumGeofenceRadiusMeters: 1000,
+    maximumLocationAccuracyMeters: 100,
+
+    // --- CREDITS, DORMANT FOR NOW ---
 
     creditsEnabled: false,
     freeMonthlyCredits: 20,
@@ -49,12 +59,20 @@ const seedPlatformSettings = async () => {
 
   const settings = await PlatformSettings.findOneAndUpdate(
     { key: "global" },
-    { $set: defaultSettings },
+    {
+      $set: defaultSettings,
+
+      // Removes old PIN setting from existing settings document if it exists.
+      $unset: {
+        checkInPinVisibilityMinutes: "",
+      },
+    },
     {
       returnDocument: "after",
       upsert: true,
       runValidators: true,
       setDefaultsOnInsert: true,
+      strict: false,
     }
   );
 

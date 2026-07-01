@@ -8,7 +8,9 @@ const badgeClass = {
   rejected: "badge-light-danger",
   restricted: "badge-light-danger",
   needs_review: "badge-light-info",
+
   active: "badge-light-success",
+  removed: "badge-light-danger",
   suspended: "badge-light-danger",
   frozen: "badge-light-danger",
   closed: "badge-light-dark",
@@ -20,6 +22,23 @@ const badgeClass = {
   available: "badge-light-success",
   unavailable: "badge-light-warning",
   busy: "badge-light-info",
+
+  failed: "badge-light-warning",
+  missing: "badge-light-warning",
+  setup_pending: "badge-light-warning",
+
+  open: "badge-light-primary",
+  assigned: "badge-light-warning",
+  confirmed: "badge-light-info",
+  in_progress: "badge-light-warning",
+  pending_settlement: "badge-light-info",
+  completed: "badge-light-success",
+  cancelled: "badge-light-danger",
+  disputed: "badge-light-danger",
+  no_show: "badge-light-danger",
+
+  deleted: "badge-light-danger",
+  revoked: "badge-light-danger",
 };
 
 const formatStatus = (status) => {
@@ -163,3 +182,38 @@ exports.getWalletStatus = (wallet) => {
     formatStatus,
   };
 };
+
+exports.getEmployerFundingStatus = (dva) => {
+  const rawStatus = dva?.status || "not_started";
+
+  const displayStatus = rawStatus === "failed" ? "setup_pending" : rawStatus;
+
+  const items = [
+    {
+      label: "Funding account",
+      status: displayStatus,
+      passed: rawStatus === "active",
+    },
+  ];
+
+  const isEligible = items.every((item) => item.passed);
+
+  return {
+    title: "Funding Account",
+    isEligible,
+    successMessage: "Your dedicated funding account is active and ready to receive payments.",
+    pendingMessage:
+      rawStatus === "failed"
+        ? "Your dedicated funding account is still being set up."
+        : "Your dedicated funding account is not ready yet.",
+    reason: rawStatus === "failed" ? dva?.failureReason || null : null,
+    rawStatus,
+    displayStatus,
+    items,
+    badgeClass,
+    formatStatus,
+  };
+};
+
+exports.badgeClass = badgeClass;
+exports.formatStatus = formatStatus;

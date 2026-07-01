@@ -3,7 +3,7 @@
 const logger = require("../utils/logger");
 
 exports.getDashboard = (req, res) => {
-  res.render("dashboards/admin/index", {
+  res.render("admin/dashboard/index", {
     layout: "layouts/app-layout",
     title: "Dashboard",
     breadcrumbs: [

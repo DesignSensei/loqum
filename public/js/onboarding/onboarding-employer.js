@@ -8,6 +8,57 @@ var OnboardingEmployer = (function () {
 
   var validator = null;
 
+  function getSelectedBusinessType() {
+    var selectedRadio = document.querySelector('input[name="type"]:checked');
+
+    return selectedRadio ? selectedRadio.value : "";
+  }
+
+  function getSelectedState() {
+    var stateSelect = document.querySelector("#stateSelect");
+
+    return stateSelect ? stateSelect.value : "";
+  }
+
+  function getRegulatoryBodyName(type, state) {
+    var cleanType = String(type || "").trim();
+    var cleanState = String(state || "")
+      .trim()
+      .toLowerCase();
+
+    if (cleanType === "pharmacy") {
+      return "Pharmacists Council of Nigeria";
+    }
+
+    if (cleanType === "laboratory") {
+      return "Medical Laboratory Science Council of Nigeria";
+    }
+
+    if (cleanType === "clinic" || cleanType === "hospital") {
+      return cleanState === "lagos"
+        ? "Health Facilities Monitoring and Accreditation Agency"
+        : "State Ministry of Health";
+    }
+
+    return "regulatory body";
+  }
+
+  function getRegulatoryRegistrationMessage(type, state) {
+    return getRegulatoryBodyName(type, state) + " registration number is required.";
+  }
+
+  function updateRegulatoryRegistrationValidationMessage() {
+    if (!validator) return;
+
+    var type = getSelectedBusinessType();
+    var state = getSelectedState();
+    var message = getRegulatoryRegistrationMessage(type, state);
+
+    validator.updateFieldStatus("regulatoryRegistrationNumber", "NotValidated");
+
+    validator.updateValidatorOption("regulatoryRegistrationNumber", "notEmpty", "message", message);
+  }
+
   // Handle dynamic registration field switching
   function handleTypeSwitching() {
     var radios = document.querySelectorAll('input[name="type"]');
@@ -16,7 +67,6 @@ var OnboardingEmployer = (function () {
 
     function switchField(selectedRadio) {
       var selectedFieldId = selectedRadio.dataset.registrationField;
-      var validatorMessage = selectedRadio.dataset.validatorMessage;
 
       document.querySelectorAll(".registration-field").forEach(function (field) {
         var isActive = field.id === selectedFieldId;
@@ -28,16 +78,7 @@ var OnboardingEmployer = (function () {
         });
       });
 
-      if (validator && validatorMessage) {
-        validator.updateFieldStatus("regulatoryRegistrationNumber", "NotValidated");
-
-        validator.updateValidatorOption(
-          "regulatoryRegistrationNumber",
-          "notEmpty",
-          "message",
-          validatorMessage
-        );
-      }
+      updateRegulatoryRegistrationValidationMessage();
     }
 
     var defaultRadio = document.querySelector('input[name="type"]:checked');
@@ -53,6 +94,22 @@ var OnboardingEmployer = (function () {
     });
   }
 
+  function handleStateChangeForRegulatoryBody() {
+    var stateSelect = document.querySelector("#stateSelect");
+
+    if (!stateSelect) return;
+
+    stateSelect.addEventListener("change", function () {
+      updateRegulatoryRegistrationValidationMessage();
+    });
+
+    if (typeof $ !== "undefined") {
+      $("#stateSelect").on("change.select2", function () {
+        updateRegulatoryRegistrationValidationMessage();
+      });
+    }
+  }
+
   // Handle form validation and submission
   function handleFormSubmission() {
     if (!form || !submitButton) return;
@@ -63,6 +120,17 @@ var OnboardingEmployer = (function () {
           validators: {
             notEmpty: {
               message: "Business name is required.",
+            },
+          },
+        },
+
+        businessEmail: {
+          validators: {
+            notEmpty: {
+              message: "Business email is required.",
+            },
+            emailAddress: {
+              message: "Enter a valid business email address.",
             },
           },
         },
@@ -220,6 +288,7 @@ var OnboardingEmployer = (function () {
 
       handleFormSubmission();
       handleTypeSwitching();
+      handleStateChangeForRegulatoryBody();
     },
   };
 })();

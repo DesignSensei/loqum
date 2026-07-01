@@ -343,21 +343,21 @@ kycVerificationSchema.index(
 
 // --- VALIDATION / AUTO-CLEANUP ---
 
-kycVerificationSchema.pre("validate", function (next) {
+kycVerificationSchema.pre("validate", function () {
   if (this.ownerType === "professional" && !this.professional) {
-    return next(new Error("Professional KYC verification must reference a professional profile."));
+    throw new Error("Professional KYC verification must reference a professional profile.");
   }
 
   if (this.ownerType === "employer" && !this.employer) {
-    return next(new Error("Employer KYC verification must reference an employer profile."));
+    throw new Error("Employer KYC verification must reference an employer profile.");
   }
 
   if (this.ownerType === "professional" && this.employer) {
-    return next(new Error("Professional KYC verification cannot reference an employer."));
+    throw new Error("Professional KYC verification cannot reference an employer.");
   }
 
   if (this.ownerType === "employer" && this.professional) {
-    return next(new Error("Employer KYC verification cannot reference a professional."));
+    throw new Error("Employer KYC verification cannot reference a professional.");
   }
 
   if (!this.submittedAt) {
@@ -394,8 +394,6 @@ kycVerificationSchema.pre("validate", function (next) {
     this.rejectionReason = null;
     this.failureReason = null;
   }
-
-  next();
 });
 
 module.exports = mongoose.model("KYCVerification", kycVerificationSchema);

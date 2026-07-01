@@ -7,90 +7,14 @@ const EmployerProfile = require("../models/EmployerProfile");
 const User = require("../models/User");
 
 const logger = require("../utils/logger");
-const { buildGeoPoint } = require("../utils/geo");
+
 const walletService = require("./walletService");
 const DVAService = require("./dvaService");
-
-const normalizeCACRegistrationNumber = (value) => {
-  return String(value || "")
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, "");
-};
-
-const normalizeRegulatoryRegistrationNumber = (value) => {
-  return String(value || "")
-    .trim()
-    .replace(/\s+/g, " ");
-};
-
-const isValidCACRegistrationNumber = (value) => {
-  return /^(RC|BN|IT|LP|LLP)\d{4,10}$/i.test(value);
-};
-
-const isValidRegulatoryRegistrationNumber = (value) => {
-  return /^[A-Z0-9/\\\- ]{4,30}$/i.test(value);
-};
+const ProfileInputService = require("./profileInputService");
 
 class OnboardingService {
   static async completeProfessionalOnboarding(userId, data) {
-    const {
-      type,
-      licenceNumber,
-      phoneCode,
-      phone,
-      specialty,
-      address,
-      state,
-      lga,
-      latitude,
-      longitude,
-      googlePlaceId,
-      yearsOfExperience,
-      bio,
-    } = data;
-
-    if (
-      !type ||
-      !licenceNumber ||
-      !phone ||
-      !phoneCode ||
-      !specialty ||
-      !address ||
-      !state ||
-      !lga
-    ) {
-      throw new Error("Missing required professional or location fields");
-    }
-
-    if (type === "pharmacist" && !/^[0-9]{6}$/.test(String(licenceNumber).trim())) {
-      throw new Error("PCN licence number must be exactly 6 digits.");
-    }
-
-    if (!String(googlePlaceId || "").trim()) {
-      throw new Error("Please select a valid address from the suggestions.");
-    }
-
-    const location = buildGeoPoint(
-      latitude,
-      longitude,
-      "Please select a valid address from the suggestions."
-    );
-
-    const profileData = {
-      type: String(type).trim(),
-      licenceNumber: String(licenceNumber).trim(),
-      phoneCode: String(phoneCode).trim(),
-      phone: String(phone).trim(),
-      specialty: String(specialty).trim(),
-      address: String(address).trim(),
-      googlePlaceId: String(googlePlaceId).trim(),
-      location,
-      state: String(state).trim(),
-      lga: String(lga).trim(),
-      yearsOfExperience: Number(yearsOfExperience) || 0,
-      bio: String(bio || "").trim(),
-    };
+    const profileData = ProfileInputService.buildProfessionalProfileData(data);
 
     const session = await mongoose.startSession();
 
@@ -143,108 +67,7 @@ class OnboardingService {
   }
 
   static async completeEmployerOnboarding(userId, data) {
-    const {
-      type,
-      businessName,
-      cacRegistrationNumber,
-      regulatoryRegistrationNumber,
-      state,
-      lga,
-      address,
-      latitude,
-      longitude,
-      googlePlaceId,
-      businessPhoneCode,
-      businessPhone,
-      contactFirstName,
-      contactLastName,
-      contactRole,
-      contactPhoneCode,
-      contactPhone,
-    } = data;
-
-    const regulatoryBodyByType = {
-      pharmacy: "pcn",
-      clinic: "state_moh",
-      hospital: "state_moh",
-      laboratory: "mlscn",
-    };
-
-    const regulatoryBody = regulatoryBodyByType[type];
-
-    if (!regulatoryBody) {
-      throw new Error("Invalid employer type selected.");
-    }
-
-    if (
-      !type ||
-      !businessName ||
-      !cacRegistrationNumber ||
-      !regulatoryRegistrationNumber ||
-      !state ||
-      !lga ||
-      !address ||
-      !businessPhoneCode ||
-      !businessPhone ||
-      !contactFirstName ||
-      !contactLastName ||
-      !contactRole ||
-      !contactPhoneCode ||
-      !contactPhone
-    ) {
-      throw new Error("Missing required employer onboarding fields");
-    }
-
-    if (!String(googlePlaceId || "").trim()) {
-      throw new Error("Please select a valid business address from the suggestions.");
-    }
-
-    const location = buildGeoPoint(
-      latitude,
-      longitude,
-      "Please select a valid business address from the suggestions."
-    );
-
-    const normalizedCACRegistrationNumber = normalizeCACRegistrationNumber(cacRegistrationNumber);
-
-    const normalizedRegulatoryRegistrationNumber = normalizeRegulatoryRegistrationNumber(
-      regulatoryRegistrationNumber
-    );
-
-    if (!isValidCACRegistrationNumber(normalizedCACRegistrationNumber)) {
-      throw new Error("Enter a valid CAC number, e.g. RC1234567 or BN1234567.");
-    }
-
-    if (!isValidRegulatoryRegistrationNumber(normalizedRegulatoryRegistrationNumber)) {
-      throw new Error(
-        "Enter a valid regulatory registration number exactly as shown on the certificate."
-      );
-    }
-
-    const profileData = {
-      type: String(type).trim(),
-      businessName: String(businessName).trim(),
-
-      cacRegistrationNumber: normalizedCACRegistrationNumber,
-
-      regulatoryBody,
-      regulatoryRegistrationNumber: normalizedRegulatoryRegistrationNumber,
-
-      businessPhoneCode: String(businessPhoneCode).trim(),
-      businessPhone: String(businessPhone).trim(),
-
-      address: String(address).trim(),
-      googlePlaceId: String(googlePlaceId).trim(),
-      location,
-      state: String(state).trim(),
-      lga: String(lga).trim(),
-
-      contactFirstName: String(contactFirstName).trim(),
-      contactLastName: String(contactLastName).trim(),
-      contactRole: String(contactRole).trim(),
-      contactPhoneCode: String(contactPhoneCode).trim(),
-      contactPhone: String(contactPhone).trim(),
-    };
+    const profileData = ProfileInputService.buildEmployerProfileData(data);
 
     const session = await mongoose.startSession();
 

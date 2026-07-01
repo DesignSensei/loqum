@@ -1,0 +1,91 @@
+<!--views/layouts/onboarding-layout.ejs -->
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <%- include("../partials/header") %>
+
+    <!-- No page indexing -->
+    <%- include("../partials/meta-noindex") %>
+  </head>
+
+  <body id="kt_body" class="app-blank onboarding-page">
+    <script>
+      var defaultThemeMode = "light";
+      var themeMode;
+      if (document.documentElement) {
+        if (document.documentElement.hasAttribute("data-bs-theme-mode")) {
+          themeMode = document.documentElement.getAttribute("data-bs-theme-mode");
+        } else {
+          if (localStorage.getItem("data-bs-theme") !== null) {
+            themeMode = localStorage.getItem("data-bs-theme");
+          } else {
+            themeMode = defaultThemeMode;
+          }
+        }
+
+        if (themeMode === "system") {
+          themeMode = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+
+        document.documentElement.setAttribute("data-bs-theme", themeMode);
+      }
+    </script>
+
+    <div class="d-flex flex-column flex-root onboarding-root" id="kt_app_root">
+      <div class="d-flex flex-column flex-lg-row flex-column-fluid onboarding-shell">
+        <!-- Form pane -->
+        <div class="d-flex flex-column flex-lg-row-fluid w-lg-50 order-1 onboarding-form-pane">
+          <div class="onboarding-form-wrap mx-auto w-100"><%- body %></div>
+        </div>
+
+        <!-- Aside pane -->
+        <div class="d-flex flex-lg-row-fluid w-lg-50 order-2 onboarding-aside">
+          <img src="/assets/images/auth-bg.png" alt="" class="onboarding-bg" />
+
+          <div class="onboarding-overlay"></div>
+
+          <div
+            class="d-flex flex-column align-items-center justify-content-center px-8 px-md-16 py-12 w-100 onboarding-aside-content"
+          >
+            <div class="onboarding-aside-text">
+              <p class="mb-3 onboarding-tag">[ Why Healthcare Teams Choose Loqum ]</p>
+
+              <blockquote class="mb-6 onboarding-quote">
+                <p class="onboarding-quote-text">
+                  "Loqum makes healthcare staffing simpler.
+                  <span class="onboarding-quote-muted">
+                    Employers can fill shifts faster, while verified professionals can find flexible
+                    work opportunities without endless calls or scattered WhatsApp messages."
+                  </span>
+                </p>
+              </blockquote>
+
+              <div class="d-flex align-items-center gap-4">
+                <img
+                  src="https://placehold.co/48x48"
+                  alt="Loqum healthcare staffing profile"
+                  class="onboarding-avatar"
+                />
+
+                <div>
+                  <p class="mb-0 fw-bold onboarding-person-title">Loqum for Healthcare Staffing</p>
+                  <p class="mb-0 onboarding-person-subtitle">
+                    Built for employers and verified healthcare professionals
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- Aside pane -->
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <%- include("../partials/footer") %>
+
+    <!-- Scripts -->
+    <%- typeof scripts !== "undefined" ? scripts : "" %>
+  </body>
+</html>

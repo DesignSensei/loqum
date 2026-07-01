@@ -10,7 +10,7 @@ const logger = require("../utils/logger");
 // Renders the Professional setup page
 exports.getProfessionalOnboarding = (req, res) => {
   res.render("onboarding/professional", {
-    layout: "layouts/auth-layout-no-index",
+    layout: "layouts/onboarding-layout",
     title: "Professional Profile",
     locations: JSON.stringify(locations),
     specialtyConfig: JSON.stringify(specialtyConfig),
@@ -31,8 +31,8 @@ exports.getProfessionalOnboarding = (req, res) => {
 
 exports.getEmployerOnboarding = (req, res) => {
   res.render("onboarding/employer", {
-    layout: "layouts/auth-layout-no-index",
-    title: "Pharmacy Profile",
+    layout: "layouts/onboarding-layout",
+    title: "Employer Profile",
     locations: JSON.stringify(locations),
     csrfToken: req.csrfToken(),
     googleMapsApiKey: process.env.GOOGLE_MAPS_BROWSER_KEY,

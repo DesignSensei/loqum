@@ -1,6 +1,11 @@
 // middleware/authMiddleware.js
 
-const { getHomeRoute, getOnboardingRoute, userHasRole } = require("../utils/routeHelper");
+const {
+  getHomeRoute,
+  getOnboardingRoute,
+  getPostAuthRedirect,
+  userHasRole,
+} = require("../utils/routeHelper");
 
 /* ---------- Check if user is authenticated ---------- */
 exports.isAuthenticated = (req, res, next) => {
@@ -17,7 +22,7 @@ exports.isGuest = (req, res, next) => {
     return next();
   }
 
-  return res.redirect(getHomeRoute(req.user.role));
+  return res.redirect(getPostAuthRedirect(req.user));
 };
 
 /* ---------- Check if user has a specific role ---------- */
@@ -71,7 +76,7 @@ exports.hasPendingAuth = (req, res, next) => {
   }
 
   if (req.isAuthenticated && req.isAuthenticated() && req.user) {
-    return res.redirect(getHomeRoute(req.user.role));
+    return res.redirect(getPostAuthRedirect(req.user));
   }
 
   return res.redirect("/login");
@@ -79,7 +84,7 @@ exports.hasPendingAuth = (req, res, next) => {
 
 /* ---------- Check if user has NOT completed onboarding ---------- */
 exports.isNotOnboarded = (req, res, next) => {
-  if (!req.user) {
+  if (!req.isAuthenticated || !req.isAuthenticated() || !req.user) {
     return res.redirect("/login");
   }
 
@@ -92,7 +97,7 @@ exports.isNotOnboarded = (req, res, next) => {
 
 /* ---------- Check if user HAS completed onboarding ---------- */
 exports.isOnboarded = (req, res, next) => {
-  if (!req.user) {
+  if (!req.isAuthenticated || !req.isAuthenticated() || !req.user) {
     return res.redirect("/login");
   }
 

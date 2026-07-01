@@ -1,0 +1,305 @@
+<!-- views/employer/business-profile/partials/overview.ejs -->
+
+<div class="row g-5 g-xl-8 mb-8">
+  <div class="col-sm-6 col-xl-3">
+    <div class="card card-flush h-100">
+      <div
+        class="card-body d-flex flex-column justify-content-center align-items-center text-center"
+      >
+        <div class="symbol symbol-60px mb-5">
+          <span class="symbol-label bg-light-primary">
+            <i class="ki-duotone ki-geolocation fs-2x text-primary">
+              <span class="path1"></span>
+              <span class="path2"></span>
+            </i>
+          </span>
+        </div>
+
+        <div class="fs-2 fw-bold text-gray-900"><%= businessProfileSummary.totalBranches %></div>
+
+        <div class="fs-6 fw-semibold text-muted">Total Branches</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-sm-6 col-xl-3">
+    <div class="card card-flush h-100">
+      <div
+        class="card-body d-flex flex-column justify-content-center align-items-center text-center"
+      >
+        <div class="symbol symbol-60px mb-5">
+          <span class="symbol-label bg-light-success">
+            <i class="ki-duotone ki-check-circle fs-2x text-success">
+              <span class="path1"></span>
+              <span class="path2"></span>
+            </i>
+          </span>
+        </div>
+
+        <div class="fs-2 fw-bold text-gray-900"><%= businessProfileSummary.activeBranches %></div>
+
+        <div class="fs-6 fw-semibold text-muted">Active Branches</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-sm-6 col-xl-3">
+    <div class="card card-flush h-100">
+      <div
+        class="card-body d-flex flex-column justify-content-center align-items-center text-center"
+      >
+        <div class="symbol symbol-60px mb-5">
+          <span class="symbol-label bg-light-info">
+            <i class="ki-duotone ki-people fs-2x text-info">
+              <span class="path1"></span>
+              <span class="path2"></span>
+              <span class="path3"></span>
+              <span class="path4"></span>
+              <span class="path5"></span>
+            </i>
+          </span>
+        </div>
+
+        <div class="fs-2 fw-bold text-gray-900"><%= businessProfileSummary.totalMembers %></div>
+
+        <div class="fs-6 fw-semibold text-muted">Team Members</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-sm-6 col-xl-3">
+    <div class="card card-flush h-100">
+      <div
+        class="card-body d-flex flex-column justify-content-center align-items-center text-center"
+      >
+        <div class="symbol symbol-60px mb-5">
+          <span class="symbol-label bg-light-warning">
+            <i class="ki-duotone ki-user-tick fs-2x text-warning">
+              <span class="path1"></span>
+              <span class="path2"></span>
+              <span class="path3"></span>
+            </i>
+          </span>
+        </div>
+
+        <div class="fs-2 fw-bold text-gray-900"><%= businessProfileSummary.pendingInvites %></div>
+
+        <div class="fs-6 fw-semibold text-muted">Pending Invites</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-5 g-xl-8">
+  <div class="col-12 col-xl-7">
+    <div class="card h-100">
+      <div class="card-header">
+        <div class="card-title">
+          <h3 class="fw-bold m-0">Business Overview</h3>
+        </div>
+
+        <div class="card-toolbar">
+          <a
+            href="/employer/business-profile?tab=business-details"
+            class="btn btn-sm btn-light-primary"
+          >
+            Edit Details
+          </a>
+        </div>
+      </div>
+
+      <div class="card-body">
+        <div class="d-flex flex-column gap-6">
+          <div class="d-flex flex-wrap justify-content-between gap-2">
+            <span class="fw-semibold text-muted">Business Name</span>
+            <span class="fw-bold fs-6 text-gray-800 text-end">
+              <%= businessProfileSummary.businessName %>
+            </span>
+          </div>
+
+          <div class="d-flex flex-wrap justify-content-between gap-2">
+            <span class="fw-semibold text-muted">Business Email</span>
+            <span class="fw-bold fs-6 text-gray-800 text-end">
+              <%= businessProfileSummary.businessEmail %>
+            </span>
+          </div>
+
+          <div class="d-flex flex-wrap justify-content-between gap-2">
+            <span class="fw-semibold text-muted">Account Status</span>
+            <span class="badge <%= businessProfileSummary.accountStatusBadgeClass %>">
+              <%= businessProfileSummary.accountStatusLabel %>
+            </span>
+          </div>
+
+          <div class="d-flex flex-wrap justify-content-between gap-2">
+            <span class="fw-semibold text-muted">Employer Approval</span>
+            <span class="badge <%= businessProfileSummary.employerApprovalStatusBadgeClass %>">
+              <%= businessProfileSummary.employerApprovalStatusLabel %>
+            </span>
+          </div>
+
+          <div class="d-flex flex-wrap justify-content-between gap-2">
+            <span class="fw-semibold text-muted">CAC Verification</span>
+            <span class="badge <%= businessProfileSummary.cacVerificationStatusBadgeClass %>">
+              <%= businessProfileSummary.cacVerificationStatusLabel %>
+            </span>
+          </div>
+
+          <div class="d-flex flex-wrap justify-content-between gap-2">
+            <span class="fw-semibold text-muted">Regulatory Verification</span>
+            <span
+              class="badge <%= businessProfileSummary.regulatoryVerificationStatusBadgeClass %>"
+            >
+              <%= businessProfileSummary.regulatoryVerificationStatusLabel %>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-xl-5">
+    <div class="card h-100">
+      <div class="card-header">
+        <div class="card-title">
+          <div class="d-flex align-items-center">
+            <div class="symbol symbol-40px me-4">
+              <span class="symbol-label bg-light-primary">
+                <i class="ki-duotone ki-wallet fs-2 text-primary">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                  <span class="path3"></span>
+                  <span class="path4"></span>
+                </i>
+              </span>
+            </div>
+
+            <div>
+              <h3 class="fw-bold m-0"><%= billingSetup.title %></h3>
+              <div class="fs-7 text-muted mt-1"><%= billingSetup.subtitle %></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card-toolbar d-flex align-items-center gap-2">
+          <span class="badge <%= billingSetup.badgeClass %>"> <%= billingSetup.badgeLabel %> </span>
+
+          <a href="/employer/billing" class="btn btn-sm btn-light-primary"> View Billing </a>
+        </div>
+      </div>
+
+      <div class="card-body">
+        <% if (billingSetup.isAvailable) { %>
+        <div class="d-flex flex-column gap-6">
+          <div
+            class="notice d-flex bg-light-primary rounded border-primary border border-dashed p-5"
+          >
+            <div class="d-flex flex-column">
+              <div class="fw-bold fs-6 text-gray-800 mb-1"><%= billingSetup.accountTitle %></div>
+
+              <div class="fs-7 text-muted"><%= billingSetup.message %></div>
+            </div>
+          </div>
+
+          <div class="d-flex flex-column gap-4">
+            <div class="d-flex align-items-center justify-content-between gap-4">
+              <div class="d-flex align-items-center gap-3">
+                <span class="symbol symbol-35px">
+                  <span class="symbol-label bg-light-primary">
+                    <i class="ki-duotone ki-wallet fs-3 text-primary">
+                      <span class="path1"></span>
+                      <span class="path2"></span>
+                      <span class="path3"></span>
+                      <span class="path4"></span>
+                    </i>
+                  </span>
+                </span>
+
+                <span class="fw-semibold text-muted">Bank Name</span>
+              </div>
+
+              <span class="fw-bold fs-6 text-gray-800 text-end"> <%= defaultDva.bankName %> </span>
+            </div>
+
+            <div class="d-flex align-items-center justify-content-between gap-4">
+              <div class="d-flex align-items-center gap-3">
+                <span class="symbol symbol-35px">
+                  <span class="symbol-label bg-light-primary">
+                    <i class="ki-duotone ki-profile-user fs-3 text-primary">
+                      <span class="path1"></span>
+                      <span class="path2"></span>
+                      <span class="path3"></span>
+                      <span class="path4"></span>
+                    </i>
+                  </span>
+                </span>
+
+                <span class="fw-semibold text-muted">Account Name</span>
+              </div>
+
+              <span class="fw-bold fs-6 text-gray-800 text-end text-uppercase">
+                <%= defaultDva.accountName %>
+              </span>
+            </div>
+
+            <div class="d-flex align-items-center justify-content-between gap-4">
+              <div class="d-flex align-items-center gap-3">
+                <span class="symbol symbol-35px">
+                  <span class="symbol-label bg-light-primary">
+                    <i class="ki-duotone ki-copy fs-3 text-primary">
+                      <span class="path1"></span>
+                      <span class="path2"></span>
+                    </i>
+                  </span>
+                </span>
+
+                <span class="fw-semibold text-muted">Account Number</span>
+              </div>
+
+              <div class="d-flex align-items-center gap-2">
+                <span class="fw-bold fs-6 text-gray-800"> <%= defaultDva.accountNumber %> </span>
+
+                <button
+                  type="button"
+                  class="btn btn-sm btn-light-primary px-3 js-copy-text"
+                  data-copy-text="<%= defaultDva.accountNumber %>"
+                  aria-label="Copy account number"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="separator separator-dashed"></div>
+
+          <div class="fs-7 text-muted"><%= billingSetup.footerMessage %></div>
+        </div>
+        <% } else { %>
+        <div class="notice d-flex bg-light-warning rounded border-warning border border-dashed p-6">
+          <i class="ki-duotone ki-information-5 fs-2tx text-warning me-4">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+          </i>
+
+          <div class="d-flex flex-stack flex-grow-1">
+            <div class="fw-semibold">
+              <div class="fs-6 text-gray-700"><%= billingSetup.message %></div>
+
+              <div class="fs-7 text-muted mt-1">
+                Once setup is complete, your business will be able to top up its employer wallet
+                from here.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="separator separator-dashed my-6"></div>
+
+        <div class="fs-7 text-muted"><%= billingSetup.footerMessage %></div>
+        <% } %>
+      </div>
+    </div>
+  </div>
+</div>

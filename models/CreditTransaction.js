@@ -302,28 +302,28 @@ creditTransactionSchema.index({ createdAt: -1 });
 
 // --- VALIDATION / AUTO-CLEANUP ---
 
-creditTransactionSchema.pre("validate", function (next) {
+creditTransactionSchema.pre("validate", function () {
   const creditTypes = ["credit_purchase", "credit_refund", "admin_credit", "promo_credit"];
 
   const debitTypes = ["application_credit_used", "boost_credit_used", "admin_debit", "expiry"];
 
   if (creditTypes.includes(this.type) && this.direction !== "credit") {
-    return next(new Error(`${this.type} must be a credit transaction.`));
+    throw new Error(`${this.type} must be a credit transaction.`);
   }
 
   if (debitTypes.includes(this.type) && this.direction !== "debit") {
-    return next(new Error(`${this.type} must be a debit transaction.`));
+    throw new Error(`${this.type} must be a debit transaction.`);
   }
 
   if (
     ["application_credit_used", "boost_credit_used"].includes(this.type) &&
     !this.shiftApplication
   ) {
-    return next(new Error(`${this.type} must reference a shift application.`));
+    throw new Error(`${this.type} must reference a shift application.`);
   }
 
   if (this.type === "credit_purchase" && !this.paymentTransaction) {
-    return next(new Error("Credit purchase must reference a payment transaction."));
+    throw new Error("Credit purchase must reference a payment transaction.");
   }
 
   const balanceFields = ["availableCredits", "pendingCredits"];
@@ -338,10 +338,8 @@ creditTransactionSchema.pre("validate", function (next) {
       const difference = Math.abs(after - expectedAfter);
 
       if (difference > 0.001) {
-        return next(
-          new Error(
-            `Invalid balanceDelta for ${field}. Expected balanceAfter.${field} to be ${expectedAfter}.`
-          )
+        throw new Error(
+          `Invalid balanceDelta for ${field}. Expected balanceAfter.${field} to be ${expectedAfter}.`
         );
       }
     }
@@ -358,8 +356,6 @@ creditTransactionSchema.pre("validate", function (next) {
   if (this.status === "reversed" && !this.reversedAt) {
     this.reversedAt = new Date();
   }
-
-  next();
 });
 
 module.exports = mongoose.model("CreditTransaction", creditTransactionSchema);

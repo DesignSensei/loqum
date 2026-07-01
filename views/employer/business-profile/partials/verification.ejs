@@ -1,0 +1,98 @@
+<!-- views/employer/business-profile/partials/verification.ejs -->
+
+<div class="card mb-8">
+  <div class="card-header">
+    <div class="card-title">
+      <h3 class="fw-bold m-0">Verification</h3>
+    </div>
+  </div>
+
+  <div class="card-body">
+    <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-5">
+      <div>
+        <h4 class="fw-bold text-gray-900 mb-2">Business Verification Status</h4>
+
+        <div class="text-muted fw-semibold">
+          Track your CAC verification, facility verification, employer approval, and account status.
+        </div>
+      </div>
+
+      <div class="notice d-flex bg-light-warning rounded border-warning border border-dashed p-5">
+        <i class="ki-duotone ki-information-5 fs-2tx text-warning me-4">
+          <span class="path1"></span>
+          <span class="path2"></span>
+          <span class="path3"></span>
+        </i>
+
+        <div class="fw-semibold text-gray-700">
+          Updating business identity, registration, or location details may return verification to
+          pending review.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-6 g-xl-8">
+  <% verificationView.items.forEach((item) => { %>
+  <div class="col-md-6">
+    <div class="card card-flush h-100">
+      <div class="card-body">
+        <div class="d-flex align-items-start justify-content-between gap-5 mb-6">
+          <div class="d-flex align-items-center">
+            <div class="symbol symbol-45px me-4">
+              <span class="symbol-label bg-light-primary">
+                <i class="ki-duotone ki-shield-tick fs-2 text-primary">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                </i>
+              </span>
+            </div>
+
+            <div>
+              <div class="fs-5 fw-bold text-gray-900"><%= item.title %></div>
+              <div class="fs-7 fw-semibold text-muted mt-1"><%= item.description %></div>
+            </div>
+          </div>
+
+          <span class="badge <%= item.badgeClass %>"><%= item.statusLabel %></span>
+        </div>
+
+        <% if (item.note) { %>
+        <div class="notice d-flex bg-light rounded border-gray-300 border border-dashed p-4">
+          <i class="ki-duotone ki-message-text-2 fs-2 text-gray-600 me-3">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+          </i>
+
+          <div class="fw-semibold text-gray-700"><%= item.note %></div>
+        </div>
+        <% } else { %>
+        <div class="text-muted fw-semibold">
+          No additional note has been added for this verification item.
+        </div>
+        <% } %>
+      </div>
+    </div>
+  </div>
+  <% }) %>
+</div>
+
+<div class="card mt-8">
+  <div
+    class="card-body d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-5"
+  >
+    <div>
+      <h4 class="fw-bold text-gray-900 mb-1">Need to update your business details?</h4>
+
+      <div class="text-muted fw-semibold">
+        You can update your business information from the Business Details tab.
+      </div>
+    </div>
+
+    <a href="/employer/business-profile?tab=business-details" class="btn btn-light-primary">
+      Edit Business Details
+    </a>
+  </div>
+</div>

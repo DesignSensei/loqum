@@ -1,0 +1,32 @@
+<!-- views/employer/business-profile/index.ejs -->
+
+<div class="d-flex flex-column flex-xl-row align-items-stretch gap-5 gap-xl-8">
+  <!--begin::Sidebar-->
+  <div class="flex-column flex-lg-row-auto w-100 w-xl-325px flex-shrink-0">
+    <%- include("./partials/side-menu") %>
+  </div>
+  <!--end::Sidebar-->
+
+  <!--begin::Main content-->
+  <div class="flex-grow-1 w-100 min-w-0">
+    <% if (activeTab === "overview") { %> <%- include("./partials/overview") %> <% } %> <% if
+    (activeTab === "business-details") { %> <%- include("./partials/business-details") %> <% } %> <%
+    if (activeTab === "verification") { %> <%- include("./partials/verification") %> <% } %> <% if
+    (activeTab === "branches") { %> <%- include("./partials/branches") %> <% } %> <% if (activeTab
+    === "team") { %> <%- include("./partials/team-members") %> <% } %> <% if (activeTab ===
+    "invites") { %> <%- include("./partials/invites") %> <% } %>
+  </div>
+  <!--end::Main content-->
+</div>
+
+<!--begin::Modals-->
+<% if (activeTab === "branches") { %> <%- include("./partials/add-branch-modal") %> <%-
+include("./partials/view-branch-modal") %> <%- include("./partials/edit-branch-modal") %> <% } %> <%
+if (activeTab === "team") { %> <%- include("./partials/team-member-modals") %> <% } %> <% if
+(activeTab === "invites") { %> <%- include("./partials/invite-member-modal") %> <%-
+include("./partials/edit-invite-modal") %> <% } %>
+<!--end::Modals-->
+
+<script>
+  window.locations = <%- locations %>;
+</script>

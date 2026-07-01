@@ -1,0 +1,203 @@
+<!-- views/employer/business-profile/partials/edit-branch-modal.ejs -->
+
+<div
+  class="modal fade"
+  id="editBranchModal"
+  tabindex="-1"
+  aria-labelledby="editBranchModalLabel"
+  aria-hidden="true"
+>
+  <div class="modal-dialog modal-dialog-centered mw-650px">
+    <div class="modal-content">
+      <form
+        id="kt_edit_branch_form"
+        class="form"
+        action="/employer/business-profile/branches/update"
+        method="POST"
+        novalidate
+      >
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+        <div class="modal-header">
+          <h2 id="editBranchModalLabel" class="fw-bold">Edit Branch</h2>
+
+          <button
+            type="button"
+            class="btn btn-icon btn-sm btn-active-icon-primary"
+            data-bs-dismiss="modal"
+            aria-label="Close"
+          >
+            <i class="ki-duotone ki-cross fs-1">
+              <span class="path1"></span>
+              <span class="path2"></span>
+            </i>
+          </button>
+        </div>
+
+        <div class="modal-body py-10 px-lg-17">
+          <input type="hidden" name="branchId" id="editBranchIdInput" />
+          <input type="hidden" name="latitude" id="editBranchLatitudeInput" />
+          <input type="hidden" name="longitude" id="editBranchLongitudeInput" />
+          <input type="hidden" name="googlePlaceId" id="editBranchGooglePlaceIdInput" />
+
+          <div class="scroll-y me-n7 pe-7">
+            <div class="fv-row mb-7">
+              <label class="required fs-6 fw-semibold mb-2">Branch Name</label>
+
+              <input
+                type="text"
+                class="form-control form-control-solid"
+                id="editBranchNameInput"
+                name="name"
+                placeholder="e.g. Lekki Branch"
+                autocomplete="off"
+              />
+            </div>
+
+            <div class="fv-row mb-7">
+              <label class="fs-6 fw-semibold mb-2">Assigned Manager</label>
+
+              <select
+                class="form-select form-select-solid"
+                id="editBranchManagerSelect"
+                name="managerMemberId"
+                data-control="select2"
+                data-placeholder="Select manager"
+                data-dropdown-parent="#editBranchModal"
+              >
+                <option value="">Not assigned</option>
+
+                <% if (typeof branchManagerOptions !== "undefined" && branchManagerOptions &&
+                branchManagerOptions.length > 0) { %> <% branchManagerOptions.forEach((member) => {
+                %>
+                <option value="<%= member._id %>">
+                  <%= member.displayName || member.name || member.email || "Unnamed member" %>
+                </option>
+                <% }) %> <% } %>
+              </select>
+
+              <div class="form-text">
+                Assign or change the team member responsible for this branch.
+              </div>
+            </div>
+
+            <div class="row g-7 mb-7">
+              <div class="col-md-6 fv-row">
+                <label class="required fs-6 fw-semibold mb-2">State</label>
+
+                <select
+                  class="form-select form-select-solid"
+                  id="editBranchStateSelect"
+                  name="state"
+                  data-control="select2"
+                  data-placeholder="Select state"
+                  data-dropdown-parent="#editBranchModal"
+                >
+                  <option></option>
+                </select>
+              </div>
+
+              <div class="col-md-6 fv-row">
+                <label class="required fs-6 fw-semibold mb-2">LGA</label>
+
+                <select
+                  class="form-select form-select-solid"
+                  id="editBranchLgaSelect"
+                  name="lga"
+                  data-control="select2"
+                  data-placeholder="Select LGA"
+                  data-dropdown-parent="#editBranchModal"
+                >
+                  <option></option>
+                </select>
+              </div>
+            </div>
+
+            <div class="fv-row mb-7">
+              <label class="required fs-6 fw-semibold mb-2">Branch Address</label>
+
+              <input
+                type="text"
+                class="form-control form-control-solid"
+                id="editBranchAddressInput"
+                name="address"
+                placeholder="Start typing and select a valid Google address"
+                autocomplete="off"
+              />
+
+              <div class="form-text">
+                Select an address from the Google suggestions so the branch coordinates can be
+                updated.
+              </div>
+            </div>
+
+            <div class="row g-7 mb-7">
+              <div class="col-md-5 fv-row">
+                <label class="fs-6 fw-semibold mb-2">Phone Code</label>
+
+                <select
+                  class="form-select form-select-solid"
+                  id="editBranchPhoneCodeSelect"
+                  name="contactPhoneCode"
+                  data-control="select2"
+                  data-dropdown-parent="#editBranchModal"
+                >
+                  <option value="+234" selected>+234</option>
+                </select>
+              </div>
+
+              <div class="col-md-7 fv-row">
+                <label class="fs-6 fw-semibold mb-2">Branch Phone</label>
+
+                <input
+                  type="text"
+                  class="form-control form-control-solid"
+                  id="editBranchPhoneInput"
+                  name="contactPhone"
+                  placeholder="e.g. 8012345678"
+                  autocomplete="off"
+                />
+              </div>
+            </div>
+
+            <div class="fv-row mb-7">
+              <label class="required fs-6 fw-semibold mb-2">Geofence Radius</label>
+
+              <div class="input-group input-group-solid">
+                <input
+                  type="number"
+                  class="form-control form-control-solid"
+                  id="editBranchGeofenceRadiusInput"
+                  name="geofenceRadiusMeters"
+                  min="50"
+                  max="1000"
+                  step="10"
+                  placeholder="100"
+                />
+
+                <span class="input-group-text">meters</span>
+              </div>
+
+              <div class="form-text">
+                This radius is used for shift clock-in and geofence checks.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer flex-center">
+          <button type="button" class="btn btn-light me-3" data-bs-dismiss="modal">Cancel</button>
+
+          <button type="submit" id="kt_edit_branch_submit" class="btn btn-primary">
+            <span class="indicator-label">Save Changes</span>
+
+            <span class="indicator-progress">
+              Please wait...
+              <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+            </span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

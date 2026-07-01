@@ -3,21 +3,26 @@
 "use strict";
 
 var TwoFactor = (function () {
-  var form = document.querySelector("#kt_sing_in_two_factor_form");
-  var submitButton = document.querySelector("#kt_sing_in_two_factor_submit");
+  var form = document.querySelector("#kt_sign_in_two_factor_form");
+  var submitButton = document.querySelector("#kt_sign_in_two_factor_submit");
   var resendButton = document.querySelector("#kt_resend_otp");
   var inputs;
 
   function getCsrfToken() {
+    if (!form) return "";
+
     var csrfInput = form.querySelector('input[name="_csrf"]');
+
     return csrfInput ? csrfInput.value : "";
   }
 
   function handleSubmit() {
-    submitButton.addEventListener("click", function (e) {
+    form.addEventListener("submit", function (e) {
       e.preventDefault();
 
-      var isValid = true;
+      if (submitButton.disabled) return;
+
+      var isValid = inputs.length === 6;
 
       inputs.forEach(function (input) {
         if (input.value === "" || input.value.length === 0) {
@@ -143,6 +148,8 @@ var TwoFactor = (function () {
 
     resendButton.addEventListener("click", function (e) {
       e.preventDefault();
+
+      if (resendButton.classList.contains("disabled")) return;
 
       resendButton.classList.add("disabled");
 

@@ -14,7 +14,7 @@ const cookieParser = require("cookie-parser");
 const passport = require("passport");
 
 // Utilities
-const { getHomeRoute } = require("./utils/routeHelper");
+const attachViewLocals = require("./middleware/viewLocalsMiddleware");
 
 // Pre-defined modules
 const connectDB = require("./config/db");
@@ -26,6 +26,7 @@ const adminRoutes = require("./routes/adminRoutes");
 const onboardingRoutes = require("./routes/onboardingRoutes");
 const professionalRoutes = require("./routes/professionalRoutes");
 const employerRoutes = require("./routes/employerRoutes");
+const accountRoutes = require("./routes/accountRoutes");
 // const reviewRoutes = require("./routes/reviewRoutes");
 
 /* ---------- Initialize App ---------- */
@@ -92,18 +93,11 @@ const csrfProtection = csrf({ cookie: true });
 app.use(csrfProtection);
 
 /* ---------- Make session user & CSRF token available to all views ---------- */
-app.use((req, res, next) => {
-  const currentUser = req.user || req.session.user || null;
-
-  res.locals.user = currentUser;
-  res.locals.csrfToken = req.csrfToken();
-  res.locals.userHome = currentUser ? getHomeRoute(currentUser.role) : "/";
-
-  next();
-});
+app.use(attachViewLocals);
 
 /* ---------- Mount Routes ---------- */
 app.use(authRoutes);
+app.use(accountRoutes);
 app.use("/onboarding", onboardingRoutes);
 app.use("/admin", adminRoutes);
 app.use("/professional", professionalRoutes);

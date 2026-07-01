@@ -30,8 +30,6 @@ const employerMemberSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      // One membership record per user across the platform.
-      // This means a user cannot belong to two different employer businesses at once.
     },
 
     business: {
@@ -64,8 +62,47 @@ const employerMemberSchema = new mongoose.Schema(
 
     accountStatus: {
       type: String,
-      enum: ["active", "restricted", "suspended"],
+      enum: ["active", "restricted", "suspended", "removed"],
       default: "active",
+    },
+
+    // --- CURRENT MEMBERSHIP FLAG ---
+    // true: this is the user's current employer membership
+    // false: historical membership record, usually after removal
+    //
+    // This lets us keep removed records for audit without permanently blocking
+    // the user from joining another employer business later.
+
+    isCurrent: {
+      type: Boolean,
+      default: true,
+    },
+
+    // --- UPDATED FIELDS ---
+
+    updatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    // --- REMOVAL AUDIT FIELDS ---
+
+    removedAt: {
+      type: Date,
+      default: null,
+    },
+
+    removedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
+    removalReason: {
+      type: String,
+      trim: true,
+      default: "",
     },
   },
   {
@@ -75,10 +112,29 @@ const employerMemberSchema = new mongoose.Schema(
 
 // --- INDEXES ---
 
-employerMemberSchema.index({ user: 1 }, { unique: true });
+// A user can only have one current employer membership.
+// Removed historical records are allowed because isCurrent becomes false.
+employerMemberSchema.index(
+  { user: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      isCurrent: true,
+    },
+  }
+);
 
 // Efficient lookup: all members of a business
 employerMemberSchema.index({ business: 1 });
+
+// Efficient lookup: current members of a business
+employerMemberSchema.index({ business: 1, isCurrent: 1 });
+
+// Efficient lookup: all members by status/filter
+employerMemberSchema.index({ business: 1, accountStatus: 1 });
+
+// Efficient lookup: current members by status/filter
+employerMemberSchema.index({ business: 1, isCurrent: 1, accountStatus: 1 });
 
 // Efficient lookup: all members assigned to a specific branch
 employerMemberSchema.index({ "branches.branch": 1 });
@@ -86,15 +142,30 @@ employerMemberSchema.index({ "branches.branch": 1 });
 // Useful for member access checks
 employerMemberSchema.index({ user: 1, business: 1 });
 
-// Useful for filtering active/restricted/suspended members
-employerMemberSchema.index({ business: 1, accountStatus: 1 });
+// Useful for audit/history queries
+employerMemberSchema.index({ business: 1, removedAt: -1 });
 
 // --- VALIDATION ---
 
-employerMemberSchema.pre("validate", function (next) {
+employerMemberSchema.pre("validate", function () {
+  if (this.accountStatus === "removed") {
+    this.isCurrent = false;
+
+    if (!this.removedAt) {
+      this.removedAt = new Date();
+    }
+  }
+
+  if (this.accountStatus !== "removed") {
+    this.isCurrent = true;
+    this.removedAt = null;
+    this.removedBy = null;
+    this.removalReason = "";
+  }
+
   if (this.role === "admin" && this.branches.length > 0) {
-    return next(
-      new Error("Admins have business-wide access and cannot be assigned to specific branches.")
+    throw new Error(
+      "Admins have business-wide access and cannot be assigned to specific branches."
     );
   }
 
@@ -102,7 +173,7 @@ employerMemberSchema.pre("validate", function (next) {
     (this.role === "branch_manager" || this.role === "branch_staff") &&
     this.branches.length === 0
   ) {
-    return next(new Error("Branch-level members must be assigned to at least one branch."));
+    throw new Error("Branch-level members must be assigned to at least one branch.");
   }
 
   // No duplicate branch assignments
@@ -110,28 +181,23 @@ employerMemberSchema.pre("validate", function (next) {
   const uniqueBranchIds = new Set(branchIds);
 
   if (branchIds.length !== uniqueBranchIds.size) {
-    return next(new Error("Duplicate branch assignments are not allowed."));
+    throw new Error("Duplicate branch assignments are not allowed.");
   }
 
   // Keep top-level role aligned with branch assignment roles.
   // If any branch assignment is branch_manager, the member's top-level role
   // must also be branch_manager.
-
   const hasManagerBranch = this.branches.some((assignment) => assignment.role === "branch_manager");
 
   if (this.role === "branch_staff" && hasManagerBranch) {
-    return next(
-      new Error(
-        "A member with a branch manager assignment must have branch_manager as top-level role."
-      )
+    throw new Error(
+      "A member with a branch manager assignment must have branch_manager as top-level role."
     );
   }
 
   if (this.role === "branch_manager" && !hasManagerBranch) {
-    return next(new Error("A branch_manager member must manage at least one branch."));
+    throw new Error("A branch_manager member must manage at least one branch.");
   }
-
-  next();
 });
 
 module.exports = mongoose.model("EmployerMember", employerMemberSchema);

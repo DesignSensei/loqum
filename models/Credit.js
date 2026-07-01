@@ -115,7 +115,7 @@ creditSchema.index({ status: 1 });
 
 // --- VALIDATION / AUTO-CLEANUP ---
 
-creditSchema.pre("validate", function (next) {
+creditSchema.pre("validate", function () {
   if (this.status === "frozen" && !this.frozenAt) {
     this.frozenAt = new Date();
   }
@@ -129,7 +129,7 @@ creditSchema.pre("validate", function (next) {
     const hasCredits = this.availableCredits > 0 || this.pendingCredits > 0;
 
     if (hasCredits) {
-      return next(new Error("Credit balance must be zero before closing."));
+      throw new Error("Credit balance must be zero before closing.");
     }
 
     if (!this.closedAt) {
@@ -140,8 +140,6 @@ creditSchema.pre("validate", function (next) {
   if (this.status !== "closed") {
     this.closedAt = null;
   }
-
-  next();
 });
 
 module.exports = mongoose.model("Credit", creditSchema);

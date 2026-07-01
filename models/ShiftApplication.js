@@ -313,7 +313,7 @@ shiftApplicationSchema.index({ "credits.isBoosted": 1, "credits.boostLevel": 1 }
 
 // --- VALIDATION / AUTO-CLEANUP ---
 
-shiftApplicationSchema.pre("validate", function (next) {
+shiftApplicationSchema.pre("validate", function () {
   const now = new Date();
 
   if (this.status === "shortlisted" && !this.shortlistedAt) {
@@ -355,8 +355,6 @@ shiftApplicationSchema.pre("validate", function (next) {
       this.credits.boostLevel = null;
     }
   }
-
-  next();
 });
 
 module.exports = mongoose.model("ShiftApplication", shiftApplicationSchema);

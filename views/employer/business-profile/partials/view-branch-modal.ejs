@@ -1,0 +1,152 @@
+<!-- views/employer/business-profile/partials/view-branch-modal.ejs -->
+
+<div class="modal fade" id="viewBranchModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable mw-750px">
+    <div class="modal-content rounded">
+      <div class="modal-header border-0 pb-0 pt-10 px-10 px-lg-15 position-relative">
+        <div class="text-start pe-15">
+          <h2 class="fw-bold mb-2">Branch Details</h2>
+          <div class="text-muted fw-semibold fs-6">
+            View branch location, contact, manager, and geofence information.
+          </div>
+        </div>
+
+        <button
+          type="button"
+          class="btn btn-icon btn-sm btn-active-secondary position-absolute top-0 end-0 mt-8 me-10 me-lg-15"
+          data-bs-dismiss="modal"
+          aria-label="Close"
+        >
+          <i class="ki-duotone ki-cross fs-1">
+            <span class="path1"></span>
+            <span class="path2"></span>
+          </i>
+        </button>
+      </div>
+
+      <div class="modal-body px-10 px-lg-15 py-10">
+        <!--begin::Branch summary-->
+        <div
+          class="notice d-flex bg-light-primary rounded border-primary border border-dashed p-6 mb-8"
+        >
+          <div class="symbol symbol-60px me-5">
+            <span class="symbol-label bg-primary">
+              <i class="ki-duotone ki-geolocation fs-2x text-white">
+                <span class="path1"></span>
+                <span class="path2"></span>
+              </i>
+            </span>
+          </div>
+
+          <div class="d-flex flex-column flex-grow-1">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-1">
+              <div class="fw-bold fs-3 text-gray-900" id="viewBranchName">-</div>
+
+              <span id="viewBranchStatus">
+                <span class="badge badge-light-secondary">-</span>
+              </span>
+            </div>
+
+            <div class="text-muted fw-semibold" id="viewBranchManager">Manager: Not assigned</div>
+          </div>
+        </div>
+        <!--end::Branch summary-->
+
+        <div class="row g-6">
+          <!--begin::Location card-->
+          <div class="col-12 col-lg-7">
+            <div class="card card-flush border h-100">
+              <div class="card-header min-h-50px">
+                <div class="card-title">
+                  <h4 class="fw-bold m-0">Location</h4>
+                </div>
+              </div>
+
+              <div class="card-body pt-2">
+                <div class="d-flex flex-column gap-6">
+                  <div>
+                    <div class="fw-semibold text-muted fs-7 mb-1">Address</div>
+                    <div class="fw-bold text-gray-800" id="viewBranchAddress">-</div>
+                  </div>
+
+                  <div class="row g-4">
+                    <div class="col-4">
+                      <div class="fw-semibold text-muted fs-7 mb-1">State</div>
+                      <div class="fw-bold text-gray-800" id="viewBranchState">-</div>
+                    </div>
+
+                    <div class="col-4">
+                      <div class="fw-semibold text-muted fs-7 mb-1">LGA</div>
+                      <div class="fw-bold text-gray-800" id="viewBranchLga">-</div>
+                    </div>
+
+                    <div class="col-4">
+                      <div class="fw-semibold text-muted fs-7 mb-1">Geofence Radius</div>
+                      <div class="fw-bold text-gray-800" id="viewBranchGeofenceRadius">-</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!--end::Location card-->
+
+          <!--begin::Contact card-->
+          <div class="col-12 col-lg-5">
+            <div class="card card-flush border h-100">
+              <div class="card-header min-h-50px">
+                <div class="card-title">
+                  <h4 class="fw-bold m-0">Contact</h4>
+                </div>
+              </div>
+
+              <div class="card-body pt-2">
+                <div class="d-flex flex-column gap-6">
+                  <div>
+                    <div class="fw-semibold text-muted mb-1">Branch Phone</div>
+                    <div class="fw-bold text-gray-800" id="viewBranchPhone">-</div>
+                  </div>
+
+                  <div>
+                    <div class="fw-semibold text-muted mb-1">Assigned Manager</div>
+                    <div class="fw-bold text-gray-800" id="viewBranchManagerName">Not assigned</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!--end::Contact card-->
+        </div>
+
+        <div
+          class="notice d-flex bg-light-warning rounded border-warning border border-dashed p-6 mt-8"
+        >
+          <i class="ki-duotone ki-information-5 fs-2tx text-warning me-4">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+          </i>
+
+          <div class="fw-semibold">
+            <div class="fs-6 text-gray-700">
+              This branch location is used for shift clocking and geofence checks.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer justify-content-center border-0 pt-0">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
+
+        <button
+          type="button"
+          class="btn btn-primary js-edit-branch-from-view"
+          data-branch-id=""
+          id="viewBranchEditButton"
+        >
+          Edit Branch
+        </button>
+      </div>
+    </div>
+  </div>
+</div>

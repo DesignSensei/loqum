@@ -187,11 +187,11 @@ const platformSettingsSchema = new mongoose.Schema(
 
     // --- SHIFT ATTENDANCE RULES ---
 
-    checkInPinVisibilityMinutes: {
+    checkInWindowBeforeMinutes: {
       type: Number,
       default: 30,
       min: 0,
-      // Number of minutes before shift start when employer can see check-in PIN.
+      // Number of minutes before shift start when a professional can check in.
     },
 
     noShowGraceMinutes: {
@@ -199,6 +199,36 @@ const platformSettingsSchema = new mongoose.Schema(
       default: 30,
       min: 0,
       // Number of minutes after shift start before a confirmed shift can be treated as no-show.
+    },
+
+    defaultGeofenceRadiusMeters: {
+      type: Number,
+      default: 100,
+      min: 20,
+      max: 1000,
+      // Default radius used when creating a branch unless the branch has its own radius.
+    },
+
+    minimumGeofenceRadiusMeters: {
+      type: Number,
+      default: 20,
+      min: 1,
+      // Smallest geofence radius allowed for a branch.
+    },
+
+    maximumGeofenceRadiusMeters: {
+      type: Number,
+      default: 1000,
+      min: 20,
+      // Largest geofence radius allowed for a branch.
+    },
+
+    maximumLocationAccuracyMeters: {
+      type: Number,
+      default: 100,
+      min: 0,
+      // If the device reports accuracy worse than this, attendance can be rejected
+      // or sent for review.
     },
 
     // --- CREDITS, DORMANT FOR NOW ---

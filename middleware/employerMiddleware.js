@@ -155,6 +155,115 @@ exports.attachEmployerContext = async (req, res, next) => {
   }
 };
 
+/**
+ * Optionally attaches employer profile/context for shared routes.
+ *
+ * Use this on routes like Account Settings that are available to
+ * admin, professional, and employer users.
+ *
+ * It does not redirect non-employer users.
+ * It does not block admin/professional users.
+ */
+exports.attachOptionalEmployerContext = async (req, res, next) => {
+  try {
+    req.employerProfile = req.employerProfile || null;
+    req.employerMember = req.employerMember || null;
+    req.employerContext = req.employerContext || null;
+
+    res.locals.employerProfile = res.locals.employerProfile || null;
+    res.locals.employerMember = res.locals.employerMember || null;
+    res.locals.employerContext = res.locals.employerContext || null;
+
+    if (!req.user || req.user.role !== "employer") {
+      return next();
+    }
+
+    let profile = null;
+    let employerMember = null;
+
+    if (req.user.employerProfile) {
+      profile = await EmployerProfile.findById(req.user.employerProfile);
+    }
+
+    if (!profile) {
+      profile = await EmployerProfile.findOne({ user: req.user._id });
+    }
+
+    if (!profile) {
+      employerMember = await EmployerMember.findOne({
+        user: req.user._id,
+        accountStatus: "active",
+      }).lean();
+
+      if (employerMember?.business) {
+        profile = await EmployerProfile.findById(employerMember.business);
+      }
+    }
+
+    if (!profile) {
+      return next();
+    }
+
+    const userId = getId(req.user._id);
+    const businessId = getId(profile._id);
+
+    if (!employerMember) {
+      employerMember = await EmployerMember.findOne({
+        user: userId,
+        business: businessId,
+        accountStatus: "active",
+      }).lean();
+    }
+
+    const primaryEmployerUserId = getId(profile.user);
+    const isPrimaryEmployer = Boolean(primaryEmployerUserId) && primaryEmployerUserId === userId;
+
+    const employerMemberRole = employerMember?.role || null;
+
+    const isBusinessAdmin = employerMemberRole === "admin";
+    const isBranchManager = employerMemberRole === "branch_manager";
+    const isBranchStaff = employerMemberRole === "branch_staff";
+
+    const assignedBranchIds =
+      employerMember?.branches?.map((assignment) => getId(assignment.branch)).filter(Boolean) || [];
+
+    const employerContext = {
+      employerMemberRole,
+
+      isPrimaryEmployer,
+      isBusinessAdmin,
+      isBranchManager,
+      isBranchStaff,
+
+      assignedBranchIds,
+
+      canViewBusinessProfile: true,
+      canManageBusinessProfile: isPrimaryEmployer || isBusinessAdmin,
+
+      canViewBranches: true,
+      canManageBranches: isPrimaryEmployer || isBusinessAdmin,
+
+      canViewTeamMembers: isPrimaryEmployer || isBusinessAdmin,
+      canInviteMembers: isPrimaryEmployer || isBusinessAdmin,
+
+      canViewWallet: isPrimaryEmployer || isBusinessAdmin,
+      canManageWallet: isPrimaryEmployer || isBusinessAdmin,
+    };
+
+    req.employerProfile = profile;
+    req.employerMember = employerMember;
+    req.employerContext = employerContext;
+
+    res.locals.employerProfile = profile;
+    res.locals.employerMember = employerMember;
+    res.locals.employerContext = employerContext;
+
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+};
+
 // Checks whether an employer is approved to post shifts
 exports.canPostShifts = (req, res, next) => {
   const profile = req.employerProfile;

@@ -7,12 +7,14 @@ const accountController = require("../controllers/accountController");
 const { uploadUserPhoto } = require("../middleware/uploadMiddleware");
 
 const { isAuthenticated, isAccountAllowed, isVerified } = require("../middleware/authMiddleware");
+const { attachOptionalEmployerContext } = require("../middleware/employerMiddleware");
 
 router.get(
   "/account/settings",
   isAuthenticated,
   isAccountAllowed,
   isVerified,
+  attachOptionalEmployerContext,
   accountController.getSettings
 );
 
@@ -22,6 +24,14 @@ router.post(
   isAccountAllowed,
   isVerified,
   accountController.postUpdateProfile
+);
+
+router.post(
+  "/account/settings/password/update",
+  isAuthenticated,
+  isAccountAllowed,
+  isVerified,
+  accountController.postUpdatePassword
 );
 
 router.post(

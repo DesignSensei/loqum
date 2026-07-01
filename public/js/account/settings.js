@@ -329,6 +329,75 @@ var AccountSettings = (function () {
     });
   }
 
+  function bindPasswordUpdate() {
+    const form = document.querySelector("#kt_change_password_form");
+    const submitButton = document.querySelector("#kt_change_password_submit");
+
+    if (!form || !submitButton) return;
+
+    form.addEventListener("submit", async function (event) {
+      event.preventDefault();
+
+      const formData = new FormData(form);
+
+      const currentPassword = String(formData.get("currentPassword") || "").trim();
+      const newPassword = String(formData.get("newPassword") || "").trim();
+      const confirmPassword = String(formData.get("confirmPassword") || "").trim();
+
+      if (!currentPassword) {
+        showError("Current password is required.");
+        return;
+      }
+
+      if (!newPassword) {
+        showError("New password is required.");
+        return;
+      }
+
+      if (!confirmPassword) {
+        showError("Please confirm your new password.");
+        return;
+      }
+
+      if (newPassword !== confirmPassword) {
+        showError("New password and confirmation do not match.");
+        return;
+      }
+
+      if (currentPassword === newPassword) {
+        showError("New password must be different from your current password.");
+        return;
+      }
+
+      try {
+        setButtonLoading(submitButton, true);
+
+        const payload = {
+          _csrf: getCsrfToken(),
+          currentPassword,
+          newPassword,
+          confirmPassword,
+        };
+
+        const response = await axios.post(form.action, payload, {
+          headers: getCsrfHeaders(),
+        });
+
+        hideModal("#changePasswordModal");
+
+        form.reset();
+
+        await showSuccess(response.data?.message || "Password updated successfully.");
+
+        window.location.reload();
+      } catch (error) {
+        showError(getErrorMessage(error, "Unable to update password."));
+      } finally {
+        setButtonLoading(submitButton, false);
+      }
+    });
+  }
+
   async function handleTwoFactorAction(button, options) {
     var sendUrl = button.dataset.sendUrl;
     var actionUrl = button.dataset[options.actionUrlKey];
@@ -442,12 +511,74 @@ var AccountSettings = (function () {
     });
   }
 
+  function setAppearanceButtonState(activeMode) {
+    var buttons = document.querySelectorAll(".js-theme-mode-option");
+
+    buttons.forEach(function (button) {
+      var isActive = button.getAttribute("data-theme-mode-value") === activeMode;
+
+      button.classList.toggle("btn-primary", isActive);
+      button.classList.toggle("btn-light", !isActive);
+    });
+  }
+
+  function getCurrentThemeMode() {
+    if (window.KTThemeMode && typeof window.KTThemeMode.getMode === "function") {
+      return window.KTThemeMode.getMode();
+    }
+
+    return localStorage.getItem("data-bs-theme") || "system";
+  }
+
+  function bindAppearanceMode() {
+    var buttons = document.querySelectorAll(".js-theme-mode-option");
+
+    if (!buttons.length) return;
+
+    setAppearanceButtonState(getCurrentThemeMode());
+
+    buttons.forEach(function (button) {
+      button.addEventListener("click", function () {
+        var mode = button.getAttribute("data-theme-mode-value");
+
+        if (!["light", "dark", "system"].includes(mode)) return;
+
+        var headerThemeOption = document.querySelector(
+          '[data-kt-element="theme-mode-menu"] [data-kt-element="mode"][data-kt-value="' +
+            mode +
+            '"]'
+        );
+
+        if (headerThemeOption) {
+          headerThemeOption.click();
+        } else if (window.KTThemeMode && typeof window.KTThemeMode.setMode === "function") {
+          window.KTThemeMode.setMode(mode);
+        } else {
+          var resolvedMode = mode;
+
+          if (mode === "system") {
+            resolvedMode = window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+          }
+
+          document.documentElement.setAttribute("data-bs-theme", resolvedMode);
+          localStorage.setItem("data-bs-theme", mode);
+        }
+
+        setAppearanceButtonState(mode);
+      });
+    });
+  }
+
   return {
     init: function () {
       bindModalSelects();
       bindProfileUpdate();
       bindProfilePhotoUpdate();
       bindEmailChange();
+      bindPasswordUpdate();
+      bindAppearanceMode();
       bindEnableTwoFactor();
       bindDisableTwoFactor();
     },

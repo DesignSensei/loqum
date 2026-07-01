@@ -45,6 +45,12 @@ class AccountService {
     }
   }
 
+  static isStrongPassword(password) {
+    const value = String(password || "");
+
+    return value.length >= 8 && /[A-Z]/.test(value) && /[a-z]/.test(value) && /\d/.test(value);
+  }
+
   static formatMemberSince(date) {
     if (!date) return "-";
 
@@ -55,17 +61,43 @@ class AccountService {
     });
   }
 
-  static getRoleLabel(role) {
-    const roleLabels = {
+  static getAccountTypeLabel(role) {
+    const accountTypeLabels = {
       admin: "Admin",
       employer: "Employer",
       professional: "Professional",
     };
 
-    return roleLabels[role] || "User";
+    return accountTypeLabels[role] || "User";
   }
 
-  static buildSettingsView(user) {
+  static getTeamRoleLabel({ user, employerMember, employerContext } = {}) {
+    if (user?.role !== "employer") {
+      return "None";
+    }
+
+    if (employerContext?.isPrimaryEmployer) {
+      return "Owner";
+    }
+
+    const role = employerContext?.employerMemberRole || employerMember?.role;
+
+    const teamRoleLabels = {
+      owner: "Owner",
+      admin: "Admin",
+      employer_admin: "Admin",
+      branch_manager: "Branch Manager",
+      branch_staff: "Branch Staff",
+      team_member: "Team Member",
+    };
+
+    return teamRoleLabels[role] || "Not assigned";
+  }
+
+  static buildSettingsView(user, options = {}) {
+    const employerMember = options.employerMember || null;
+    const employerContext = options.employerContext || null;
+
     const fullName = `${user?.firstName || ""} ${user?.lastName || ""}`.trim();
 
     return {
@@ -79,7 +111,12 @@ class AccountService {
         phoneCode: user?.phoneCode || "+234",
         phoneNumber: user?.phoneNumber || "",
 
-        roleLabel: this.getRoleLabel(user?.role),
+        accountTypeLabel: this.getAccountTypeLabel(user?.role),
+        teamRoleLabel: this.getTeamRoleLabel({
+          user,
+          employerMember,
+          employerContext,
+        }),
         memberSinceLabel: this.formatMemberSince(user?.createdAt),
 
         twoFactorEnabled: Boolean(user?.twoFactorEnabled),
@@ -125,15 +162,18 @@ class AccountService {
       },
 
       preferencesView: {
-        notificationsStatusText: "Notification preferences will be available soon.",
-        themeStatusText: "Theme is currently controlled from the header.",
-        languageStatusText: "English is currently the only supported language.",
+        notificationsStatusText:
+          "Choose how you receive account, shift, wallet, and team updates. Notification controls will be available soon.",
+        themeStatusText: "Choose how Loqum appears on this device.",
       },
 
       sessionsView: {
         currentSessionLabel: "Current session",
+        currentSessionStatusLabel: "Active",
+        currentSessionDescription: "You are currently signed in on this device.",
         activeDevicesStatusText:
           "Active device management will be available after session tracking is added.",
+        showManageDevicesButton: false,
       },
     };
   }
@@ -207,6 +247,72 @@ class AccountService {
     await user.save();
 
     return user;
+  }
+
+  static async updatePassword({ userId, data }) {
+    if (!userId) {
+      throw new Error("User is required.");
+    }
+
+    const currentPassword = String(data.currentPassword || "");
+    const newPassword = String(data.newPassword || "");
+    const confirmPassword = String(data.confirmPassword || "");
+
+    if (!currentPassword) {
+      throw new Error("Current password is required.");
+    }
+
+    if (!newPassword) {
+      throw new Error("New password is required.");
+    }
+
+    if (!confirmPassword) {
+      throw new Error("Please confirm your new password.");
+    }
+
+    if (newPassword !== confirmPassword) {
+      throw new Error("New password and confirmation do not match.");
+    }
+
+    if (!this.isStrongPassword(newPassword)) {
+      throw new Error(
+        "Password must be at least 8 characters and include uppercase, lowercase, and a number."
+      );
+    }
+
+    const user = await User.findById(userId).select("+password");
+
+    if (!user) {
+      throw new Error("User not found.");
+    }
+
+    if (user.authProvider === "google") {
+      throw new Error(
+        "This account uses Google login. Password changes should be made through Google."
+      );
+    }
+
+    if (!user.password) {
+      throw new Error("Password login is not enabled for this account.");
+    }
+
+    const isCurrentPasswordValid = await user.comparePassword(currentPassword);
+
+    if (!isCurrentPasswordValid) {
+      throw new Error("Current password is incorrect.");
+    }
+
+    const isSamePassword = await user.comparePassword(newPassword);
+
+    if (isSamePassword) {
+      throw new Error("New password must be different from your current password.");
+    }
+
+    user.password = newPassword;
+
+    await user.save();
+
+    return true;
   }
 
   static async sendChangeEmailOTP({ userId, newEmail }) {

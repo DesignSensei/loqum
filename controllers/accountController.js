@@ -20,7 +20,10 @@ exports.getSettings = async (req, res, next) => {
       return res.redirect("/login");
     }
 
-    const accountSettingsView = AccountService.buildSettingsView(currentUser);
+    const accountSettingsView = AccountService.buildSettingsView(currentUser, {
+      employerMember: req.employerMember,
+      employerContext: req.employerContext,
+    });
 
     return res.render("account/settings", {
       layout: "layouts/app-layout",
@@ -105,6 +108,31 @@ exports.postUpdateProfilePhoto = async (req, res) => {
     logger.error("Update profile photo error:", error);
 
     return sendBadRequest(res, error.message || "Unable to update profile photo.");
+  }
+};
+
+exports.postUpdatePassword = async (req, res) => {
+  try {
+    const currentUser = getCurrentUser(req);
+
+    if (!currentUser) {
+      return sendBadRequest(res, "You must be logged in.");
+    }
+
+    await AccountService.updatePassword({
+      userId: currentUser._id,
+      data: req.body,
+    });
+
+    return res.json({
+      success: true,
+      message: "Password updated successfully.",
+      redirectUrl: "/account/settings",
+    });
+  } catch (error) {
+    logger.error("Update password error:", error);
+
+    return sendBadRequest(res, error.message || "Unable to update password.");
   }
 };
 

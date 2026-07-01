@@ -63,14 +63,15 @@
         </div>
 
         <div class="row g-5">
-          <div class="col-md-6">
+          <!-- Top row -->
+          <div class="col-md-4">
             <div class="text-muted fs-7 fw-semibold mb-1">Email Address</div>
             <div class="fw-bold text-gray-900">
               <%= accountSettingsView.profileView.email || "-" %>
             </div>
           </div>
 
-          <div class="col-md-6">
+          <div class="col-md-4">
             <div class="text-muted fs-7 fw-semibold mb-1">Phone Number</div>
             <div class="fw-bold text-gray-900">
               <% if (accountSettingsView.profileView.phoneNumber) { %> <%=
@@ -86,10 +87,18 @@
             </div>
           </div>
 
+          <!-- Bottom row -->
           <div class="col-md-4">
-            <div class="text-muted fs-7 fw-semibold mb-1">Role</div>
+            <div class="text-muted fs-7 fw-semibold mb-1">Account Type</div>
             <span class="badge badge-light-primary fw-bold">
-              <%= accountSettingsView.profileView.roleLabel %>
+              <%= accountSettingsView.profileView.accountTypeLabel %>
+            </span>
+          </div>
+
+          <div class="col-md-4">
+            <div class="text-muted fs-7 fw-semibold mb-1">Team Role</div>
+            <span class="badge badge-light-info fw-bold">
+              <%= accountSettingsView.profileView.teamRoleLabel %>
             </span>
           </div>
 
@@ -233,7 +242,14 @@
 
       <% if (accountSettingsView.securityView.hasPasswordLogin) { %>
       <div>
-        <button type="button" class="btn btn-light fw-bold" disabled>Change Password Soon</button>
+        <button
+          type="button"
+          class="btn btn-light-primary fw-bold"
+          data-bs-toggle="modal"
+          data-bs-target="#changePasswordModal"
+        >
+          Change Password
+        </button>
       </div>
       <% } %>
     </div>
@@ -272,7 +288,8 @@
 
   <div class="card-body border-top p-9">
     <div class="row g-6">
-      <div class="col-md-4">
+      <!-- Notifications -->
+      <div class="col-md-6">
         <div class="border rounded p-6 h-100">
           <div class="d-flex align-items-center mb-4">
             <i class="ki-duotone ki-notification-bing fs-2 text-primary me-3">
@@ -280,6 +297,7 @@
               <span class="path2"></span>
               <span class="path3"></span>
             </i>
+
             <h4 class="fw-bold text-gray-900 mb-0">Notifications</h4>
           </div>
 
@@ -287,11 +305,17 @@
             <%= accountSettingsView.preferencesView.notificationsStatusText %>
           </div>
 
-          <span class="badge badge-light-secondary fw-bold">Coming soon</span>
+          <div class="d-flex flex-wrap gap-2">
+            <span class="badge badge-light-secondary fw-bold">Email alerts</span>
+            <span class="badge badge-light-secondary fw-bold">Shift updates</span>
+            <span class="badge badge-light-secondary fw-bold">Wallet alerts</span>
+            <span class="badge badge-light-secondary fw-bold">Coming soon</span>
+          </div>
         </div>
       </div>
 
-      <div class="col-md-4">
+      <!-- Appearance -->
+      <div class="col-md-6">
         <div class="border rounded p-6 h-100">
           <div class="d-flex align-items-center mb-4">
             <i class="ki-duotone ki-night-day fs-2 text-primary me-3">
@@ -306,36 +330,67 @@
               <span class="path9"></span>
               <span class="path10"></span>
             </i>
-            <h4 class="fw-bold text-gray-900 mb-0">Theme</h4>
+
+            <h4 class="fw-bold text-gray-900 mb-0">Appearance</h4>
           </div>
 
-          <div class="text-muted fs-6 mb-4">
+          <div class="text-muted fs-6 mb-5">
             <%= accountSettingsView.preferencesView.themeStatusText %>
           </div>
 
-          <span class="badge badge-light-info fw-bold">
-            <%= accountSettingsView.preferencesView.themeLabel || "System default" %>
-          </span>
-        </div>
-      </div>
+          <div class="row g-3">
+            <div class="col-4">
+              <button
+                type="button"
+                class="btn btn-light fw-bold w-100 d-flex align-items-center justify-content-center js-theme-mode-option"
+                data-theme-mode-value="light"
+              >
+                <i class="ki-duotone ki-night-day fs-2 me-2">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                  <span class="path3"></span>
+                  <span class="path4"></span>
+                  <span class="path5"></span>
+                  <span class="path6"></span>
+                  <span class="path7"></span>
+                  <span class="path8"></span>
+                  <span class="path9"></span>
+                  <span class="path10"></span>
+                </i>
+                Light
+              </button>
+            </div>
 
-      <div class="col-md-4">
-        <div class="border rounded p-6 h-100">
-          <div class="d-flex align-items-center mb-4">
-            <i class="ki-duotone ki-abstract-26 fs-2 text-primary me-3">
-              <span class="path1"></span>
-              <span class="path2"></span>
-            </i>
-            <h4 class="fw-bold text-gray-900 mb-0">Language</h4>
+            <div class="col-4">
+              <button
+                type="button"
+                class="btn btn-light fw-bold w-100 d-flex align-items-center justify-content-center js-theme-mode-option"
+                data-theme-mode-value="dark"
+              >
+                <i class="ki-duotone ki-moon fs-2 me-2">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                </i>
+                Dark
+              </button>
+            </div>
+
+            <div class="col-4">
+              <button
+                type="button"
+                class="btn btn-light fw-bold w-100 d-flex align-items-center justify-content-center js-theme-mode-option"
+                data-theme-mode-value="system"
+              >
+                <i class="ki-duotone ki-screen fs-2 me-2">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                  <span class="path3"></span>
+                  <span class="path4"></span>
+                </i>
+                System
+              </button>
+            </div>
           </div>
-
-          <div class="text-muted fs-6 mb-4">
-            <%= accountSettingsView.preferencesView.languageStatusText %>
-          </div>
-
-          <span class="badge badge-light-primary fw-bold">
-            <%= accountSettingsView.preferencesView.languageLabel || "English" %>
-          </span>
         </div>
       </div>
     </div>
@@ -360,21 +415,32 @@
             <%= accountSettingsView.sessionsView.currentSessionLabel %>
           </h4>
 
-          <span class="badge badge-light-success fw-bold">Active</span>
+          <span class="badge badge-light-success fw-bold">
+            <%= accountSettingsView.sessionsView.currentSessionStatusLabel %>
+          </span>
         </div>
 
-        <div class="text-muted fs-6">
+        <div class="text-gray-700 fs-6 mb-2">
+          <%= accountSettingsView.sessionsView.currentSessionDescription %>
+        </div>
+
+        <div class="text-muted fs-7">
           <%= accountSettingsView.sessionsView.activeDevicesStatusText %>
         </div>
       </div>
 
+      <% if (accountSettingsView.sessionsView.showManageDevicesButton) { %>
       <div>
-        <button type="button" class="btn btn-light fw-bold" disabled>Manage Devices Soon</button>
+        <button type="button" class="btn btn-light fw-bold">Manage Devices</button>
       </div>
+      <% } else { %>
+      <div>
+        <span class="badge badge-light-secondary fw-bold"> Device management coming soon </span>
+      </div>
+      <% } %>
     </div>
   </div>
 </div>
-
 <!-- Edit Contact Information Modal -->
 <div class="modal fade" id="editProfileModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered mw-650px">
@@ -620,6 +686,97 @@
 
           <button type="submit" class="btn btn-primary" id="kt_change_email_submit">
             <span class="indicator-label">Send OTP</span>
+            <span class="indicator-progress">
+              Please wait...
+              <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+            </span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Change Password Modal -->
+<div class="modal fade" id="changePasswordModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered mw-550px">
+    <div class="modal-content">
+      <form
+        id="kt_change_password_form"
+        method="POST"
+        action="<%= accountSettingsView.securityView.changePasswordUrl %>"
+      >
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+        <div class="modal-header">
+          <h2 class="fw-bold">Change Password</h2>
+
+          <button
+            type="button"
+            class="btn btn-icon btn-sm btn-active-icon-primary"
+            data-bs-dismiss="modal"
+            aria-label="Close"
+          >
+            <i class="ki-duotone ki-cross fs-1">
+              <span class="path1"></span>
+              <span class="path2"></span>
+            </i>
+          </button>
+        </div>
+
+        <div class="modal-body py-10 px-lg-17">
+          <div
+            class="notice d-flex bg-light-primary rounded border-primary border border-dashed p-6 mb-8"
+          >
+            <i class="ki-duotone ki-shield-tick fs-2tx text-primary me-4">
+              <span class="path1"></span>
+              <span class="path2"></span>
+            </i>
+
+            <div class="fw-semibold text-gray-700">
+              Choose a strong password you do not use on other websites.
+            </div>
+          </div>
+
+          <div class="fv-row mb-7">
+            <label class="form-label required">Current Password</label>
+            <input
+              type="password"
+              name="currentPassword"
+              class="form-control"
+              autocomplete="current-password"
+              placeholder="Enter current password"
+            />
+          </div>
+
+          <div class="fv-row mb-7">
+            <label class="form-label required">New Password</label>
+            <input
+              type="password"
+              name="newPassword"
+              class="form-control"
+              autocomplete="new-password"
+              placeholder="Enter new password"
+            />
+          </div>
+
+          <div class="fv-row">
+            <label class="form-label required">Confirm New Password</label>
+            <input
+              type="password"
+              name="confirmPassword"
+              class="form-control"
+              autocomplete="new-password"
+              placeholder="Confirm new password"
+            />
+          </div>
+        </div>
+
+        <div class="modal-footer flex-center">
+          <button type="button" class="btn btn-light me-3" data-bs-dismiss="modal">Cancel</button>
+
+          <button type="submit" class="btn btn-primary" id="kt_change_password_submit">
+            <span class="indicator-label">Update Password</span>
             <span class="indicator-progress">
               Please wait...
               <span class="spinner-border spinner-border-sm align-middle ms-2"></span>

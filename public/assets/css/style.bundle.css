@@ -50536,7 +50536,7 @@ body.onboarding-page {
   max-height: 820px;
   padding: 18px 0;
   border-radius: 999px;
-  background: #ffffff;
+  background: var(--bs-body-bg);
   box-shadow: 0 14px 35px rgba(30, 33, 41, 0.06);
 }
 
@@ -50683,5 +50683,82 @@ body.onboarding-page {
     display: flex;
     align-items: center;
     justify-content: center;
+  }
+}
+
+/* ---------- Loqum sidebar theme override ---------- */
+
+/* Desktop dark mode */
+html[data-bs-theme="dark"] #kt_app_sidebar.app-sidebar {
+  background: transparent !important;
+}
+
+html[data-bs-theme="dark"] #kt_app_sidebar .app-sidebar-navbar {
+  background: transparent !important;
+}
+
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-rail {
+  background: #15171c !important;
+  box-shadow: 0 14px 35px rgba(0, 0, 0, 0.45) !important;
+}
+
+/* Brighter sidebar icons in dark mode */
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link {
+  color: #dfe6f1 !important;
+}
+
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link i,
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link i [class^="path"],
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link i [class^="path"]::before,
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link .menu-icon,
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link .menu-icon i,
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link .menu-icon i [class^="path"],
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link .menu-icon i [class^="path"]::before {
+  color: #dfe6f1 !important;
+  opacity: 1 !important;
+}
+
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link:hover,
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link.active,
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link.show,
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link.here,
+html[data-bs-theme="dark"] #kt_app_sidebar .menu.menu-item:hover>.loqum-sidebar-link {
+  color: var(--bs-primary) !important;
+  background-color: rgba(var(--bs-primary-rgb), 0.18) !important;
+}
+
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link:hover i,
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link:hover i [class^="path"],
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link:hover i [class^="path"]::before,
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link.active i,
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link.active i [class^="path"],
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link.active i [class^="path"]::before,
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link.show i,
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link.show i [class^="path"],
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link.show i [class^="path"]::before,
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link.here i,
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link.here i [class^="path"],
+html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-link.here i [class^="path"]::before,
+html[data-bs-theme="dark"] #kt_app_sidebar .menu.menu-item:hover>.loqum-sidebar-link .menu-icon,
+html[data-bs-theme="dark"] #kt_app_sidebar .menu.menu-item:hover>.loqum-sidebar-link .menu-icon i,
+html[data-bs-theme="dark"] #kt_app_sidebar .menu.menu-item:hover>.loqum-sidebar-link .menu-icon i [class^="path"],
+html[data-bs-theme="dark"] #kt_app_sidebar .menu.menu-item:hover>.loqum-sidebar-link .menu-icon i [class^="path"]::before {
+  color: var(--bs-primary) !important;
+  opacity: 1 !important;
+}
+/* Mobile dark mode */
+@media (max-width: 991.98px) {
+  html[data-bs-theme="dark"] #kt_app_sidebar.app-sidebar {
+    background: #15171c !important;
+    box-shadow: 0 14px 35px rgba(0, 0, 0, 0.45) !important;
+  }
+
+  html[data-bs-theme="dark"] #kt_app_sidebar .app-sidebar-navbar {
+    background: #15171c !important;
+  }
+
+  html[data-bs-theme="dark"] #kt_app_sidebar .loqum-sidebar-rail {
+    background: transparent !important;
+    box-shadow: none !important;
   }
 }

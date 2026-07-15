@@ -17,8 +17,8 @@ const mongoose = require("mongoose");
  *
  * One active bank account per owner is enforced through partial indexes.
  *
- * paystackRecipientCode is generated when a Paystack transfer recipient
- * is created. It must be present before a withdrawal can be initiated.
+ * Paystack-specific fields are stored only when Paystack verification
+ * and transfer recipient creation become available.
  */
 
 const bankAccountSchema = new mongoose.Schema(
@@ -51,27 +51,34 @@ const bankAccountSchema = new mongoose.Schema(
       required: true,
       select: false,
       // Hidden by default because this is sensitive payout information.
+      // Select it explicitly only where the account owner needs to view it.
     },
 
     accountName: {
       type: String,
       trim: true,
       required: true,
+      // This should eventually be populated from bank account resolution.
+      // Until provider access is available, it may be saved from controlled/manual input.
     },
 
     bankName: {
       type: String,
       trim: true,
       required: true,
-    },
-
-    bankCode: {
-      type: String,
-      trim: true,
-      required: true,
+      // Selected by the user from a bank dropdown.
     },
 
     // --- PAYSTACK ---
+
+    paystackBankCode: {
+      type: String,
+      trim: true,
+      default: null,
+      select: false,
+      // Internal Paystack bank code.
+      // Not user-facing and not required until Paystack account resolution is available.
+    },
 
     paystackRecipientCode: {
       type: String,
@@ -79,7 +86,7 @@ const bankAccountSchema = new mongoose.Schema(
       default: null,
       select: false,
       // Generated when a Paystack transfer recipient is created.
-      // Must be present before a withdrawal transaction can be initiated.
+      // Must be present before a Paystack withdrawal can be initiated.
     },
 
     // --- VERIFICATION ---
@@ -171,31 +178,64 @@ bankAccountSchema.index(
   }
 );
 
-// Useful lookups
+// Useful owner/status lookups
 bankAccountSchema.index({ ownerType: 1, isActive: 1 });
+bankAccountSchema.index({ ownerType: 1, verificationStatus: 1 });
 bankAccountSchema.index({ verificationStatus: 1 });
-bankAccountSchema.index({ bankCode: 1 });
+
+// Useful provider lookup when Paystack is enabled
+bankAccountSchema.index(
+  { paystackBankCode: 1 },
+  {
+    partialFilterExpression: {
+      paystackBankCode: { $type: "string" },
+    },
+  }
+);
+
+// Optional admin/search convenience
+bankAccountSchema.index({ bankName: 1 });
 
 // --- VALIDATION / AUTO-CLEANUP ---
 
-bankAccountSchema.pre("validate", function (next) {
+bankAccountSchema.pre("validate", function () {
+  if (this.accountNumber) {
+    this.accountNumber = String(this.accountNumber).replace(/\s+/g, "").trim();
+  }
+
+  if (this.accountName) {
+    this.accountName = String(this.accountName).trim();
+  }
+
+  if (this.bankName) {
+    this.bankName = String(this.bankName).trim();
+  }
+
+  if (this.paystackBankCode) {
+    this.paystackBankCode = String(this.paystackBankCode).trim();
+  }
+
+  if (this.paystackRecipientCode) {
+    this.paystackRecipientCode = String(this.paystackRecipientCode).trim();
+  }
+
   if (this.ownerType === "employer") {
     if (!this.employer) {
-      return next(new Error("Employer bank account must reference an employer profile."));
+      throw new Error("Employer bank account must reference an employer profile.");
     }
 
     if (this.professional) {
-      return next(new Error("Employer bank account cannot reference a professional profile."));
+      throw new Error("Employer bank account cannot reference a professional profile.");
     }
   }
 
   if (this.ownerType === "professional") {
     if (!this.professional) {
-      return next(new Error("Professional bank account must reference a professional profile."));
+      throw new Error("Professional bank account must reference a professional profile.");
     }
 
     if (this.employer) {
-      return next(new Error("Professional bank account cannot reference an employer profile."));
+      throw new Error("Professional bank account cannot reference an employer profile.");
     }
   }
 
@@ -218,8 +258,6 @@ bankAccountSchema.pre("validate", function (next) {
   if (this.isActive) {
     this.deactivatedAt = null;
   }
-
-  next();
 });
 
 module.exports = mongoose.model("BankAccount", bankAccountSchema);

@@ -9,6 +9,9 @@ const WalletService = require("./walletService");
 
 const logger = require("../utils/logger");
 
+const DVA_USER_RETRY_WAIT_HOURS = 24;
+const DVA_USER_RETRY_WAIT_MS = DVA_USER_RETRY_WAIT_HOURS * 60 * 60 * 1000;
+
 class DVAService {
   /* ---------- Clean string value ---------- */
   static cleanString(value) {
@@ -33,9 +36,58 @@ class DVAService {
     return String(message || "DVA creation failed.").slice(0, 300);
   }
 
+  /* ---------- Get DVA retry anchor date ---------- */
+  static getRetryAnchorDate(dva) {
+    return dva?.failedAt || dva?.requestedAt || dva?.updatedAt || null;
+  }
+
+  /* ---------- Check if user retry window has passed ---------- */
+  static hasUserRetryWindowPassed(dva) {
+    const retryAnchorDate = DVAService.getRetryAnchorDate(dva);
+
+    if (!retryAnchorDate) {
+      return true;
+    }
+
+    const retryAgeMs = Date.now() - new Date(retryAnchorDate).getTime();
+
+    return retryAgeMs >= DVA_USER_RETRY_WAIT_MS;
+  }
+
+  /* ---------- Get retry availability date ---------- */
+  static getRetryAvailableAt(dva) {
+    const retryAnchorDate = DVAService.getRetryAnchorDate(dva);
+
+    if (!retryAnchorDate) {
+      return null;
+    }
+
+    return new Date(new Date(retryAnchorDate).getTime() + DVA_USER_RETRY_WAIT_MS);
+  }
+
   /* ---------- Format phone number for Paystack ---------- */
   static formatPhone(phoneCode, phone) {
     return `${String(phoneCode || "").trim()}${String(phone || "").trim()}`.replace(/\s+/g, "");
+  }
+
+  /* ---------- Check if DVA provider is unavailable ---------- */
+  static isProviderUnavailableError(error) {
+    const message = String(error?.message || error || "").toLowerCase();
+
+    const providerUnavailableMessages = [
+      "dedicated nuban is not available",
+      "access denied",
+      "not available for your business",
+      "not activated",
+      "not enabled",
+    ];
+
+    return providerUnavailableMessages.some((providerMessage) => message.includes(providerMessage));
+  }
+
+  /* ---------- Get provider unavailable message ---------- */
+  static getProviderUnavailableMessage() {
+    return "Wallet bank account setup is not available for this business yet. We will complete setup once the payment provider activates this feature.";
   }
 
   static getPreferredProviderSlug() {
@@ -119,38 +171,72 @@ class DVAService {
     if (!dva) {
       return {
         status: "not_started",
-        message: "Wallet account setup pending.",
+        rawStatus: "not_started",
+        message: "Your wallet bank account has not been set up yet.",
+        canRetrySetup: true,
+        retryAvailableAt: null,
         dva: null,
       };
     }
 
-    if (dva.status === "active") {
+    const rawStatus = dva.status;
+    const canRetrySetup =
+      ["failed", "pending"].includes(rawStatus) && DVAService.hasUserRetryWindowPassed(dva);
+
+    const retryAvailableAt = DVAService.getRetryAvailableAt(dva);
+
+    if (rawStatus === "active") {
       return {
         status: "active",
-        message: "Wallet account is active.",
+        rawStatus,
+        message: "Your wallet bank account is ready.",
+        canRetrySetup: false,
+        retryAvailableAt: null,
         dva,
       };
     }
 
-    if (dva.status === "failed") {
+    if (rawStatus === "failed") {
       return {
-        status: "pending",
-        message: "Wallet account setup pending. Please contact support if this persists.",
+        status: "setup_pending",
+        rawStatus,
+        message:
+          dva.failureReason ||
+          "Your wallet bank account could not be completed automatically. Please allow up to 24 hours while we review it.",
+        canRetrySetup,
+        retryAvailableAt,
+        dva,
+      };
+    }
+    if (rawStatus === "failed") {
+      return {
+        status: "setup_pending",
+        rawStatus,
+        message:
+          "Your wallet bank account could not be completed automatically. Please allow up to 24 hours while we review it.",
+        canRetrySetup,
+        retryAvailableAt,
         dva,
       };
     }
 
-    if (dva.status === "deactivated") {
+    if (rawStatus === "deactivated") {
       return {
         status: "deactivated",
-        message: "Wallet account has been deactivated.",
+        rawStatus,
+        message: "Your wallet bank account is currently unavailable. Please contact support.",
+        canRetrySetup: false,
+        retryAvailableAt: null,
         dva,
       };
     }
 
     return {
-      status: "pending",
-      message: "Wallet account setup pending.",
+      status: "setup_pending",
+      rawStatus,
+      message: "Your wallet bank account is being set up. Please allow up to 24 hours.",
+      canRetrySetup,
+      retryAvailableAt,
       dva,
     };
   }
@@ -175,16 +261,25 @@ class DVAService {
 
     const wallet = await WalletService.createEmployerWalletIfMissing(employerProfile);
 
-    const existingActiveDVA = await DVA.findOne({
+    const existingDVA = await DVA.findOne({
       wallet: wallet._id,
       provider: "paystack",
       countryCode: wallet.countryCode,
       currency: wallet.currency,
-      status: "active",
     });
 
-    if (existingActiveDVA) {
-      return existingActiveDVA;
+    if (existingDVA?.status === "active") {
+      return existingDVA;
+    }
+
+    if (
+      existingDVA &&
+      ["pending", "failed"].includes(existingDVA.status) &&
+      !DVAService.hasUserRetryWindowPassed(existingDVA)
+    ) {
+      throw new Error(
+        "Your wallet bank account is being set up. Please allow up to 24 hours before trying again."
+      );
     }
 
     const preferredProviderSlug = DVAService.getPreferredProviderSlug();
@@ -203,8 +298,6 @@ class DVAService {
       },
       {
         $setOnInsert: {
-          user: user._id,
-          employer: employerProfile._id,
           wallet: wallet._id,
           provider: "paystack",
           countryCode: wallet.countryCode,
@@ -212,6 +305,8 @@ class DVAService {
           isDefault: true,
         },
         $set: {
+          ownerUser: user._id,
+          employer: employerProfile._id,
           status: "pending",
           requestedAt: new Date(),
           failedAt: null,
@@ -286,22 +381,34 @@ class DVAService {
 
       return savedDVA;
     } catch (error) {
+      const failedAt = new Date();
+      const providerUnavailable = DVAService.isProviderUnavailableError(error);
+
+      const failureReason = providerUnavailable
+        ? DVAService.getProviderUnavailableMessage()
+        : error.message;
+
       pendingDVA.set({
         status: "failed",
-        failedAt: new Date(),
-        failureReason: DVAService.shortenErrorMessage(error.message),
+        failedAt,
+        failureReason: DVAService.shortenErrorMessage(failureReason),
         metadata: {
           ...(pendingDVA.metadata || {}),
           lastFailure: {
             message: error.message,
-            failedAt: new Date(),
+            providerUnavailable,
+            failedAt,
           },
         },
       });
 
-      await pendingDVA.save();
+      const savedDVA = await pendingDVA.save();
 
       logger.error(`DVA creation failed for profile ${employerProfile._id}: ${error.message}`);
+
+      if (providerUnavailable) {
+        return savedDVA;
+      }
 
       throw error;
     }

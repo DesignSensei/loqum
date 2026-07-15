@@ -27,6 +27,11 @@ const badgeClass = {
   missing: "badge-light-warning",
   setup_pending: "badge-light-warning",
 
+  processing: "badge-light-warning",
+  success: "badge-light-success",
+  reversed: "badge-light-info",
+  deactivated: "badge-light-dark",
+
   open: "badge-light-primary",
   assigned: "badge-light-warning",
   confirmed: "badge-light-info",

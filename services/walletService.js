@@ -13,6 +13,7 @@ const {
   generateWalletFundingReference,
   generateShiftFundingReference,
   generateWithdrawalReference,
+  generateWithdrawalReversalReference,
   generateRefundReference,
   generatePlatformFeeReference,
   generateSettlementReference,
@@ -125,9 +126,15 @@ class WalletService {
   /* ---------- Build wallet balance snapshot ---------- */
   static getBalanceSnapshot(wallet) {
     return {
-      availableBalance: money.roundMoney(wallet.availableBalance || 0),
-      pendingBalance: money.roundMoney(wallet.pendingBalance || 0),
-      outstandingBalance: money.roundMoney(wallet.outstandingBalance || 0),
+      availableBalance: money.normalizeMinorUnitAmount(
+        wallet.availableBalance ?? 0,
+        "Available balance"
+      ),
+      pendingBalance: money.normalizeMinorUnitAmount(wallet.pendingBalance ?? 0, "Pending balance"),
+      outstandingBalance: money.normalizeMinorUnitAmount(
+        wallet.outstandingBalance ?? 0,
+        "Outstanding balance"
+      ),
     };
   }
 
@@ -172,7 +179,7 @@ class WalletService {
       professional_payout: generateSettlementReference,
       platform_fee: generatePlatformFeeReference,
       withdrawal: generateWithdrawalReference,
-      withdrawal_reversal: generateWalletFundingReference,
+      withdrawal_reversal: generateWithdrawalReversalReference,
     };
 
     const generator = referenceMap[type] || (() => generateReference("LQ-TXN"));
@@ -564,36 +571,57 @@ class WalletService {
       throw new Error("Transaction direction must be either credit or debit.");
     }
 
-    const normalizedAmount = money.roundMoney(amount);
-
-    if (normalizedAmount <= 0) {
-      throw new Error("Wallet movement amount must be greater than zero.");
-    }
+    const normalizedAmount = money.normalizePositiveMinorUnitAmount(
+      amount,
+      "Wallet movement amount"
+    );
 
     const balanceBefore = WalletService.getBalanceSnapshot(wallet);
 
     const delta = {
-      availableBalance: money.roundMoney(balanceDelta?.availableBalance || 0),
-      pendingBalance: money.roundMoney(balanceDelta?.pendingBalance || 0),
-      outstandingBalance: money.roundMoney(balanceDelta?.outstandingBalance || 0),
-    };
-
-    const balanceAfter = {
-      availableBalance: money.roundMoney(balanceBefore.availableBalance + delta.availableBalance),
-      pendingBalance: money.roundMoney(balanceBefore.pendingBalance + delta.pendingBalance),
-      outstandingBalance: money.roundMoney(
-        balanceBefore.outstandingBalance + delta.outstandingBalance
+      availableBalance: money.normalizeSignedMinorUnitAmount(
+        balanceDelta?.availableBalance ?? 0,
+        "Available balance delta"
+      ),
+      pendingBalance: money.normalizeSignedMinorUnitAmount(
+        balanceDelta?.pendingBalance ?? 0,
+        "Pending balance delta"
+      ),
+      outstandingBalance: money.normalizeSignedMinorUnitAmount(
+        balanceDelta?.outstandingBalance ?? 0,
+        "Outstanding balance delta"
       ),
     };
 
+    const rawBalanceAfter = {
+      availableBalance: balanceBefore.availableBalance + delta.availableBalance,
+      pendingBalance: balanceBefore.pendingBalance + delta.pendingBalance,
+      outstandingBalance: balanceBefore.outstandingBalance + delta.outstandingBalance,
+    };
+
     const hasNegativeBalance =
-      balanceAfter.availableBalance < 0 ||
-      balanceAfter.pendingBalance < 0 ||
-      balanceAfter.outstandingBalance < 0;
+      rawBalanceAfter.availableBalance < 0 ||
+      rawBalanceAfter.pendingBalance < 0 ||
+      rawBalanceAfter.outstandingBalance < 0;
 
     if (hasNegativeBalance) {
       throw new Error("Wallet balance cannot go negative.");
     }
+
+    const balanceAfter = {
+      availableBalance: money.normalizeMinorUnitAmount(
+        rawBalanceAfter.availableBalance,
+        "Available balance after movement"
+      ),
+      pendingBalance: money.normalizeMinorUnitAmount(
+        rawBalanceAfter.pendingBalance,
+        "Pending balance after movement"
+      ),
+      outstandingBalance: money.normalizeMinorUnitAmount(
+        rawBalanceAfter.outstandingBalance,
+        "Outstanding balance after movement"
+      ),
+    };
 
     const hasMaximumBalance =
       wallet.maximumBalance !== null &&
@@ -609,11 +637,17 @@ class WalletService {
     wallet.outstandingBalance = balanceAfter.outstandingBalance;
 
     if (direction === "credit") {
-      wallet.lifetimeCredit = money.roundMoney((wallet.lifetimeCredit || 0) + normalizedAmount);
+      wallet.lifetimeCredit = money.normalizeMinorUnitAmount(
+        (wallet.lifetimeCredit ?? 0) + normalizedAmount,
+        "Lifetime credit"
+      );
     }
 
     if (direction === "debit") {
-      wallet.lifetimeDebit = money.roundMoney((wallet.lifetimeDebit || 0) + normalizedAmount);
+      wallet.lifetimeDebit = money.normalizeMinorUnitAmount(
+        (wallet.lifetimeDebit ?? 0) + normalizedAmount,
+        "Lifetime debit"
+      );
     }
 
     wallet.lastTransactionAt = new Date();
@@ -641,8 +675,11 @@ class WalletService {
       countryCode: wallet.countryCode,
       currency: wallet.currency,
 
-      providerFee: money.roundMoney(providerFee || 0),
-      netAmount: netAmount === null ? normalizedAmount : money.roundMoney(netAmount),
+      providerFee: money.normalizeMinorUnitAmount(providerFee ?? 0, "Provider fee"),
+      netAmount:
+        netAmount === null || netAmount === undefined
+          ? normalizedAmount
+          : money.normalizeMinorUnitAmount(netAmount, "Net amount"),
 
       balanceBefore,
       balanceAfter,
@@ -786,11 +823,7 @@ class WalletService {
       WalletService.assertWalletIsActive(toWallet);
       WalletService.assertSameCountryAndCurrency(fromWallet, toWallet);
 
-      const normalizedAmount = money.roundMoney(amount);
-
-      if (normalizedAmount <= 0) {
-        throw new Error("Transfer amount must be greater than zero.");
-      }
+      const normalizedAmount = money.normalizePositiveMinorUnitAmount(amount, "Transfer amount");
 
       const sharedGroupReference = groupReference || generateGroupReference();
 

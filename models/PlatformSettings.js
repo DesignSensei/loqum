@@ -46,20 +46,26 @@ const countrySettingSchema = new mongoose.Schema(
 
     maximumEmployerWalletBalance: {
       type: Number,
-      default: 1000000,
+      default: 100000000,
       min: 0,
+      // Stored in minor units using a factor of 100.
+      // Example: ₦1,000,000.00 is stored as 100000000.
     },
 
     minimumEmployerWithdrawalAmount: {
       type: Number,
-      default: 5000,
+      default: 500000,
       min: 0,
+      // Stored in minor units using a factor of 100.
+      // Example: ₦5,000.00 is stored as 500000.
     },
 
     minimumProfessionalWithdrawalAmount: {
       type: Number,
-      default: 5000,
+      default: 500000,
       min: 0,
+      // Stored in minor units using a factor of 100.
+      // Example: ₦5,000.00 is stored as 500000.
     },
 
     isActive: {
@@ -128,9 +134,9 @@ const platformSettingsSchema = new mongoose.Schema(
           countryCode: "NG",
           currency: "NGN",
           platformFeeRate: 0.075,
-          maximumEmployerWalletBalance: 1000000,
-          minimumEmployerWithdrawalAmount: 5000,
-          minimumProfessionalWithdrawalAmount: 5000,
+          maximumEmployerWalletBalance: 100000000,
+          minimumEmployerWithdrawalAmount: 500000,
+          minimumProfessionalWithdrawalAmount: 500000,
           isActive: true,
         },
       ],
@@ -156,23 +162,29 @@ const platformSettingsSchema = new mongoose.Schema(
 
     maximumEmployerWalletBalance: {
       type: Number,
-      default: 1000000,
+      default: 100000000,
       min: 0,
+      // Stored in minor units using a factor of 100.
+      // Example: ₦1,000,000.00 is stored as 100000000.
       // Maximum amount an employer can keep in wallet.
       // Helps prevent employers from parking unlimited funds on Loqum.
     },
 
     minimumEmployerWithdrawalAmount: {
       type: Number,
-      default: 5000,
+      default: 500000,
       min: 0,
+      // Stored in minor units using a factor of 100.
+      // Example: ₦5,000.00 is stored as 500000.
       // Minimum amount an employer can withdraw from eligible wallet balance.
     },
 
     minimumProfessionalWithdrawalAmount: {
       type: Number,
-      default: 5000,
+      default: 500000,
       min: 0,
+      // Stored in minor units using a factor of 100.
+      // Example: ₦5,000.00 is stored as 500000.
       // Minimum amount a professional can withdraw.
     },
 

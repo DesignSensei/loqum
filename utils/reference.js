@@ -36,6 +36,10 @@ exports.generateWithdrawalReference = () => {
   return exports.generateReference("LQ-WITHDRAWAL");
 };
 
+exports.generateWithdrawalReversalReference = () => {
+  return exports.generateReference("LQ-WITHDRAWAL-REVERSAL");
+};
+
 exports.generateRefundReference = () => {
   return exports.generateReference("LQ-REFUND");
 };

@@ -5,21 +5,69 @@ const axios = require("axios");
 class PaystackService {
   static baseUrl = "https://api.paystack.co";
 
-  /* ---------- Get Paystack headers ---------- */
-  static getHeaders() {
-    if (!process.env.PAYSTACK_SECRET_KEY) {
-      throw new Error("PAYSTACK_SECRET_KEY is not configured.");
+  /* ---------- Get Paystack secret key ---------- */
+  static getSecretKey() {
+    return String(process.env.PAYSTACK_SECRET_KEY || "").trim();
+  }
+
+  /* ---------- Get Paystack mode ---------- */
+  static getMode() {
+    const secretKey = PaystackService.getSecretKey();
+
+    if (secretKey.startsWith("sk_test_")) {
+      return "test";
     }
 
-    return {
-      Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-      "Content-Type": "application/json",
-    };
+    if (secretKey.startsWith("sk_live_")) {
+      return "live";
+    }
+
+    return "none";
+  }
+
+  /* ---------- Check if Paystack is configured ---------- */
+  static hasSecretKey() {
+    return PaystackService.getMode() !== "none";
   }
 
   /* ---------- Check if current key is test key ---------- */
   static isTestMode() {
-    return String(process.env.PAYSTACK_SECRET_KEY || "").startsWith("sk_test_");
+    return PaystackService.getMode() === "test";
+  }
+
+  /* ---------- Check if current key is live key ---------- */
+  static isLiveMode() {
+    return PaystackService.getMode() === "live";
+  }
+
+  /* ---------- Clean string value ---------- */
+  static cleanString(value) {
+    const cleaned = String(value || "").trim();
+
+    return cleaned || null;
+  }
+
+  /* ---------- Clean phone value ---------- */
+  static cleanPhone(value) {
+    const cleaned = String(value || "")
+      .replace(/\s+/g, "")
+      .trim();
+
+    return cleaned || null;
+  }
+
+  /* ---------- Get Paystack headers ---------- */
+  static getHeaders() {
+    const secretKey = PaystackService.getSecretKey();
+
+    if (!secretKey) {
+      throw new Error("PAYSTACK_SECRET_KEY is not configured.");
+    }
+
+    return {
+      Authorization: `Bearer ${secretKey}`,
+      "Content-Type": "application/json",
+    };
   }
 
   /* ---------- Get preferred DVA provider ---------- */
@@ -28,17 +76,19 @@ class PaystackService {
       return "test-bank";
     }
 
-    if (preferredBank) {
-      return String(preferredBank).trim().toLowerCase();
+    const cleanPreferredBank = PaystackService.cleanString(preferredBank);
+
+    if (cleanPreferredBank) {
+      return cleanPreferredBank.toLowerCase();
     }
 
-    const envPreferredBank = process.env.PAYSTACK_DVA_PREFERRED_BANK;
+    const envPreferredBank = PaystackService.cleanString(process.env.PAYSTACK_DVA_PREFERRED_BANK);
 
     if (!envPreferredBank) {
       throw new Error("PAYSTACK_DVA_PREFERRED_BANK is not configured.");
     }
 
-    return String(envPreferredBank).trim().toLowerCase();
+    return envPreferredBank.toLowerCase();
   }
 
   /* ---------- Make Paystack request ---------- */
@@ -79,27 +129,32 @@ class PaystackService {
     countryCode = "NG",
     metadata = {},
   }) {
-    if (!email) {
+    const cleanEmail = PaystackService.cleanString(email);
+    const cleanFirstName = PaystackService.cleanString(firstName);
+    const cleanLastName = PaystackService.cleanString(lastName);
+    const cleanPhone = PaystackService.cleanPhone(phone);
+
+    if (!cleanEmail) {
       throw new Error("Email is required for Paystack DVA assignment.");
     }
 
-    if (!firstName) {
+    if (!cleanFirstName) {
       throw new Error("First name is required for Paystack DVA assignment.");
     }
 
-    if (!lastName) {
+    if (!cleanLastName) {
       throw new Error("Last name is required for Paystack DVA assignment.");
     }
 
-    if (!phone) {
+    if (!cleanPhone) {
       throw new Error("Phone number is required for Paystack DVA assignment.");
     }
 
     const payload = {
-      email,
-      first_name: firstName,
-      last_name: lastName,
-      phone,
+      email: cleanEmail,
+      first_name: cleanFirstName,
+      last_name: cleanLastName,
+      phone: cleanPhone,
       preferred_bank: PaystackService.getPreferredDVABank(preferredBank),
       country: String(countryCode || "NG")
         .toUpperCase()
@@ -121,6 +176,48 @@ class PaystackService {
     const response = await PaystackService.request({
       method: "get",
       path: "/dedicated_account/available_providers",
+    });
+
+    return response.data;
+  }
+
+  /* ---------- Fetch banks ---------- */
+  static async fetchBanks({ country = "nigeria", currency = "NGN" } = {}) {
+    const response = await PaystackService.request({
+      method: "get",
+      path: "/bank",
+      params: {
+        country,
+        currency,
+      },
+    });
+
+    return response.data;
+  }
+
+  /* ---------- Resolve bank account ---------- */
+  static async resolveBankAccount({ accountNumber, bankCode }) {
+    const cleanAccountNumber = String(accountNumber || "")
+      .replace(/\s+/g, "")
+      .trim();
+
+    const cleanBankCode = String(bankCode || "").trim();
+
+    if (!cleanAccountNumber) {
+      throw new Error("Account number is required.");
+    }
+
+    if (!cleanBankCode) {
+      throw new Error("Bank is required.");
+    }
+
+    const response = await PaystackService.request({
+      method: "get",
+      path: "/bank/resolve",
+      params: {
+        account_number: cleanAccountNumber,
+        bank_code: cleanBankCode,
+      },
     });
 
     return response.data;

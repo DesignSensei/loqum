@@ -65,6 +65,11 @@ const mongoose = require("mongoose");
  * Service layer must enforce all debit checks before updating balances.
  */
 
+const isNonNegativeInteger = (value) => Number.isInteger(value) && value >= 0;
+
+const isOptionalNonNegativeInteger = (value) =>
+  value === null || value === undefined || isNonNegativeInteger(value);
+
 const walletSchema = new mongoose.Schema(
   {
     // --- OWNERSHIP ---
@@ -106,41 +111,63 @@ const walletSchema = new mongoose.Schema(
     },
 
     // --- BALANCES ---
+    // All monetary values are stored in minor units using a factor of 100.
+    // Example: ₦1,000.00 is stored as 100000.
+    // For NGN, the minor unit is kobo. For USD, it is cents.
 
     availableBalance: {
       type: Number,
       default: 0,
+      required: true,
       min: 0,
+      validate: {
+        validator: isNonNegativeInteger,
+        message: "Available balance must be a non-negative integer.",
+      },
     },
 
     pendingBalance: {
       type: Number,
       default: 0,
+      required: true,
       min: 0,
+      validate: {
+        validator: isNonNegativeInteger,
+        message: "Pending balance must be a non-negative integer.",
+      },
     },
 
     outstandingBalance: {
       type: Number,
       default: 0,
+      required: true,
       min: 0,
-      // Employer-only aggregate of unfunded platform obligations.
-      // Example: approved overtime top-up, cancellation fee, or admin-confirmed charge.
-      // This is not spendable money and not a negative wallet balance.
-      // Source of truth should remain Shift and Transaction records.
+      validate: {
+        validator: isNonNegativeInteger,
+        message: "Outstanding balance must be a non-negative integer.",
+      },
     },
 
     lifetimeCredit: {
       type: Number,
       default: 0,
+      required: true,
       min: 0,
-      // Cumulative value ever credited to this wallet.
+      validate: {
+        validator: isNonNegativeInteger,
+        message: "Lifetime credit must be a non-negative integer.",
+      },
     },
 
     lifetimeDebit: {
       type: Number,
       default: 0,
+      required: true,
       min: 0,
-      // Cumulative value ever debited from this wallet.
+      validate: {
+        validator: isNonNegativeInteger,
+        message: "Lifetime debit must be a non-negative integer.",
+      },
     },
 
     // --- LIMITS ---
@@ -149,16 +176,20 @@ const walletSchema = new mongoose.Schema(
       type: Number,
       default: null,
       min: 0,
-      // Optional wallet-specific balance cap.
-      // Employer wallets may fall back to PlatformSettings.maximumEmployerWalletBalance.
+      validate: {
+        validator: isOptionalNonNegativeInteger,
+        message: "Maximum balance must be a non-negative integer.",
+      },
     },
 
     minimumWithdrawalAmount: {
       type: Number,
       default: null,
       min: 0,
-      // Optional wallet-specific withdrawal threshold.
-      // If null, service layer can fall back to PlatformSettings.
+      validate: {
+        validator: isOptionalNonNegativeInteger,
+        message: "Minimum withdrawal amount must be a non-negative integer.",
+      },
     },
 
     // --- STATUS ---
@@ -167,9 +198,7 @@ const walletSchema = new mongoose.Schema(
       type: String,
       enum: ["active", "frozen", "closed"],
       default: "active",
-      // active: transactions allowed.
-      // frozen: no wallet movement allowed pending review.
-      // closed: wallet terminated. Balance should be zero before closing.
+      required: true,
     },
 
     frozenReason: {

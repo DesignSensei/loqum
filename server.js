@@ -15,6 +15,7 @@ const passport = require("passport");
 
 // Utilities
 const attachViewLocals = require("./middleware/viewLocalsMiddleware");
+const { attachNotificationLocals } = require("./middleware/notificationMiddleware");
 
 // Pre-defined modules
 const connectDB = require("./config/db");
@@ -27,18 +28,24 @@ const onboardingRoutes = require("./routes/onboardingRoutes");
 const professionalRoutes = require("./routes/professionalRoutes");
 const employerRoutes = require("./routes/employerRoutes");
 const accountRoutes = require("./routes/accountRoutes");
+const notificationRoutes = require("./routes/notificationRoutes");
 // const reviewRoutes = require("./routes/reviewRoutes");
+const webhookRoutes = require("./routes/webhookRoutes");
 
 /* ---------- Initialize App ---------- */
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-/* ---------- App Level Middleware ---------- */
-/* ---------- Parsers & static ---------- */
+/* ---------- Parsers ---------- */
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(methodOverride("_method"));
+
+/* ---------- Public webhook routes ---------- */
+app.use("/webhooks", webhookRoutes);
+
+/* ---------- Static files ---------- */
 app.use(express.static(path.join(__dirname, "public")));
 
 /* ---------- View engine ---------- */
@@ -48,20 +55,7 @@ app.set("views", path.join(__dirname, "views"));
 /* ---------- Use layout ---------- */
 app.use(expressLayouts);
 
-/* ---------- Request logging ---------- */
-app.use((req, res, next) => {
-  res.on("finish", () => {
-    const message = `${req.method} ${req.originalUrl} ${res.statusCode}`;
-    const meta = {
-      user: req.user ? req.user.email : "Guest",
-      timestamp: new Date().toISOString(),
-    };
-    logger.info(message, meta);
-  });
-  next();
-});
-
-/* ---------- Cookies + Session ---------- */
+/* ---------- Session ---------- */
 app.use(
   session({
     secret: process.env.SESSION_SECRET,
@@ -81,23 +75,42 @@ app.use(
   })
 );
 
-/* ---------- Passport Config ---------- */
+/* ---------- Passport ---------- */
 require("./config/passport")(passport);
 
-// Initialize Passport Middleware
 app.use(passport.initialize());
 app.use(passport.session());
+
+/* ---------- Request logging ---------- */
+app.use((req, res, next) => {
+  res.on("finish", () => {
+    const message = `${req.method} ${req.originalUrl} ${res.statusCode}`;
+
+    const meta = {
+      user: req.user?.email || "Guest",
+      timestamp: new Date().toISOString(),
+    };
+
+    logger.info(message, meta);
+  });
+
+  next();
+});
 
 /* ---------- CSRF Middleware ---------- */
 const csrfProtection = csrf({ cookie: true });
 app.use(csrfProtection);
 
-/* ---------- Make session user & CSRF token available to all views ---------- */
+/* ---------- Header notifications ---------- */
+app.use(attachNotificationLocals);
+
+/* ---------- View locals ---------- */
 app.use(attachViewLocals);
 
-/* ---------- Mount Routes ---------- */
+/* ---------- Routes ---------- */
 app.use(authRoutes);
 app.use(accountRoutes);
+app.use("/notifications", notificationRoutes);
 app.use("/onboarding", onboardingRoutes);
 app.use("/admin", adminRoutes);
 app.use("/professional", professionalRoutes);

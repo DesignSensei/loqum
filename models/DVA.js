@@ -13,7 +13,7 @@ const mongoose = require("mongoose");
  * - DVA is for employer wallet funding only.
  * - DVA should not directly fund a shift.
  * - DVA should not directly credit escrow.
- * - Money received through DVA credits the employer wallet.
+ * - Money received through DVA is reconciled into the employer wallet.
  *
  * Paystack Checkout is separate:
  * - Paystack Checkout can fund a specific shift directly into escrow.
@@ -24,7 +24,7 @@ const dvaSchema = new mongoose.Schema(
   {
     // --- OWNERSHIP ---
 
-    user: {
+    ownerUser: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
@@ -154,6 +154,7 @@ const dvaSchema = new mongoose.Schema(
       type: String,
       enum: ["pending", "active", "failed", "deactivated"],
       default: "pending",
+      required: true,
       index: true,
     },
 
@@ -198,7 +199,7 @@ const dvaSchema = new mongoose.Schema(
 
     metadata: {
       type: mongoose.Schema.Types.Mixed,
-      default: {},
+      default: () => ({}),
     },
   },
   {
@@ -242,7 +243,7 @@ dvaSchema.index(
   }
 );
 
-dvaSchema.index({ user: 1, status: 1 });
+dvaSchema.index({ ownerUser: 1, status: 1 });
 dvaSchema.index({ employer: 1, status: 1 });
 dvaSchema.index({ wallet: 1, status: 1 });
 dvaSchema.index({ provider: 1, providerSlug: 1 });

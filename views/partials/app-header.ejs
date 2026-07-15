@@ -32,7 +32,7 @@
       <div class="app-navbar-item">
         <button
           type="button"
-          class="btn btn-icon btn-custom btn-color-white btn-active-color-primary-2 bg-white bg-opacity-10 w-40px h-40px"
+          class="btn btn-icon btn-custom btn-color-white btn-active-color-primary-2 bg-white bg-opacity-10 w-40px h-40px position-relative"
           data-kt-menu-trigger="{default: 'click', lg: 'hover'}"
           data-kt-menu-attach="parent"
           data-kt-menu-placement="bottom-end"
@@ -43,27 +43,124 @@
             <span class="path3"></span>
             <span class="path4"></span>
           </i>
+
+          <% if (headerNotificationView.hasUnread) { %>
+          <span
+            class="position-absolute top-0 start-100 translate-middle badge badge-circle badge-danger w-15px h-15px fs-9"
+            data-notification-icon-badge
+          >
+            <span data-notification-unread-count-text>
+              <%= headerNotificationView.unreadCountText %>
+            </span>
+          </span>
+          <% } %>
         </button>
 
         <div
-          class="menu menu-sub menu-sub-dropdown menu-column menu-rounded menu-gray-800 menu-state-bg fw-semibold py-4 w-325px"
+          class="menu menu-sub menu-sub-dropdown menu-column menu-rounded menu-gray-800 menu-state-bg fw-semibold py-4 w-375px"
           data-kt-menu="true"
         >
           <div class="px-5 pb-3">
             <div class="d-flex align-items-center justify-content-between">
               <div>
-                <div class="fw-bold fs-5 text-gray-900">Notifications</div>
-                <div class="text-muted fs-7">
-                  Updates about shifts, invites, and account activity.
-                </div>
+                <div class="fw-bold fs-5 text-gray-900"><%= headerNotificationView.title %></div>
+
+                <div class="text-muted fs-7"><%= headerNotificationView.subtitle %></div>
               </div>
 
-              <span class="badge badge-light-primary">0 new</span>
+              <span class="badge badge-light-primary" data-notification-unread-badge-text>
+                <%= headerNotificationView.unreadBadgeText %>
+              </span>
             </div>
           </div>
 
           <div class="separator my-2"></div>
 
+          <% if (headerNotificationView.hasItems) { %>
+          <div class="scroll-y mh-400px">
+            <% headerNotificationView.items.forEach(function (notification) { %>
+            <div
+              class="d-flex align-items-start px-5 py-4 bg-hover-light"
+              data-notification-item="<%= notification.id %>"
+            >
+              <div class="symbol symbol-40px me-4">
+                <span class="symbol-label bg-light-primary">
+                  <i class="ki-duotone ki-notification-bing fs-2 text-primary">
+                    <span class="path1"></span>
+                    <span class="path2"></span>
+                    <span class="path3"></span>
+                  </i>
+                </span>
+              </div>
+
+              <div class="flex-grow-1">
+                <div class="d-flex align-items-start justify-content-between gap-3">
+                  <div class="fw-bold text-gray-900 fs-7"><%= notification.title %></div>
+
+                  <% if (notification.isUnread) { %>
+                  <span
+                    class="bullet bullet-dot bg-primary h-8px w-8px mt-2"
+                    data-notification-unread-dot
+                  ></span>
+                  <% } %>
+                </div>
+
+                <div class="text-muted fs-8 mt-1"><%= notification.message %></div>
+
+                <div class="d-flex align-items-center justify-content-between mt-3">
+                  <% if (notification.createdAtDisplay) { %>
+                  <div class="text-muted fs-9"><%= notification.createdAtDisplay %></div>
+                  <% } %> <% if (notification.isUnread) { %>
+                  <form
+                    action="/notifications/<%= notification.id %>/read"
+                    method="POST"
+                    class="m-0"
+                    data-notification-read-form
+                  >
+                    <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+                    <button
+                      type="submit"
+                      class="btn btn-link btn-color-primary btn-active-color-primary p-0 fs-8 fw-bold"
+                      data-notification-read-button
+                    >
+                      Mark as read
+                    </button>
+                  </form>
+                  <% } else { %>
+                  <span class="text-muted fs-8">Read</span>
+                  <% } %>
+                </div>
+              </div>
+            </div>
+            <% }); %>
+          </div>
+
+          <div class="separator my-2"></div>
+
+          <div class="px-5 pt-2">
+            <% if (headerNotificationView.hasUnread) { %>
+            <form
+              action="/notifications/read-all"
+              method="POST"
+              class="m-0"
+              data-notifications-read-all-form
+            >
+              <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+              <button
+                type="submit"
+                class="btn btn-light-primary btn-sm w-100"
+                data-notifications-read-all-button
+              >
+                Mark all as read
+              </button>
+            </form>
+            <% } else { %>
+            <button type="button" class="btn btn-light btn-sm w-100" disabled>All caught up</button>
+            <% } %>
+          </div>
+          <% } else { %>
           <div class="px-5 py-8 text-center">
             <div class="symbol symbol-55px mx-auto mb-4">
               <span class="symbol-label bg-light-primary">
@@ -75,11 +172,11 @@
               </span>
             </div>
 
-            <div class="fw-bold text-gray-900 mb-1">No notifications yet</div>
-            <div class="text-muted fs-7">
-              Important updates will appear here when activity starts.
-            </div>
+            <div class="fw-bold text-gray-900 mb-1"><%= headerNotificationView.emptyTitle %></div>
+
+            <div class="text-muted fs-7"><%= headerNotificationView.emptyMessage %></div>
           </div>
+          <% } %>
         </div>
       </div>
 

@@ -24,6 +24,20 @@ const mongoose = require("mongoose");
  * The service layer must write paired internal entries atomically using a
  * MongoDB session.
  *
+ * MONEY STORAGE:
+ *
+ * All monetary values are stored in minor units using a factor of 100.
+ * Example: ₦1,000.00 is stored as 100000.
+ *
+ * Transaction amount is always positive.
+ * Direction explains whether the wallet was credited or debited.
+ *
+ * Example:
+ * - direction: "credit", amount: 500000 means wallet received ₦5,000.00.
+ * - direction: "debit", amount: 500000 means wallet paid out ₦5,000.00.
+ *
+ * balanceDelta can be positive or negative because it records how the wallet changed.
+ *
  * CURRENT EMPLOYER WALLET TOP-UP FLOW:
  *
  * Employers top up their wallet through their Paystack DVA.
@@ -64,24 +78,42 @@ const mongoose = require("mongoose");
  * Wallet balance changes must always be backed by Transaction records.
  */
 
+const isNonNegativeInteger = (value) => Number.isInteger(value) && value >= 0;
+
+const isPositiveInteger = (value) => Number.isInteger(value) && value > 0;
+
+const isSignedInteger = (value) => Number.isInteger(value);
+
 const balanceSnapshotSchema = new mongoose.Schema(
   {
     availableBalance: {
       type: Number,
       required: true,
       min: 0,
+      validate: {
+        validator: isNonNegativeInteger,
+        message: "Available balance snapshot must be a non-negative integer.",
+      },
     },
 
     pendingBalance: {
       type: Number,
       required: true,
       min: 0,
+      validate: {
+        validator: isNonNegativeInteger,
+        message: "Pending balance snapshot must be a non-negative integer.",
+      },
     },
 
     outstandingBalance: {
       type: Number,
       required: true,
       min: 0,
+      validate: {
+        validator: isNonNegativeInteger,
+        message: "Outstanding balance snapshot must be a non-negative integer.",
+      },
     },
   },
   { _id: false }
@@ -92,16 +124,28 @@ const balanceDeltaSchema = new mongoose.Schema(
     availableBalance: {
       type: Number,
       default: 0,
+      validate: {
+        validator: isSignedInteger,
+        message: "Available balance delta must be an integer.",
+      },
     },
 
     pendingBalance: {
       type: Number,
       default: 0,
+      validate: {
+        validator: isSignedInteger,
+        message: "Pending balance delta must be an integer.",
+      },
     },
 
     outstandingBalance: {
       type: Number,
       default: 0,
+      validate: {
+        validator: isSignedInteger,
+        message: "Outstanding balance delta must be an integer.",
+      },
     },
   },
   { _id: false }
@@ -224,11 +268,15 @@ const transactionSchema = new mongoose.Schema(
     },
 
     // --- AMOUNTS ---
+    // Stored in minor units using a factor of 100.
 
     amount: {
       type: Number,
       required: true,
-      min: [0.01, "Transaction amount must be greater than zero."],
+      validate: {
+        validator: isPositiveInteger,
+        message: "Transaction amount must be a positive integer minor-unit amount.",
+      },
     },
 
     countryCode: {
@@ -250,13 +298,20 @@ const transactionSchema = new mongoose.Schema(
     providerFee: {
       type: Number,
       default: 0,
-      min: 0,
+      required: true,
+      validate: {
+        validator: isNonNegativeInteger,
+        message: "Provider fee must be a non-negative integer minor-unit amount.",
+      },
     },
 
     netAmount: {
       type: Number,
-      default: null,
-      min: 0,
+      required: true,
+      validate: {
+        validator: isNonNegativeInteger,
+        message: "Net amount must be a non-negative integer minor-unit amount.",
+      },
     },
 
     // --- BALANCE SNAPSHOT ---
@@ -346,6 +401,7 @@ const transactionSchema = new mongoose.Schema(
       type: String,
       enum: ["pending", "processing", "completed", "failed", "reversed", "cancelled"],
       default: "pending",
+      required: true,
     },
 
     completedAt: {
@@ -381,6 +437,10 @@ const transactionSchema = new mongoose.Schema(
       type: Number,
       default: 0,
       min: 0,
+      validate: {
+        validator: isNonNegativeInteger,
+        message: "Retry count must be a non-negative integer.",
+      },
     },
 
     // --- INITIATED BY ---
@@ -395,6 +455,7 @@ const transactionSchema = new mongoose.Schema(
       role: {
         type: String,
         enum: ["system", "employer", "professional", "admin"],
+        default: "system",
         required: true,
       },
     },
@@ -410,7 +471,7 @@ const transactionSchema = new mongoose.Schema(
 
     metadata: {
       type: mongoose.Schema.Types.Mixed,
-      default: {},
+      default: () => ({}),
     },
   },
   {
@@ -501,6 +562,14 @@ transactionSchema.pre("validate", function () {
   this.countryCode = String(this.countryCode).toUpperCase().trim();
   this.currency = String(this.currency).toUpperCase().trim();
 
+  if (this.netAmount === null || this.netAmount === undefined) {
+    this.netAmount = this.amount;
+  }
+
+  if (this.providerFee === null || this.providerFee === undefined) {
+    this.providerFee = 0;
+  }
+
   const shiftRelatedTypes = [
     "shift_funding",
     "shift_topup",
@@ -587,32 +656,77 @@ transactionSchema.pre("validate", function () {
     throw new Error(`${this.paymentRail} transaction must reference Paystack payment.`);
   }
 
-  if (this.paymentRail === "paystack_transfer") {
-    if (this.type !== "withdrawal") {
-      throw new Error("Paystack Transfer should only be used for withdrawals.");
+  if (this.type === "withdrawal") {
+    if (this.purpose !== "withdrawal") {
+      throw new Error("Withdrawal transaction must have withdrawal purpose.");
+    }
+
+    if (this.direction !== "debit") {
+      throw new Error("Withdrawal transaction must be a debit.");
+    }
+
+    if (this.paymentRail !== "paystack_transfer") {
+      throw new Error("Withdrawal transaction must use Paystack Transfer.");
+    }
+
+    if (this.provider !== "paystack") {
+      throw new Error("Withdrawal transaction must have paystack as provider.");
     }
 
     if (!this.bankAccount) {
-      throw new Error("Paystack Transfer withdrawal must reference a bank account.");
+      throw new Error("Withdrawal transaction must reference a bank account.");
     }
   }
 
-  if (["withdrawal", "withdrawal_reversal"].includes(this.type) && !this.bankAccount) {
-    throw new Error(`${this.type} transaction must reference a bank account.`);
+  if (this.type === "withdrawal_reversal") {
+    if (this.purpose !== "withdrawal_reversal") {
+      throw new Error("Withdrawal reversal transaction must have withdrawal_reversal purpose.");
+    }
+
+    if (this.direction !== "credit") {
+      throw new Error("Withdrawal reversal transaction must be a credit.");
+    }
+
+    if (this.paymentRail !== "system_action") {
+      throw new Error("Withdrawal reversal transaction must use system_action payment rail.");
+    }
+
+    if (this.provider !== "internal") {
+      throw new Error("Withdrawal reversal transaction must have internal as provider.");
+    }
+
+    if (!this.bankAccount) {
+      throw new Error("Withdrawal reversal transaction must reference a bank account.");
+    }
+
+    if (!this.relatedTransaction) {
+      throw new Error("Withdrawal reversal transaction must reference the original withdrawal.");
+    }
+  }
+
+  if (this.paymentRail === "paystack_transfer" && this.type !== "withdrawal") {
+    throw new Error("Paystack Transfer should only be used for external bank withdrawals.");
+  }
+
+  if (this.providerFee > this.amount) {
+    throw new Error("Provider fee cannot be greater than transaction amount.");
+  }
+
+  if (this.netAmount > this.amount) {
+    throw new Error("Net amount cannot be greater than transaction amount.");
   }
 
   const balanceFields = ["availableBalance", "pendingBalance", "outstandingBalance"];
 
   if (this.balanceBefore && this.balanceAfter && this.balanceDelta) {
     for (const field of balanceFields) {
-      const before = Number(this.balanceBefore[field] || 0);
-      const delta = Number(this.balanceDelta[field] || 0);
-      const after = Number(this.balanceAfter[field] || 0);
+      const before = Number(this.balanceBefore[field] ?? 0);
+      const delta = Number(this.balanceDelta[field] ?? 0);
+      const after = Number(this.balanceAfter[field] ?? 0);
 
       const expectedAfter = before + delta;
-      const difference = Math.abs(after - expectedAfter);
 
-      if (difference > 0.001) {
+      if (after !== expectedAfter) {
         throw new Error(
           `Invalid balanceDelta for ${field}. Expected balanceAfter.${field} to be ${expectedAfter}.`
         );
@@ -628,8 +742,14 @@ transactionSchema.pre("validate", function () {
     this.completedAt = null;
   }
 
-  if (this.status === "failed" && !this.failedAt) {
-    this.failedAt = new Date();
+  if (this.status === "failed") {
+    if (!this.failedAt) {
+      this.failedAt = new Date();
+    }
+
+    if (!this.failureReason) {
+      this.failureReason = "Transaction failed.";
+    }
   }
 
   if (this.status !== "failed") {
@@ -637,8 +757,14 @@ transactionSchema.pre("validate", function () {
     this.failureReason = null;
   }
 
-  if (this.status === "reversed" && !this.reversedAt) {
-    this.reversedAt = new Date();
+  if (this.status === "reversed") {
+    if (!this.reversedAt) {
+      this.reversedAt = new Date();
+    }
+
+    if (!this.reversalReason) {
+      this.reversalReason = "Transaction reversed.";
+    }
   }
 
   if (this.status !== "reversed") {

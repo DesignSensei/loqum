@@ -18,18 +18,24 @@ const seedPlatformSettings = async () => {
 
     platformFeeRate: 0.075,
 
-    maximumEmployerWalletBalance: 1000000,
-    minimumEmployerWithdrawalAmount: 5000,
-    minimumProfessionalWithdrawalAmount: 5000,
+    // Wallet monetary limits are stored in minor units using a factor of 100.
+    // Example: ₦1,000,000.00 is stored as 100000000.
+    maximumEmployerWalletBalance: 100000000,
+    minimumEmployerWithdrawalAmount: 500000,
+    minimumProfessionalWithdrawalAmount: 500000,
 
     countrySettings: [
       {
         countryCode: "NG",
         currency: "NGN",
         platformFeeRate: 0.075,
-        maximumEmployerWalletBalance: 1000000,
-        minimumEmployerWithdrawalAmount: 5000,
-        minimumProfessionalWithdrawalAmount: 5000,
+
+        // Wallet monetary limits are stored in minor units using a factor of 100.
+        // Example: ₦5,000.00 is stored as 500000.
+        maximumEmployerWalletBalance: 100000000,
+        minimumEmployerWithdrawalAmount: 500000,
+        minimumProfessionalWithdrawalAmount: 500000,
+
         isActive: true,
       },
     ],

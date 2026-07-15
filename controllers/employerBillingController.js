@@ -19,6 +19,14 @@ function cleanString(value) {
   return cleanValue || null;
 }
 
+function assertCanViewWallet(req) {
+  if (!req.employerContext?.canViewWallet) {
+    const error = new Error("You do not have permission to view this wallet.");
+    error.statusCode = 403;
+    throw error;
+  }
+}
+
 function getEmployerProfileFromRequest(req) {
   const employerProfile = req.employerProfile;
 
@@ -59,10 +67,11 @@ function buildWithdrawalRequestReference(req) {
   return cleanString(req.body.requestReference) || `employer_withdrawal_${crypto.randomUUID()}`;
 }
 
-function sendBadRequest(res, message) {
+function sendBadRequest(res, message, extra = {}) {
   return res.status(400).json({
     success: false,
     message,
+    ...extra,
   });
 }
 
@@ -70,9 +79,13 @@ function sendBadRequest(res, message) {
 
 exports.getBilling = async (req, res, next) => {
   try {
+    const employerProfile = getEmployerProfileFromRequest(req);
+
+    assertCanViewWallet(req);
+
     const billingView = await EmployerBillingService.getEmployerBillingPageData({
       userId: req.user._id,
-      employerProfile: req.employerProfile,
+      employerProfile,
       transactionsPage: req.query.transactionsPage,
     });
 
@@ -101,6 +114,10 @@ exports.getBilling = async (req, res, next) => {
     });
   } catch (error) {
     logger.error("Employer billing error:", error);
+
+    if (error.statusCode === 403) {
+      return res.redirect("/employer/dashboard?notice=wallet-permission");
+    }
 
     return next(error);
   }

@@ -19,11 +19,7 @@ class EmployerBillingService {
       throw new Error("User ID is required.");
     }
 
-    if (employerProfile) {
-      if (String(employerProfile.user) !== String(userId)) {
-        throw new Error("Employer profile does not belong to this user.");
-      }
-
+    if (employerProfile?._id) {
       return employerProfile;
     }
 

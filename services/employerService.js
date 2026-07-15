@@ -11,6 +11,8 @@ const EmployerMember = require("../models/EmployerMember");
 const InviteService = require("./inviteService");
 const ProfileInputService = require("./profileInputService");
 
+const money = require("../utils/money");
+
 const {
   getEmployerKycStatus,
   getWalletStatus,
@@ -733,7 +735,7 @@ class EmployerService {
         : fundingReadiness.pendingMessage,
       fundingReason: fundingReadiness.reason || null,
 
-      walletBalanceFormatted: this.formatMoney(walletBalance),
+      walletBalanceFormatted: this.formatMinorUnitMoney(walletBalance),
       walletCtaLabel: walletBalance > 0 ? "View Wallet" : "Fund Wallet",
       walletCtaBadgeClass: walletBalance > 0 ? "badge-light-success" : "badge-light-warning",
 
@@ -782,6 +784,13 @@ class EmployerService {
 
   static formatMoney(value) {
     return Number(value || 0).toLocaleString();
+  }
+
+  static formatMinorUnitMoney(value) {
+    return money.fromMinorUnit(value || 0).toLocaleString("en-NG", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    });
   }
 
   static async getMemberStatusCounts(businessId) {

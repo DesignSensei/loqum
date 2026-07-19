@@ -14,6 +14,7 @@ const {
 const {
   attachEmployerProfile,
   attachEmployerContext,
+  canPostShifts,
 } = require("../middleware/employerMiddleware");
 
 const employerController = require("../controllers/employerController");
@@ -21,6 +22,7 @@ const branchController = require("../controllers/branchController");
 const inviteController = require("../controllers/inviteController");
 const teamMemberController = require("../controllers/teamMemberController");
 const employerBillingController = require("../controllers/employerBillingController");
+const employerShiftController = require("../controllers/employerShiftController");
 
 //─────────────────────────────── EMPLOYER ROUTE PROTECTION ───────────────────────────────//
 
@@ -105,7 +107,20 @@ router.post("/business-profile/invites/:inviteId/revoke", inviteController.postR
 
 router.post("/business-profile/invites/revoke", inviteController.postRevokeInvite);
 
-// ─────────────────────────────── BILLING / WALLET ROUTES ─────────────────────────────── //
+//─────────────────────────────── SHIFT ROUTES ───────────────────────────────//
+
+// Shift pages.
+router.get("/shifts", employerShiftController.getManageShifts);
+
+// Shift actions.
+router.post("/shifts", canPostShifts, employerShiftController.postShift);
+
+// Attendance PIN access.
+router.get("/shifts/:shiftId/check-in-pin", employerShiftController.getCheckInPin);
+
+router.get("/shifts/:shiftId/check-out-pin", employerShiftController.getCheckOutPin);
+
+//─────────────────────────────── BILLING / WALLET ROUTES ───────────────────────────────//
 
 // Safe GET redirects.
 router.get("/billing", employerBillingController.getBilling);
@@ -114,7 +129,7 @@ router.get("/billing/wallet", (req, res) => {
   return res.redirect("/employer/billing");
 });
 
-// Billing Actions
+// Billing actions.
 router.post("/billing/setup-dva", employerBillingController.postSetupDVA);
 
 router.post(

@@ -21,6 +21,8 @@ const {
   formatStatus,
 } = require("../utils/statusHelper");
 
+const allowedBranchStatusFilters = ["active", "inactive", "all"];
+
 const allowedMemberStatusFilters = ["active", "restricted", "suspended", "removed", "all"];
 
 function getBusinessInitials(businessName) {
@@ -39,6 +41,55 @@ function getBusinessInitials(businessName) {
   }
 
   return `${words[0][0]}${words[1][0]}`.toUpperCase();
+}
+
+function normalizeBranchStatusFilter(status) {
+  const normalizedStatus = String(status || "active")
+    .toLowerCase()
+    .trim();
+
+  return allowedBranchStatusFilters.includes(normalizedStatus) ? normalizedStatus : "active";
+}
+
+function getBranchStatusQuery({ businessId, branchStatus }) {
+  const query = {
+    business: businessId,
+  };
+
+  if (branchStatus === "all") {
+    return query;
+  }
+
+  return {
+    ...query,
+    isActive: branchStatus === "active",
+  };
+}
+
+function buildBranchStatusFilters(activeStatus, counts = {}) {
+  return [
+    {
+      key: "active",
+      label: "Active",
+      count: counts.active || 0,
+      isActive: activeStatus === "active",
+      url: "/employer/business-profile?tab=branches&branchStatus=active",
+    },
+    {
+      key: "inactive",
+      label: "Inactive",
+      count: counts.inactive || 0,
+      isActive: activeStatus === "inactive",
+      url: "/employer/business-profile?tab=branches&branchStatus=inactive",
+    },
+    {
+      key: "all",
+      label: "All",
+      count: counts.all || 0,
+      isActive: activeStatus === "all",
+      url: "/employer/business-profile?tab=branches&branchStatus=all",
+    },
+  ];
 }
 
 function normalizeMemberStatusFilter(status) {
@@ -793,6 +844,30 @@ class EmployerService {
     });
   }
 
+  static async getBranchStatusCounts(businessId) {
+    const [active, inactive, all] = await Promise.all([
+      Branch.countDocuments({
+        business: businessId,
+        isActive: true,
+      }),
+
+      Branch.countDocuments({
+        business: businessId,
+        isActive: false,
+      }),
+
+      Branch.countDocuments({
+        business: businessId,
+      }),
+    ]);
+
+    return {
+      active,
+      inactive,
+      all,
+    };
+  }
+
   static async getMemberStatusCounts(businessId) {
     const [active, restricted, suspended, removed, current, all] = await Promise.all([
       EmployerMember.countDocuments({
@@ -850,7 +925,13 @@ class EmployerService {
     const activeTab = options.activeTab || "overview";
     const inviteStatus = options.inviteStatus || "active";
 
+    const branchStatus = normalizeBranchStatusFilter(options.branchStatus);
     const memberStatus = normalizeMemberStatusFilter(options.memberStatus);
+
+    const branchQuery = getBranchStatusQuery({
+      businessId: employerProfileId,
+      branchStatus,
+    });
 
     const memberQuery = getMemberStatusQuery({
       businessId: employerProfileId,
@@ -865,6 +946,7 @@ class EmployerService {
 
     const [
       branches,
+      branchStatusCounts,
       members,
       activeCurrentMembers,
       memberStatusCounts,
@@ -873,11 +955,9 @@ class EmployerService {
       wallet,
       defaultDva,
     ] = await Promise.all([
-      Branch.find({
-        business: employerProfileId,
-      })
-        .sort({ isActive: -1, createdAt: -1 })
-        .lean(),
+      Branch.find(branchQuery).sort({ isActive: -1, createdAt: -1 }).lean(),
+
+      this.getBranchStatusCounts(employerProfileId),
 
       EmployerMember.find(memberQuery)
         .populate("user", "firstName lastName displayName email photo accountStatus")
@@ -918,13 +998,19 @@ class EmployerService {
     return this.buildBusinessProfileView({
       employerProfile,
       activeTab,
+
+      branchStatus,
+      branchStatusCounts,
+
       memberStatus,
       branches,
       members,
       activeCurrentMembers,
       memberStatusCounts,
+
       inviteView,
       pendingInvitesCount,
+
       wallet,
       defaultDva,
     });
@@ -933,13 +1019,19 @@ class EmployerService {
   static buildBusinessProfileView({
     employerProfile,
     activeTab,
+
+    branchStatus,
+    branchStatusCounts,
+
     memberStatus,
     branches,
     members,
     activeCurrentMembers,
     memberStatusCounts,
+
     inviteView,
     pendingInvitesCount,
+
     wallet,
     defaultDva,
   }) {
@@ -949,7 +1041,32 @@ class EmployerService {
 
     const businessProfileMembers = shapeBusinessProfileMembers(members);
 
-    const activeBranches = businessProfileBranches.filter((branch) => branch.isActive);
+    const branchStatusFilters = buildBranchStatusFilters(branchStatus, branchStatusCounts);
+
+    const activeBranchStatusFilter = branchStatusFilters.find((filter) => filter.isActive);
+
+    const activeBranchStatusLabel = activeBranchStatusFilter?.label || "Active";
+
+    const branchStatusView = {
+      activeStatus: branchStatus,
+      activeFilterLabel: activeBranchStatusLabel,
+      filters: branchStatusFilters,
+      counts: branchStatusCounts,
+
+      hasAnyBranches: (branchStatusCounts.all || 0) > 0,
+
+      emptyTitle:
+        branchStatus === "all"
+          ? "No Branches Found"
+          : `No ${activeBranchStatusLabel} Branches Found`,
+
+      emptyMessage:
+        branchStatus === "active"
+          ? "Active branches will appear here."
+          : branchStatus === "inactive"
+            ? "Inactive branches will appear here."
+            : "Branches will appear here.",
+    };
 
     const memberStatusFilters = buildMemberStatusFilters(memberStatus, memberStatusCounts);
 
@@ -1000,8 +1117,8 @@ class EmployerService {
     };
 
     const businessProfileStats = {
-      totalBranches: businessProfileBranches.length,
-      activeBranches: activeBranches.length,
+      totalBranches: branchStatusCounts.all || 0,
+      activeBranches: branchStatusCounts.active || 0,
 
       totalMembers: memberStatusCounts.current || 0,
       activeMembers: memberStatusCounts.active || 0,
@@ -1060,6 +1177,7 @@ class EmployerService {
       fundingReadiness,
 
       activeTab,
+      branchStatusView,
       memberStatusView,
 
       branches: businessProfileBranches,

@@ -2,10 +2,21 @@
 
 const mongoose = require("mongoose");
 
+const { minorUnitAmountField, nonNegativeIntegerField } = require("./helpers/schemaFields");
+
 /**
  * EMPLOYER PROFILE:
+ *
  * Stores the employer's business profile, KYC summary, location,
- * contact person, financial summary, reputation, and posting approval status.
+ * contact person, financial summary, reputation and posting approval status.
+ *
+ * COUNTRY AND CURRENCY:
+ *
+ * EmployerProfile.countryCode and EmployerProfile.currency are the
+ * authoritative values used when resolving country-specific platform settings.
+ *
+ * Branches belong to an employer profile and do not independently determine
+ * country or currency.
  *
  * FINANCIAL ARCHITECTURE:
  *
@@ -32,16 +43,16 @@ const mongoose = require("mongoose");
  * DVA should not directly credit escrow.
  *
  * GENERAL WALLET TOP-UP:
- * If the employer intentionally tops up their wallet, or sends a transfer
+ * If the employer intentionally tops up their wallet or sends a transfer
  * not tied to a shift funding attempt, the employer wallet is credited.
  *
  * REFUNDS:
- * Excess escrow from cancellation, dispute resolution, or proration can be
+ * Excess escrow from cancellation, dispute resolution or proration can be
  * returned to the employer wallet.
  *
  * KYC:
  * This model stores employer KYC summary fields.
- * Detailed documents, provider references, and review history should live in
+ * Detailed documents, provider references and review history should live in
  * KYCVerification.
  *
  * BANK ACCOUNT:
@@ -71,6 +82,7 @@ const employerProfileSchema = new mongoose.Schema(
       uppercase: true,
       trim: true,
       required: true,
+      match: [/^[A-Z]{2}$/, "countryCode must be a valid two-letter country code."],
     },
 
     currency: {
@@ -79,12 +91,14 @@ const employerProfileSchema = new mongoose.Schema(
       uppercase: true,
       trim: true,
       required: true,
+      match: [/^[A-Z]{3}$/, "currency must be a valid three-letter currency code."],
     },
 
     businessName: {
       type: String,
       required: true,
       trim: true,
+      maxlength: 150,
     },
 
     businessEmail: {
@@ -92,30 +106,35 @@ const employerProfileSchema = new mongoose.Schema(
       trim: true,
       lowercase: true,
       required: true,
+      maxlength: 254,
     },
 
     businessPhoneCode: {
       type: String,
       trim: true,
       default: "+234",
+      maxlength: 10,
     },
 
     businessPhone: {
       type: String,
       trim: true,
       required: true,
+      maxlength: 30,
     },
 
     address: {
       type: String,
       trim: true,
       required: true,
+      maxlength: 250,
     },
 
     googlePlaceId: {
       type: String,
       trim: true,
       default: "",
+      maxlength: 250,
     },
 
     location: {
@@ -129,14 +148,22 @@ const employerProfileSchema = new mongoose.Schema(
       coordinates: {
         type: [Number],
         required: true,
-        // [longitude, latitude]
         validate: {
-          validator: function (value) {
-            if (!Array.isArray(value) || value.length !== 2) return false;
+          validator: (value) => {
+            if (!Array.isArray(value) || value.length !== 2) {
+              return false;
+            }
 
-            const [lng, lat] = value;
+            const [longitude, latitude] = value;
 
-            return lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90;
+            return (
+              Number.isFinite(longitude) &&
+              Number.isFinite(latitude) &&
+              longitude >= -180 &&
+              longitude <= 180 &&
+              latitude >= -90 &&
+              latitude <= 90
+            );
           },
           message: "Coordinates must be [longitude, latitude] with valid ranges.",
         },
@@ -147,23 +174,23 @@ const employerProfileSchema = new mongoose.Schema(
       type: String,
       trim: true,
       required: true,
+      maxlength: 100,
     },
 
     lga: {
       type: String,
       trim: true,
       required: true,
+      maxlength: 100,
     },
 
     // --- BUSINESS REGISTRATION / CAC SUMMARY ---
-    // Employer submits cacRegistrationNumber during onboarding.
-    // cacNameOnRecord is entered by admin or saved from provider result
-    // after CAC verification.
 
     cacRegistrationNumber: {
       type: String,
       trim: true,
       required: true,
+      maxlength: 100,
     },
 
     cacVerificationStatus: {
@@ -188,9 +215,7 @@ const employerProfileSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: null,
-      // Official business name found during CAC verification.
-      // This is not entered by the employer during normal onboarding.
-      // It is entered by admin or saved from provider/API result.
+      maxlength: 150,
     },
 
     cacVerifiedAt: {
@@ -223,11 +248,7 @@ const employerProfileSchema = new mongoose.Schema(
       default: null,
     },
 
-    // --- FACILITY / REGULATORY REGISTRATION SUMMARY ---
-    // Employer submits regulatoryBody and regulatoryRegistrationNumber
-    // during onboarding.
-    // regulatoryNameOnRecord is entered by admin or saved from provider result
-    // after facility/regulatory verification.
+    // --- FACILITY OR REGULATORY REGISTRATION SUMMARY ---
 
     regulatoryBody: {
       type: String,
@@ -239,6 +260,7 @@ const employerProfileSchema = new mongoose.Schema(
       type: String,
       trim: true,
       required: true,
+      maxlength: 100,
     },
 
     regulatoryVerificationStatus: {
@@ -271,9 +293,7 @@ const employerProfileSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: null,
-      // Official facility or business name found during regulatory verification.
-      // This is not entered by the employer during normal onboarding.
-      // It is entered by admin or saved from provider/API result.
+      maxlength: 150,
     },
 
     regulatoryVerifiedAt: {
@@ -312,12 +332,14 @@ const employerProfileSchema = new mongoose.Schema(
       type: String,
       trim: true,
       required: true,
+      maxlength: 100,
     },
 
     contactLastName: {
       type: String,
       trim: true,
       required: true,
+      maxlength: 100,
     },
 
     contactRole: {
@@ -340,64 +362,45 @@ const employerProfileSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: "+234",
+      maxlength: 10,
     },
 
     contactPhone: {
       type: String,
       trim: true,
       required: true,
+      maxlength: 30,
     },
 
     // --- FINANCIAL SUMMARY ---
+    //
     // Wallet balance is managed through Wallet.
     // Actual money movements are recorded through Transaction.
-    // This profile only stores high-level employer spending metrics.
+    //
+    // Monetary summaries are stored as whole minor-unit amounts.
 
-    totalShiftsPaid: {
-      type: Number,
-      default: 0,
-      min: 0,
-      // Incremented when a shift is successfully funded.
-    },
+    totalShiftsPaid: nonNegativeIntegerField(),
 
-    totalAmountFunded: {
-      type: Number,
-      default: 0,
-      min: 0,
-      // Total amount employer has funded into escrow for shifts.
-      // Includes professional pay and Loqum platform fee.
-    },
+    totalAmountFunded: minorUnitAmountField({
+      defaultValue: 0,
+    }),
 
-    totalAmountSpent: {
-      type: Number,
-      default: 0,
-      min: 0,
-      // Final settled amount spent after completion, proration, refunds, or disputes.
-      // Includes professional pay and Loqum platform fee.
-    },
+    totalAmountSpent: minorUnitAmountField({
+      defaultValue: 0,
+    }),
 
-    totalProfessionalPayFunded: {
-      type: Number,
-      default: 0,
-      min: 0,
-      // Cumulative professional pay portion funded by this employer.
-    },
+    totalProfessionalPayFunded: minorUnitAmountField({
+      defaultValue: 0,
+    }),
 
-    totalPlatformFeesPaid: {
-      type: Number,
-      default: 0,
-      min: 0,
+    totalPlatformFeesPaid: minorUnitAmountField({
+      defaultValue: 0,
       select: false,
-      // Internal admin/reporting metric.
-      // Do not expose in employer-facing responses unless deliberately needed.
-    },
+    }),
 
-    totalRefundedAmount: {
-      type: Number,
-      default: 0,
-      min: 0,
-      // Cumulative amount returned to employer wallet.
-    },
+    totalRefundedAmount: minorUnitAmountField({
+      defaultValue: 0,
+    }),
 
     // --- ACCOUNT STATUS ---
 
@@ -441,32 +444,15 @@ const employerProfileSchema = new mongoose.Schema(
       max: 5,
     },
 
-    totalReviews: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
+    totalReviews: nonNegativeIntegerField(),
 
     // --- SHIFT ACTIVITY ---
 
-    totalShiftsPosted: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
+    totalShiftsPosted: nonNegativeIntegerField(),
 
-    totalShiftsCompleted: {
-      type: Number,
-      default: 0,
-      min: 0,
-    },
+    totalShiftsCompleted: nonNegativeIntegerField(),
 
-    activeShiftCount: {
-      type: Number,
-      default: 0,
-      min: 0,
-      // Optional counter for active confirmed or in-progress shifts.
-    },
+    activeShiftCount: nonNegativeIntegerField(),
 
     lastShiftPostedAt: {
       type: Date,
@@ -517,7 +503,15 @@ const employerProfileSchema = new mongoose.Schema(
 );
 
 // --- INDEXES ---
-employerProfileSchema.index({ user: 1 }, { unique: true });
+
+employerProfileSchema.index(
+  {
+    user: 1,
+  },
+  {
+    unique: true,
+  }
+);
 
 employerProfileSchema.index({ accountStatus: 1 });
 employerProfileSchema.index({ type: 1 });
@@ -525,7 +519,15 @@ employerProfileSchema.index({ type: 1 });
 employerProfileSchema.index({ state: 1, lga: 1 });
 employerProfileSchema.index({ location: "2dsphere" });
 
-employerProfileSchema.index({ countryCode: 1, cacRegistrationNumber: 1 }, { unique: true });
+employerProfileSchema.index(
+  {
+    countryCode: 1,
+    cacRegistrationNumber: 1,
+  },
+  {
+    unique: true,
+  }
+);
 
 employerProfileSchema.index(
   {
@@ -533,11 +535,17 @@ employerProfileSchema.index(
     regulatoryBody: 1,
     regulatoryRegistrationNumber: 1,
   },
-  { unique: true }
+  {
+    unique: true,
+  }
 );
 
 employerProfileSchema.index({ cacVerificationStatus: 1 });
-employerProfileSchema.index({ regulatoryVerificationStatus: 1 });
+
+employerProfileSchema.index({
+  regulatoryVerificationStatus: 1,
+});
+
 employerProfileSchema.index({ employerApprovalStatus: 1 });
 
 employerProfileSchema.index({
@@ -548,9 +556,17 @@ employerProfileSchema.index({
   accountStatus: 1,
 });
 
-// --- VALIDATION / AUTO-CLEANUP ---
+// Used when checking whether an employer can post shifts.
 
-employerProfileSchema.pre("validate", function () {
+employerProfileSchema.index({
+  _id: 1,
+  employerApprovalStatus: 1,
+  accountStatus: 1,
+});
+
+// --- VALIDATION AND AUTO-CLEANUP ---
+
+employerProfileSchema.pre("validate", function validateEmployerProfile() {
   if (this.cacVerificationStatus === "verified") {
     if (!this.cacVerifiedAt) {
       this.cacVerifiedAt = new Date();

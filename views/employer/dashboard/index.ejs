@@ -318,7 +318,7 @@
           <span class="text-gray-500 fw-semibold fs-6 mb-4"> No shifts posted yet </span>
 
           <% if (dashboardView.canPostShifts) { %>
-          <a href="/employer/shifts/post" class="btn btn-sm btn-primary"> Post Your First Shift </a>
+          <a href="/employer/shifts" class="btn btn-sm btn-primary"> Post Your First Shift </a>
           <% } else { %>
           <span class="badge badge-light-warning fs-7 fw-bold">
             <%= dashboardView.postShiftLockedMessage %>
@@ -343,7 +343,7 @@
         <div class="d-flex flex-column gap-3">
           <% if (dashboardView.canPostShifts) { %>
           <a
-            href="/employer/shifts/post"
+            href="/employer/shifts"
             class="d-flex align-items-center bg-light-primary rounded p-3 text-decoration-none"
           >
             <i class="ki-duotone ki-plus-square fs-2x text-primary me-4">

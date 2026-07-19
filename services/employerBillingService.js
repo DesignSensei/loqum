@@ -130,7 +130,7 @@ class EmployerBillingService {
       hasPaymentsDue: totalAmount > 0,
       count: shifts.length,
       totalAmount,
-      totalAmountDisplay: EmployerBillingService.formatMajorAmount(totalAmount, currency),
+      totalAmountDisplay: EmployerBillingService.formatAmount(totalAmount, currency),
 
       message:
         shifts.length === 1

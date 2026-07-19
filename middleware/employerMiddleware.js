@@ -120,6 +120,13 @@ exports.attachEmployerContext = async (req, res, next) => {
     const assignedBranchIds =
       employerMember?.branches?.map((assignment) => getId(assignment.branch)).filter(Boolean) || [];
 
+    const canManageAllShifts = isPrimaryEmployer || isBusinessAdmin;
+    const canManageAssignedBranchShifts = isBranchManager;
+
+    const canViewShifts = isPrimaryEmployer || isBusinessAdmin || isBranchManager || isBranchStaff;
+
+    const canPostShifts = isPrimaryEmployer || isBusinessAdmin || isBranchManager;
+
     const employerContext = {
       employerMemberRole,
 
@@ -141,6 +148,11 @@ exports.attachEmployerContext = async (req, res, next) => {
 
       canViewWallet: isPrimaryEmployer || isBusinessAdmin,
       canManageWallet: isPrimaryEmployer || isBusinessAdmin,
+
+      canViewShifts,
+      canPostShifts,
+      canManageAllShifts,
+      canManageAssignedBranchShifts,
     };
 
     req.employerMember = employerMember;
@@ -227,6 +239,13 @@ exports.attachOptionalEmployerContext = async (req, res, next) => {
     const assignedBranchIds =
       employerMember?.branches?.map((assignment) => getId(assignment.branch)).filter(Boolean) || [];
 
+    const canManageAllShifts = isPrimaryEmployer || isBusinessAdmin;
+    const canManageAssignedBranchShifts = isBranchManager;
+
+    const canViewShifts = isPrimaryEmployer || isBusinessAdmin || isBranchManager || isBranchStaff;
+
+    const canPostShifts = isPrimaryEmployer || isBusinessAdmin || isBranchManager;
+
     const employerContext = {
       employerMemberRole,
 
@@ -248,6 +267,11 @@ exports.attachOptionalEmployerContext = async (req, res, next) => {
 
       canViewWallet: isPrimaryEmployer || isBusinessAdmin,
       canManageWallet: isPrimaryEmployer || isBusinessAdmin,
+
+      canViewShifts,
+      canPostShifts,
+      canManageAllShifts,
+      canManageAssignedBranchShifts,
     };
 
     req.employerProfile = profile;
@@ -264,21 +288,32 @@ exports.attachOptionalEmployerContext = async (req, res, next) => {
   }
 };
 
-// Checks whether an employer is approved to post shifts
+// Checks whether an employer user may post shifts.
 exports.canPostShifts = (req, res, next) => {
   const profile = req.employerProfile;
+  const employerContext = req.employerContext;
 
   if (!profile) {
-    return res.redirect("/onboarding/employer");
+    return res.status(404).json({
+      success: false,
+      message: "Employer profile not found.",
+    });
   }
 
-  const isApprovedToPost =
+  if (!employerContext?.canPostShifts) {
+    return res.status(403).json({
+      success: false,
+      message: "You do not have permission to post shifts.",
+    });
+  }
+
+  const isBusinessEligible =
     profile.cacVerificationStatus === "verified" &&
     profile.regulatoryVerificationStatus === "verified" &&
     profile.employerApprovalStatus === "approved" &&
     profile.accountStatus === "active";
 
-  if (!isApprovedToPost) {
+  if (!isBusinessEligible) {
     return res.status(403).json({
       success: false,
       message: "Your business profile must be verified and approved before you can post shifts.",

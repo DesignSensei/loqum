@@ -25,6 +25,8 @@ const allowedInviteStatusFilters = [
   "all",
 ];
 
+const allowedBranchStatusFilters = ["active", "inactive", "all"];
+
 const allowedMemberStatusFilters = ["active", "restricted", "suspended", "removed", "all"];
 
 function getActiveBusinessProfileTab(requestedTab) {
@@ -41,6 +43,14 @@ function getInviteStatusFilter(requestedStatus) {
 
 function getMemberStatusFilter(requestedStatus) {
   if (!allowedMemberStatusFilters.includes(requestedStatus)) {
+    return "active";
+  }
+
+  return requestedStatus;
+}
+
+function getBranchStatusFilter(requestedStatus) {
+  if (!allowedBranchStatusFilters.includes(requestedStatus)) {
     return "active";
   }
 
@@ -108,11 +118,15 @@ exports.getBusinessProfile = async (req, res, next) => {
     const requestedTab = req.query.tab || "overview";
     const activeTab = getActiveBusinessProfileTab(requestedTab);
 
+    const branchStatus = getBranchStatusFilter(req.query.branchStatus || "active");
+
     const inviteStatus = getInviteStatusFilter(req.query.inviteStatus || "active");
+
     const memberStatus = getMemberStatusFilter(req.query.memberStatus || "active");
 
     const businessProfileData = await EmployerService.getBusinessProfileData(employerProfile, {
       activeTab,
+      branchStatus,
       inviteStatus,
       memberStatus,
     });

@@ -2,7 +2,11 @@
 
 const mongoose = require("mongoose");
 
+const geoPointSchema = require("./helpers/geoPointSchema");
+
 const { minorUnitAmountField, nonNegativeIntegerField } = require("./helpers/schemaFields");
+
+const { hasAnyValue, validateVerificationState } = require("./helpers/employerProfileHelpers");
 
 /**
  * EMPLOYER PROFILE:
@@ -17,6 +21,13 @@ const { minorUnitAmountField, nonNegativeIntegerField } = require("./helpers/sch
  *
  * Branches belong to an employer profile and do not independently determine
  * country or currency.
+ *
+ * LOCATION:
+ *
+ * Employer onboarding requires a Google Places selection. The selected place
+ * supplies the formatted address, Google Place ID, longitude and latitude.
+ *
+ * GeoJSON uses [longitude, latitude] order.
  *
  * FINANCIAL ARCHITECTURE:
  *
@@ -133,41 +144,13 @@ const employerProfileSchema = new mongoose.Schema(
     googlePlaceId: {
       type: String,
       trim: true,
-      default: "",
+      required: true,
       maxlength: 250,
     },
 
     location: {
-      type: {
-        type: String,
-        enum: ["Point"],
-        default: "Point",
-        required: true,
-      },
-
-      coordinates: {
-        type: [Number],
-        required: true,
-        validate: {
-          validator: (value) => {
-            if (!Array.isArray(value) || value.length !== 2) {
-              return false;
-            }
-
-            const [longitude, latitude] = value;
-
-            return (
-              Number.isFinite(longitude) &&
-              Number.isFinite(latitude) &&
-              longitude >= -180 &&
-              longitude <= 180 &&
-              latitude >= -90 &&
-              latitude <= 90
-            );
-          },
-          message: "Coordinates must be [longitude, latitude] with valid ranges.",
-        },
-      },
+      type: geoPointSchema,
+      required: true,
     },
 
     state: {
@@ -197,18 +180,21 @@ const employerProfileSchema = new mongoose.Schema(
       type: String,
       enum: ["pending", "verified", "rejected", "needs_review"],
       default: "pending",
+      required: true,
     },
 
     cacVerificationMethod: {
       type: String,
       enum: ["manual", "api", "provider", "not_checked"],
       default: "not_checked",
+      required: true,
     },
 
     cacVerificationSource: {
       type: String,
-      enum: ["cac_portal", "uploaded_document", "provider", "internal_review"],
-      default: "internal_review",
+      enum: ["cac_portal", "uploaded_document", "provider", "internal_review", "not_checked"],
+      default: "not_checked",
+      required: true,
     },
 
     cacNameOnRecord: {
@@ -267,12 +253,14 @@ const employerProfileSchema = new mongoose.Schema(
       type: String,
       enum: ["pending", "verified", "rejected", "needs_review"],
       default: "pending",
+      required: true,
     },
 
     regulatoryVerificationMethod: {
       type: String,
       enum: ["manual", "api", "provider", "not_checked"],
       default: "not_checked",
+      required: true,
     },
 
     regulatoryVerificationSource: {
@@ -285,8 +273,10 @@ const employerProfileSchema = new mongoose.Schema(
         "uploaded_document",
         "provider",
         "internal_review",
+        "not_checked",
       ],
-      default: "internal_review",
+      default: "not_checked",
+      required: true,
     },
 
     regulatoryNameOnRecord: {
@@ -408,6 +398,7 @@ const employerProfileSchema = new mongoose.Schema(
       type: String,
       enum: ["active", "restricted", "suspended"],
       default: "active",
+      required: true,
     },
 
     accountStatusReason: {
@@ -470,6 +461,18 @@ const employerProfileSchema = new mongoose.Schema(
       type: String,
       enum: ["pending", "approved", "rejected", "restricted", "needs_review"],
       default: "pending",
+      required: true,
+    },
+
+    employerApprovalStatusUpdatedAt: {
+      type: Date,
+      default: null,
+    },
+
+    employerApprovalStatusUpdatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
     },
 
     approvedToPostShiftsAt: {
@@ -513,11 +516,22 @@ employerProfileSchema.index(
   }
 );
 
-employerProfileSchema.index({ accountStatus: 1 });
-employerProfileSchema.index({ type: 1 });
+employerProfileSchema.index({
+  accountStatus: 1,
+});
 
-employerProfileSchema.index({ state: 1, lga: 1 });
-employerProfileSchema.index({ location: "2dsphere" });
+employerProfileSchema.index({
+  type: 1,
+});
+
+employerProfileSchema.index({
+  state: 1,
+  lga: 1,
+});
+
+employerProfileSchema.index({
+  location: "2dsphere",
+});
 
 employerProfileSchema.index(
   {
@@ -540,13 +554,17 @@ employerProfileSchema.index(
   }
 );
 
-employerProfileSchema.index({ cacVerificationStatus: 1 });
+employerProfileSchema.index({
+  cacVerificationStatus: 1,
+});
 
 employerProfileSchema.index({
   regulatoryVerificationStatus: 1,
 });
 
-employerProfileSchema.index({ employerApprovalStatus: 1 });
+employerProfileSchema.index({
+  employerApprovalStatus: 1,
+});
 
 employerProfileSchema.index({
   type: 1,
@@ -556,43 +574,180 @@ employerProfileSchema.index({
   accountStatus: 1,
 });
 
-// Used when checking whether an employer can post shifts.
-
-employerProfileSchema.index({
-  _id: 1,
-  employerApprovalStatus: 1,
-  accountStatus: 1,
-});
-
-// --- VALIDATION AND AUTO-CLEANUP ---
+// --- VALIDATION ---
 
 employerProfileSchema.pre("validate", function validateEmployerProfile() {
-  if (this.cacVerificationStatus === "verified") {
-    if (!this.cacVerifiedAt) {
-      this.cacVerifiedAt = new Date();
+  validateVerificationState(this, {
+    label: "CAC",
+    pathPrefix: "cac",
+    status: this.cacVerificationStatus,
+    method: this.cacVerificationMethod,
+    source: this.cacVerificationSource,
+    nameOnRecord: this.cacNameOnRecord,
+    verifiedAt: this.cacVerifiedAt,
+    lastCheckedAt: this.cacLastCheckedAt,
+    verifiedBy: this.cacVerifiedBy,
+    verificationNote: this.cacVerificationNote,
+    rejectionReason: this.cacRejectionReason,
+  });
+
+  validateVerificationState(this, {
+    label: "Regulatory",
+    pathPrefix: "regulatory",
+    status: this.regulatoryVerificationStatus,
+    method: this.regulatoryVerificationMethod,
+    source: this.regulatoryVerificationSource,
+    nameOnRecord: this.regulatoryNameOnRecord,
+    verifiedAt: this.regulatoryVerifiedAt,
+    lastCheckedAt: this.regulatoryLastCheckedAt,
+    verifiedBy: this.regulatoryVerifiedBy,
+    verificationNote: this.regulatoryVerificationNote,
+    rejectionReason: this.regulatoryRejectionReason,
+  });
+
+  const accountStatusHasAudit = hasAnyValue([
+    this.accountStatusReason,
+    this.accountStatusUpdatedAt,
+    this.accountStatusUpdatedBy,
+  ]);
+
+  if (["restricted", "suspended"].includes(this.accountStatus)) {
+    if (!this.accountStatusReason) {
+      this.invalidate(
+        "accountStatusReason",
+        `${this.accountStatus} account status requires a reason.`
+      );
     }
 
-    this.cacRejectionReason = null;
+    if (!this.accountStatusUpdatedAt) {
+      this.invalidate(
+        "accountStatusUpdatedAt",
+        `${this.accountStatus} account status requires an update timestamp.`
+      );
+    }
+
+    if (!this.accountStatusUpdatedBy) {
+      this.invalidate(
+        "accountStatusUpdatedBy",
+        `${this.accountStatus} account status requires an update actor.`
+      );
+    }
+  } else if (
+    accountStatusHasAudit &&
+    (!this.accountStatusUpdatedAt || !this.accountStatusUpdatedBy)
+  ) {
+    this.invalidate(
+      "accountStatusUpdatedAt",
+      "Account-status audit data requires both accountStatusUpdatedAt and accountStatusUpdatedBy."
+    );
   }
 
-  if (this.regulatoryVerificationStatus === "verified") {
-    if (!this.regulatoryVerifiedAt) {
-      this.regulatoryVerifiedAt = new Date();
+  const approvalStatusHasAudit = hasAnyValue([
+    this.employerApprovalStatusUpdatedAt,
+    this.employerApprovalStatusUpdatedBy,
+  ]);
+
+  if (this.employerApprovalStatus !== "pending") {
+    if (!this.employerApprovalStatusUpdatedAt) {
+      this.invalidate(
+        "employerApprovalStatusUpdatedAt",
+        `${this.employerApprovalStatus} employer approval status requires an update timestamp.`
+      );
     }
 
-    this.regulatoryRejectionReason = null;
+    if (!this.employerApprovalStatusUpdatedBy) {
+      this.invalidate(
+        "employerApprovalStatusUpdatedBy",
+        `${this.employerApprovalStatus} employer approval status requires an update actor.`
+      );
+    }
+  } else if (
+    approvalStatusHasAudit &&
+    (!this.employerApprovalStatusUpdatedAt || !this.employerApprovalStatusUpdatedBy)
+  ) {
+    this.invalidate(
+      "employerApprovalStatusUpdatedAt",
+      "Employer-approval audit data requires both employerApprovalStatusUpdatedAt and employerApprovalStatusUpdatedBy."
+    );
+  }
+
+  const hasApprovalTimestamp = Boolean(this.approvedToPostShiftsAt);
+
+  const hasApprovalActor = Boolean(this.approvedToPostShiftsBy);
+
+  if (hasApprovalTimestamp !== hasApprovalActor) {
+    this.invalidate(
+      "approvedToPostShiftsBy",
+      "approvedToPostShiftsAt and approvedToPostShiftsBy must be set together."
+    );
   }
 
   if (this.employerApprovalStatus === "approved") {
-    if (!this.approvedToPostShiftsAt) {
-      this.approvedToPostShiftsAt = new Date();
+    if (!this.approvedToPostShiftsAt || !this.approvedToPostShiftsBy) {
+      this.invalidate(
+        "approvedToPostShiftsAt",
+        "Approved employers require approval timestamp and approval actor."
+      );
     }
 
-    this.employerRejectionReason = null;
+    if (this.employerRejectionReason) {
+      this.invalidate(
+        "employerRejectionReason",
+        "Approved employers cannot retain a rejection reason."
+      );
+    }
   }
 
-  if (typeof this.isModified === "function" && this.isModified("accountStatus")) {
-    this.accountStatusUpdatedAt = new Date();
+  if (this.employerApprovalStatus === "rejected") {
+    if (!this.employerRejectionReason) {
+      this.invalidate(
+        "employerRejectionReason",
+        "Rejected employer approval requires a rejection reason."
+      );
+    }
+
+    if (this.approvedToPostShiftsAt || this.approvedToPostShiftsBy) {
+      this.invalidate(
+        "approvedToPostShiftsAt",
+        "Rejected employer approval cannot retain posting approval details."
+      );
+    }
+  } else if (this.employerRejectionReason) {
+    this.invalidate(
+      "employerRejectionReason",
+      "employerRejectionReason may only be set when employerApprovalStatus is rejected."
+    );
+  }
+
+  if (
+    ["restricted", "needs_review"].includes(this.employerApprovalStatus) &&
+    !this.employerApprovalNote
+  ) {
+    this.invalidate(
+      "employerApprovalNote",
+      `${this.employerApprovalStatus} employer approval status requires an approval note.`
+    );
+  }
+
+  if (
+    !["approved", "restricted"].includes(this.employerApprovalStatus) &&
+    (this.approvedToPostShiftsAt || this.approvedToPostShiftsBy)
+  ) {
+    this.invalidate(
+      "approvedToPostShiftsAt",
+      "Posting approval details may only be retained for approved or restricted employers."
+    );
+  }
+
+  if (
+    this.approvedToPostShiftsAt &&
+    this.employerApprovalStatusUpdatedAt &&
+    this.approvedToPostShiftsAt > this.employerApprovalStatusUpdatedAt
+  ) {
+    this.invalidate(
+      "employerApprovalStatusUpdatedAt",
+      "Employer approval status cannot be updated before posting approval was granted."
+    );
   }
 });
 

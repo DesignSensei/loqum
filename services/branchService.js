@@ -5,25 +5,40 @@ const EmployerMember = require("../models/EmployerMember");
 const PlatformSettings = require("../models/PlatformSettings");
 
 class BranchService {
-  /* ---------- Get geofence policy from platform settings ---------- */
-  static async getGeofencePolicy() {
+  /* ---------- Get active platform settings ---------- */
+  static async getActivePlatformSettings() {
     const settings = await PlatformSettings.findOne({
       key: "global",
       isActive: true,
-    }).lean();
+    });
 
-    const defaultRadius = Number(settings?.defaultGeofenceRadiusMeters);
-    const minimumRadius = Number(settings?.minimumGeofenceRadiusMeters);
-    const maximumRadius = Number(settings?.maximumGeofenceRadiusMeters);
+    if (!settings) {
+      throw new Error("Active platform settings could not be found.");
+    }
+
+    return settings;
+  }
+
+  /* ---------- Get geofence policy from platform settings ---------- */
+  static async getGeofencePolicy() {
+    const settings = await BranchService.getActivePlatformSettings();
+
+    const defaultRadius = Number(settings.defaultGeofenceRadiusMeters);
+
+    const minimumRadius = Number(settings.minimumGeofenceRadiusMeters);
+
+    const maximumRadius = Number(settings.maximumGeofenceRadiusMeters);
 
     return {
-      defaultRadius: Number.isFinite(defaultRadius) ? defaultRadius : 100,
-      minimumRadius: Number.isFinite(minimumRadius) ? minimumRadius : 20,
-      maximumRadius: Number.isFinite(maximumRadius) ? maximumRadius : 1000,
+      defaultRadius: Number.isSafeInteger(defaultRadius) ? defaultRadius : 100,
+
+      minimumRadius: Number.isSafeInteger(minimumRadius) ? minimumRadius : 20,
+
+      maximumRadius: Number.isSafeInteger(maximumRadius) ? maximumRadius : 1000,
     };
   }
 
-  /* ---------- Normalize coordinate value ---------- */
+  /* ---------- Parse coordinate value ---------- */
   static parseCoordinate(value) {
     if (value === undefined || value === null || String(value).trim() === "") {
       return null;
@@ -34,7 +49,7 @@ class BranchService {
     return Number.isFinite(numberValue) ? numberValue : null;
   }
 
-  /* ---------- Normalize geofence radius ---------- */
+  /* ---------- Parse geofence radius ---------- */
   static parseGeofenceRadius(value, defaultRadius = 100) {
     if (value === undefined || value === null || String(value).trim() === "") {
       return defaultRadius;
@@ -47,9 +62,14 @@ class BranchService {
 
   /* ---------- Normalize branch payload ---------- */
   static async normalizeBranchPayload(body) {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw new Error("Branch details are required.");
+    }
+
     const geofencePolicy = await BranchService.getGeofencePolicy();
 
     const longitude = BranchService.parseCoordinate(body.longitude);
+
     const latitude = BranchService.parseCoordinate(body.latitude);
 
     const geofenceRadiusMeters = BranchService.parseGeofenceRadius(
@@ -65,15 +85,31 @@ class BranchService {
       latitude >= -90 &&
       latitude <= 90;
 
+    const contactPhone = String(body.contactPhone || "").trim();
+
+    /*
+     * Do not store a phone code when no phone number was submitted.
+     *
+     * This also protects against the form submitting its selected default
+     * phone code while the optional phone-number field is empty.
+     */
+    const contactPhoneCode = contactPhone ? String(body.contactPhoneCode || "").trim() : "";
+
     return {
       payload: {
         name: String(body.name || "").trim(),
+
         address: String(body.address || "").trim(),
+
         googlePlaceId: String(body.googlePlaceId || "").trim(),
+
         state: String(body.state || "").trim(),
+
         lga: String(body.lga || "").trim(),
-        contactPhoneCode: String(body.contactPhoneCode || "+234").trim(),
-        contactPhone: String(body.contactPhone || "").trim(),
+
+        contactPhoneCode,
+
+        contactPhone,
 
         geofenceRadiusMeters,
 
@@ -124,8 +160,11 @@ class BranchService {
       throw new Error("Branch coordinates are invalid.");
     }
 
-    if (payload.geofenceRadiusMeters === null || !Number.isFinite(payload.geofenceRadiusMeters)) {
-      throw new Error("Geofence radius must be a valid number.");
+    if (
+      payload.geofenceRadiusMeters === null ||
+      !Number.isSafeInteger(payload.geofenceRadiusMeters)
+    ) {
+      throw new Error("Geofence radius must be a whole number.");
     }
 
     if (
@@ -136,13 +175,27 @@ class BranchService {
         `Geofence radius must be between ${geofencePolicy.minimumRadius} and ${geofencePolicy.maximumRadius} meters.`
       );
     }
+
+    if (payload.contactPhone && !payload.contactPhoneCode) {
+      throw new Error("Contact phone code is required when a contact phone number is provided.");
+    }
+
+    if (payload.contactPhoneCode && !/^\+\d{1,4}$/.test(payload.contactPhoneCode)) {
+      throw new Error("Contact phone code must be a valid international dialing code.");
+    }
+
+    if (payload.contactPhoneCode && !payload.contactPhone) {
+      throw new Error("Contact phone number is required when a contact phone code is provided.");
+    }
   }
 
   /* ---------- Get all branches for business ---------- */
   static async getBranchesForBusiness(businessId) {
     return Branch.find({
       business: businessId,
-    }).sort({ createdAt: -1 });
+    }).sort({
+      createdAt: -1,
+    });
   }
 
   /* ---------- Get one branch for business ---------- */
@@ -161,6 +214,10 @@ class BranchService {
 
   /* ---------- Create branch ---------- */
   static async createBranch({ businessId, body }) {
+    if (!businessId) {
+      throw new Error("Business ID is required.");
+    }
+
     const { payload, geofencePolicy } = await BranchService.normalizeBranchPayload(body);
 
     BranchService.validateBranchPayload(payload, geofencePolicy);
@@ -200,12 +257,13 @@ class BranchService {
 
     let newManager = null;
 
-    /**
+    /*
      * Validate the selected manager before changing the existing manager.
      *
-     * This prevents a bad managerMemberId from demoting the current manager
-     * before we discover that the new manager is invalid.
+     * This prevents an invalid managerMemberId from demoting the existing
+     * branch manager before the selected replacement is validated.
      */
+
     if (selectedManagerId) {
       newManager = await EmployerMember.findOne({
         _id: selectedManagerId,
@@ -222,13 +280,13 @@ class BranchService {
       }
     }
 
-    /**
+    /*
      * Demote existing managers for this branch.
      *
-     * We do not remove the branch assignment here.
-     * We change branch_manager to branch_staff so the old manager stays
-     * assigned to the branch but no longer manages it.
+     * The existing branch assignment is retained. Only its role changes
+     * from branch_manager to branch_staff.
      */
+
     const existingManagers = await EmployerMember.find({
       business: businessId,
       accountStatus: "active",
@@ -258,10 +316,11 @@ class BranchService {
       await member.save();
     }
 
-    /**
-     * Empty managerMemberId means "Not assigned".
-     * Existing manager has already been demoted to branch_staff.
+    /*
+     * An empty managerMemberId means "Not assigned".
+     * Any existing manager has already been changed to branch_staff.
      */
+
     if (!selectedManagerId) {
       return null;
     }
@@ -272,6 +331,7 @@ class BranchService {
 
     if (existingAssignment) {
       existingAssignment.role = "branch_manager";
+
       existingAssignment.assignedAt = existingAssignment.assignedAt || new Date();
     } else {
       newManager.branches.push({
@@ -294,6 +354,10 @@ class BranchService {
       throw new Error("Branch ID is required.");
     }
 
+    if (!businessId) {
+      throw new Error("Business ID is required.");
+    }
+
     const branch = await BranchService.getBranchForBusiness({
       branchId,
       businessId,
@@ -308,9 +372,13 @@ class BranchService {
     branch.googlePlaceId = payload.googlePlaceId;
     branch.state = payload.state;
     branch.lga = payload.lga;
+
     branch.contactPhoneCode = payload.contactPhoneCode;
+
     branch.contactPhone = payload.contactPhone;
+
     branch.location = payload.location;
+
     branch.geofenceRadiusMeters = payload.geofenceRadiusMeters;
 
     await branch.save();
@@ -338,7 +406,9 @@ class BranchService {
       "branches.branch": branchId,
     })
       .populate("user", "firstName lastName email displayName")
-      .sort({ createdAt: -1 });
+      .sort({
+        createdAt: -1,
+      });
   }
 }
 

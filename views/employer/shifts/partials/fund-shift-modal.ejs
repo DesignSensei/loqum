@@ -1,0 +1,381 @@
+<!-- views/employer/shifts/partials/fund-shift-modal.ejs -->
+
+<div
+  class="modal fade"
+  id="<%= shiftsView ? shiftsView.fundingModal.modalId : shiftDetailsView.fundingModal.modalId %>"
+  tabindex="-1"
+  aria-labelledby="fundShiftModalLabel"
+  aria-hidden="true"
+  data-currency="<%= shiftsView ? shiftsView.fundingModal.currency : shiftDetailsView.fundingModal.currency %>"
+  data-brand-color="<%= shiftsView ? shiftsView.fundingModal.brandColor : shiftDetailsView.fundingModal.brandColor %>"
+>
+  <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content">
+      <!-- ─────────────────────────────── HEADER ─────────────────────────────── -->
+
+      <div class="modal-header align-items-start">
+        <div class="flex-grow-1 pe-5">
+          <h2 class="modal-title fw-bold text-gray-900" id="fundShiftModalLabel">
+            <span id="fundShiftModalTitle"> Fund Shift </span>
+          </h2>
+
+          <div class="fs-7 text-muted mt-1">
+            Complete payment to secure the full engagement charge in escrow and publish the Shift.
+          </div>
+        </div>
+
+        <button
+          type="button"
+          class="btn btn-icon btn-sm btn-active-light-primary"
+          data-bs-dismiss="modal"
+          aria-label="Close"
+        >
+          <i class="ki-duotone ki-cross fs-2">
+            <span class="path1"></span>
+            <span class="path2"></span>
+          </i>
+        </button>
+      </div>
+
+      <!-- ─────────────────────────────── BODY ─────────────────────────────── -->
+
+      <div class="modal-body py-10 px-lg-12">
+        <input type="hidden" id="fundShiftCsrfToken" value="<%= csrfToken %>" />
+
+        <input type="hidden" id="fundShiftId" value="" />
+
+        <input type="hidden" id="fundShiftWalletFundingUrl" value="" />
+
+        <input type="hidden" id="fundShiftCheckoutUrl" value="" />
+
+        <div class="alert alert-danger d-none" id="fundShiftAlert" role="alert"></div>
+
+        <!-- ─────────────────────────────── SHIFT SUMMARY ─────────────────────────────── -->
+
+        <div class="card border border-gray-300 mb-8">
+          <div class="card-body p-6">
+            <div
+              class="d-flex flex-column flex-md-row justify-content-between align-items-md-start gap-4"
+            >
+              <div>
+                <div class="fs-7 fw-semibold text-muted">Shift Reference</div>
+
+                <div class="fs-4 fw-bold text-gray-900 mt-1" id="fundShiftReference">—</div>
+              </div>
+
+              <span class="badge badge-light-warning align-self-start" id="fundShiftStatusBadge">
+                Pending Funding
+              </span>
+            </div>
+
+            <div class="separator separator-dashed my-6"></div>
+
+            <div class="row g-5">
+              <div class="col-sm-6 col-lg-3">
+                <div class="fs-7 fw-semibold text-muted">Role</div>
+
+                <div class="fw-bold text-gray-800 mt-1" id="fundShiftRole">—</div>
+              </div>
+
+              <div class="col-sm-6 col-lg-3">
+                <div class="fs-7 fw-semibold text-muted">Branch</div>
+
+                <div class="fw-bold text-gray-800 mt-1" id="fundShiftBranch">—</div>
+              </div>
+
+              <div class="col-sm-6 col-lg-3">
+                <div class="fs-7 fw-semibold text-muted">Schedule</div>
+
+                <div class="fw-bold text-gray-800 mt-1" id="fundShiftSchedule">—</div>
+              </div>
+
+              <div class="col-sm-6 col-lg-3">
+                <div class="fs-7 fw-semibold text-muted">Number of Shifts</div>
+
+                <div class="fw-bold text-gray-800 mt-1" id="fundShiftOccurrenceCount">—</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ─────────────────────────────── PAYMENT REVIEW ─────────────────────────────── -->
+
+        <div class="card bg-light-primary border border-primary border-dashed mb-8">
+          <div class="card-body p-6">
+            <div class="d-flex align-items-center mb-6">
+              <div class="symbol symbol-45px me-4">
+                <span class="symbol-label bg-primary">
+                  <i class="ki-duotone ki-wallet fs-2 text-white">
+                    <span class="path1"></span>
+                    <span class="path2"></span>
+                    <span class="path3"></span>
+                    <span class="path4"></span>
+                  </i>
+                </span>
+              </div>
+
+              <div>
+                <div class="fw-bold fs-5 text-gray-900">Payment Review</div>
+
+                <div class="fs-7 text-muted mt-1">
+                  These amounts were calculated and locked when the Shift was created.
+                </div>
+              </div>
+            </div>
+
+            <div class="row g-5 mb-5">
+              <div class="col-sm-6 col-lg-4">
+                <div class="fs-7 fw-semibold text-muted">Hours per Shift</div>
+
+                <div class="fs-5 fw-bold text-gray-900 mt-1" id="fundShiftHoursPerOccurrence">
+                  —
+                </div>
+              </div>
+
+              <div class="col-sm-6 col-lg-4">
+                <div class="fs-7 fw-semibold text-muted">Total Hours</div>
+
+                <div class="fs-5 fw-bold text-gray-900 mt-1" id="fundShiftTotalHours">—</div>
+              </div>
+
+              <div class="col-sm-6 col-lg-4">
+                <div class="fs-7 fw-semibold text-muted">Total Employer Charge</div>
+
+                <div class="fs-4 fw-bold text-primary mt-1" id="fundShiftEmployerCharge">—</div>
+              </div>
+            </div>
+
+            <div class="separator separator-dashed mb-5"></div>
+
+            <div class="row g-5">
+              <div class="col-sm-6">
+                <div class="fs-7 fw-semibold text-muted">Professional Pay</div>
+
+                <div class="fs-5 fw-bold text-gray-900 mt-1" id="fundShiftProfessionalPay">—</div>
+              </div>
+
+              <div class="col-sm-6">
+                <div class="fs-7 fw-semibold text-muted">Platform Fee</div>
+
+                <div class="fs-5 fw-bold text-gray-900 mt-1" id="fundShiftPlatformFee">—</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ─────────────────────────────── PAYMENT METHODS ─────────────────────────────── -->
+
+        <div class="fw-bold fs-5 text-gray-900 mb-2">Choose Payment Method</div>
+
+        <div class="fs-7 text-muted mb-6">
+          The Shift will remain unpublished until the complete engagement charge is successfully
+          secured.
+        </div>
+
+        <div class="row g-6">
+          <!-- EMPLOYER WALLET -->
+
+          <div class="col-lg-6">
+            <div class="card border border-gray-300 h-100" id="fundShiftWalletOption">
+              <div class="card-body d-flex flex-column p-7">
+                <div class="d-flex align-items-start justify-content-between gap-4 mb-6">
+                  <div class="d-flex align-items-center">
+                    <div class="symbol symbol-50px me-4">
+                      <span class="symbol-label bg-light-primary">
+                        <i class="ki-duotone ki-wallet fs-2x text-primary">
+                          <span class="path1"></span>
+                          <span class="path2"></span>
+                          <span class="path3"></span>
+                          <span class="path4"></span>
+                        </i>
+                      </span>
+                    </div>
+
+                    <div>
+                      <div class="fw-bold fs-5 text-gray-900">Employer Wallet</div>
+
+                      <div class="fs-7 text-muted mt-1">
+                        Pay with your available wallet balance.
+                      </div>
+                    </div>
+                  </div>
+
+                  <span class="badge badge-light-secondary" id="fundShiftWalletStatusBadge">
+                    Checking
+                  </span>
+                </div>
+
+                <div class="bg-light rounded p-5 mb-5">
+                  <div class="d-flex justify-content-between gap-4 mb-3">
+                    <span class="fs-7 text-muted"> Available balance </span>
+
+                    <span class="fw-bold text-gray-900" id="fundShiftWalletAvailableBalance">
+                      <%= shiftsView ? shiftsView.fundingModal.wallet.availableBalanceDisplay :
+                      shiftDetailsView.fundingModal.wallet.availableBalanceDisplay %>
+                    </span>
+                  </div>
+
+                  <div class="d-flex justify-content-between gap-4 mb-3">
+                    <span class="fs-7 text-muted"> Balance after payment </span>
+
+                    <span class="fw-bold text-gray-900" id="fundShiftWalletBalanceAfter"> — </span>
+                  </div>
+
+                  <div
+                    class="d-flex justify-content-between gap-4 d-none"
+                    id="fundShiftWalletShortfallRow"
+                  >
+                    <span class="fs-7 text-danger"> Shortfall </span>
+
+                    <span class="fw-bold text-danger" id="fundShiftWalletShortfall"> — </span>
+                  </div>
+                </div>
+
+                <div class="fs-7 text-muted mb-6" id="fundShiftWalletMessage">
+                  Select a Shift to check whether your wallet balance is sufficient.
+                </div>
+
+                <div class="mt-auto">
+                  <button
+                    type="button"
+                    class="btn btn-primary w-100"
+                    id="fundShiftFromWalletButton"
+                    disabled
+                  >
+                    <span class="indicator-label"> Fund from Wallet </span>
+
+                    <span class="indicator-progress">
+                      Funding...
+
+                      <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+                    </span>
+                  </button>
+
+                  <a
+                    href="/employer/billing"
+                    class="btn btn-light-primary w-100 mt-3 d-none"
+                    id="fundShiftAddWalletFundsLink"
+                  >
+                    Add Money to Wallet
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- PAYSTACK CHECKOUT -->
+
+          <div class="col-lg-6">
+            <div class="card border border-gray-300 h-100" id="fundShiftCheckoutOption">
+              <div class="card-body d-flex flex-column p-7">
+                <div class="d-flex align-items-start justify-content-between gap-4 mb-6">
+                  <div class="d-flex align-items-center">
+                    <div class="symbol symbol-50px me-4">
+                      <span class="symbol-label bg-light-success">
+                        <i class="ki-duotone ki-credit-cart fs-2x text-success">
+                          <span class="path1"></span>
+                          <span class="path2"></span>
+                        </i>
+                      </span>
+                    </div>
+
+                    <div>
+                      <div class="fw-bold fs-5 text-gray-900">Paystack Checkout</div>
+
+                      <div class="fs-7 text-muted mt-1">
+                        Pay the full engagement charge through Paystack.
+                      </div>
+                    </div>
+                  </div>
+
+                  <span class="badge badge-light-success" id="fundShiftCheckoutStatusBadge">
+                    Online Payment
+                  </span>
+                </div>
+
+                <div class="bg-light rounded p-5 mb-5">
+                  <div class="fw-semibold text-gray-800 mb-3">What happens next</div>
+
+                  <div class="d-flex align-items-start mb-3">
+                    <i class="ki-duotone ki-check-circle fs-4 text-success me-3 mt-1">
+                      <span class="path1"></span>
+                      <span class="path2"></span>
+                    </i>
+
+                    <span class="fs-7 text-muted">
+                      You will be redirected to Paystack Checkout.
+                    </span>
+                  </div>
+
+                  <div class="d-flex align-items-start mb-3">
+                    <i class="ki-duotone ki-check-circle fs-4 text-success me-3 mt-1">
+                      <span class="path1"></span>
+                      <span class="path2"></span>
+                    </i>
+
+                    <span class="fs-7 text-muted">
+                      Loqum will verify the payment directly with Paystack.
+                    </span>
+                  </div>
+
+                  <div class="d-flex align-items-start">
+                    <i class="ki-duotone ki-check-circle fs-4 text-success me-3 mt-1">
+                      <span class="path1"></span>
+                      <span class="path2"></span>
+                    </i>
+
+                    <span class="fs-7 text-muted">
+                      The Shift publishes only after successful verification.
+                    </span>
+                  </div>
+                </div>
+
+                <div class="fs-7 text-muted mb-6" id="fundShiftCheckoutMessage">
+                  Use this option when you do not want to pay from your employer wallet.
+                </div>
+
+                <div class="mt-auto">
+                  <button
+                    type="button"
+                    class="btn btn-success w-100"
+                    id="initializeFundShiftCheckoutButton"
+                    disabled
+                  >
+                    <span class="indicator-label"> Continue to Paystack </span>
+
+                    <span class="indicator-progress">
+                      Preparing Checkout...
+
+                      <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div
+          class="notice d-flex bg-light-warning rounded border-warning border border-dashed p-5 mt-8"
+        >
+          <i class="ki-duotone ki-information-5 fs-2 text-warning me-4">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+          </i>
+
+          <div class="fs-7 text-gray-700">
+            Closing this modal does not publish the Shift. It will remain in Pending Funding until
+            payment is successfully completed.
+          </div>
+        </div>
+      </div>
+
+      <!-- ─────────────────────────────── FOOTER ─────────────────────────────── -->
+
+      <div class="modal-footer flex-center">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>

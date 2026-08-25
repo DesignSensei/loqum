@@ -1,9 +1,15 @@
 // services/platformSettingsService.js
 
 const PlatformSettings = require("../models/PlatformSettings");
+
+const { FINANCIAL_RATE_SCALE } = require("../constants/shiftPosting");
+
+const money = require("../utils/money");
 const logger = require("../utils/logger");
 
 class PlatformSettingsService {
+  /* ─────────────────────────────── ERRORS ─────────────────────────────── */
+
   static createSettingsError({ message, code, statusCode = 500 }) {
     const error = new Error(message);
 
@@ -14,8 +20,10 @@ class PlatformSettingsService {
     return error;
   }
 
+  /* ─────────────────────────────── BASIC VALIDATION ─────────────────────────────── */
+
   static normalizeCountryCode(countryCode) {
-    if (countryCode === null || countryCode === undefined) {
+    if (countryCode === null || countryCode === undefined || countryCode === "") {
       return null;
     }
 
@@ -47,6 +55,30 @@ class PlatformSettingsService {
     return normalizedCurrency;
   }
 
+  static assertRate(value, fieldName) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
+      throw this.createSettingsError({
+        message: `${fieldName} must be a number between 0 and 1.`,
+        code: "INVALID_RATE_SETTING",
+      });
+    }
+
+    try {
+      money.scaleRate({
+        rate: value,
+        rateScale: FINANCIAL_RATE_SCALE,
+        fieldName,
+      });
+    } catch (error) {
+      throw this.createSettingsError({
+        message: `${fieldName} must use the supported financial rate precision.`,
+        code: "INVALID_RATE_SETTING",
+      });
+    }
+
+    return value;
+  }
+
   static assertPlatformFeeRate(platformFeeRate) {
     if (
       typeof platformFeeRate !== "number" ||
@@ -60,13 +92,26 @@ class PlatformSettingsService {
       });
     }
 
+    try {
+      money.scaleRate({
+        rate: platformFeeRate,
+        rateScale: FINANCIAL_RATE_SCALE,
+        fieldName: "platformFeeRate",
+      });
+    } catch (error) {
+      throw this.createSettingsError({
+        message: "The configured platform fee rate uses unsupported financial precision.",
+        code: "INVALID_PLATFORM_FEE_RATE",
+      });
+    }
+
     return platformFeeRate;
   }
 
-  static assertMinorUnitAmount(amount, fieldName) {
-    if (!Number.isSafeInteger(amount) || amount < 0) {
+  static assertPositiveMinorUnitAmount(amount, fieldName) {
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
       throw this.createSettingsError({
-        message: `${fieldName} must be a non-negative whole number in minor units.`,
+        message: `${fieldName} must be a positive whole number in minor units.`,
         code: "INVALID_FINANCIAL_SETTING",
       });
     }
@@ -85,12 +130,19 @@ class PlatformSettingsService {
     return value;
   }
 
-  /**
-   * Returns the active global PlatformSettings document.
-   *
-   * No in-memory cache is used yet so changes to platform settings take
-   * effect immediately for newly posted shifts and other new operations.
-   */
+  static assertPositiveInteger(value, fieldName) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw this.createSettingsError({
+        message: `${fieldName} must be a positive whole number.`,
+        code: "INVALID_PLATFORM_SETTING",
+      });
+    }
+
+    return value;
+  }
+
+  /* ─────────────────────────────── ACTIVE SETTINGS ─────────────────────────────── */
+
   static async getActiveSettings() {
     const settings = await PlatformSettings.findOne({
       key: "global",
@@ -107,20 +159,28 @@ class PlatformSettingsService {
     return settings;
   }
 
-  /**
-   * Resolves the applicable country setting from an already loaded global
-   * settings document.
-   *
-   * An active countrySettings entry is the preferred source.
-   * The global financial fields are fallback values for the default country.
-   */
+  /* ─────────────────────────────── COUNTRY SETTINGS ─────────────────────────────── */
+
   static resolveCountrySettings(settings, requestedCountryCode) {
     const defaultCountryCode = this.normalizeCountryCode(settings.defaultCountryCode);
+
+    if (!defaultCountryCode) {
+      throw this.createSettingsError({
+        message: "The default platform country has not been configured.",
+        code: "DEFAULT_COUNTRY_NOT_CONFIGURED",
+      });
+    }
 
     const countryCode = this.normalizeCountryCode(requestedCountryCode) || defaultCountryCode;
 
     const activeCountryCodes = Array.isArray(settings.activeCountryCodes)
-      ? settings.activeCountryCodes.map((code) => String(code).trim().toUpperCase())
+      ? settings.activeCountryCodes
+          .map((code) =>
+            String(code || "")
+              .trim()
+              .toUpperCase()
+          )
+          .filter(Boolean)
       : [];
 
     if (!activeCountryCodes.includes(countryCode)) {
@@ -148,17 +208,17 @@ class PlatformSettingsService {
 
         platformFeeRate: this.assertPlatformFeeRate(matchingCountrySetting.platformFeeRate),
 
-        maximumEmployerWalletBalance: this.assertMinorUnitAmount(
-          matchingCountrySetting.maximumEmployerWalletBalance,
-          "maximumEmployerWalletBalance"
+        maximumEmployerWalletExternalTopupBalance: this.assertPositiveMinorUnitAmount(
+          matchingCountrySetting.maximumEmployerWalletExternalTopupBalance,
+          "maximumEmployerWalletExternalTopupBalance"
         ),
 
-        minimumEmployerWithdrawalAmount: this.assertMinorUnitAmount(
+        minimumEmployerWithdrawalAmount: this.assertPositiveMinorUnitAmount(
           matchingCountrySetting.minimumEmployerWithdrawalAmount,
           "minimumEmployerWithdrawalAmount"
         ),
 
-        minimumProfessionalWithdrawalAmount: this.assertMinorUnitAmount(
+        minimumProfessionalWithdrawalAmount: this.assertPositiveMinorUnitAmount(
           matchingCountrySetting.minimumProfessionalWithdrawalAmount,
           "minimumProfessionalWithdrawalAmount"
         ),
@@ -179,67 +239,81 @@ class PlatformSettingsService {
 
       platformFeeRate: this.assertPlatformFeeRate(settings.platformFeeRate),
 
-      maximumEmployerWalletBalance: this.assertMinorUnitAmount(
-        settings.maximumEmployerWalletBalance,
-        "maximumEmployerWalletBalance"
+      maximumEmployerWalletExternalTopupBalance: this.assertPositiveMinorUnitAmount(
+        settings.maximumEmployerWalletExternalTopupBalance,
+        "maximumEmployerWalletExternalTopupBalance"
       ),
 
-      minimumEmployerWithdrawalAmount: this.assertMinorUnitAmount(
+      minimumEmployerWithdrawalAmount: this.assertPositiveMinorUnitAmount(
         settings.minimumEmployerWithdrawalAmount,
         "minimumEmployerWithdrawalAmount"
       ),
 
-      minimumProfessionalWithdrawalAmount: this.assertMinorUnitAmount(
+      minimumProfessionalWithdrawalAmount: this.assertPositiveMinorUnitAmount(
         settings.minimumProfessionalWithdrawalAmount,
         "minimumProfessionalWithdrawalAmount"
       ),
     };
   }
 
-  /**
-   * Builds the attendance configuration from the active platform settings.
-   */
+  /* ─────────────────────────────── ATTENDANCE SETTINGS ─────────────────────────────── */
+
   static buildAttendanceSettings(settings) {
-    /*
-     * This fallback supports settings documents created before
-     * checkInPinRevealBeforeMinutes was added.
-     */
-    const checkInPinRevealBeforeMinutes =
-      settings.checkInPinRevealBeforeMinutes ?? settings.checkInWindowBeforeMinutes;
+    const overtimeResponseHours = settings.overtimeResponseHours ?? 24;
+
+    const checkInWindowBeforeMinutes = settings.checkInWindowBeforeMinutes ?? 30;
+
+    const noShowGraceMinutes = settings.noShowGraceMinutes ?? 30;
+
+    const unfilledFinalizationGraceMinutes = settings.unfilledFinalizationGraceMinutes ?? 15;
+
+    const defaultGeofenceRadiusMeters = settings.defaultGeofenceRadiusMeters ?? 100;
+
+    const minimumGeofenceRadiusMeters = settings.minimumGeofenceRadiusMeters ?? 20;
+
+    const maximumGeofenceRadiusMeters = settings.maximumGeofenceRadiusMeters ?? 1000;
+
+    const maximumLocationAccuracyMeters = settings.maximumLocationAccuracyMeters ?? 100;
 
     const attendanceSettings = {
+      overtimeResponseHours: this.assertPositiveInteger(
+        overtimeResponseHours,
+        "overtimeResponseHours"
+      ),
+
       checkInWindowBeforeMinutes: this.assertNonNegativeInteger(
-        settings.checkInWindowBeforeMinutes,
+        checkInWindowBeforeMinutes,
         "checkInWindowBeforeMinutes"
       ),
 
-      checkInPinRevealBeforeMinutes: this.assertNonNegativeInteger(
-        checkInPinRevealBeforeMinutes,
-        "checkInPinRevealBeforeMinutes"
+      noShowGraceMinutes: this.assertNonNegativeInteger(noShowGraceMinutes, "noShowGraceMinutes"),
+
+      /*
+       * ShiftOccurrence requires unfilledFinalizationAt to be strictly later
+       * than fillCutoffAt, so zero is not a valid runtime configuration.
+       */
+      unfilledFinalizationGraceMinutes: this.assertPositiveInteger(
+        unfilledFinalizationGraceMinutes,
+        "unfilledFinalizationGraceMinutes"
       ),
 
-      noShowGraceMinutes: this.assertNonNegativeInteger(
-        settings.noShowGraceMinutes,
-        "noShowGraceMinutes"
-      ),
-
-      defaultGeofenceRadiusMeters: this.assertNonNegativeInteger(
-        settings.defaultGeofenceRadiusMeters,
+      defaultGeofenceRadiusMeters: this.assertPositiveInteger(
+        defaultGeofenceRadiusMeters,
         "defaultGeofenceRadiusMeters"
       ),
 
-      minimumGeofenceRadiusMeters: this.assertNonNegativeInteger(
-        settings.minimumGeofenceRadiusMeters,
+      minimumGeofenceRadiusMeters: this.assertPositiveInteger(
+        minimumGeofenceRadiusMeters,
         "minimumGeofenceRadiusMeters"
       ),
 
-      maximumGeofenceRadiusMeters: this.assertNonNegativeInteger(
-        settings.maximumGeofenceRadiusMeters,
+      maximumGeofenceRadiusMeters: this.assertPositiveInteger(
+        maximumGeofenceRadiusMeters,
         "maximumGeofenceRadiusMeters"
       ),
 
       maximumLocationAccuracyMeters: this.assertNonNegativeInteger(
-        settings.maximumLocationAccuracyMeters,
+        maximumLocationAccuracyMeters,
         "maximumLocationAccuracyMeters"
       ),
     };
@@ -270,43 +344,72 @@ class PlatformSettingsService {
     return attendanceSettings;
   }
 
-  /**
-   * Returns the resolved financial configuration for a country.
-   */
+  /* ─────────────────────────────── CANCELLATION POLICY ─────────────────────────────── */
+
+  static buildShiftCancellationPolicy(settings) {
+    const configuredPolicy =
+      settings.shiftCancellationPolicy && typeof settings.shiftCancellationPolicy === "object"
+        ? settings.shiftCancellationPolicy
+        : {};
+
+    const lateCancellationWindowMinutes = configuredPolicy.lateCancellationWindowMinutes ?? 30;
+
+    const lateCancellationProfessionalPayRate =
+      configuredPolicy.lateCancellationProfessionalPayRate ?? 0.25;
+
+    const activeWorkCancellationMinimumPayRate =
+      configuredPolicy.activeWorkCancellationMinimumPayRate ?? 0.25;
+
+    return {
+      lateCancellationWindowMinutes: this.assertNonNegativeInteger(
+        lateCancellationWindowMinutes,
+        "lateCancellationWindowMinutes"
+      ),
+
+      lateCancellationProfessionalPayRate: this.assertRate(
+        lateCancellationProfessionalPayRate,
+        "lateCancellationProfessionalPayRate"
+      ),
+
+      activeWorkCancellationMinimumPayRate: this.assertRate(
+        activeWorkCancellationMinimumPayRate,
+        "activeWorkCancellationMinimumPayRate"
+      ),
+    };
+  }
+
+  /* ─────────────────────────────── PUBLIC GETTERS ─────────────────────────────── */
+
   static async getCountrySettings(countryCode) {
     const settings = await this.getActiveSettings();
 
     return this.resolveCountrySettings(settings, countryCode);
   }
 
-  /**
-   * Returns only the pricing data needed when a shift is posted.
-   */
   static async getShiftPricingSettings(countryCode) {
     const countrySettings = await this.getCountrySettings(countryCode);
 
     return {
       countryCode: countrySettings.countryCode,
+
       currency: countrySettings.currency,
+
       platformFeeRate: countrySettings.platformFeeRate,
     };
   }
 
-  /**
-   * Returns the attendance rules used for PIN visibility, check-in,
-   * no-show handling and geofencing.
-   */
   static async getAttendanceSettings() {
     const settings = await this.getActiveSettings();
 
     return this.buildAttendanceSettings(settings);
   }
 
-  /**
-   * Returns the settings needed to post a shift.
-   *
-   * Pricing and attendance settings are resolved through one database query.
-   */
+  static async getShiftCancellationPolicy() {
+    const settings = await this.getActiveSettings();
+
+    return this.buildShiftCancellationPolicy(settings);
+  }
+
   static async getShiftPostingSettings(countryCode) {
     const settings = await this.getActiveSettings();
 
@@ -315,11 +418,15 @@ class PlatformSettingsService {
     const shiftPostingSettings = {
       pricing: {
         countryCode: countrySettings.countryCode,
+
         currency: countrySettings.currency,
+
         platformFeeRate: countrySettings.platformFeeRate,
       },
 
       attendance: this.buildAttendanceSettings(settings),
+
+      cancellationPolicy: this.buildShiftCancellationPolicy(settings),
     };
 
     logger.info(`Shift posting settings resolved for country: ${countrySettings.countryCode}`);

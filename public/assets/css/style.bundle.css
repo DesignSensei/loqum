@@ -50442,71 +50442,41 @@ body.onboarding-page {
   --sidebar-active-color: var(--bs-primary);
 }
 
-/* Inactive state */
-.app-sidebar-menu .btn.btn-icon,
-.app-sidebar-menu .menu-link {
+/* Only control the main sidebar rail buttons */
+.app-sidebar-menu .loqum-sidebar-link {
   color: var(--sidebar-inactive-color) !important;
   background-color: transparent !important;
   box-shadow: none !important;
 }
 
-/* Inactive icon/text */
-.app-sidebar-menu .btn.btn-icon i,
-.app-sidebar-menu .btn.btn-icon i [class^="path"],
-.app-sidebar-menu .menu-link .menu-title,
-.app-sidebar-menu .menu-link .menu-icon,
-.app-sidebar-menu .menu-link .menu-icon i,
-.app-sidebar-menu .menu-link .menu-icon i [class^="path"] {
+.app-sidebar-menu .loqum-sidebar-link i,
+.app-sidebar-menu .loqum-sidebar-link i [class^="path"],
+.app-sidebar-menu .loqum-sidebar-link .menu-icon,
+.app-sidebar-menu .loqum-sidebar-link .menu-icon i,
+.app-sidebar-menu .loqum-sidebar-link .menu-icon i [class^="path"] {
   color: var(--sidebar-inactive-color) !important;
 }
 
-/* Hover state: only the icon/text changes */
-.app-sidebar-menu .btn.btn-icon:hover,
-.app-sidebar-menu .menu-link:hover,
-.app-sidebar-menu .menu.menu-item:hover>.menu-link {
-  color: var(--sidebar-active-color) !important;
-  background-color: transparent !important;
-  box-shadow: none !important;
-}
-
-/* Hover icon/text */
-.app-sidebar-menu .btn.btn-icon:hover i,
-.app-sidebar-menu .btn.btn-icon:hover i [class^="path"],
-.app-sidebar-menu .menu-link:hover .menu-title,
-.app-sidebar-menu .menu-link:hover .menu-icon,
-.app-sidebar-menu .menu-link:hover .menu-icon i,
-.app-sidebar-menu .menu-link:hover .menu-icon i [class^="path"],
-.app-sidebar-menu .menu.menu-item:hover>.menu-link .menu-icon,
-.app-sidebar-menu .menu.menu-item:hover>.menu-link .menu-icon i,
-.app-sidebar-menu .menu.menu-item:hover>.menu-link .menu-icon i [class^="path"] {
+/* Rail hover and open state */
+.app-sidebar-menu .loqum-sidebar-link:hover,
+.app-sidebar-menu .loqum-sidebar-link.active,
+.app-sidebar-menu .loqum-sidebar-link.show,
+.app-sidebar-menu .loqum-sidebar-link.here,
+.app-sidebar-menu .menu.menu-item:hover>.loqum-sidebar-link {
   color: var(--sidebar-active-color) !important;
 }
 
-/* Active/open state: only the icon/text changes */
-.app-sidebar-menu .btn.btn-icon.active,
-.app-sidebar-menu .menu-link.active,
-.app-sidebar-menu .menu-link.show,
-.app-sidebar-menu .menu-link.here {
-  color: var(--sidebar-active-color) !important;
-  background-color: transparent !important;
-  box-shadow: none !important;
-}
-
-/* Active/open icon/text */
-.app-sidebar-menu .btn.btn-icon.active i,
-.app-sidebar-menu .btn.btn-icon.active i [class^="path"],
-.app-sidebar-menu .menu-link.active .menu-title,
-.app-sidebar-menu .menu-link.active .menu-icon,
-.app-sidebar-menu .menu-link.active .menu-icon i,
-.app-sidebar-menu .menu-link.active .menu-icon i [class^="path"],
-.app-sidebar-menu .menu-link.show .menu-title,
-.app-sidebar-menu .menu-link.show .menu-icon,
-.app-sidebar-menu .menu-link.show .menu-icon i,
-.app-sidebar-menu .menu-link.show .menu-icon i [class^="path"],
-.app-sidebar-menu .menu-link.here .menu-title,
-.app-sidebar-menu .menu-link.here .menu-icon,
-.app-sidebar-menu .menu-link.here .menu-icon i,
-.app-sidebar-menu .menu-link.here .menu-icon i [class^="path"] {
+.app-sidebar-menu .loqum-sidebar-link:hover i,
+.app-sidebar-menu .loqum-sidebar-link:hover i [class^="path"],
+.app-sidebar-menu .loqum-sidebar-link.active i,
+.app-sidebar-menu .loqum-sidebar-link.active i [class^="path"],
+.app-sidebar-menu .loqum-sidebar-link.show i,
+.app-sidebar-menu .loqum-sidebar-link.show i [class^="path"],
+.app-sidebar-menu .loqum-sidebar-link.here i,
+.app-sidebar-menu .loqum-sidebar-link.here i [class^="path"],
+.app-sidebar-menu .menu.menu-item:hover>.loqum-sidebar-link .menu-icon,
+.app-sidebar-menu .menu.menu-item:hover>.loqum-sidebar-link .menu-icon i,
+.app-sidebar-menu .menu.menu-item:hover>.loqum-sidebar-link .menu-icon i [class^="path"] {
   color: var(--sidebar-active-color) !important;
 }
 
@@ -50761,5 +50731,41 @@ html[data-bs-theme="dark"] #kt_app_sidebar .menu.menu-item:hover>.loqum-sidebar-
     background: transparent !important;
     box-shadow: none !important;
   }
+}
+
+.loqum-shifts-submenu .menu-link {
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.loqum-shifts-submenu .menu-link .menu-title {
+  color: var(--bs-gray-700) !important;
+}
+
+.loqum-shifts-submenu .menu-link:hover,
+.loqum-shifts-submenu .menu-link:focus,
+.loqum-shifts-submenu .menu-link.active,
+.loqum-shifts-submenu .menu-link.here {
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.loqum-shifts-submenu .menu-link:hover .menu-title,
+.loqum-shifts-submenu .menu-link:focus .menu-title,
+.loqum-shifts-submenu .menu-link.active .menu-title,
+.loqum-shifts-submenu .menu-link.here .menu-title {
+  color: var(--bs-primary) !important;
+}
+
+.loqum-shifts-submenu {
+  --loqum-shifts-left-padding: 1rem;
+}
+
+.loqum-shifts-submenu .menu-link {
+  padding-left: var(--loqum-shifts-left-padding);
+}
+
+.loqum-shifts-submenu .loqum-shifts-menu-heading {
+  padding-left: var(--loqum-shifts-left-padding) !important;
 }
 

@@ -2,77 +2,6 @@
 
 const { buildGeoPoint } = require("../utils/geo");
 
-/* ─────────────────────────────── SHARED HELPERS ─────────────────────────────── */
-
-function normalizeEmail(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase();
-}
-
-function isValidEmail(value) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-}
-
-/* ─────────────────────────────── PROFESSIONAL PROFILE INPUT ─────────────────────────────── */
-
-function validateProfessionalLicenceNumber(type, licenceNumber) {
-  if (type === "pharmacist" && !/^[0-9]{6}$/.test(String(licenceNumber || "").trim())) {
-    throw new Error("PCN licence number must be exactly 6 digits.");
-  }
-}
-
-function buildProfessionalProfileData(data = {}) {
-  const {
-    type,
-    licenceNumber,
-    phoneCode,
-    phone,
-    specialty,
-    address,
-    state,
-    lga,
-    latitude,
-    longitude,
-    googlePlaceId,
-    yearsOfExperience,
-    bio,
-  } = data;
-
-  if (!type || !licenceNumber || !phone || !phoneCode || !specialty || !address || !state || !lga) {
-    throw new Error("Missing required professional or location fields");
-  }
-
-  validateProfessionalLicenceNumber(type, licenceNumber);
-
-  if (!String(googlePlaceId || "").trim()) {
-    throw new Error("Please select a valid address from the suggestions.");
-  }
-
-  const location = buildGeoPoint(
-    latitude,
-    longitude,
-    "Please select a valid address from the suggestions."
-  );
-
-  return {
-    type: String(type).trim(),
-    licenceNumber: String(licenceNumber).trim(),
-    phoneCode: String(phoneCode).trim(),
-    phone: String(phone).trim(),
-    specialty: String(specialty).trim(),
-    address: String(address).trim(),
-    googlePlaceId: String(googlePlaceId).trim(),
-    location,
-    state: String(state).trim(),
-    lga: String(lga).trim(),
-    yearsOfExperience: Number(yearsOfExperience) || 0,
-    bio: String(bio || "").trim(),
-  };
-}
-
-/* ─────────────────────────────── EMPLOYER PROFILE INPUT ─────────────────────────────── */
-
 const regulatoryBodyLabels = {
   pcn: "Pharmacists Council of Nigeria",
   hefamaa: "Health Facilities Monitoring and Accreditation Agency",
@@ -81,11 +10,41 @@ const regulatoryBodyLabels = {
   other: "Other Regulatory Body",
 };
 
+function normalizeText(value) {
+  return String(value || "").trim();
+}
+
+function normalizeLowercase(value) {
+  return normalizeText(value).toLowerCase();
+}
+
+function normalizeEmail(value) {
+  return normalizeLowercase(value);
+}
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function assertRequiredFields(values, message) {
+  const hasMissingField = values.some((value) => {
+    return !normalizeText(value);
+  });
+
+  if (hasMissingField) {
+    throw new Error(message);
+  }
+}
+
+function validateProfessionalLicenceNumber(type, licenceNumber) {
+  if (type === "pharmacist" && !/^\d{6}$/.test(licenceNumber)) {
+    throw new Error("PCN licence number must be exactly 6 digits.");
+  }
+}
+
 function getRegulatoryBody(type, state) {
-  const cleanType = String(type || "").trim();
-  const cleanState = String(state || "")
-    .trim()
-    .toLowerCase();
+  const cleanType = normalizeLowercase(type);
+  const cleanState = normalizeLowercase(state);
 
   if (cleanType === "pharmacy") {
     return "pcn";
@@ -102,149 +61,220 @@ function getRegulatoryBody(type, state) {
   return null;
 }
 
-function getRegulatoryBodyLabel(regulatoryBody) {
-  return regulatoryBodyLabels[regulatoryBody] || "-";
-}
-
 function normalizeCACRegistrationNumber(value) {
-  return String(value || "")
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, "");
+  return normalizeText(value).toUpperCase().replace(/\s+/g, "");
 }
 
 function normalizeRegulatoryRegistrationNumber(value) {
-  return String(value || "")
-    .trim()
-    .replace(/\s+/g, " ");
+  return normalizeText(value).replace(/\s+/g, " ");
 }
 
 function isValidCACRegistrationNumber(value) {
-  return /^(RC|BN|IT|LP|LLP)\d{4,10}$/i.test(value);
+  return /^(RC|BN|IT|LP|LLP)\d{4,10}$/.test(value);
 }
 
 function isValidRegulatoryRegistrationNumber(value) {
-  return /^[A-Z0-9/\\\- ]{4,30}$/i.test(value);
-}
-
-function buildEmployerProfileData(data = {}) {
-  const {
-    type,
-    businessName,
-    businessEmail,
-    cacRegistrationNumber,
-    regulatoryRegistrationNumber,
-    state,
-    lga,
-    address,
-    latitude,
-    longitude,
-    googlePlaceId,
-    businessPhoneCode,
-    businessPhone,
-    contactFirstName,
-    contactLastName,
-    contactRole,
-    contactPhoneCode,
-    contactPhone,
-  } = data;
-
-  const cleanType = String(type || "").trim();
-  const cleanState = String(state || "").trim();
-
-  if (
-    !cleanType ||
-    !businessName ||
-    !businessEmail ||
-    !cacRegistrationNumber ||
-    !regulatoryRegistrationNumber ||
-    !cleanState ||
-    !lga ||
-    !address ||
-    !businessPhoneCode ||
-    !businessPhone ||
-    !contactFirstName ||
-    !contactLastName ||
-    !contactRole ||
-    !contactPhoneCode ||
-    !contactPhone
-  ) {
-    throw new Error("Missing required employer profile fields.");
-  }
-
-  const regulatoryBody = getRegulatoryBody(cleanType, cleanState);
-
-  if (!regulatoryBody) {
-    throw new Error("Invalid employer type selected.");
-  }
-
-  if (!String(googlePlaceId || "").trim()) {
-    throw new Error("Please select a valid business address from the suggestions.");
-  }
-
-  const location = buildGeoPoint(
-    latitude,
-    longitude,
-    "Please select a valid business address from the suggestions."
-  );
-
-  const normalizedBusinessEmail = normalizeEmail(businessEmail);
-
-  if (!isValidEmail(normalizedBusinessEmail)) {
-    throw new Error("Enter a valid business email address.");
-  }
-
-  const normalizedCACRegistrationNumber = normalizeCACRegistrationNumber(cacRegistrationNumber);
-
-  if (!isValidCACRegistrationNumber(normalizedCACRegistrationNumber)) {
-    throw new Error("Enter a valid CAC number, e.g. RC1234567 or BN1234567.");
-  }
-
-  const normalizedRegulatoryRegistrationNumber = normalizeRegulatoryRegistrationNumber(
-    regulatoryRegistrationNumber
-  );
-
-  if (!isValidRegulatoryRegistrationNumber(normalizedRegulatoryRegistrationNumber)) {
-    throw new Error(
-      "Enter a valid regulatory registration number exactly as shown on the certificate."
-    );
-  }
-
-  return {
-    type: cleanType,
-
-    businessName: String(businessName).trim(),
-    businessEmail: normalizedBusinessEmail,
-
-    cacRegistrationNumber: normalizedCACRegistrationNumber,
-
-    regulatoryBody,
-    regulatoryRegistrationNumber: normalizedRegulatoryRegistrationNumber,
-
-    businessPhoneCode: String(businessPhoneCode).trim(),
-    businessPhone: String(businessPhone).trim(),
-
-    address: String(address).trim(),
-    googlePlaceId: String(googlePlaceId).trim(),
-    location,
-    state: cleanState,
-    lga: String(lga).trim(),
-
-    contactFirstName: String(contactFirstName).trim(),
-    contactLastName: String(contactLastName).trim(),
-    contactRole: String(contactRole).trim(),
-    contactPhoneCode: String(contactPhoneCode).trim(),
-    contactPhone: String(contactPhone).trim(),
-  };
+  return /^[A-Z0-9/ -]{4,30}$/i.test(value);
 }
 
 class ProfileInputService {
-  static buildProfessionalProfileData(data) {
-    return buildProfessionalProfileData(data);
+  static buildProfessionalProfileData(data = {}) {
+    const {
+      type,
+      licenceNumber,
+      phoneCode,
+      phone,
+      specialty,
+      address,
+      state,
+      lga,
+      latitude,
+      longitude,
+      googlePlaceId,
+      yearsOfExperience,
+      bio,
+    } = data;
+
+    const cleanType = normalizeLowercase(type);
+    const cleanLicenceNumber = normalizeText(licenceNumber);
+    const cleanPhoneCode = normalizeText(phoneCode);
+    const cleanPhone = normalizeText(phone);
+    const cleanSpecialty = normalizeText(specialty);
+    const cleanAddress = normalizeText(address);
+    const cleanState = normalizeText(state);
+    const cleanLga = normalizeText(lga);
+    const cleanGooglePlaceId = normalizeText(googlePlaceId);
+
+    assertRequiredFields(
+      [
+        cleanType,
+        cleanLicenceNumber,
+        cleanPhoneCode,
+        cleanPhone,
+        cleanSpecialty,
+        cleanAddress,
+        cleanState,
+        cleanLga,
+      ],
+      "Missing required professional or location fields."
+    );
+
+    validateProfessionalLicenceNumber(cleanType, cleanLicenceNumber);
+
+    if (!cleanGooglePlaceId) {
+      throw new Error("Please select a valid address from the suggestions.");
+    }
+
+    const location = buildGeoPoint(
+      latitude,
+      longitude,
+      "Please select a valid address from the suggestions."
+    );
+
+    return {
+      type: cleanType,
+      licenceNumber: cleanLicenceNumber,
+
+      phoneCode: cleanPhoneCode,
+      phone: cleanPhone,
+
+      specialty: cleanSpecialty,
+
+      address: cleanAddress,
+      googlePlaceId: cleanGooglePlaceId,
+      location,
+      state: cleanState,
+      lga: cleanLga,
+
+      yearsOfExperience: Number(yearsOfExperience) || 0,
+
+      bio: normalizeText(bio),
+    };
   }
 
-  static buildEmployerProfileData(data) {
-    return buildEmployerProfileData(data);
+  static buildEmployerProfileData(data = {}) {
+    const {
+      type,
+      businessName,
+      businessEmail,
+      cacRegistrationNumber,
+      regulatoryRegistrationNumber,
+      state,
+      lga,
+      address,
+      latitude,
+      longitude,
+      googlePlaceId,
+      businessPhoneCode,
+      businessPhone,
+      contactFirstName,
+      contactLastName,
+      contactRole,
+      contactPhoneCode,
+      contactPhone,
+    } = data;
+
+    const cleanType = normalizeLowercase(type);
+    const cleanBusinessName = normalizeText(businessName);
+    const cleanBusinessEmail = normalizeEmail(businessEmail);
+
+    const cleanState = normalizeText(state);
+    const cleanLga = normalizeText(lga);
+    const cleanAddress = normalizeText(address);
+    const cleanGooglePlaceId = normalizeText(googlePlaceId);
+
+    const cleanBusinessPhoneCode = normalizeText(businessPhoneCode);
+    const cleanBusinessPhone = normalizeText(businessPhone);
+
+    const cleanContactFirstName = normalizeText(contactFirstName);
+    const cleanContactLastName = normalizeText(contactLastName);
+    const cleanContactRole = normalizeText(contactRole);
+    const cleanContactPhoneCode = normalizeText(contactPhoneCode);
+    const cleanContactPhone = normalizeText(contactPhone);
+
+    assertRequiredFields(
+      [
+        cleanType,
+        cleanBusinessName,
+        cleanBusinessEmail,
+        cacRegistrationNumber,
+        regulatoryRegistrationNumber,
+        cleanState,
+        cleanLga,
+        cleanAddress,
+        cleanBusinessPhoneCode,
+        cleanBusinessPhone,
+        cleanContactFirstName,
+        cleanContactLastName,
+        cleanContactRole,
+        cleanContactPhoneCode,
+        cleanContactPhone,
+      ],
+      "Missing required employer profile fields."
+    );
+
+    const regulatoryBody = getRegulatoryBody(cleanType, cleanState);
+
+    if (!regulatoryBody) {
+      throw new Error("Invalid employer type selected.");
+    }
+
+    if (!cleanGooglePlaceId) {
+      throw new Error("Please select a valid business address from the suggestions.");
+    }
+
+    const location = buildGeoPoint(
+      latitude,
+      longitude,
+      "Please select a valid business address from the suggestions."
+    );
+
+    if (!isValidEmail(cleanBusinessEmail)) {
+      throw new Error("Enter a valid business email address.");
+    }
+
+    const normalizedCACRegistrationNumber = normalizeCACRegistrationNumber(cacRegistrationNumber);
+
+    if (!isValidCACRegistrationNumber(normalizedCACRegistrationNumber)) {
+      throw new Error("Enter a valid CAC number, e.g. RC1234567 or BN1234567.");
+    }
+
+    const normalizedRegulatoryRegistrationNumber = normalizeRegulatoryRegistrationNumber(
+      regulatoryRegistrationNumber
+    );
+
+    if (!isValidRegulatoryRegistrationNumber(normalizedRegulatoryRegistrationNumber)) {
+      throw new Error(
+        "Enter a valid regulatory registration number exactly as shown on the certificate."
+      );
+    }
+
+    return {
+      type: cleanType,
+
+      businessName: cleanBusinessName,
+      businessEmail: cleanBusinessEmail,
+
+      cacRegistrationNumber: normalizedCACRegistrationNumber,
+
+      regulatoryBody,
+      regulatoryRegistrationNumber: normalizedRegulatoryRegistrationNumber,
+
+      businessPhoneCode: cleanBusinessPhoneCode,
+      businessPhone: cleanBusinessPhone,
+
+      address: cleanAddress,
+      googlePlaceId: cleanGooglePlaceId,
+      location,
+      state: cleanState,
+      lga: cleanLga,
+
+      contactFirstName: cleanContactFirstName,
+      contactLastName: cleanContactLastName,
+      contactRole: cleanContactRole,
+      contactPhoneCode: cleanContactPhoneCode,
+      contactPhone: cleanContactPhone,
+    };
   }
 
   static getRegulatoryBody(type, state) {
@@ -252,7 +282,7 @@ class ProfileInputService {
   }
 
   static getRegulatoryBodyLabel(regulatoryBody) {
-    return getRegulatoryBodyLabel(regulatoryBody);
+    return regulatoryBodyLabels[regulatoryBody] || "-";
   }
 
   static getRegulatoryBodyLabels() {

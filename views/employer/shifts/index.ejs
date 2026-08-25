@@ -3,24 +3,23 @@
 <div
   id="manageShiftsPage"
   data-currency="<%= shiftsView.employer.currency %>"
+  data-time-zone="<%= shiftsView.postShiftForm.timeZone %>"
+  data-maximum-occurrence-count="<%= shiftsView.postShiftForm.maximumOccurrenceCount %>"
+  data-funding-modal-id="<%= shiftsView.actions.fundShiftModalId %>"
 >
-  <!-- POSTING AVAILABILITY  -->
+  <!-- ─────────────────────────────── POSTING AVAILABILITY ─────────────────────────────── -->
 
   <% if (shiftsView.postShiftForm.unavailableMessage) { %>
-    <div
-      class="notice d-flex bg-light-warning rounded border-warning border border-dashed p-6 mb-8"
-    >
+    <div class="notice d-flex bg-light-warning rounded border-warning border border-dashed p-6 mb-8">
       <i class="ki-duotone ki-information-5 fs-2tx text-warning me-4">
         <span class="path1"></span>
         <span class="path2"></span>
         <span class="path3"></span>
       </i>
 
-      <div class="d-flex flex-stack flex-grow-1">
-        <div class="fw-semibold">
-          <div class="fs-6 text-gray-700">
-            <%= shiftsView.postShiftForm.unavailableMessage %>
-          </div>
+      <div class="fw-semibold">
+        <div class="fs-6 text-gray-700">
+          <%= shiftsView.postShiftForm.unavailableMessage %>
         </div>
       </div>
     </div>
@@ -30,165 +29,147 @@
     shiftsView.postShiftForm.canOpenModal &&
     !shiftsView.postShiftForm.hasSelectableBranches
   ) { %>
-    <div
-      class="notice d-flex bg-light-warning rounded border-warning border border-dashed p-6 mb-8"
-    >
+    <div class="notice d-flex bg-light-warning rounded border-warning border border-dashed p-6 mb-8">
       <i class="ki-duotone ki-information-5 fs-2tx text-warning me-4">
         <span class="path1"></span>
         <span class="path2"></span>
         <span class="path3"></span>
       </i>
 
-      <div class="d-flex flex-stack flex-grow-1">
-        <div class="fw-semibold">
-          <% if (shiftsView.postShiftForm.hasBranches) { %>
-            <div class="fs-6 text-gray-700">
-              No active branch with a valid location is available.
-            </div>
+      <div class="fw-semibold">
+        <% if (shiftsView.postShiftForm.hasBranches) { %>
+          <div class="fs-6 text-gray-700">
+            No active branch with a valid location is available.
+          </div>
 
-            <div class="fs-7 text-muted mt-1">
-              Update a branch location before posting a shift.
-            </div>
-          <% } else { %>
-            <div class="fs-6 text-gray-700">
-              No active branch is available.
-            </div>
+          <div class="fs-7 text-muted mt-1">
+            Update a branch location before posting a Shift.
+          </div>
+        <% } else { %>
+          <div class="fs-6 text-gray-700">
+            No active branch is available.
+          </div>
 
-            <div class="fs-7 text-muted mt-1">
-              Add or assign an active branch before posting a shift.
-            </div>
-          <% } %>
-        </div>
+          <div class="fs-7 text-muted mt-1">
+            Add or assign an active branch before posting a Shift.
+          </div>
+        <% } %>
       </div>
     </div>
   <% } %>
 
-  <!-- SHIFT SUMMARY CARDS -->
+  <!-- ─────────────────────────────── SUMMARY CARDS ─────────────────────────────── -->
 
-<div class="row g-5 g-xl-8 mb-8">
-  <% shiftsView.summaryCards.forEach((card) => { %>
-    <div class="col-sm-6 col-lg-4 col-xl">
-      <div class="card card-flush h-100">
-        <div
-          class="card-body d-flex flex-column justify-content-center align-items-center text-center"
-        >
+  <div class="row g-5 g-xl-8 mb-8">
+    <% shiftsView.summaryCards.forEach((card) => { %>
+      <div class="col-sm-6 col-lg-4 col-xl">
+        <div class="card card-flush h-100">
+          <div class="card-body d-flex flex-column justify-content-center align-items-center text-center">
+            <% if (card.status === "all") { %>
+              <div class="symbol symbol-60px mb-5">
+                <span class="symbol-label bg-light-dark">
+                  <i class="ki-duotone ki-abstract-26 fs-2x text-dark">
+                    <span class="path1"></span>
+                    <span class="path2"></span>
+                  </i>
+                </span>
+              </div>
 
-        <!-- ALL SHIFTS -->
+              <div class="fs-2 fw-bold text-gray-900">
+                <%= card.count %>
+              </div>
+            <% } %>
 
-<% if (card.status === "all") { %>
-  <div class="symbol symbol-60px mb-5">
-    <span class="symbol-label bg-light-dark">
-      <i class="ki-duotone ki-abstract-26 fs-2x text-dark">
-        <span class="path1"></span>
-        <span class="path2"></span>
-      </i>
-    </span>
-  </div>
+            <% if (card.status === "open") { %>
+              <div class="symbol symbol-60px mb-5">
+                <span class="symbol-label bg-light-primary">
+                  <i class="ki-duotone ki-briefcase fs-2x text-primary">
+                    <span class="path1"></span>
+                    <span class="path2"></span>
+                  </i>
+                </span>
+              </div>
 
-  <div class="fs-2 fw-bold text-gray-900">
-    <%= card.count %>
-  </div>
-<% } %>
-          <!-- OPEN -->
+              <div class="fs-2 fw-bold text-primary">
+                <%= card.count %>
+              </div>
+            <% } %>
 
-          <% if (card.status === "open") { %>
-            <div class="symbol symbol-60px mb-5">
-              <span class="symbol-label bg-light-primary">
-                <i class="ki-duotone ki-briefcase fs-2x text-primary">
-                  <span class="path1"></span>
-                  <span class="path2"></span>
-                </i>
-              </span>
+            <% if (card.status === "confirmed") { %>
+              <div class="symbol symbol-60px mb-5">
+                <span class="symbol-label bg-light-info">
+                  <i class="ki-duotone ki-user-tick fs-2x text-info">
+                    <span class="path1"></span>
+                    <span class="path2"></span>
+                    <span class="path3"></span>
+                  </i>
+                </span>
+              </div>
+
+              <div class="fs-2 fw-bold text-info">
+                <%= card.count %>
+              </div>
+            <% } %>
+
+            <% if (card.status === "in_progress") { %>
+              <div class="symbol symbol-60px mb-5">
+                <span class="symbol-label bg-light-warning">
+                  <i class="ki-duotone ki-time fs-2x text-warning">
+                    <span class="path1"></span>
+                    <span class="path2"></span>
+                  </i>
+                </span>
+              </div>
+
+              <div class="fs-2 fw-bold text-warning">
+                <%= card.count %>
+              </div>
+            <% } %>
+
+            <% if (card.status === "pending_settlement") { %>
+              <div class="symbol symbol-60px mb-5">
+                <span class="symbol-label bg-light-danger">
+                  <i class="ki-duotone ki-wallet fs-2x text-danger">
+                    <span class="path1"></span>
+                    <span class="path2"></span>
+                    <span class="path3"></span>
+                    <span class="path4"></span>
+                  </i>
+                </span>
+              </div>
+
+              <div class="fs-2 fw-bold text-danger">
+                <%= card.count %>
+              </div>
+            <% } %>
+
+            <% if (card.status === "completed") { %>
+              <div class="symbol symbol-60px mb-5">
+                <span class="symbol-label bg-light-success">
+                  <i class="ki-duotone ki-check-circle fs-2x text-success">
+                    <span class="path1"></span>
+                    <span class="path2"></span>
+                  </i>
+                </span>
+              </div>
+
+              <div class="fs-2 fw-bold text-success">
+                <%= card.count %>
+              </div>
+            <% } %>
+
+            <div class="fs-6 fw-semibold text-gray-700">
+              <%= card.label %>
             </div>
 
-            <div class="fs-2 fw-bold text-primary">
-              <%= card.count %>
+            <div class="fs-7 fw-semibold text-muted mt-1">
+              <%= card.description %>
             </div>
-          <% } %>
-
-          <!-- CONFIRMED -->
-
-          <% if (card.status === "confirmed") { %>
-            <div class="symbol symbol-60px mb-5">
-              <span class="symbol-label bg-light-info">
-                <i class="ki-duotone ki-user-tick fs-2x text-info">
-                  <span class="path1"></span>
-                  <span class="path2"></span>
-                  <span class="path3"></span>
-                </i>
-              </span>
-            </div>
-
-            <div class="fs-2 fw-bold text-info">
-              <%= card.count %>
-            </div>
-          <% } %>
-
-          <!-- IN PROGRESS -->
-
-          <% if (card.status === "in_progress") { %>
-            <div class="symbol symbol-60px mb-5">
-              <span class="symbol-label bg-light-warning">
-                <i class="ki-duotone ki-time fs-2x text-warning">
-                  <span class="path1"></span>
-                  <span class="path2"></span>
-                </i>
-              </span>
-            </div>
-
-            <div class="fs-2 fw-bold text-warning">
-              <%= card.count %>
-            </div>
-          <% } %>
-
-          <!-- PENDING SETTLEMENT -->
-
-          <% if (card.status === "pending_settlement") { %>
-            <div class="symbol symbol-60px mb-5">
-              <span class="symbol-label bg-light-danger">
-                <i class="ki-duotone ki-wallet fs-2x text-danger">
-                  <span class="path1"></span>
-                  <span class="path2"></span>
-                  <span class="path3"></span>
-                  <span class="path4"></span>
-                </i>
-              </span>
-            </div>
-
-            <div class="fs-2 fw-bold text-danger">
-              <%= card.count %>
-            </div>
-          <% } %>
-
-          <!-- COMPLETED -->
-
-          <% if (card.status === "completed") { %>
-            <div class="symbol symbol-60px mb-5">
-              <span class="symbol-label bg-light-success">
-                <i class="ki-duotone ki-check-circle fs-2x text-success">
-                  <span class="path1"></span>
-                  <span class="path2"></span>
-                </i>
-              </span>
-            </div>
-
-            <div class="fs-2 fw-bold text-success">
-              <%= card.count %>
-            </div>
-          <% } %>
-
-          <div class="fs-6 fw-semibold text-gray-700">
-            <%= card.label %>
-          </div>
-
-          <div class="fs-7 fw-semibold text-muted mt-1">
-            <%= card.description %>
           </div>
         </div>
       </div>
-    </div>
-  <% }) %>
-</div>
+    <% }) %>
+  </div>
 
   <!-- ─────────────────────────────── SHIFTS TABLE ─────────────────────────────── -->
 
@@ -206,19 +187,16 @@
               <%= shiftsView.pagination.startItem %>–<%= shiftsView.pagination.endItem %>
               of
               <%= shiftsView.pagination.totalItems %>
-              shifts
+              engagements
             <% } else { %>
-              No shifts found
+              No Shifts found
             <% } %>
           </div>
         </div>
       </div>
 
       <div class="card-toolbar d-flex align-items-center gap-3">
-        <% if (
-          shiftsView.filterTabs &&
-          shiftsView.filterTabs.length > 0
-        ) { %>
+        <% if (shiftsView.filterTabs && shiftsView.filterTabs.length > 0) { %>
           <button
             type="button"
             class="btn btn-sm btn-light btn-active-light-primary"
@@ -236,7 +214,7 @@
           </button>
 
           <div
-            class="menu menu-sub menu-sub-dropdown menu-column menu-rounded menu-gray-600 menu-state-bg-light-primary fw-semibold fs-7 w-225px py-3"
+            class="menu menu-sub menu-sub-dropdown menu-column menu-rounded menu-gray-600 menu-state-bg-light-primary fw-semibold fs-7 w-250px py-3"
             data-kt-menu="true"
           >
             <% shiftsView.filterTabs.forEach((filter) => { %>
@@ -249,14 +227,9 @@
                     <%= filter.label %>
                   </span>
 
-                  <% if (filter.isActive) { %>
-                    <span class="menu-icon ms-2">
-                      <i class="ki-duotone ki-check fs-4">
-                        <span class="path1"></span>
-                        <span class="path2"></span>
-                      </i>
-                    </span>
-                  <% } %>
+                  <span class="badge badge-light ms-auto">
+                    <%= filter.count %>
+                  </span>
                 </a>
               </div>
             <% }) %>
@@ -281,7 +254,7 @@
             type="button"
             class="btn btn-sm btn-primary"
             disabled
-            title="<%= shiftsView.postShiftForm.unavailableMessage || 'Add an active branch with a valid location before posting a shift.' %>"
+            title="<%= shiftsView.postShiftForm.unavailableMessage || 'Add an active branch with a valid location before posting a Shift.' %>"
           >
             <i class="ki-duotone ki-plus fs-3"></i>
             Post a Shift
@@ -295,13 +268,11 @@
         <div class="table-responsive">
           <table class="table align-middle table-row-dashed fs-6 gy-5">
             <thead>
-              <tr
-                class="text-start text-gray-600 fw-bold fs-7 text-uppercase gs-0"
-              >
-                <th>Shift</th>
+              <tr class="text-start text-gray-600 fw-bold fs-7 text-uppercase gs-0">
+                <th>Engagement</th>
                 <th>Branch</th>
-                <th>Schedule</th>
-                <th>Pay</th>
+                <th>Relevant Shift</th>
+                <th>Pricing</th>
                 <th>Status</th>
                 <th>Applications</th>
                 <th class="text-end">Actions</th>
@@ -311,187 +282,141 @@
             <tbody class="fw-semibold text-gray-700">
               <% shiftsView.shifts.forEach((shift) => { %>
                 <tr>
-                  <!-- SHIFT -->
-
-                  <td>
+                  <td class="min-w-175px">
                     <div class="d-flex flex-column">
-                      <span class="fw-bold text-gray-900">
+                      <a
+                        href="<%= shift.detailsUrl %>"
+                        class="fw-bold text-gray-900 text-hover-primary"
+                      >
                         <%= shift.roleTitle %>
-                      </span>
-
-                      <span class="fs-7 text-muted mt-1">
-                        <%= shift.professionalTypeLabel %>
-                      </span>
+                      </a>
 
                       <span class="fs-8 text-muted mt-1">
                         <%= shift.referenceCode %>
                       </span>
+
+                      <% if (shift.scheduleMode === "multiple") { %>
+                        <span class="badge badge-light-primary align-self-start mt-2">
+                          <%= shift.occurrenceCountLabel %>
+                        </span>
+                      <% } %>
                     </div>
                   </td>
 
-                  <!-- BRANCH -->
-
-                  <td>
+                  <td class="min-w-130px">
                     <% if (shift.branch) { %>
-                      <div class="d-flex flex-column">
-                        <span class="fw-bold text-gray-800">
-                          <%= shift.branch.name %>
-                        </span>
-
-                        <% if (shift.branch.address) { %>
-                          <span class="fs-7 text-muted mt-1">
-                            <%= shift.branch.address %>
-                          </span>
-                        <% } %>
-
-                        <% if (shift.branch.lga) { %>
-                          <span class="fs-7 text-muted">
-                            <%= shift.branch.lga %>
-                          </span>
-                        <% } %>
-
-                        <% if (shift.branch.state) { %>
-                          <span class="fs-7 text-muted">
-                            <%= shift.branch.state %>
-                          </span>
-                        <% } %>
-                      </div>
+                      <span class="fw-semibold text-gray-800">
+                        <%= shift.branch.name %>
+                      </span>
                     <% } else { %>
                       <span class="text-muted">
-                        Branch unavailable
+                        Unavailable
                       </span>
                     <% } %>
                   </td>
 
-                  <!-- SCHEDULE -->
+                  <td class="min-w-210px">
+                    <div class="d-flex flex-column align-items-start">
+                      <% if (shift.relevantOccurrence) { %>
+                        <span class="fw-semibold text-gray-800">
+                          <%= shift.relevantOccurrence.occurrenceDateDisplay %>
+                        </span>
 
-                  <td>
-                    <div class="d-flex flex-column">
-                      <span class="fw-bold text-gray-800">
-                        <%= shift.startDateDisplay %>
-                      </span>
+                        <span class="fs-7 text-muted mt-1">
+                          <%= shift.relevantOccurrence.startTimeDisplay %>–<%= shift.relevantOccurrence.endTimeDisplay %>
+                        </span>
 
-                      <span class="fs-7 text-muted mt-1">
-                        <%= shift.startTimeDisplay %>
-                        –
-                        <%= shift.endTimeDisplay %>
-                      </span>
-
-                      <span class="fs-7 text-muted mt-1">
-                        <%= shift.scheduledHoursDisplay %>
-                      </span>
-
-                      <span class="fs-8 text-muted">
-                        <%= shift.breakDurationDisplay %>
-                      </span>
+                        <% if (shift.relevantOccurrence.highlight.label) { %>
+                          <span
+                            class="badge mt-2 <%= shift.relevantOccurrence.highlight.isActive ? 'badge-light-success' : shift.relevantOccurrence.highlight.isToday ? 'badge-light-warning' : 'badge-light-primary' %>"
+                          >
+                            <%= shift.relevantOccurrence.highlight.label %>
+                          </span>
+                        <% } %>
+                      <% } else { %>
+                        <span class="fw-semibold text-gray-800">
+                          <%= shift.scheduleSummary %>
+                        </span>
+                      <% } %>
                     </div>
                   </td>
 
-                  <!-- PAY -->
-
-                  <td>
+                  <td class="min-w-140px">
                     <div class="d-flex flex-column">
                       <span class="fw-bold text-gray-900">
-                        <%= shift.hourlyRateDisplay %>/hour
-                      </span>
-
-                      <span class="fs-7 text-muted mt-1">
-                        Professional:
-                        <%= shift.estimatedProfessionalPayDisplay %>
-                      </span>
-
-                      <span class="fs-7 text-muted">
-                        Platform fee:
-                        <%= shift.estimatedPlatformFeeDisplay %>
-                      </span>
-
-                      <span class="fs-7 fw-bold text-gray-700 mt-1">
-                        Total:
                         <%= shift.estimatedEmployerChargeDisplay %>
                       </span>
-                    </div>
-                  </td>
 
-                  <!-- STATUS -->
-
-                  <td>
-                    <div class="d-flex flex-column align-items-start gap-2">
-                      <span
-                        class="badge <%= shift.statusBadgeClass || 'badge-light-primary' %>"
-                      >
-                        <%= shift.statusLabel %>
-                      </span>
-
-                      <span
-                        class="badge <%= shift.paymentStatusBadgeClass || 'badge-light-secondary' %>"
-                      >
-                        <%= shift.paymentStatusLabel %>
+                      <span class="fs-8 text-muted mt-1">
+                        <%= shift.hourlyRateDisplay %>/hour
                       </span>
                     </div>
                   </td>
 
-                  <!-- APPLICATIONS -->
+                  <td class="min-w-120px">
+                    <span class="badge <%= shift.statusBadgeClass || 'badge-light-primary' %>">
+                      <%= shift.statusLabel %>
+                    </span>
+                  </td>
 
                   <td>
-                    <span class="badge badge-light-primary">
+                    <span class="fw-bold text-gray-800">
                       <%= shift.totalApplications %>
                     </span>
                   </td>
 
-                  <!-- ACTIONS -->
-
                   <td class="text-end">
                     <% if (
-                      shift.canRevealCheckInPin ||
-                      shift.canRevealCheckOutPin
+                      shift.parentAction &&
+                      shift.parentAction.type === "funding_modal" &&
+                      shift.parentAction.paymentReview
                     ) { %>
                       <button
                         type="button"
-                        class="btn btn-sm btn-light btn-active-light-primary"
-                        data-kt-menu-trigger="click"
-                        data-kt-menu-placement="bottom-end"
+                        class="btn btn-sm btn-primary js-open-fund-shift-modal"
+                        data-bs-toggle="modal"
+                        data-bs-target="#<%= shift.parentAction.modalId %>"
+                        data-shift-id="<%= shift.id %>"
+                        data-shift-reference="<%= shift.referenceCode %>"
+                        data-shift-role="<%= shift.roleTitle %>"
+                        data-shift-branch="<%= shift.branch ? shift.branch.name : 'Branch unavailable' %>"
+                        data-shift-schedule="<%= shift.scheduleSummary %>"
+                        data-shift-details-url="<%= shift.detailsUrl %>"
+                        data-action-label="<%= shift.parentAction.label %>"
+                        data-employer-charge="<%= shift.parentAction.paymentReview.employerCharge %>"
+                        data-employer-charge-display="<%= shift.parentAction.paymentReview.employerChargeDisplay %>"
+                        data-professional-pay-display="<%= shift.parentAction.paymentReview.professionalPayDisplay %>"
+                        data-platform-fee-display="<%= shift.parentAction.paymentReview.platformFeeDisplay %>"
+                        data-occurrence-count-label="<%= shift.parentAction.paymentReview.schedule.occurrenceCountLabel %>"
+                        data-hours-per-shift-display="<%= shift.parentAction.paymentReview.schedule.scheduledHoursPerOccurrenceDisplay %>"
+                        data-total-hours-display="<%= shift.parentAction.paymentReview.schedule.totalScheduledHoursDisplay %>"
+                        data-wallet-funding-url="<%= shift.parentAction.paymentReview.actions.fundFromWalletUrl %>"
+                        data-checkout-url="<%= shift.parentAction.paymentReview.actions.initializeCheckoutUrl %>"
+                        data-wallet-can-use="<%= shift.parentAction.paymentReview.paymentOptions.wallet.canUse ? 'true' : 'false' %>"
+                        data-wallet-available-balance-display="<%= shift.parentAction.paymentReview.paymentOptions.wallet.availableBalanceDisplay %>"
+                        data-wallet-balance-after-payment-display="<%= shift.parentAction.paymentReview.paymentOptions.wallet.balanceAfterPaymentDisplay %>"
+                        data-wallet-shortfall="<%= shift.parentAction.paymentReview.paymentOptions.wallet.shortfall %>"
+                        data-wallet-shortfall-display="<%= shift.parentAction.paymentReview.paymentOptions.wallet.shortfallDisplay %>"
+                        data-wallet-unavailable-message="<%= shift.parentAction.paymentReview.paymentOptions.wallet.unavailableMessage || '' %>"
+                        data-paystack-can-use="<%= shift.parentAction.paymentReview.paymentOptions.paystackCheckout.canUse ? 'true' : 'false' %>"
+                        data-paystack-description="<%= shift.parentAction.paymentReview.paymentOptions.paystackCheckout.description %>"
                       >
-                        Actions
-
-                        <i class="ki-duotone ki-down fs-5 ms-1"></i>
+                        <%= shift.parentAction.label %>
                       </button>
-
-                      <div
-                        class="menu menu-sub menu-sub-dropdown menu-column menu-rounded menu-gray-600 menu-state-bg-light-primary fw-semibold fs-7 w-175px py-3"
-                        data-kt-menu="true"
+                    <% } else if (shift.parentAction) { %>
+                      <a
+                        href="<%= shift.parentAction.href %>"
+                        class="btn btn-sm btn-light-primary"
                       >
-                        <% if (shift.canRevealCheckInPin) { %>
-                          <div class="menu-item px-3">
-                            <a
-                              href="#"
-                              class="menu-link px-3 js-reveal-attendance-pin"
-                              data-pin-url="<%= shift.checkInPinUrl %>"
-                              data-pin-type="check_in"
-                              data-shift-reference="<%= shift.referenceCode %>"
-                            >
-                              Check-in PIN
-                            </a>
-                          </div>
-                        <% } %>
-
-                        <% if (shift.canRevealCheckOutPin) { %>
-                          <div class="menu-item px-3">
-                            <a
-                              href="#"
-                              class="menu-link px-3 js-reveal-attendance-pin"
-                              data-pin-url="<%= shift.checkOutPinUrl %>"
-                              data-pin-type="check_out"
-                              data-shift-reference="<%= shift.referenceCode %>"
-                            >
-                              Check-out PIN
-                            </a>
-                          </div>
-                        <% } %>
-                      </div>
+                        <%= shift.parentAction.label %>
+                      </a>
                     <% } else { %>
-                      <span class="text-muted fs-7">
-                        No Actions
-                      </span>
+                      <a
+                        href="<%= shift.detailsUrl %>"
+                        class="btn btn-sm btn-light-primary"
+                      >
+                        View Details
+                      </a>
                     <% } %>
                   </td>
                 </tr>
@@ -500,12 +425,8 @@
           </table>
         </div>
 
-        <!-- ─────────────────────────────── PAGINATION ─────────────────────────────── -->
-
         <% if (shiftsView.pagination.hasPagination) { %>
-          <div
-            class="d-flex flex-column flex-md-row align-items-center justify-content-between gap-4 pt-5"
-          >
+          <div class="d-flex flex-column flex-md-row align-items-center justify-content-between gap-4 pt-5">
             <div class="fs-7 text-muted">
               Showing
               <%= shiftsView.pagination.startItem %>
@@ -513,7 +434,7 @@
               <%= shiftsView.pagination.endItem %>
               of
               <%= shiftsView.pagination.totalItems %>
-              shifts
+              engagements
             </div>
 
             <ul class="pagination mb-0">
@@ -536,13 +457,11 @@
               </li>
 
               <% shiftsView.pagination.pages.forEach((paginationPage) => { %>
-                <li
-                  class="page-item <%= paginationPage.isActive ? 'active' : '' %>"
-                >
+                <li class="page-item <%= paginationPage.isActive ? 'active' : '' %>">
                   <a
                     href="<%= paginationPage.url %>"
                     class="page-link"
-                    <%- paginationPage.isActive ? 'aria-current="page"' : "" %>
+                    <%- paginationPage.isActive ? 'aria-current="page"' : '' %>
                   >
                     <%= paginationPage.page %>
                   </a>
@@ -570,8 +489,6 @@
           </div>
         <% } %>
       <% } else { %>
-        <!-- ─────────────────────────────── EMPTY STATE ─────────────────────────────── -->
-
         <div class="text-center py-10">
           <div class="symbol symbol-60px mb-5">
             <span class="symbol-label bg-light-primary">
@@ -618,468 +535,588 @@
   shiftsView.postShiftForm.hasSelectableBranches
 ) { %>
   <div
-  class="modal fade post-shift-modal"
-  id="<%= shiftsView.postShiftForm.modalId %>"
-  tabindex="-1"
-  aria-labelledby="<%= shiftsView.postShiftForm.modalId %>Label"
-  aria-hidden="true"
->
-  <div class="modal-dialog modal-xl modal-dialog-scrollable">
-    <form
-      class="modal-content"
-      id="postShiftForm"
-      method="post"
-      action="<%= shiftsView.postShiftForm.createShiftUrl %>"
-      data-platform-fee-rate="<%= shiftsView.postShiftForm.pricing.platformFeeRate %>"
-      data-platform-fee-label="<%= shiftsView.postShiftForm.pricing.platformFeeLabel %>"
-      data-currency="<%= shiftsView.postShiftForm.pricing.currency %>"
-      novalidate
-    >
-      <div class="modal-header">
-            <div>
-              <h2
-                class="modal-title fw-bold text-gray-900"
-                id="<%= shiftsView.postShiftForm.modalId %>Label"
-              >
-                Post a Shift
-              </h2>
+    class="modal fade post-shift-modal"
+    id="<%= shiftsView.postShiftForm.modalId %>"
+    tabindex="-1"
+    aria-labelledby="<%= shiftsView.postShiftForm.modalId %>Label"
+    aria-hidden="true"
+  >
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+      <form
+        class="modal-content"
+        id="postShiftForm"
+        method="post"
+        action="<%= shiftsView.postShiftForm.createShiftUrl %>"
+        data-platform-fee-rate="<%= shiftsView.postShiftForm.pricing.platformFeeRate %>"
+        data-platform-fee-label="<%= shiftsView.postShiftForm.pricing.platformFeeLabel %>"
+        data-currency="<%= shiftsView.postShiftForm.pricing.currency %>"
+        data-time-zone="<%= shiftsView.postShiftForm.timeZone %>"
+        data-maximum-occurrence-count="<%= shiftsView.postShiftForm.maximumOccurrenceCount %>"
+        novalidate
+      >
+        <div class="modal-header align-items-start">
+          <div class="flex-grow-1 pe-5">
+            <h2
+              class="modal-title fw-bold text-gray-900"
+              id="<%= shiftsView.postShiftForm.modalId %>Label"
+            >
+              Post a Shift
+            </h2>
+
+            <div class="fs-7 text-muted mt-1">
+              Add one work date or create a repeated engagement of up to
+              <%= shiftsView.postShiftForm.maximumOccurrenceCount %>
+              Shifts. The engagement remains unpublished until it is funded.
+            </div>
+          </div>
+
+          <button
+            type="button"
+            class="btn btn-icon btn-sm btn-active-light-primary"
+            data-bs-dismiss="modal"
+            aria-label="Close"
+          >
+            <i class="ki-duotone ki-cross fs-2">
+              <span class="path1"></span>
+              <span class="path2"></span>
+            </i>
+          </button>
+        </div>
+
+        <div class="modal-body py-10 px-lg-17">
+          <input
+            type="hidden"
+            name="_csrf"
+            value="<%= csrfToken %>"
+          >
+
+          <div
+            class="alert alert-danger d-none"
+            id="postShiftFormAlert"
+            role="alert"
+          ></div>
+
+          <div class="row g-8">
+            <!-- SHIFT DETAILS -->
+
+            <div class="col-12">
+              <div class="fw-bold fs-5 text-gray-900">
+                Shift Details
+              </div>
 
               <div class="fs-7 text-muted mt-1">
-                Complete the details below to publish a new shift.
+                Select the branch and define the professional role.
               </div>
             </div>
 
-            <button
-              type="button"
-              class="btn btn-icon btn-sm btn-active-light-primary"
-              data-bs-dismiss="modal"
-              aria-label="Close"
-            >
-              <i class="ki-duotone ki-cross fs-2">
-                <span class="path1"></span>
-                <span class="path2"></span>
-              </i>
-            </button>
-          </div>
+            <div class="col-md-6">
+              <label
+                for="shiftBranchId"
+                class="required form-label fw-semibold"
+              >
+                Branch
+              </label>
 
-          <div class="modal-body py-10 px-lg-17">
-            <input
-              type="hidden"
-              name="_csrf"
-              value="<%= csrfToken %>"
-            >
+              <select
+                class="form-select"
+                id="shiftBranchId"
+                name="branchId"
+                required
+              >
+                <option value="">
+                  Select a branch
+                </option>
 
-            <div
-              class="alert alert-danger d-none"
-              id="postShiftFormAlert"
-              role="alert"
-            ></div>
-
-            <div class="row g-8">
-              <!-- SHIFT DETAILS -->
-
-              <div class="col-12">
-                <div class="fw-bold fs-5 text-gray-900">
-                  Shift Details
-                </div>
-
-                <div class="fs-7 text-muted mt-1">
-                  Select the branch and professional requirements.
-                </div>
-              </div>
-
-              <div class="col-md-6">
-                <label
-                  for="shiftBranchId"
-                  class="required form-label fw-semibold"
-                >
-                  Branch
-                </label>
-
-                <select
-                  class="form-select"
-                  id="shiftBranchId"
-                  name="branchId"
-                  required
-                >
-                  <option value="">
-                    Select a branch
-                  </option>
-
-                  <% shiftsView.postShiftForm.branchOptions.forEach((branch) => { %>
-                    <option
-                      value="<%= branch.value %>"
-                      <%= branch.isSelectable ? "" : "disabled" %>
-                    >
-                      <%= branch.name %>
-
-                      <% if (branch.locationLabel) { %>
-                        — <%= branch.locationLabel %>
-                      <% } %>
-
-                      <% if (!branch.isSelectable) { %>
-                        — Location required
-                      <% } %>
-                    </option>
-                  <% }) %>
-                </select>
-
-                <div class="invalid-feedback">
-                  Select an available branch.
-                </div>
-              </div>
-
-              <div class="col-md-6">
-                <label
-                  for="shiftProfessionalType"
-                  class="required form-label fw-semibold"
-                >
-                  Professional Type
-                </label>
-
-                <select
-                  class="form-select"
-                  id="shiftProfessionalType"
-                  name="professionalType"
-                  required
-                >
-                  <option value="">
-                    Select a professional type
-                  </option>
-
-                  <% shiftsView.postShiftForm.professionalTypeOptions.forEach((professionalType) => { %>
-                    <option value="<%= professionalType.value %>">
-                      <%= professionalType.label %>
-                    </option>
-                  <% }) %>
-                </select>
-
-                <div class="invalid-feedback">
-                  Select the professional type required for this shift.
-                </div>
-              </div>
-
-              <div class="col-md-6">
-                <label
-                  for="shiftRoleTitle"
-                  class="required form-label fw-semibold"
-                >
-                  Role Title
-                </label>
-
-                <input
-                  type="text"
-                  class="form-control"
-                  id="shiftRoleTitle"
-                  name="roleTitle"
-                  maxlength="120"
-                  placeholder="Example: Locum Pharmacist"
-                  required
-                >
-
-                <div class="invalid-feedback">
-                  Enter the role title.
-                </div>
-              </div>
-
-              <div class="col-md-6">
-                <label
-                  for="shiftDepartment"
-                  class="form-label fw-semibold"
-                >
-                  Department
-                </label>
-
-                <input
-                  type="text"
-                  class="form-control"
-                  id="shiftDepartment"
-                  name="department"
-                  maxlength="120"
-                  placeholder="Example: Outpatient Pharmacy"
-                >
-              </div>
-
-              <div class="col-12">
-                <div class="separator separator-dashed"></div>
-              </div>
-
-              <!-- SCHEDULE -->
-
-              <div class="col-12">
-                <div class="fw-bold fs-5 text-gray-900">
-                  Schedule and Pay
-                </div>
-
-                <div class="fs-7 text-muted mt-1">
-                  Shift times use
-                  <%= shiftsView.postShiftForm.timeZone %>.
-                </div>
-              </div>
-
-              <div class="col-md-6">
-                <label
-                  for="shiftStartTime"
-                  class="required form-label fw-semibold"
-                >
-                  Start Date and Time
-                </label>
-
-               <input
-  type="text"
-  class="form-control"
-  id="shiftStartTime"
-  name="startTime"
-  placeholder="Select start date and time"
-  autocomplete="off"
-  required
->
-
-                <div class="invalid-feedback">
-                  Select the shift start date and time.
-                </div>
-              </div>
-
-              <div class="col-md-6">
-                <label
-                  for="shiftEndTime"
-                  class="required form-label fw-semibold"
-                >
-                  End Date and Time
-                </label>
-
-                <input
-  type="text"
-  class="form-control"
-  id="shiftEndTime"
-  name="endTime"
-  placeholder="Select end date and time"
-  autocomplete="off"
-  required
->
-
-                <div class="invalid-feedback">
-                  Select a valid end date and time.
-                </div>
-              </div>
-
-              <div class="col-md-6">
-                <label
-                  for="shiftBreakDuration"
-                  class="form-label fw-semibold"
-                >
-                  Break Duration
-                </label>
-
-                <div class="input-group">
-                  <input
-                    type="number"
-                    class="form-control"
-                    id="shiftBreakDuration"
-                    name="breakDuration"
-                    min="0"
-                    step="1"
-                    value="0"
+                <% shiftsView.postShiftForm.branchOptions.forEach((branch) => { %>
+                  <option
+                    value="<%= branch.value %>"
+                    <%= branch.isSelectable ? "" : "disabled" %>
                   >
+                    <%= branch.name %>
 
-                  <span class="input-group-text">
-                    minutes
-                  </span>
-                </div>
+                    <% if (branch.locationLabel) { %>
+                      — <%= branch.locationLabel %>
+                    <% } %>
 
-                <div class="form-text">
-                  Break duration is informational and is not deducted from
-                  professional pay.
-                </div>
+                    <% if (!branch.isSelectable) { %>
+                      — Location required
+                    <% } %>
+                  </option>
+                <% }) %>
+              </select>
+
+              <div class="invalid-feedback">
+                Select an available branch.
               </div>
+            </div>
 
-              <div class="col-md-6">
-                <label
-                  for="shiftHourlyRate"
-                  class="required form-label fw-semibold"
-                >
-                  Hourly Rate
-                </label>
+            <div class="col-md-6">
+              <label
+                for="shiftProfessionalType"
+                class="required form-label fw-semibold"
+              >
+                Professional Type
+              </label>
 
-                <div class="input-group">
-                  <span class="input-group-text">
-                    <%= shiftsView.postShiftForm.pricing.currency %>
-                  </span>
+              <select
+                class="form-select"
+                id="shiftProfessionalType"
+                name="professionalType"
+                required
+              >
+                <option value="">
+                  Select a professional type
+                </option>
 
-                  <input
-                    type="number"
-                    class="form-control"
-                    id="shiftHourlyRate"
-                    name="hourlyRate"
-                    min="0.01"
-                    step="0.01"
-                    placeholder="0.00"
-                    required
+                <% shiftsView.postShiftForm.professionalTypeOptions.forEach((professionalType) => { %>
+                  <option
+                    value="<%= professionalType.value %>"
+                    <%= professionalType.disabled ? "disabled" : "" %>
                   >
-                </div>
+                    <%= professionalType.label %>
+                    <%= professionalType.disabled ? "— Coming soon" : "" %>
+                  </option>
+                <% }) %>
+              </select>
 
-                <div class="invalid-feedback">
-                  Enter an hourly rate greater than zero.
-                </div>
+              <div class="form-text">
+                Only currently supported professional types can be selected.
               </div>
 
-              <div class="col-12">
-                <div class="separator separator-dashed"></div>
+              <div class="invalid-feedback">
+                Select the professional type required for this Shift.
+              </div>
+            </div>
+
+            <div class="col-md-6">
+              <label
+                for="shiftRoleTitle"
+                class="required form-label fw-semibold"
+              >
+                Role Title
+              </label>
+
+              <input
+                type="text"
+                class="form-control"
+                id="shiftRoleTitle"
+                name="roleTitle"
+                maxlength="120"
+                placeholder="Example: Locum Pharmacist"
+                required
+              >
+
+              <div class="invalid-feedback">
+                Enter the role title.
+              </div>
+            </div>
+
+            <div class="col-md-6">
+              <label
+                for="shiftDepartment"
+                class="form-label fw-semibold"
+              >
+                Department
+              </label>
+
+              <input
+                type="text"
+                class="form-control"
+                id="shiftDepartment"
+                name="department"
+                maxlength="120"
+                placeholder="Example: Outpatient Pharmacy"
+              >
+            </div>
+
+            <div class="col-12">
+              <div class="separator separator-dashed"></div>
+            </div>
+
+            <!-- SCHEDULE MODE -->
+
+            <div class="col-12">
+              <div class="fw-bold fs-5 text-gray-900">
+                Schedule Type
               </div>
 
-              <!-- REQUIREMENTS -->
-
-              <div class="col-12">
-                <div class="fw-bold fs-5 text-gray-900">
-                  Requirements and Notes
-                </div>
-
-                <div class="fs-7 text-muted mt-1">
-                  Add information the professional should know before applying.
-                </div>
+              <div class="fs-7 text-muted mt-1">
+                Choose one work date or create a repeated engagement for one
+                accepted professional.
               </div>
+            </div>
 
-              <div class="col-md-6">
-                <label
-                  for="shiftRequiredSkills"
-                  class="form-label fw-semibold"
-                >
-                  Required Skills
-                </label>
-
-                <textarea
-                  class="form-control"
-                  id="shiftRequiredSkills"
-                  name="requiredSkills"
-                  rows="3"
-                  placeholder="Separate skills with commas"
-                ></textarea>
-
-                <div class="form-text">
-                  Example: Patient counseling, inventory management, dispensing
-                </div>
-              </div>
-
-              <div class="col-md-6">
-                <label
-                  for="shiftDressCode"
-                  class="form-label fw-semibold"
-                >
-                  Dress Code
-                </label>
-
-                <textarea
-                  class="form-control"
-                  id="shiftDressCode"
-                  name="dressCode"
-                  rows="3"
-                  maxlength="300"
-                  placeholder="Example: White coat and closed shoes"
-                ></textarea>
-              </div>
-
-              <div class="col-12">
-                <label
-                  for="shiftDescription"
-                  class="form-label fw-semibold"
-                >
-                  Additional Information
-                </label>
-
-                <textarea
-                  class="form-control"
-                  id="shiftDescription"
-                  name="description"
-                  rows="4"
-                  maxlength="500"
-                  placeholder="Add any other information the professional should know."
-                ></textarea>
-              </div>
-
-              <!-- PRICING PREVIEW -->
-
-              <div class="col-12">
-                <div
-                  class="notice d-flex bg-light-primary rounded border-primary border border-dashed p-6"
-                >
-                  <i class="ki-duotone ki-wallet fs-2tx text-primary me-4">
-                    <span class="path1"></span>
-                    <span class="path2"></span>
-                    <span class="path3"></span>
-                    <span class="path4"></span>
-                  </i>
-
-                  <div class="flex-grow-1">
-                    <div
-                      class="d-flex flex-column flex-md-row justify-content-between gap-3 mb-5"
+            <div class="col-12">
+              <div class="row g-5">
+                <% shiftsView.postShiftForm.scheduleModeOptions.forEach((scheduleMode) => { %>
+                  <div class="col-md-6">
+                    <input
+                      type="radio"
+                      class="btn-check js-shift-schedule-mode"
+                      name="scheduleMode"
+                      id="shiftScheduleMode-<%= scheduleMode.value %>"
+                      value="<%= scheduleMode.value %>"
+                      autocomplete="off"
+                      <%= scheduleMode.value === "single" ? "checked" : "" %>
                     >
-                      <div>
-                        <div class="fw-bold fs-5 text-gray-900">
-                          Estimated Pricing
-                        </div>
 
-                        <div class="fs-7 text-muted mt-1">
-                          Platform fee:
-                          <%= shiftsView.postShiftForm.pricing.platformFeeLabel %>
-                        </div>
-                      </div>
+                    <label
+                      class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex text-start p-6 w-100 h-100"
+                      for="shiftScheduleMode-<%= scheduleMode.value %>"
+                    >
+                      <span class="d-flex flex-column">
+                        <span class="fw-bold fs-5 text-gray-900">
+                          <%= scheduleMode.label %>
+                        </span>
 
-                      <div class="fs-7 text-muted">
-                        Final pricing is recalculated when the shift is
-                        submitted.
+                        <span class="fs-7 text-muted mt-2">
+                          <%= scheduleMode.description %>
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+                <% }) %>
+              </div>
+            </div>
+
+            <!-- SINGLE SHIFT SCHEDULE -->
+
+            <div class="col-12" id="postShiftSingleScheduleFields">
+              <div class="card border border-gray-300">
+                <div class="card-body p-6">
+                  <div class="row g-6">
+                    <div class="col-md-4">
+                      <label
+                        for="shiftSingleDate"
+                        class="required form-label fw-semibold"
+                      >
+                        Shift Date
+                      </label>
+
+                      <input
+                        type="text"
+                        class="form-control js-single-schedule-field"
+                        id="shiftSingleDate"
+                        name="singleShiftDate"
+                        placeholder="Select the work date"
+                        autocomplete="off"
+                        required
+                      >
+
+                      <div class="invalid-feedback">
+                        Select the Shift date.
                       </div>
                     </div>
 
-                    <div class="row g-5">
-                      <div class="col-sm-6 col-lg-3">
-                        <div class="fs-7 fw-semibold text-muted">
-                          Scheduled Hours
-                        </div>
+                    <div class="col-md-4">
+                      <label
+                        for="shiftSingleStartTime"
+                        class="required form-label fw-semibold"
+                      >
+                        Start Time
+                      </label>
 
-                        <div
-                          class="fs-5 fw-bold text-gray-900 mt-1"
-                          id="shiftScheduledHoursPreview"
+                      <input
+                        type="text"
+                        class="form-control js-single-schedule-field"
+                        id="shiftSingleStartTime"
+                        name="singleStartTime"
+                        placeholder="Select start time"
+                        autocomplete="off"
+                        required
+                      >
+
+                      <div class="invalid-feedback">
+                        Select the Shift start time.
+                      </div>
+                    </div>
+
+                    <div class="col-md-4">
+                      <label
+                        for="shiftSingleEndTime"
+                        class="required form-label fw-semibold"
+                      >
+                        End Time
+                      </label>
+
+                      <input
+                        type="text"
+                        class="form-control js-single-schedule-field"
+                        id="shiftSingleEndTime"
+                        name="singleEndTime"
+                        placeholder="Select end time"
+                        autocomplete="off"
+                        required
+                      >
+
+                      <div class="invalid-feedback">
+                        Select the Shift end time.
+                      </div>
+                    </div>
+
+                    <div class="col-12">
+                      <div class="form-check form-switch form-check-custom form-check-solid">
+                        <input
+                          class="form-check-input js-single-schedule-field"
+                          type="checkbox"
+                          id="shiftSingleEndsNextDay"
+                          name="singleEndsNextDay"
+                          value="true"
                         >
-                          —
-                        </div>
+
+                        <label
+                          class="form-check-label fw-semibold"
+                          for="shiftSingleEndsNextDay"
+                        >
+                          This Shift ends the next day
+                        </label>
                       </div>
 
-                      <div class="col-sm-6 col-lg-3">
-                        <div class="fs-7 fw-semibold text-muted">
-                          Professional Pay
-                        </div>
+                      <div class="form-text">
+                        Enable this for an overnight Shift such as 8:00 PM to
+                        8:00 AM. Times use
+                        <%= shiftsView.postShiftForm.timeZone %>.
+                      </div>
+                    </div>
 
-                        <div
-                          class="fs-5 fw-bold text-gray-900 mt-1"
-                          id="shiftProfessionalPayPreview"
-                        >
-                          —
-                        </div>
+                    <input
+                      type="hidden"
+                      id="shiftStartTime"
+                      name="startTime"
+                    >
+
+                    <input
+                      type="hidden"
+                      id="shiftEndTime"
+                      name="endTime"
+                    >
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- MULTIPLE SHIFT SCHEDULE -->
+
+            <div
+              class="col-12 d-none"
+              id="postShiftMultipleScheduleFields"
+            >
+              <div class="card border border-gray-300">
+                <div class="card-body p-6">
+                  <div class="row g-6">
+                    <div class="col-md-6">
+                      <label
+                        for="shiftFirstOccurrenceDate"
+                        class="required form-label fw-semibold"
+                      >
+                        First Shift Date
+                      </label>
+
+                      <input
+                        type="text"
+                        class="form-control js-multiple-schedule-field"
+                        id="shiftFirstOccurrenceDate"
+                        name="firstOccurrenceDate"
+                        placeholder="Select the first work date"
+                        autocomplete="off"
+                        disabled
+                      >
+
+                      <div class="invalid-feedback">
+                        Select the first Shift date.
+                      </div>
+                    </div>
+
+                    <div class="col-md-6">
+                      <label
+                        for="shiftOccurrenceCount"
+                        class="required form-label fw-semibold"
+                      >
+                        Number of Shifts
+                      </label>
+
+                      <input
+                        type="number"
+                        class="form-control js-multiple-schedule-field"
+                        id="shiftOccurrenceCount"
+                        name="occurrenceCount"
+                        min="<%= shiftsView.postShiftForm.minimumMultipleOccurrenceCount %>"
+                        max="<%= shiftsView.postShiftForm.maximumOccurrenceCount %>"
+                        step="1"
+                        value="<%= shiftsView.postShiftForm.minimumMultipleOccurrenceCount %>"
+                        disabled
+                      >
+
+                      <div class="form-text">
+                        Enter the total number of work dates, capped at
+                        <%= shiftsView.postShiftForm.maximumOccurrenceCount %>.
                       </div>
 
-                      <div class="col-sm-6 col-lg-3">
-                        <div class="fs-7 fw-semibold text-muted">
-                          Platform Fee
-                        </div>
+                      <div class="invalid-feedback">
+                        Enter a valid number of Shifts.
+                      </div>
+                    </div>
 
-                        <div
-                          class="fs-5 fw-bold text-gray-900 mt-1"
-                          id="shiftPlatformFeePreview"
+                    <div class="col-md-6">
+                      <label
+                        for="shiftDailyStartTime"
+                        class="required form-label fw-semibold"
+                      >
+                        Start Time
+                      </label>
+
+                      <input
+                        type="text"
+                        class="form-control js-multiple-schedule-field"
+                        id="shiftDailyStartTime"
+                        name="dailyStartTime"
+                        placeholder="Select start time"
+                        autocomplete="off"
+                        disabled
+                      >
+
+                      <div class="invalid-feedback">
+                        Select the start time for each Shift.
+                      </div>
+                    </div>
+
+                    <div class="col-md-6">
+                      <label
+                        for="shiftDailyEndTime"
+                        class="required form-label fw-semibold"
+                      >
+                        End Time
+                      </label>
+
+                      <input
+                        type="text"
+                        class="form-control js-multiple-schedule-field"
+                        id="shiftDailyEndTime"
+                        name="dailyEndTime"
+                        placeholder="Select end time"
+                        autocomplete="off"
+                        disabled
+                      >
+
+                      <div class="invalid-feedback">
+                        Select the end time for each Shift.
+                      </div>
+                    </div>
+
+                    <div class="col-12">
+                      <div class="form-check form-switch form-check-custom form-check-solid">
+                        <input
+                          class="form-check-input js-multiple-schedule-field"
+                          type="checkbox"
+                          id="shiftEndsNextDay"
+                          name="endsNextDay"
+                          value="true"
+                          disabled
                         >
-                          —
-                        </div>
+
+                        <label
+                          class="form-check-label fw-semibold"
+                          for="shiftEndsNextDay"
+                        >
+                          Each Shift ends the next day
+                        </label>
                       </div>
 
-                      <div class="col-sm-6 col-lg-3">
-                        <div class="fs-7 fw-semibold text-muted">
-                          Employer Charge
-                        </div>
+                      <div class="form-text">
+                        Enable this for overnight Shifts such as 8:00 PM to
+                        8:00 AM.
+                      </div>
+                    </div>
 
-                        <div
-                          class="fs-4 fw-bold text-primary mt-1"
-                          id="shiftEmployerChargePreview"
-                        >
-                          —
+                    <div class="col-12">
+                      <label class="required form-label fw-semibold">
+                        Repeat On
+                      </label>
+
+                      <div
+                        class="d-flex flex-wrap gap-3"
+                        id="shiftRepeatDaysGroup"
+                      >
+                        <% shiftsView.postShiftForm.repeatDayOptions.forEach((repeatDay) => { %>
+                          <div>
+                            <input
+                              type="checkbox"
+                              class="btn-check js-repeat-day js-multiple-schedule-field"
+                              name="repeatDays"
+                              id="shiftRepeatDay-<%= repeatDay.value %>"
+                              value="<%= repeatDay.value %>"
+                              autocomplete="off"
+                              disabled
+                            >
+
+                            <label
+                              class="btn btn-sm btn-outline btn-outline-dashed btn-active-light-primary"
+                              for="shiftRepeatDay-<%= repeatDay.value %>"
+                            >
+                              <%= repeatDay.shortLabel %>
+                            </label>
+                          </div>
+                        <% }) %>
+                      </div>
+
+                      <div
+                        class="invalid-feedback d-block d-none"
+                        id="shiftRepeatDaysFeedback"
+                      >
+                        Select at least one repeat day.
+                      </div>
+                    </div>
+
+                    <div class="col-12">
+                      <div class="card bg-light border border-dashed border-gray-400">
+                        <div class="card-body p-6">
+                          <div class="d-flex flex-column flex-md-row justify-content-between gap-3 mb-5">
+                            <div>
+                              <div class="fw-bold text-gray-900">
+                                Generated Work Dates
+                              </div>
+
+                              <div class="fs-7 text-muted mt-1">
+                                Review the exact occurrences before creating the
+                                engagement.
+                              </div>
+                            </div>
+
+                            <span
+                              class="badge badge-light-primary align-self-start"
+                              id="shiftGeneratedOccurrenceCount"
+                            >
+                              0 Shifts
+                            </span>
+                          </div>
+
+                          <div
+                            class="text-center py-6"
+                            id="shiftOccurrencePreviewEmptyState"
+                          >
+                            <div class="fs-7 text-muted">
+                              Select the first date, repeat days, times and
+                              number of Shifts to generate the schedule.
+                            </div>
+                          </div>
+
+                          <div
+                            class="table-responsive d-none"
+                            id="shiftOccurrencePreviewTableWrapper"
+                          >
+                            <table class="table table-row-bordered align-middle gy-3 mb-0">
+                              <thead>
+                                <tr class="fw-bold fs-7 text-gray-600 text-uppercase">
+                                  <th>#</th>
+                                  <th>Date</th>
+                                  <th>Time</th>
+                                  <th>Hours</th>
+                                </tr>
+                              </thead>
+
+                              <tbody id="shiftOccurrencePreviewBody"></tbody>
+                            </table>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1087,138 +1124,319 @@
                 </div>
               </div>
             </div>
+
+            <div class="col-12">
+              <div class="separator separator-dashed"></div>
+            </div>
+
+            <!-- PAY AND BREAK -->
+
+            <div class="col-12">
+              <div class="fw-bold fs-5 text-gray-900">
+                Pay and Break
+              </div>
+
+              <div class="fs-7 text-muted mt-1">
+                The hourly rate applies to every generated occurrence.
+              </div>
+            </div>
+
+            <div class="col-md-6">
+              <label
+                for="shiftBreakDuration"
+                class="form-label fw-semibold"
+              >
+                Break Duration
+              </label>
+
+              <div class="input-group">
+                <input
+                  type="number"
+                  class="form-control"
+                  id="shiftBreakDuration"
+                  name="breakDuration"
+                  min="0"
+                  max="1440"
+                  step="1"
+                  value="0"
+                >
+
+                <span class="input-group-text">
+                  minutes
+                </span>
+              </div>
+
+              <div class="form-text">
+                Break duration is informational and is not deducted from
+                professional pay.
+              </div>
+            </div>
+
+            <div class="col-md-6">
+              <label
+                for="shiftHourlyRate"
+                class="required form-label fw-semibold"
+              >
+                Hourly Rate
+              </label>
+
+              <div class="input-group">
+                <span class="input-group-text">
+                  <%= shiftsView.postShiftForm.pricing.currency %>
+                </span>
+
+                <input
+                  type="number"
+                  class="form-control"
+                  id="shiftHourlyRate"
+                  name="hourlyRate"
+                  min="0.01"
+                  step="0.01"
+                  placeholder="0.00"
+                  required
+                >
+              </div>
+
+              <div class="invalid-feedback">
+                Enter an hourly rate greater than zero.
+              </div>
+            </div>
+
+            <div class="col-12">
+              <div class="separator separator-dashed"></div>
+            </div>
+
+            <!-- REQUIREMENTS -->
+
+            <div class="col-12">
+              <div class="fw-bold fs-5 text-gray-900">
+                Requirements and Notes
+              </div>
+
+              <div class="fs-7 text-muted mt-1">
+                Add information the professional should know before applying.
+              </div>
+            </div>
+
+            <div class="col-md-6">
+              <label
+                for="shiftRequiredSkills"
+                class="form-label fw-semibold"
+              >
+                Required Skills
+              </label>
+
+              <textarea
+                class="form-control"
+                id="shiftRequiredSkills"
+                name="requiredSkills"
+                rows="3"
+                placeholder="Separate skills with commas"
+              ></textarea>
+
+              <div class="form-text">
+                Example: Patient counseling, inventory management, dispensing
+              </div>
+            </div>
+
+            <div class="col-md-6">
+              <label
+                for="shiftDressCode"
+                class="form-label fw-semibold"
+              >
+                Dress Code
+              </label>
+
+              <textarea
+                class="form-control"
+                id="shiftDressCode"
+                name="dressCode"
+                rows="3"
+                maxlength="300"
+                placeholder="Example: White coat and closed shoes"
+              ></textarea>
+            </div>
+
+            <div class="col-12">
+              <label
+                for="shiftDescription"
+                class="form-label fw-semibold"
+              >
+                Additional Information
+              </label>
+
+              <textarea
+                class="form-control"
+                id="shiftDescription"
+                name="description"
+                rows="4"
+                maxlength="500"
+                placeholder="Add any other information the professional should know."
+              ></textarea>
+            </div>
+
+            <!-- PRICING PREVIEW -->
+
+            <div class="col-12">
+              <div class="notice d-flex bg-light-primary rounded border-primary border border-dashed p-6">
+                <i class="ki-duotone ki-wallet fs-2tx text-primary me-4">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                  <span class="path3"></span>
+                  <span class="path4"></span>
+                </i>
+
+                <div class="flex-grow-1">
+                  <div class="d-flex flex-column flex-md-row justify-content-between gap-3 mb-5">
+                    <div>
+                      <div class="fw-bold fs-5 text-gray-900">
+                        Estimated Pricing
+                      </div>
+
+                      <div class="fs-7 text-muted mt-1">
+                        Platform fee:
+                        <%= shiftsView.postShiftForm.pricing.platformFeeLabel %>
+                      </div>
+                    </div>
+
+                    <div class="fs-7 text-muted">
+                      Server-calculated pricing is locked when the Shift is
+                      created.
+                    </div>
+                  </div>
+
+                  <div class="row g-5 mb-5">
+                    <div class="col-sm-6 col-lg-3">
+                      <div class="fs-7 fw-semibold text-muted">
+                        Number of Shifts
+                      </div>
+
+                      <div
+                        class="fs-5 fw-bold text-gray-900 mt-1"
+                        id="shiftOccurrenceCountPreview"
+                      >
+                        1 Shift
+                      </div>
+                    </div>
+
+                    <div class="col-sm-6 col-lg-3">
+                      <div class="fs-7 fw-semibold text-muted">
+                        Hours per Shift
+                      </div>
+
+                      <div
+                        class="fs-5 fw-bold text-gray-900 mt-1"
+                        id="shiftScheduledHoursPerOccurrencePreview"
+                      >
+                        —
+                      </div>
+                    </div>
+
+                    <div class="col-sm-6 col-lg-3">
+                      <div class="fs-7 fw-semibold text-muted">
+                        Total Hours
+                      </div>
+
+                      <div
+                        class="fs-5 fw-bold text-gray-900 mt-1"
+                        id="shiftScheduledHoursPreview"
+                      >
+                        —
+                      </div>
+                    </div>
+
+                    <div class="col-sm-6 col-lg-3">
+                      <div class="fs-7 fw-semibold text-muted">
+                        Charge per Shift
+                      </div>
+
+                      <div
+                        class="fs-5 fw-bold text-gray-900 mt-1"
+                        id="shiftEmployerChargePerOccurrencePreview"
+                      >
+                        —
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="separator separator-dashed mb-5"></div>
+
+                  <div class="row g-5">
+                    <div class="col-sm-6 col-lg-4">
+                      <div class="fs-7 fw-semibold text-muted">
+                        Total Professional Pay
+                      </div>
+
+                      <div
+                        class="fs-5 fw-bold text-gray-900 mt-1"
+                        id="shiftProfessionalPayPreview"
+                      >
+                        —
+                      </div>
+                    </div>
+
+                    <div class="col-sm-6 col-lg-4">
+                      <div class="fs-7 fw-semibold text-muted">
+                        Total Platform Fee
+                      </div>
+
+                      <div
+                        class="fs-5 fw-bold text-gray-900 mt-1"
+                        id="shiftPlatformFeePreview"
+                      >
+                        —
+                      </div>
+                    </div>
+
+                    <div class="col-sm-6 col-lg-4">
+                      <div class="fs-7 fw-semibold text-muted">
+                        Total Employer Charge
+                      </div>
+
+                      <div
+                        class="fs-4 fw-bold text-primary mt-1"
+                        id="shiftEmployerChargePreview"
+                      >
+                        —
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
+        </div>
 
-          <div class="modal-footer flex-center">
-            <button
-              type="button"
-              class="btn btn-light me-3"
-              data-bs-dismiss="modal"
-            >
-              Cancel
-            </button>
-
-            <button
-              type="submit"
-              class="btn btn-primary"
-              id="postShiftSubmitButton"
-            >
-              <span class="indicator-label">
-                Post Shift
-              </span>
-
-              <span class="indicator-progress">
-                Posting...
-
-                <span
-                  class="spinner-border spinner-border-sm align-middle ms-2"
-                ></span>
-              </span>
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-<% } %>
-
-<!-- ─────────────────────────────── ATTENDANCE PIN MODAL ─────────────────────────────── -->
-
-<div
-  class="modal fade"
-  id="attendancePinModal"
-  tabindex="-1"
-  aria-labelledby="attendancePinModalLabel"
-  aria-hidden="true"
->
-  <div class="modal-dialog modal-dialog-centered">
-    <div class="modal-content">
-      <div class="modal-header">
-        <div>
-          <h2
-            class="modal-title fw-bold text-gray-900"
-            id="attendancePinModalLabel"
+        <div class="modal-footer flex-center">
+          <button
+            type="button"
+            class="btn btn-light me-3"
+            data-bs-dismiss="modal"
           >
-            Attendance PIN
-          </h2>
+            Cancel
+          </button>
 
-          <div
-            class="fs-7 text-muted mt-1"
-            id="attendancePinShiftReference"
-          ></div>
-        </div>
-
-        <button
-          type="button"
-          class="btn btn-icon btn-sm btn-active-light-primary"
-          data-bs-dismiss="modal"
-          aria-label="Close"
-        >
-          <i class="ki-duotone ki-cross fs-2">
-            <span class="path1"></span>
-            <span class="path2"></span>
-          </i>
-        </button>
-      </div>
-
-      <div class="modal-body text-center py-10">
-        <div
-          class="alert alert-danger d-none text-start"
-          id="attendancePinAlert"
-          role="alert"
-        ></div>
-
-        <div
-          class="spinner-border text-primary d-none"
-          id="attendancePinLoader"
-          role="status"
-        >
-          <span class="visually-hidden">
-            Loading attendance PIN
-          </span>
-        </div>
-
-        <div
-          class="d-none"
-          id="attendancePinContent"
-        >
-          <div class="symbol symbol-60px mb-5">
-            <span class="symbol-label bg-light-primary">
-              <i class="ki-duotone ki-check-circle fs-2x text-primary">
-                <span class="path1"></span>
-                <span class="path2"></span>
-              </i>
+          <button
+            type="submit"
+            class="btn btn-primary"
+            id="postShiftSubmitButton"
+          >
+            <span class="indicator-label">
+              Create Shift
             </span>
-          </div>
 
-          <div
-            class="fs-6 fw-semibold text-muted mb-3"
-            id="attendancePinTypeLabel"
-          >
-            Attendance PIN
-          </div>
+            <span class="indicator-progress">
+              Creating Shift...
 
-          <div
-            class="fs-2x fw-bold text-gray-900 font-monospace mb-5"
-            id="attendancePinValue"
-          >
-            ——— ———
-          </div>
-
-          <div class="fs-7 text-muted">
-            Share this PIN only with the professional assigned to this shift.
-          </div>
+              <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+            </span>
+          </button>
         </div>
-      </div>
-
-      <div class="modal-footer flex-center">
-        <button
-          type="button"
-          class="btn btn-light"
-          data-bs-dismiss="modal"
-        >
-          Close
-        </button>
-      </div>
+      </form>
     </div>
   </div>
-</div>
+<% } %>
+
+<!-- ─────────────────────────────── REUSABLE FUNDING MODAL ─────────────────────────────── -->
+
+<%- include("./partials/fund-shift-modal") %>

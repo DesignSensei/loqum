@@ -135,15 +135,15 @@
               <div class="col-md-5 fv-row">
                 <label class="fs-6 fw-semibold mb-2">Phone Code</label>
 
-                <select
-                  class="form-select form-select-solid"
-                  id="editBranchPhoneCodeSelect"
+                <input
+                  type="text"
+                  class="form-control form-control-solid"
+                  id="editBranchPhoneCodeInput"
                   name="contactPhoneCode"
-                  data-control="select2"
-                  data-dropdown-parent="#editBranchModal"
-                >
-                  <option value="+234" selected>+234</option>
-                </select>
+                  value="<%= employerProfile.businessPhoneCode || '' %>"
+                  data-default-phone-code="<%= employerProfile.businessPhoneCode || '' %>"
+                  readonly
+                />
               </div>
 
               <div class="col-md-7 fv-row">
@@ -169,9 +169,9 @@
                   class="form-control form-control-solid"
                   id="editBranchGeofenceRadiusInput"
                   name="geofenceRadiusMeters"
-                  min="50"
+                  min="20"
                   max="1000"
-                  step="10"
+                  step="1"
                   placeholder="100"
                 />
 

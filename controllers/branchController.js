@@ -3,11 +3,11 @@
 const BranchService = require("../services/branchService");
 
 const BUSINESS_PROFILE_BRANCHES_URL = "/employer/business-profile?tab=branches";
+
 const BUSINESS_PROFILE_TEAM_URL = "/employer/business-profile?tab=team";
 
 //─────────────────────────────── LEGACY / SAFE GET REDIRECTS ───────────────────────────────//
 
-// Branches are now managed from the employer business profile page.
 exports.getBranches = async (req, res, next) => {
   try {
     return res.redirect(BUSINESS_PROFILE_BRANCHES_URL);
@@ -16,7 +16,6 @@ exports.getBranches = async (req, res, next) => {
   }
 };
 
-// Add branch is now handled from the Business Profile page.
 exports.getNewBranch = async (req, res, next) => {
   try {
     return res.redirect(BUSINESS_PROFILE_BRANCHES_URL);
@@ -25,7 +24,6 @@ exports.getNewBranch = async (req, res, next) => {
   }
 };
 
-// Edit branch is now handled from the Business Profile page.
 exports.getEditBranch = async (req, res, next) => {
   try {
     return res.redirect(BUSINESS_PROFILE_BRANCHES_URL);
@@ -34,7 +32,6 @@ exports.getEditBranch = async (req, res, next) => {
   }
 };
 
-// Branch members are now viewed through the Team section.
 exports.getBranchMembers = async (req, res, next) => {
   try {
     return res.redirect(BUSINESS_PROFILE_TEAM_URL);
@@ -45,7 +42,6 @@ exports.getBranchMembers = async (req, res, next) => {
 
 //─────────────────────────────── BRANCH ACTIONS ───────────────────────────────//
 
-// Create Branch
 exports.postNewBranch = async (req, res) => {
   try {
     await BranchService.createBranch({
@@ -66,7 +62,6 @@ exports.postNewBranch = async (req, res) => {
   }
 };
 
-// Update Branch
 exports.postEditBranch = async (req, res) => {
   try {
     const branchId = req.params.branchId || req.body.branchId;

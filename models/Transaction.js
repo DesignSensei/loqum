@@ -2,87 +2,180 @@
 
 const mongoose = require("mongoose");
 
+const {
+  TRANSACTION_TYPES,
+  TRANSACTION_PURPOSES,
+  TRANSACTION_STATUSES,
+  TRANSACTION_PROVIDERS,
+  TRANSACTION_DIRECTIONS,
+  TRANSACTION_PAYMENT_RAILS,
+  PAYSTACK_TRANSACTION_STATUSES,
+  TRANSACTION_INITIATOR_ROLES,
+
+  DIRECT_SHIFT_TRANSACTION_TYPES,
+  SHIFT_FUNDING_TRANSACTION_TYPES,
+  SETTLEMENT_BATCH_TRANSACTION_TYPES,
+  EMPLOYER_REFUND_BATCH_TRANSACTION_TYPES,
+  ASSIGNMENT_CASE_ALLOWED_TRANSACTION_TYPES,
+
+  INTERNAL_PAYMENT_RAILS,
+  PAYSTACK_PAYMENT_RAILS,
+  PAYSTACK_PAYMENT_REFERENCE_RAILS,
+  SHIFT_FUNDING_PAYMENT_RAILS,
+  SHIFT_REFUND_PAYMENT_RAILS,
+  EMPLOYER_REFUND_BATCH_PAYMENT_RAILS,
+  PAYSTACK_TRANSFER_ALLOWED_TRANSACTION_TYPES,
+
+  PLATFORM_FEE_PURPOSES,
+  PLATFORM_FEE_PAYMENT_RAILS,
+
+  OCCURRENCE_REFUND_PURPOSES,
+  SHIFT_LEVEL_REFUND_PURPOSES,
+  DIRECT_SHIFT_REFUND_PURPOSES,
+  EMPLOYER_REFUND_BATCH_PURPOSES,
+  SHIFT_REFUND_PURPOSES,
+
+  REQUIRED_PURPOSE_BY_TRANSACTION_TYPE,
+  SETTLEMENT_BATCH_PURPOSE_BY_TRANSACTION_TYPE,
+  SETTLEMENT_BATCH_PURPOSES,
+  EMPLOYER_REFUND_BATCH_PURPOSE_BY_TRANSACTION_TYPE,
+
+  MAX_TRANSACTION_FAILURE_REASON_LENGTH,
+  MAX_TRANSACTION_REVERSAL_REASON_LENGTH,
+  MAX_TRANSACTION_CANCELLATION_REASON_LENGTH,
+  MAX_TRANSACTION_DESCRIPTION_LENGTH,
+} = require("../constants/transaction");
+
+const {
+  isNonNegativeSafeInteger,
+  isPositiveSafeInteger,
+  isSignedSafeInteger,
+  sameId,
+} = require("./helpers/schemaValidators");
+
 /**
- * TRANSACTION ARCHITECTURE:
+ * TRANSACTION ARCHITECTURE
  *
- * Wallet ledger entries with paired internal transactions.
+ * One Transaction represents one wallet-side ledger movement.
  *
- * One Transaction document represents one wallet-side movement.
+ * INTERNAL WALLET MOVEMENTS
  *
- * Internal wallet-to-wallet transfers must create paired Transaction documents:
- * 1. One debit entry.
- * 2. One credit entry.
+ * A transfer between two Loqum wallets creates two Transaction records:
  *
- * Both entries should share a groupReference and be linked through
- * relatedTransaction.
+ * 1. Debit on the source wallet.
+ * 2. Credit on the destination wallet.
  *
- * Example:
- * Employer funds a shift using wallet balance:
- * 1. Employer wallet is debited.
- * 2. Escrow wallet is credited.
+ * Both records:
  *
- * The service layer must write paired internal entries atomically using a
- * MongoDB session.
+ * - share groupReference;
+ * - identify the opposite wallet through counterpartyWallet; and
+ * - point to each other through relatedTransaction.
  *
- * MONEY STORAGE:
+ * EXTERNAL PROVIDER MOVEMENTS
  *
- * All monetary values are stored in minor units using a factor of 100.
- * Example: ₦1,000.00 is stored as 100000.
+ * External provider movements are one-sided inside Loqum's wallet ledger:
  *
- * Transaction amount is always positive.
- * Direction explains whether the wallet was credited or debited.
+ * - Paystack DVA credits the employer wallet.
+ * - Paystack Checkout credits escrow for one Shift.
+ * - Paystack Refund debits escrow when Paystack returns protected funds.
+ * - Paystack Transfer is represented before provider submission as a durable
+ *   external-transfer instruction, but it must not reduce the linked wallet's
+ *   total recorded balance until the transfer is conclusively successful.
  *
- * Example:
- * - direction: "credit", amount: 500000 means wallet received ₦5,000.00.
- * - direction: "debit", amount: 500000 means wallet paid out ₦5,000.00.
+ * PAYSTACK TRANSFER SAFETY
  *
- * balanceDelta can be positive or negative because it records how the wallet changed.
+ * A Paystack Transfer may be created in pending/processing state before the
+ * provider call so Loqum can persist:
  *
- * CURRENT EMPLOYER WALLET TOP-UP FLOW:
+ * - a deterministic provider transfer reference;
+ * - the exact wallet/bank-account/batch relationship; and
+ * - the idempotency boundary needed for reconciliation.
  *
- * Employers top up their wallet through their Paystack DVA.
- * Each employer receives a dedicated virtual account during onboarding.
- * When the employer transfers money to that DVA, Paystack confirms the deposit,
- * and Loqum credits the employer wallet.
+ * While the transfer remains pending/processing, its cumulative balance delta
+ * must have zero net effect on the wallet. A service may optionally reserve
+ * value between availableBalance and pendingBalance, but it must not consume
+ * wallet value before provider success.
  *
- * DVA:
- * DVA is an inbound rail for employer wallet funding only.
- * DVA should not directly fund a shift.
- * DVA should not directly credit escrow.
+ * Only a completed Paystack Transfer may have a cumulative net wallet debit
+ * equal to amount.
  *
- * CURRENT SHIFT FUNDING OPTIONS:
+ * MONEY STORAGE
  *
- * Employers can confirm a selected shift through:
- * 1. Fund with Wallet
- * 2. Pay with Paystack
+ * All monetary values are stored in minor units.
  *
- * FUND WITH WALLET:
- * Employer wallet availableBalance is debited.
- * Escrow wallet availableBalance is credited.
+ * amount is always positive.
+ * direction determines whether the linked wallet is credited or debited.
+ * balanceDelta records the exact movement against that wallet.
  *
- * PAY WITH PAYSTACK:
- * Employer pays for a specific shift through Paystack Checkout.
- * When Paystack confirms payment, Loqum credits the escrow wallet directly
- * for that shift.
+ * SHIFT FUNDING
  *
- * This does not become employer available wallet balance first.
+ * A Shift may be funded through:
  *
- * PLATFORM FEE:
- * Loqum's fee is employer-side.
- * There is no professional-side commission deduction at launch.
+ * 1. Employer wallet balance.
+ * 2. Paystack Checkout for that Shift.
  *
- * SETTLEMENT:
- * Escrow releases professional pay to professional wallet.
- * Escrow releases Loqum platform fee to platform wallet.
+ * Wallet funding creates paired employer-wallet and escrow transactions.
+ * Paystack Checkout creates one external-provider escrow credit.
  *
- * Wallet balance changes must always be backed by Transaction records.
+ * PROFESSIONAL SETTLEMENT
+ *
+ * ShiftSettlementBatch is the authoritative allocation record for weekly
+ * professional pay only.
+ *
+ * Platform fees do not belong to ShiftSettlementBatch. They are earned and
+ * collected directly against the exact ShiftOccurrence that created the fee.
+ *
+ * PLATFORM FEES
+ *
+ * A base platform fee is earned when a professional is successfully confirmed
+ * for the occurrence.
+ *
+ * An overtime platform fee is earned only after the final payable overtime
+ * obligation is established.
+ *
+ * Both use direct Shift + ShiftOccurrence links and internal wallet transfers
+ * from escrow to the platform wallet.
+ *
+ * EMPLOYER REFUNDS
+ *
+ * Direct refunds reference one Shift and may reference one ShiftOccurrence.
+ *
+ * Weekly employer refunds reference:
+ *
+ * - EmployerRefundBatch; and
+ * - the exact embedded EmployerRefundBatch line.
+ *
+ * The batch line remains authoritative for the individual EmployerRefund
+ * allocations behind an aggregated financial movement.
  */
 
-const isNonNegativeInteger = (value) => Number.isInteger(value) && value >= 0;
+/* ─────────────────────────────── HELPERS ─────────────────────────────── */
 
-const isPositiveInteger = (value) => Number.isInteger(value) && value > 0;
+function hasAnyNonZeroBalanceDelta(balanceDelta) {
+  if (!balanceDelta) {
+    return false;
+  }
 
-const isSignedInteger = (value) => Number.isInteger(value);
+  return [
+    balanceDelta.availableBalance,
+    balanceDelta.pendingBalance,
+    balanceDelta.outstandingBalance,
+  ].some((value) => Number(value || 0) !== 0);
+}
+
+function getNetBalanceDelta(balanceDelta) {
+  if (!balanceDelta) {
+    return 0;
+  }
+
+  return [
+    balanceDelta.availableBalance,
+    balanceDelta.pendingBalance,
+    balanceDelta.outstandingBalance,
+  ].reduce((total, value) => total + Number(value || 0), 0);
+}
+
+/* ─────────────────────────────── BALANCE SUB-SCHEMAS ─────────────────────────────── */
 
 const balanceSnapshotSchema = new mongoose.Schema(
   {
@@ -91,8 +184,8 @@ const balanceSnapshotSchema = new mongoose.Schema(
       required: true,
       min: 0,
       validate: {
-        validator: isNonNegativeInteger,
-        message: "Available balance snapshot must be a non-negative integer.",
+        validator: isNonNegativeSafeInteger,
+        message: "Available balance snapshot must be a non-negative whole number.",
       },
     },
 
@@ -101,8 +194,8 @@ const balanceSnapshotSchema = new mongoose.Schema(
       required: true,
       min: 0,
       validate: {
-        validator: isNonNegativeInteger,
-        message: "Pending balance snapshot must be a non-negative integer.",
+        validator: isNonNegativeSafeInteger,
+        message: "Pending balance snapshot must be a non-negative whole number.",
       },
     },
 
@@ -111,12 +204,14 @@ const balanceSnapshotSchema = new mongoose.Schema(
       required: true,
       min: 0,
       validate: {
-        validator: isNonNegativeInteger,
-        message: "Outstanding balance snapshot must be a non-negative integer.",
+        validator: isNonNegativeSafeInteger,
+        message: "Outstanding balance snapshot must be a non-negative whole number.",
       },
     },
   },
-  { _id: false }
+  {
+    _id: false,
+  }
 );
 
 const balanceDeltaSchema = new mongoose.Schema(
@@ -125,8 +220,8 @@ const balanceDeltaSchema = new mongoose.Schema(
       type: Number,
       default: 0,
       validate: {
-        validator: isSignedInteger,
-        message: "Available balance delta must be an integer.",
+        validator: isSignedSafeInteger,
+        message: "Available balance delta must be a whole number.",
       },
     },
 
@@ -134,8 +229,8 @@ const balanceDeltaSchema = new mongoose.Schema(
       type: Number,
       default: 0,
       validate: {
-        validator: isSignedInteger,
-        message: "Pending balance delta must be an integer.",
+        validator: isSignedSafeInteger,
+        message: "Pending balance delta must be a whole number.",
       },
     },
 
@@ -143,27 +238,33 @@ const balanceDeltaSchema = new mongoose.Schema(
       type: Number,
       default: 0,
       validate: {
-        validator: isSignedInteger,
-        message: "Outstanding balance delta must be an integer.",
+        validator: isSignedSafeInteger,
+        message: "Outstanding balance delta must be a whole number.",
       },
     },
   },
-  { _id: false }
+  {
+    _id: false,
+  }
 );
+
+/* ─────────────────────────────── TRANSACTION SCHEMA ─────────────────────────────── */
 
 const transactionSchema = new mongoose.Schema(
   {
-    // --- REFERENCE ---
+    // --- IDENTITY ---
 
     reference: {
       type: String,
       required: true,
       trim: true,
+      uppercase: true,
     },
 
     groupReference: {
       type: String,
       trim: true,
+      uppercase: true,
       default: null,
     },
 
@@ -171,13 +272,42 @@ const transactionSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: null,
+      select: false,
     },
 
     // --- EXTERNAL PROVIDER REFERENCES ---
 
+    /**
+     * Paystack Checkout and DVA:
+     * → confirmed payment reference
+     *
+     * Paystack Refund:
+     * → provider refund reference
+     *
+     * The original Checkout reference for an employer refund remains on the
+     * EmployerRefundBatch execution line.
+     */
     paystackReference: {
       type: String,
       trim: true,
+      default: null,
+    },
+
+    /**
+     * Paystack Transfer:
+     * → Loqum-generated deterministic provider reference.
+     *
+     * This is deliberately separate from Transaction.reference.
+     *
+     * Transaction.reference is the Loqum ledger reference and is normalized
+     * to uppercase. Paystack Transfer references are provider-facing,
+     * lowercase reconciliation keys with a different format contract.
+     */
+    paystackTransferReference: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      maxlength: 50,
       default: null,
     },
 
@@ -195,61 +325,27 @@ const transactionSchema = new mongoose.Schema(
 
     provider: {
       type: String,
-      enum: ["paystack", "internal", "manual", null],
+      enum: [...TRANSACTION_PROVIDERS, null],
       default: null,
     },
 
-    // --- TYPE ---
+    // --- CLASSIFICATION ---
 
     type: {
       type: String,
       required: true,
-      enum: [
-        "wallet_funding",
-        "shift_funding",
-        "shift_topup",
-        "shift_refund",
-        "professional_payout",
-        "platform_fee",
-        "outstanding_charge",
-        "outstanding_settlement",
-        "withdrawal",
-        "withdrawal_reversal",
-        "dispute_refund",
-        "cancellation_fee",
-        "penalty_debit",
-        "adjustment",
-        "credit_purchase",
-      ],
+      enum: TRANSACTION_TYPES,
     },
 
     purpose: {
       type: String,
-      enum: [
-        "wallet_topup",
-        "shift_base_funding",
-        "shift_overtime_topup",
-        "shift_refund",
-        "base_professional_payout",
-        "overtime_professional_payout",
-        "base_platform_fee",
-        "overtime_platform_fee",
-        "withdrawal",
-        "withdrawal_reversal",
-        "cancellation_fee",
-        "dispute_resolution",
-        "admin_adjustment",
-        "credit_purchase",
-        null,
-      ],
+      enum: [...TRANSACTION_PURPOSES, null],
       default: null,
     },
 
-    // --- DIRECTION ---
-
     direction: {
       type: String,
-      enum: ["credit", "debit"],
+      enum: TRANSACTION_DIRECTIONS,
       required: true,
     },
 
@@ -268,14 +364,14 @@ const transactionSchema = new mongoose.Schema(
     },
 
     // --- AMOUNTS ---
-    // Stored in minor units using a factor of 100.
+    // All values are stored in minor units.
 
     amount: {
       type: Number,
       required: true,
       validate: {
-        validator: isPositiveInteger,
-        message: "Transaction amount must be a positive integer minor-unit amount.",
+        validator: isPositiveSafeInteger,
+        message: "Transaction amount must be a positive whole number in minor units.",
       },
     },
 
@@ -284,7 +380,10 @@ const transactionSchema = new mongoose.Schema(
       default: "NG",
       uppercase: true,
       trim: true,
+      minlength: 2,
+      maxlength: 2,
       required: true,
+      match: [/^[A-Z]{2}$/, "countryCode must contain exactly 2 uppercase letters."],
     },
 
     currency: {
@@ -292,29 +391,34 @@ const transactionSchema = new mongoose.Schema(
       default: "NGN",
       uppercase: true,
       trim: true,
+      minlength: 3,
+      maxlength: 3,
       required: true,
+      match: [/^[A-Z]{3}$/, "currency must contain exactly 3 uppercase letters."],
     },
 
     providerFee: {
       type: Number,
       default: 0,
       required: true,
+      min: 0,
       validate: {
-        validator: isNonNegativeInteger,
-        message: "Provider fee must be a non-negative integer minor-unit amount.",
+        validator: isNonNegativeSafeInteger,
+        message: "Provider fee must be a non-negative whole number in minor units.",
       },
     },
 
     netAmount: {
       type: Number,
       required: true,
+      min: 0,
       validate: {
-        validator: isNonNegativeInteger,
-        message: "Net amount must be a non-negative integer minor-unit amount.",
+        validator: isNonNegativeSafeInteger,
+        message: "Net amount must be a non-negative whole number in minor units.",
       },
     },
 
-    // --- BALANCE SNAPSHOT ---
+    // --- WALLET BALANCE AUDIT ---
 
     balanceBefore: {
       type: balanceSnapshotSchema,
@@ -331,11 +435,23 @@ const transactionSchema = new mongoose.Schema(
       default: () => ({}),
     },
 
-    // --- LINKED RECORDS ---
+    // --- DIRECT SHIFT LINKS ---
 
     shift: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Shift",
+      default: null,
+    },
+
+    shiftOccurrence: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ShiftOccurrence",
+      default: null,
+    },
+
+    assignmentCase: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ShiftAssignmentCase",
       default: null,
     },
 
@@ -344,6 +460,35 @@ const transactionSchema = new mongoose.Schema(
       ref: "ShiftApplication",
       default: null,
     },
+
+    // --- PROFESSIONAL SETTLEMENT BATCH ---
+
+    settlementBatch: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ShiftSettlementBatch",
+      default: null,
+    },
+
+    // --- EMPLOYER REFUND BATCH ---
+
+    employerRefundBatch: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "EmployerRefundBatch",
+      default: null,
+    },
+
+    /**
+     * EmployerRefundBatch.lines is an embedded subdocument array.
+     *
+     * employerRefundBatchLineId points to the exact execution line whose
+     * allocations produced this Transaction.
+     */
+    employerRefundBatchLineId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
+
+    // --- OTHER FINANCIAL LINKS ---
 
     dva: {
       type: mongoose.Schema.Types.ObjectId,
@@ -367,31 +512,30 @@ const transactionSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Transaction",
       default: null,
+
+      /**
+       * Internal movement:
+       * → exact paired debit or credit
+       *
+       * Withdrawal reversal:
+       * → original withdrawal
+       *
+       * Paystack refund:
+       * → may reference the original Checkout funding transaction
+       */
     },
 
-    // --- PAYMENT RAIL ---
+    // --- PAYMENT ROUTE ---
 
     paymentRail: {
       type: String,
-      enum: [
-        "wallet_balance",
-        "paystack_checkout",
-        "paystack_dva",
-        "paystack_transfer",
-        "internal_transfer",
-        "platform_wallet",
-        "admin_action",
-        "system_action",
-        null,
-      ],
+      enum: [...TRANSACTION_PAYMENT_RAILS, null],
       default: null,
     },
 
-    // --- EXTERNAL PAYMENT STATUS ---
-
     paystackStatus: {
       type: String,
-      enum: ["pending", "success", "failed", "reversed", null],
+      enum: [...PAYSTACK_TRANSACTION_STATUSES, null],
       default: null,
     },
 
@@ -399,9 +543,14 @@ const transactionSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["pending", "processing", "completed", "failed", "reversed", "cancelled"],
+      enum: TRANSACTION_STATUSES,
       default: "pending",
       required: true,
+    },
+
+    processingStartedAt: {
+      type: Date,
+      default: null,
     },
 
     completedAt: {
@@ -417,7 +566,7 @@ const transactionSchema = new mongoose.Schema(
     failureReason: {
       type: String,
       trim: true,
-      maxlength: 300,
+      maxlength: MAX_TRANSACTION_FAILURE_REASON_LENGTH,
       default: null,
     },
 
@@ -429,7 +578,19 @@ const transactionSchema = new mongoose.Schema(
     reversalReason: {
       type: String,
       trim: true,
-      maxlength: 300,
+      maxlength: MAX_TRANSACTION_REVERSAL_REASON_LENGTH,
+      default: null,
+    },
+
+    cancelledAt: {
+      type: Date,
+      default: null,
+    },
+
+    cancellationReason: {
+      type: String,
+      trim: true,
+      maxlength: MAX_TRANSACTION_CANCELLATION_REASON_LENGTH,
       default: null,
     },
 
@@ -438,12 +599,12 @@ const transactionSchema = new mongoose.Schema(
       default: 0,
       min: 0,
       validate: {
-        validator: isNonNegativeInteger,
-        message: "Retry count must be a non-negative integer.",
+        validator: isNonNegativeSafeInteger,
+        message: "Retry count must be a non-negative whole number.",
       },
     },
 
-    // --- INITIATED BY ---
+    // --- INITIATOR ---
 
     initiatedBy: {
       userId: {
@@ -454,18 +615,18 @@ const transactionSchema = new mongoose.Schema(
 
       role: {
         type: String,
-        enum: ["system", "employer", "professional", "admin"],
+        enum: TRANSACTION_INITIATOR_ROLES,
         default: "system",
         required: true,
       },
     },
 
-    // --- METADATA ---
+    // --- DISPLAY AND PROVIDER METADATA ---
 
     description: {
       type: String,
       trim: true,
-      maxlength: 500,
+      maxlength: MAX_TRANSACTION_DESCRIPTION_LENGTH,
       default: null,
     },
 
@@ -479,78 +640,13 @@ const transactionSchema = new mongoose.Schema(
   }
 );
 
-// --- INDEXES ---
+/* ─────────────────────────────── MODEL VALIDATION ─────────────────────────────── */
 
-transactionSchema.index({ reference: 1 }, { unique: true });
+transactionSchema.pre("validate", function validateTransaction() {
+  const now = new Date();
 
-transactionSchema.index(
-  { idempotencyKey: 1 },
-  {
-    unique: true,
-    partialFilterExpression: {
-      idempotencyKey: { $type: "string" },
-    },
-  }
-);
+  // --- DEFAULT NORMALIZATION ---
 
-transactionSchema.index(
-  { providerEventId: 1 },
-  {
-    unique: true,
-    partialFilterExpression: {
-      providerEventId: { $type: "string" },
-    },
-  }
-);
-
-transactionSchema.index(
-  { paystackReference: 1 },
-  {
-    unique: true,
-    partialFilterExpression: {
-      paystackReference: { $type: "string" },
-    },
-  }
-);
-
-transactionSchema.index(
-  { paystackTransferCode: 1 },
-  {
-    unique: true,
-    partialFilterExpression: {
-      paystackTransferCode: { $type: "string" },
-    },
-  }
-);
-
-transactionSchema.index({ wallet: 1, createdAt: -1 });
-transactionSchema.index({ counterpartyWallet: 1 }, { sparse: true });
-
-transactionSchema.index({ groupReference: 1 }, { sparse: true });
-transactionSchema.index({ relatedTransaction: 1 }, { sparse: true });
-
-transactionSchema.index({ shift: 1 }, { sparse: true });
-transactionSchema.index({ shiftApplication: 1 }, { sparse: true });
-transactionSchema.index({ dva: 1 }, { sparse: true });
-transactionSchema.index({ bankAccount: 1 }, { sparse: true });
-transactionSchema.index({ dispute: 1 }, { sparse: true });
-
-transactionSchema.index({ type: 1, status: 1 });
-transactionSchema.index({ purpose: 1, status: 1 });
-transactionSchema.index({ paymentRail: 1, status: 1 });
-
-transactionSchema.index({ countryCode: 1 });
-transactionSchema.index({ currency: 1 });
-transactionSchema.index({ countryCode: 1, currency: 1 });
-transactionSchema.index({ countryCode: 1, currency: 1, createdAt: -1 });
-transactionSchema.index({ type: 1, countryCode: 1, currency: 1, createdAt: -1 });
-transactionSchema.index({ wallet: 1, countryCode: 1, currency: 1, createdAt: -1 });
-
-transactionSchema.index({ createdAt: -1 });
-
-// --- VALIDATION ---
-
-transactionSchema.pre("validate", function () {
   if (!this.countryCode) {
     this.countryCode = "NG";
   }
@@ -560,6 +656,7 @@ transactionSchema.pre("validate", function () {
   }
 
   this.countryCode = String(this.countryCode).toUpperCase().trim();
+
   this.currency = String(this.currency).toUpperCase().trim();
 
   if (this.netAmount === null || this.netAmount === undefined) {
@@ -570,181 +667,825 @@ transactionSchema.pre("validate", function () {
     this.providerFee = 0;
   }
 
-  const shiftRelatedTypes = [
-    "shift_funding",
-    "shift_topup",
-    "shift_refund",
-    "professional_payout",
-    "platform_fee",
-    "outstanding_charge",
-    "outstanding_settlement",
-    "dispute_refund",
-    "cancellation_fee",
-  ];
+  const isInternalWalletMovement = INTERNAL_PAYMENT_RAILS.includes(this.paymentRail);
 
-  if (shiftRelatedTypes.includes(this.type) && !this.shift) {
-    throw new Error(`${this.type} transaction must reference a shift.`);
+  const isPaystackMovement = PAYSTACK_PAYMENT_RAILS.includes(this.paymentRail);
+
+  const hasSettlementBatch = Boolean(this.settlementBatch);
+
+  const hasEmployerRefundBatch = Boolean(this.employerRefundBatch);
+
+  const hasEmployerRefundBatchLine = Boolean(this.employerRefundBatchLineId);
+
+  const isEmployerRefundBatchTransaction =
+    hasEmployerRefundBatch && EMPLOYER_REFUND_BATCH_TRANSACTION_TYPES.includes(this.type);
+
+  const isDirectShiftRefund = this.type === "shift_refund" && !hasEmployerRefundBatch;
+
+  const isBatchShiftRefund = this.type === "shift_refund" && hasEmployerRefundBatch;
+
+  // --- BATCH LINK EXCLUSIVITY ---
+
+  if (hasSettlementBatch && hasEmployerRefundBatch) {
+    this.invalidate(
+      "employerRefundBatch",
+      "A Transaction cannot belong to both a professional settlement batch and an employer refund batch."
+    );
   }
 
+  if (hasEmployerRefundBatch !== hasEmployerRefundBatchLine) {
+    this.invalidate(
+      "employerRefundBatchLineId",
+      "employerRefundBatch and employerRefundBatchLineId must be recorded together."
+    );
+  }
+
+  // --- DIRECT SHIFT LINKS ---
+
+  if (DIRECT_SHIFT_TRANSACTION_TYPES.includes(this.type) && !this.shift) {
+    this.invalidate("shift", `${this.type} transaction must reference a Shift.`);
+  }
+
+  if (this.shiftOccurrence && !this.shift) {
+    this.invalidate(
+      "shiftOccurrence",
+      "shiftOccurrence cannot be linked without its parent Shift."
+    );
+  }
+
+  if (this.assignmentCase && !this.shift) {
+    this.invalidate("assignmentCase", "assignmentCase cannot be linked without its parent Shift.");
+  }
+
+  if (this.shiftApplication && !this.shift) {
+    this.invalidate(
+      "shiftApplication",
+      "shiftApplication cannot be linked without its parent Shift."
+    );
+  }
+
+  // --- PROFESSIONAL SETTLEMENT BATCH ---
+
+  if (hasSettlementBatch && !SETTLEMENT_BATCH_TRANSACTION_TYPES.includes(this.type)) {
+    this.invalidate(
+      "settlementBatch",
+      "settlementBatch may only be linked to a professional payout Transaction."
+    );
+  }
+
+  if (hasSettlementBatch) {
+    if (this.shift) {
+      this.invalidate(
+        "shift",
+        "A professional settlement-batch Transaction cannot reference one Shift because the batch may contain several Shifts."
+      );
+    }
+
+    if (this.shiftOccurrence) {
+      this.invalidate(
+        "shiftOccurrence",
+        "A professional settlement-batch Transaction cannot reference one occurrence."
+      );
+    }
+
+    if (this.assignmentCase) {
+      this.invalidate(
+        "assignmentCase",
+        "A professional settlement-batch Transaction cannot reference one assignment case."
+      );
+    }
+
+    if (this.shiftApplication) {
+      this.invalidate(
+        "shiftApplication",
+        "A professional settlement-batch Transaction cannot reference one Shift application."
+      );
+    }
+
+    const requiredBatchPurpose = SETTLEMENT_BATCH_PURPOSE_BY_TRANSACTION_TYPE[this.type];
+
+    if (this.purpose !== requiredBatchPurpose) {
+      this.invalidate(
+        "purpose",
+        `${this.type} settlement-batch Transaction must have ${requiredBatchPurpose} purpose.`
+      );
+    }
+
+    if (this.paymentRail !== "internal_transfer") {
+      this.invalidate(
+        "paymentRail",
+        "Professional settlement-batch wallet movements must use internal_transfer."
+      );
+    }
+
+    if (this.provider !== "internal") {
+      this.invalidate(
+        "provider",
+        "Professional settlement-batch Transactions must use internal provider."
+      );
+    }
+  }
+
+  // --- EMPLOYER REFUND BATCH ---
+
+  if (hasEmployerRefundBatch && !EMPLOYER_REFUND_BATCH_TRANSACTION_TYPES.includes(this.type)) {
+    this.invalidate(
+      "employerRefundBatch",
+      "employerRefundBatch may only be linked to an employer refund Transaction."
+    );
+  }
+
+  if (hasEmployerRefundBatch) {
+    if (!isEmployerRefundBatchTransaction) {
+      this.invalidate(
+        "type",
+        "An employer refund batch Transaction must use a supported employer refund transaction type."
+      );
+    }
+
+    if (this.shift || this.shiftOccurrence || this.assignmentCase || this.shiftApplication) {
+      this.invalidate(
+        "employerRefundBatch",
+        "An employer refund batch Transaction cannot reference one Shift, occurrence, assignment case or Shift application."
+      );
+    }
+
+    const requiredBatchPurpose = EMPLOYER_REFUND_BATCH_PURPOSE_BY_TRANSACTION_TYPE[this.type];
+
+    if (this.purpose !== requiredBatchPurpose) {
+      this.invalidate(
+        "purpose",
+        `${this.type} employer-refund-batch Transaction must have ${requiredBatchPurpose} purpose.`
+      );
+    }
+
+    if (!EMPLOYER_REFUND_BATCH_PAYMENT_RAILS.includes(this.paymentRail)) {
+      this.invalidate(
+        "paymentRail",
+        "An employer refund batch Transaction must use internal_transfer, paystack_refund or paystack_transfer."
+      );
+    }
+  }
+
+  if (hasEmployerRefundBatchLine && !hasEmployerRefundBatch) {
+    this.invalidate(
+      "employerRefundBatchLineId",
+      "employerRefundBatchLineId requires employerRefundBatch."
+    );
+  }
+
+  // --- PROFESSIONAL SETTLEMENT ---
+
+  if (this.type === "professional_payout" && !hasSettlementBatch) {
+    this.invalidate(
+      "settlementBatch",
+      "A professional payout Transaction must belong to a ShiftSettlementBatch."
+    );
+  }
+
+  if (SETTLEMENT_BATCH_PURPOSES.includes(this.purpose)) {
+    if (this.type !== "professional_payout") {
+      this.invalidate(
+        "type",
+        `${this.purpose} may only be used by a professional_payout Transaction.`
+      );
+    }
+
+    if (!hasSettlementBatch) {
+      this.invalidate("settlementBatch", `${this.purpose} requires a ShiftSettlementBatch.`);
+    }
+  }
+
+  // --- PLATFORM FEE ---
+
+  if (this.type === "platform_fee") {
+    if (hasSettlementBatch) {
+      this.invalidate(
+        "settlementBatch",
+        "Platform-fee Transactions cannot belong to ShiftSettlementBatch."
+      );
+    }
+
+    if (!this.shift) {
+      this.invalidate("shift", "A platform-fee Transaction must reference its Shift.");
+    }
+
+    if (!this.shiftOccurrence) {
+      this.invalidate(
+        "shiftOccurrence",
+        "A platform-fee Transaction must reference the exact occurrence whose fee was earned."
+      );
+    }
+
+    if (!PLATFORM_FEE_PURPOSES.includes(this.purpose)) {
+      this.invalidate(
+        "purpose",
+        "A platform-fee Transaction must use base_platform_fee_earned or overtime_platform_fee_earned."
+      );
+    }
+
+    if (!PLATFORM_FEE_PAYMENT_RAILS.includes(this.paymentRail)) {
+      this.invalidate("paymentRail", "Platform-fee Transactions must use internal_transfer.");
+    }
+
+    if (this.provider !== "internal") {
+      this.invalidate("provider", "Platform-fee Transactions must use internal provider.");
+    }
+
+    if (this.assignmentCase) {
+      this.invalidate(
+        "assignmentCase",
+        "A platform-fee Transaction cannot reference an assignment case."
+      );
+    }
+
+    if (this.shiftApplication) {
+      this.invalidate(
+        "shiftApplication",
+        "A platform-fee Transaction cannot reference a Shift application."
+      );
+    }
+  }
+
+  if (PLATFORM_FEE_PURPOSES.includes(this.purpose) && this.type !== "platform_fee") {
+    this.invalidate("type", `${this.purpose} may only be used by a platform_fee Transaction.`);
+  }
+
+  // --- TYPE AND PURPOSE ---
+
+  const requiredPurpose = REQUIRED_PURPOSE_BY_TRANSACTION_TYPE[this.type];
+
+  if (requiredPurpose && this.purpose !== requiredPurpose) {
+    this.invalidate("purpose", `${this.type} transaction must have ${requiredPurpose} purpose.`);
+  }
+
+  const hasRefundPurpose = SHIFT_REFUND_PURPOSES.includes(this.purpose);
+
+  if (hasRefundPurpose && this.type !== "shift_refund") {
+    this.invalidate("type", `${this.purpose} may only be used by a shift_refund Transaction.`);
+  }
+
+  // --- DIRECT AND BATCH REFUND PURPOSES ---
+
+  if (EMPLOYER_REFUND_BATCH_PURPOSES.includes(this.purpose) && !hasEmployerRefundBatch) {
+    this.invalidate(
+      "employerRefundBatch",
+      `${this.purpose} requires EmployerRefundBatch and employerRefundBatchLineId.`
+    );
+  }
+
+  if (DIRECT_SHIFT_REFUND_PURPOSES.includes(this.purpose) && hasEmployerRefundBatch) {
+    this.invalidate(
+      "purpose",
+      "A weekly employer refund batch cannot use a direct Shift refund purpose."
+    );
+  }
+
+  // --- SHIFT REFUND ---
+
+  if (this.type === "shift_refund") {
+    if (!SHIFT_REFUND_PURPOSES.includes(this.purpose)) {
+      this.invalidate(
+        "purpose",
+        "shift_refund must use a supported direct or weekly employer refund purpose."
+      );
+    }
+
+    if (!SHIFT_REFUND_PAYMENT_RAILS.includes(this.paymentRail)) {
+      this.invalidate(
+        "paymentRail",
+        "shift_refund must use internal_transfer, paystack_refund or paystack_transfer."
+      );
+    }
+
+    if (isDirectShiftRefund) {
+      if (!this.shift) {
+        this.invalidate("shift", "A direct Shift refund must reference its Shift.");
+      }
+
+      if (!DIRECT_SHIFT_REFUND_PURPOSES.includes(this.purpose)) {
+        this.invalidate(
+          "purpose",
+          "A direct Shift refund must use a direct Shift or occurrence refund purpose."
+        );
+      }
+
+      if (OCCURRENCE_REFUND_PURPOSES.includes(this.purpose) && !this.shiftOccurrence) {
+        this.invalidate(
+          "shiftOccurrence",
+          `${this.purpose} must reference the occurrence that created the refund.`
+        );
+      }
+
+      if (SHIFT_LEVEL_REFUND_PURPOSES.includes(this.purpose) && this.shiftOccurrence) {
+        this.invalidate(
+          "shiftOccurrence",
+          `${this.purpose} is a parent-Shift reconciliation and cannot reference one occurrence.`
+        );
+      }
+
+      if (this.paymentRail === "paystack_transfer") {
+        this.invalidate(
+          "paymentRail",
+          "A Paystack Transfer refund fallback must belong to an EmployerRefundBatch line."
+        );
+      }
+    }
+
+    if (isBatchShiftRefund) {
+      if (!EMPLOYER_REFUND_BATCH_PURPOSES.includes(this.purpose)) {
+        this.invalidate(
+          "purpose",
+          "An employer refund batch Transaction must use weekly_employer_refund purpose."
+        );
+      }
+    }
+  }
+
+  if (this.assignmentCase && !ASSIGNMENT_CASE_ALLOWED_TRANSACTION_TYPES.includes(this.type)) {
+    this.invalidate(
+      "assignmentCase",
+      "assignmentCase may only trace a refund, dispute refund or cancellation fee."
+    );
+  }
+
+  // --- DVA WALLET FUNDING ---
+
   if (this.type === "wallet_funding") {
-    if (this.purpose !== "wallet_topup") {
-      throw new Error("Wallet funding transaction must have wallet_topup purpose.");
+    if (this.direction !== "credit") {
+      this.invalidate("direction", "Employer wallet funding must be a credit Transaction.");
     }
 
     if (this.paymentRail !== "paystack_dva") {
-      throw new Error("Employer wallet funding must use Paystack DVA.");
+      this.invalidate("paymentRail", "Employer wallet funding must use Paystack DVA.");
     }
   }
 
   if (this.paymentRail === "paystack_dva") {
     if (this.type !== "wallet_funding") {
-      throw new Error("Paystack DVA can only be used for wallet funding.");
-    }
-
-    if (this.purpose !== "wallet_topup") {
-      throw new Error("Paystack DVA transactions must have wallet_topup purpose.");
+      this.invalidate("type", "Paystack DVA can only be used for wallet funding.");
     }
 
     if (!this.dva) {
-      throw new Error("Paystack DVA wallet funding transaction must reference a DVA.");
+      this.invalidate("dva", "Paystack DVA wallet funding must reference a DVA.");
+    }
+
+    if (this.provider !== "paystack") {
+      this.invalidate("provider", "Paystack DVA Transaction must use Paystack provider.");
     }
   }
 
   if (this.dva && this.paymentRail !== "paystack_dva") {
-    throw new Error("DVA should only be linked to Paystack DVA wallet funding.");
+    this.invalidate("dva", "DVA may only be linked to Paystack DVA wallet funding.");
   }
 
-  if (["shift_funding", "shift_topup"].includes(this.type)) {
-    const allowedShiftFundingRails = ["wallet_balance", "paystack_checkout"];
+  // --- SHIFT FUNDING AND TOP-UP ---
 
-    if (!allowedShiftFundingRails.includes(this.paymentRail)) {
-      throw new Error(`${this.type} must be funded through wallet balance or Paystack Checkout.`);
-    }
-  }
-
-  if (
-    this.paymentRail === "wallet_balance" ||
-    this.paymentRail === "internal_transfer" ||
-    this.paymentRail === "platform_wallet"
-  ) {
-    if (!this.counterpartyWallet) {
-      throw new Error(`${this.paymentRail} transaction must reference a counterparty wallet.`);
-    }
-  }
-
-  if (this.paymentRail === "paystack_checkout") {
-    if (this.type === "wallet_funding") {
-      throw new Error(
-        "Paystack Checkout should not be used for employer wallet funding in the MVP."
+  if (SHIFT_FUNDING_TRANSACTION_TYPES.includes(this.type)) {
+    if (!SHIFT_FUNDING_PAYMENT_RAILS.includes(this.paymentRail)) {
+      this.invalidate(
+        "paymentRail",
+        `${this.type} must be funded through wallet balance or Paystack Checkout.`
       );
     }
 
-    if (this.provider !== "paystack") {
-      throw new Error("Paystack Checkout transaction must have paystack as provider.");
+    if (this.paymentRail === "paystack_checkout" && this.direction !== "credit") {
+      this.invalidate(
+        "direction",
+        "Paystack Checkout Shift funding must credit the escrow wallet."
+      );
     }
   }
 
-  if (this.paymentRail === "paystack_dva" && this.provider !== "paystack") {
-    throw new Error("Paystack DVA transaction must have paystack as provider.");
-  }
+  // --- INTERNAL WALLET MOVEMENT ---
 
-  if (
-    ["paystack_checkout", "paystack_dva"].includes(this.paymentRail) &&
-    this.status === "completed" &&
-    !this.paystackReference
-  ) {
-    throw new Error(`${this.paymentRail} transaction must reference Paystack payment.`);
-  }
-
-  if (this.type === "withdrawal") {
-    if (this.purpose !== "withdrawal") {
-      throw new Error("Withdrawal transaction must have withdrawal purpose.");
+  if (isInternalWalletMovement) {
+    if (!this.counterpartyWallet) {
+      this.invalidate(
+        "counterpartyWallet",
+        `${this.paymentRail} Transaction must reference a counterparty wallet.`
+      );
     }
 
-    if (this.direction !== "debit") {
-      throw new Error("Withdrawal transaction must be a debit.");
-    }
-
-    if (this.paymentRail !== "paystack_transfer") {
-      throw new Error("Withdrawal transaction must use Paystack Transfer.");
-    }
-
-    if (this.provider !== "paystack") {
-      throw new Error("Withdrawal transaction must have paystack as provider.");
-    }
-
-    if (!this.bankAccount) {
-      throw new Error("Withdrawal transaction must reference a bank account.");
-    }
-  }
-
-  if (this.type === "withdrawal_reversal") {
-    if (this.purpose !== "withdrawal_reversal") {
-      throw new Error("Withdrawal reversal transaction must have withdrawal_reversal purpose.");
-    }
-
-    if (this.direction !== "credit") {
-      throw new Error("Withdrawal reversal transaction must be a credit.");
-    }
-
-    if (this.paymentRail !== "system_action") {
-      throw new Error("Withdrawal reversal transaction must use system_action payment rail.");
+    if (!this.groupReference) {
+      this.invalidate(
+        "groupReference",
+        `${this.paymentRail} Transaction must share a groupReference with its paired wallet entry.`
+      );
     }
 
     if (this.provider !== "internal") {
-      throw new Error("Withdrawal reversal transaction must have internal as provider.");
+      this.invalidate("provider", `${this.paymentRail} Transaction must use internal provider.`);
+    }
+
+    if (this.status === "completed" && !this.relatedTransaction) {
+      this.invalidate(
+        "relatedTransaction",
+        "A completed internal wallet movement must reference its exact paired Transaction."
+      );
+    }
+
+    if (
+      this.paystackReference ||
+      this.paystackTransferReference ||
+      this.paystackTransferCode ||
+      this.paystackStatus ||
+      this.providerEventId
+    ) {
+      this.invalidate(
+        "provider",
+        "Internal wallet movements cannot contain Paystack payment, Transfer or event references."
+      );
+    }
+  }
+
+  if (this.counterpartyWallet && this.wallet && sameId(this.counterpartyWallet, this.wallet)) {
+    this.invalidate("counterpartyWallet", "A wallet cannot be its own counterparty.");
+  }
+
+  // --- EXTERNAL PAYSTACK MOVEMENT ---
+
+  if (isPaystackMovement && this.counterpartyWallet) {
+    this.invalidate(
+      "counterpartyWallet",
+      "External Paystack movements cannot reference a Loqum counterparty wallet."
+    );
+  }
+
+  if (isPaystackMovement && this.provider !== "paystack") {
+    this.invalidate("provider", `${this.paymentRail} Transaction must use Paystack provider.`);
+  }
+
+  // --- PAYSTACK CHECKOUT ---
+
+  if (this.paymentRail === "paystack_checkout") {
+    if (this.type === "wallet_funding") {
+      this.invalidate("type", "Paystack Checkout cannot be used for employer wallet funding.");
+    }
+  }
+
+  // --- PAYSTACK REFUND ---
+
+  if (this.paymentRail === "paystack_refund") {
+    if (this.type !== "shift_refund") {
+      this.invalidate("type", "Paystack Refund may only execute a Shift refund.");
+    }
+
+    if (this.direction !== "debit") {
+      this.invalidate("direction", "Paystack Refund must debit protected escrow funds.");
+    }
+
+    if (this.bankAccount) {
+      this.invalidate(
+        "bankAccount",
+        "Paystack Refund returns money through the original payment route and cannot reference a bank account."
+      );
+    }
+
+    if (this.paystackTransferCode) {
+      this.invalidate(
+        "paystackTransferCode",
+        "Paystack Refund cannot contain a Paystack Transfer code."
+      );
+    }
+
+    if (["processing", "completed"].includes(this.status) && !this.paystackReference) {
+      this.invalidate(
+        "paystackReference",
+        "A processing or completed Paystack Refund must reference its provider refund."
+      );
+    }
+  }
+
+  // --- PAYSTACK PAYMENT REFERENCE ---
+
+  if (
+    PAYSTACK_PAYMENT_REFERENCE_RAILS.includes(this.paymentRail) &&
+    this.status === "completed" &&
+    !this.paystackReference
+  ) {
+    this.invalidate(
+      "paystackReference",
+      `${this.paymentRail} Transaction must reference the confirmed Paystack operation.`
+    );
+  }
+
+  if (this.paystackReference && this.provider !== "paystack") {
+    this.invalidate(
+      "paystackReference",
+      "paystackReference may only be set for Paystack Transactions."
+    );
+  }
+
+  if (this.providerEventId && this.provider !== "paystack") {
+    this.invalidate(
+      "providerEventId",
+      "providerEventId may only be set for Paystack Transactions."
+    );
+  }
+
+  if (this.paystackStatus && this.provider !== "paystack") {
+    this.invalidate("paystackStatus", "paystackStatus may only be set for Paystack Transactions.");
+  }
+
+  if (
+    this.provider === "paystack" &&
+    this.status === "completed" &&
+    this.paystackStatus !== "success"
+  ) {
+    this.invalidate(
+      "paystackStatus",
+      "A completed Paystack Transaction must have success paystackStatus."
+    );
+  }
+
+  // --- WITHDRAWAL ---
+
+  if (this.type === "withdrawal") {
+    if (this.direction !== "debit") {
+      this.invalidate("direction", "Withdrawal Transaction must be a debit.");
+    }
+
+    if (this.paymentRail !== "paystack_transfer") {
+      this.invalidate("paymentRail", "Withdrawal Transaction must use Paystack Transfer.");
     }
 
     if (!this.bankAccount) {
-      throw new Error("Withdrawal reversal transaction must reference a bank account.");
+      this.invalidate("bankAccount", "Withdrawal Transaction must reference a bank account.");
+    }
+
+    if (
+      ["processing", "completed", "failed", "reversed"].includes(this.status) &&
+      !this.paystackTransferReference
+    ) {
+      this.invalidate(
+        "paystackTransferReference",
+        "A started withdrawal must retain its deterministic Paystack Transfer reference for reconciliation."
+      );
+    }
+
+    if (["completed", "reversed"].includes(this.status) && !this.paystackTransferCode) {
+      this.invalidate(
+        "paystackTransferCode",
+        "A completed or subsequently reversed withdrawal must reference its Paystack Transfer code."
+      );
+    }
+  }
+
+  // --- EMPLOYER REFUND FALLBACK TRANSFER ---
+
+  if (this.type === "shift_refund" && this.paymentRail === "paystack_transfer") {
+    if (!hasEmployerRefundBatch) {
+      this.invalidate(
+        "employerRefundBatch",
+        "An employer refund fallback Transfer must reference EmployerRefundBatch and its exact line."
+      );
+    }
+
+    if (this.purpose !== "weekly_employer_refund") {
+      this.invalidate(
+        "purpose",
+        "An employer refund fallback Transfer must use weekly_employer_refund purpose."
+      );
+    }
+
+    if (this.direction !== "debit") {
+      this.invalidate(
+        "direction",
+        "An employer refund fallback Transfer must debit protected escrow funds."
+      );
+    }
+
+    if (!this.bankAccount) {
+      this.invalidate(
+        "bankAccount",
+        "An employer refund fallback Transfer must reference the employer-approved bank account."
+      );
+    }
+
+    if (
+      ["processing", "completed", "failed", "reversed"].includes(this.status) &&
+      !this.paystackTransferReference
+    ) {
+      this.invalidate(
+        "paystackTransferReference",
+        "A started employer refund fallback Transfer must retain its deterministic Paystack Transfer reference for reconciliation."
+      );
+    }
+
+    if (["completed", "reversed"].includes(this.status) && !this.paystackTransferCode) {
+      this.invalidate(
+        "paystackTransferCode",
+        "A completed or subsequently reversed employer refund fallback Transfer must reference its Paystack Transfer code."
+      );
+    }
+  }
+
+  // --- WITHDRAWAL REVERSAL ---
+
+  if (this.type === "withdrawal_reversal") {
+    if (this.direction !== "credit") {
+      this.invalidate("direction", "Withdrawal reversal Transaction must be a credit.");
+    }
+
+    if (this.paymentRail !== "system_action") {
+      this.invalidate("paymentRail", "Withdrawal reversal Transaction must use system_action.");
+    }
+
+    if (this.provider !== "internal") {
+      this.invalidate("provider", "Withdrawal reversal must use internal provider.");
+    }
+
+    if (!this.bankAccount) {
+      this.invalidate("bankAccount", "Withdrawal reversal must reference a bank account.");
     }
 
     if (!this.relatedTransaction) {
-      throw new Error("Withdrawal reversal transaction must reference the original withdrawal.");
+      this.invalidate(
+        "relatedTransaction",
+        "Withdrawal reversal must reference the original withdrawal."
+      );
     }
   }
 
-  if (this.paymentRail === "paystack_transfer" && this.type !== "withdrawal") {
-    throw new Error("Paystack Transfer should only be used for external bank withdrawals.");
+  // --- PAYSTACK TRANSFER GENERAL RULES ---
+
+  if (
+    this.paymentRail === "paystack_transfer" &&
+    !PAYSTACK_TRANSFER_ALLOWED_TRANSACTION_TYPES.includes(this.type)
+  ) {
+    this.invalidate(
+      "type",
+      "Paystack Transfer may only be used for a withdrawal or approved employer refund fallback."
+    );
   }
 
+  if (this.paystackTransferReference && this.paymentRail !== "paystack_transfer") {
+    this.invalidate(
+      "paystackTransferReference",
+      "paystackTransferReference may only be linked to Paystack Transfer Transactions."
+    );
+  }
+
+  if (this.paystackTransferReference && this.provider !== "paystack") {
+    this.invalidate(
+      "paystackTransferReference",
+      "paystackTransferReference may only be set for Paystack Transactions."
+    );
+  }
+
+  if (
+    this.paystackTransferReference &&
+    !/^[a-z0-9_-]{16,50}$/.test(this.paystackTransferReference)
+  ) {
+    this.invalidate(
+      "paystackTransferReference",
+      "Paystack Transfer reference must contain 16 to 50 lowercase letters, digits, hyphens or underscores."
+    );
+  }
+
+  if (this.paystackTransferCode && this.paymentRail !== "paystack_transfer") {
+    this.invalidate(
+      "paystackTransferCode",
+      "paystackTransferCode may only be linked to Paystack Transfer Transactions."
+    );
+  }
+
+  if (this.paystackTransferCode && this.provider !== "paystack") {
+    this.invalidate(
+      "paystackTransferCode",
+      "paystackTransferCode may only be set for Paystack Transactions."
+    );
+  }
+
+  if (this.paystackTransferCode && !this.paystackTransferReference) {
+    this.invalidate(
+      "paystackTransferReference",
+      "A Paystack Transfer code requires the deterministic provider transfer reference used to create or verify that Transfer."
+    );
+  }
+
+  if (this.paymentRail === "paystack_transfer" && this.paystackReference) {
+    this.invalidate(
+      "paystackReference",
+      "Paystack Transfer uses paystackTransferReference and paystackTransferCode, not paystackReference."
+    );
+  }
+
+  // --- BANK ACCOUNT RELATIONSHIP ---
+
+  const isBankAccountTransaction =
+    this.type === "withdrawal" ||
+    this.type === "withdrawal_reversal" ||
+    (this.type === "shift_refund" && this.paymentRail === "paystack_transfer");
+
+  if (this.bankAccount && !isBankAccountTransaction) {
+    this.invalidate(
+      "bankAccount",
+      "bankAccount may only be linked to a withdrawal, withdrawal reversal or employer refund fallback Transfer."
+    );
+  }
+
+  // --- AMOUNT CONSISTENCY ---
+
   if (this.providerFee > this.amount) {
-    throw new Error("Provider fee cannot be greater than transaction amount.");
+    this.invalidate("providerFee", "Provider fee cannot be greater than Transaction amount.");
   }
 
   if (this.netAmount > this.amount) {
-    throw new Error("Net amount cannot be greater than transaction amount.");
+    this.invalidate("netAmount", "Net amount cannot be greater than Transaction amount.");
   }
+
+  if (this.provider === "internal" && this.providerFee !== 0) {
+    this.invalidate("providerFee", "Internal wallet movements cannot contain a provider fee.");
+  }
+
+  if (this.provider === "internal" && this.netAmount !== this.amount) {
+    this.invalidate("netAmount", "Internal wallet movements must have netAmount equal to amount.");
+  }
+
+  if (this.relatedTransaction && sameId(this.relatedTransaction, this._id)) {
+    this.invalidate("relatedTransaction", "A Transaction cannot be related to itself.");
+  }
+
+  // --- BALANCE CONSISTENCY ---
 
   const balanceFields = ["availableBalance", "pendingBalance", "outstandingBalance"];
 
   if (this.balanceBefore && this.balanceAfter && this.balanceDelta) {
     for (const field of balanceFields) {
-      const before = Number(this.balanceBefore[field] ?? 0);
-      const delta = Number(this.balanceDelta[field] ?? 0);
-      const after = Number(this.balanceAfter[field] ?? 0);
+      const before = Number(this.balanceBefore[field]);
+
+      const delta = Number(this.balanceDelta[field]);
+
+      const after = Number(this.balanceAfter[field]);
 
       const expectedAfter = before + delta;
 
       if (after !== expectedAfter) {
-        throw new Error(
+        this.invalidate(
+          `balanceDelta.${field}`,
           `Invalid balanceDelta for ${field}. Expected balanceAfter.${field} to be ${expectedAfter}.`
         );
       }
     }
   }
 
-  if (this.status === "completed" && !this.completedAt) {
-    this.completedAt = new Date();
+  if (this.paymentRail === "paystack_transfer") {
+    const netBalanceDelta = getNetBalanceDelta(this.balanceDelta);
+
+    if (
+      ["pending", "processing", "failed", "cancelled"].includes(this.status) &&
+      netBalanceDelta !== 0
+    ) {
+      this.invalidate(
+        "balanceDelta",
+        "A Paystack Transfer cannot consume wallet value before conclusive provider success. Pending, processing, failed and cancelled Transfer records must have zero cumulative net wallet movement."
+      );
+    }
+
+    if (
+      ["completed", "reversed"].includes(this.status) &&
+      netBalanceDelta !== -Number(this.amount)
+    ) {
+      this.invalidate(
+        "balanceDelta",
+        "A completed or subsequently reversed Paystack Transfer must retain the original cumulative wallet debit equal to Transaction amount. Any reversal credit belongs in its own reversal Transaction."
+      );
+    }
   }
 
-  if (this.status !== "completed") {
+  if (
+    ["completed", "reversed"].includes(this.status) &&
+    !hasAnyNonZeroBalanceDelta(this.balanceDelta)
+  ) {
+    this.invalidate(
+      "balanceDelta",
+      "A completed or reversed Transaction must record a non-zero wallet balance movement."
+    );
+  }
+
+  // --- STATUS TIMESTAMPS ---
+
+  if (this.status === "processing" && !this.processingStartedAt) {
+    this.processingStartedAt = now;
+  }
+
+  if (this.status === "pending") {
+    this.processingStartedAt = null;
+  }
+
+  if (this.status === "completed" && !this.completedAt) {
+    this.completedAt = now;
+  }
+
+  if (!["completed", "reversed"].includes(this.status)) {
     this.completedAt = null;
   }
 
   if (this.status === "failed") {
     if (!this.failedAt) {
-      this.failedAt = new Date();
+      this.failedAt = now;
     }
 
     if (!this.failureReason) {
@@ -758,8 +1499,15 @@ transactionSchema.pre("validate", function () {
   }
 
   if (this.status === "reversed") {
+    if (!this.completedAt) {
+      this.invalidate(
+        "completedAt",
+        "A reversed Transaction must retain the time it originally completed."
+      );
+    }
+
     if (!this.reversedAt) {
-      this.reversedAt = new Date();
+      this.reversedAt = now;
     }
 
     if (!this.reversalReason) {
@@ -771,6 +1519,403 @@ transactionSchema.pre("validate", function () {
     this.reversedAt = null;
     this.reversalReason = null;
   }
+
+  if (this.status === "cancelled") {
+    if (!this.cancelledAt) {
+      this.cancelledAt = now;
+    }
+
+    if (!this.cancellationReason) {
+      this.cancellationReason = "Transaction cancelled.";
+    }
+  }
+
+  if (this.status !== "cancelled") {
+    this.cancelledAt = null;
+    this.cancellationReason = null;
+  }
+
+  // --- INITIATOR ---
+
+  if (this.initiatedBy?.role !== "system" && !this.initiatedBy?.userId) {
+    this.invalidate(
+      "initiatedBy.userId",
+      "initiatedBy.userId is required when a user initiates the Transaction."
+    );
+  }
+});
+
+/* ─────────────────────────────── INDEXES ─────────────────────────────── */
+
+transactionSchema.index(
+  {
+    reference: 1,
+  },
+  {
+    unique: true,
+  }
+);
+
+transactionSchema.index(
+  {
+    idempotencyKey: 1,
+  },
+  {
+    unique: true,
+    partialFilterExpression: {
+      idempotencyKey: {
+        $type: "string",
+      },
+    },
+  }
+);
+
+transactionSchema.index(
+  {
+    providerEventId: 1,
+  },
+  {
+    unique: true,
+    partialFilterExpression: {
+      providerEventId: {
+        $type: "string",
+      },
+    },
+  }
+);
+
+transactionSchema.index(
+  {
+    paystackReference: 1,
+  },
+  {
+    unique: true,
+    partialFilterExpression: {
+      paystackReference: {
+        $type: "string",
+      },
+    },
+  }
+);
+
+transactionSchema.index(
+  {
+    paystackTransferReference: 1,
+  },
+  {
+    unique: true,
+    partialFilterExpression: {
+      paystackTransferReference: {
+        $type: "string",
+      },
+    },
+  }
+);
+
+transactionSchema.index(
+  {
+    paystackTransferCode: 1,
+  },
+  {
+    unique: true,
+    partialFilterExpression: {
+      paystackTransferCode: {
+        $type: "string",
+      },
+    },
+  }
+);
+
+transactionSchema.index(
+  {
+    settlementBatch: 1,
+    type: 1,
+    direction: 1,
+    wallet: 1,
+  },
+  {
+    unique: true,
+    partialFilterExpression: {
+      settlementBatch: {
+        $type: "objectId",
+      },
+    },
+  }
+);
+
+/**
+ * One occurrence may earn each platform-fee component only once.
+ *
+ * The internal transfer produces:
+ *
+ * - one escrow debit; and
+ * - one platform-wallet credit.
+ *
+ * direction and wallet distinguish the valid pair while preventing a second
+ * ordinary collection for the same occurrence-component fee.
+ */
+transactionSchema.index(
+  {
+    shiftOccurrence: 1,
+    purpose: 1,
+    direction: 1,
+    wallet: 1,
+  },
+  {
+    unique: true,
+    partialFilterExpression: {
+      type: "platform_fee",
+      shiftOccurrence: {
+        $type: "objectId",
+      },
+    },
+  }
+);
+
+/**
+ * One employer refund batch line may create:
+ *
+ * internal_transfer
+ * → one escrow debit and one employer-wallet credit
+ *
+ * paystack_refund
+ * → one escrow debit
+ *
+ * paystack_transfer
+ * → one escrow debit after the refund route fails
+ *
+ * paymentRail, direction and wallet distinguish these valid movements while
+ * preventing duplicate execution for the same route.
+ */
+transactionSchema.index(
+  {
+    employerRefundBatch: 1,
+    employerRefundBatchLineId: 1,
+    paymentRail: 1,
+    direction: 1,
+    wallet: 1,
+  },
+  {
+    unique: true,
+    partialFilterExpression: {
+      employerRefundBatch: {
+        $type: "objectId",
+      },
+
+      employerRefundBatchLineId: {
+        $type: "objectId",
+      },
+    },
+  }
+);
+
+transactionSchema.index({
+  wallet: 1,
+  createdAt: -1,
+});
+
+transactionSchema.index(
+  {
+    counterpartyWallet: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+transactionSchema.index(
+  {
+    groupReference: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+transactionSchema.index(
+  {
+    relatedTransaction: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+transactionSchema.index(
+  {
+    shift: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+transactionSchema.index(
+  {
+    shiftOccurrence: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+transactionSchema.index(
+  {
+    assignmentCase: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+transactionSchema.index(
+  {
+    shiftApplication: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+transactionSchema.index(
+  {
+    settlementBatch: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+transactionSchema.index(
+  {
+    employerRefundBatch: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+transactionSchema.index(
+  {
+    employerRefundBatchLineId: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+transactionSchema.index(
+  {
+    employerRefundBatch: 1,
+    status: 1,
+    paymentRail: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+transactionSchema.index(
+  {
+    dva: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+transactionSchema.index(
+  {
+    bankAccount: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+transactionSchema.index(
+  {
+    dispute: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+transactionSchema.index({
+  type: 1,
+  status: 1,
+});
+
+transactionSchema.index({
+  purpose: 1,
+  status: 1,
+});
+
+transactionSchema.index({
+  paymentRail: 1,
+  status: 1,
+});
+
+transactionSchema.index({
+  countryCode: 1,
+});
+
+transactionSchema.index({
+  currency: 1,
+});
+
+transactionSchema.index({
+  countryCode: 1,
+  currency: 1,
+});
+
+transactionSchema.index({
+  countryCode: 1,
+  currency: 1,
+  createdAt: -1,
+});
+
+transactionSchema.index({
+  type: 1,
+  countryCode: 1,
+  currency: 1,
+  createdAt: -1,
+});
+
+transactionSchema.index({
+  wallet: 1,
+  countryCode: 1,
+  currency: 1,
+  createdAt: -1,
+});
+
+transactionSchema.index({
+  shiftOccurrence: 1,
+  type: 1,
+  createdAt: -1,
+});
+
+transactionSchema.index({
+  shiftOccurrence: 1,
+  purpose: 1,
+  direction: 1,
+  createdAt: -1,
+});
+
+transactionSchema.index({
+  assignmentCase: 1,
+  type: 1,
+  createdAt: -1,
+});
+
+transactionSchema.index({
+  status: 1,
+  processingStartedAt: 1,
+});
+
+transactionSchema.index({
+  createdAt: -1,
 });
 
 module.exports = mongoose.model("Transaction", transactionSchema);

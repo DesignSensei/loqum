@@ -3,6 +3,9 @@
 const NotificationService = require("../services/notificationService");
 const logger = require("../utils/logger");
 
+const HEADER_NOTIFICATION_MAX_AGE_HOURS = 24;
+const HEADER_NOTIFICATION_LIMIT = 15;
+
 function isPageRequest(req) {
   if (req.method !== "GET") {
     return false;
@@ -13,15 +16,26 @@ function isPageRequest(req) {
   return acceptHeader.includes("text/html");
 }
 
+function getHeaderNotificationCutoff() {
+  const maximumAgeMs = HEADER_NOTIFICATION_MAX_AGE_HOURS * 60 * 60 * 1000;
+
+  return new Date(Date.now() - maximumAgeMs);
+}
+
 function formatRelativeNotificationTime(date) {
   if (!date) {
     return null;
   }
 
   const createdAt = new Date(date);
+
+  if (Number.isNaN(createdAt.getTime())) {
+    return null;
+  }
+
   const now = new Date();
 
-  const diffMs = now - createdAt;
+  const diffMs = Math.max(0, now.getTime() - createdAt.getTime());
   const diffMinutes = Math.floor(diffMs / (1000 * 60));
   const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
@@ -74,16 +88,20 @@ function buildHeaderNotificationItem(notification) {
 function buildEmptyHeaderNotificationView() {
   return {
     items: [],
+
     unreadCount: 0,
     unreadCountText: "0",
     unreadBadgeText: "0 new",
+
     hasItems: false,
     hasUnread: false,
 
     title: "Notifications",
+
     subtitle: "Updates about shifts, invites, wallet activity, and account activity.",
 
     emptyTitle: "No notifications yet",
+
     emptyMessage: "Important updates will appear here when activity starts.",
   };
 }
@@ -100,25 +118,36 @@ exports.attachNotificationLocals = async (req, res, next) => {
       return next();
     }
 
+    const createdAfter = getHeaderNotificationCutoff();
+
     const [notifications, unreadCount] = await Promise.all([
       NotificationService.getUserNotifications(req.user._id, {
-        limit: 15,
+        limit: HEADER_NOTIFICATION_LIMIT,
+        createdAfter,
       }),
 
-      NotificationService.countUnreadNotifications(req.user._id),
+      NotificationService.countUnreadNotifications(req.user._id, {
+        createdAfter,
+      }),
     ]);
 
     const items = notifications.map(buildHeaderNotificationItem);
-    const normalizedUnreadCount = Number(unreadCount || 0);
+
+    const normalizedUnreadCount = Math.max(0, Number(unreadCount || 0));
 
     res.locals.headerNotificationView = {
       ...buildEmptyHeaderNotificationView(),
 
       items,
+
       unreadCount: normalizedUnreadCount,
+
       unreadCountText: normalizedUnreadCount > 9 ? "9+" : String(normalizedUnreadCount),
+
       unreadBadgeText: `${normalizedUnreadCount} new`,
+
       hasItems: items.length > 0,
+
       hasUnread: normalizedUnreadCount > 0,
     };
 

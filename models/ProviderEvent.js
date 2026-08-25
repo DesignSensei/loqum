@@ -5,8 +5,8 @@ const mongoose = require("mongoose");
 /**
  * PROVIDER EVENT MODEL:
  *
- * Stores raw and normalized payment provider events before they affect wallets,
- * transactions, shifts or withdrawals.
+ * Stores raw and normalized payment-provider events before they affect wallets,
+ * transactions, Shifts, withdrawals or employer refund execution.
  *
  * This model is provider-facing.
  * Transaction.js remains the wallet ledger.
@@ -16,21 +16,41 @@ const mongoose = require("mongoose");
  * - Store raw provider payloads for audit/debugging.
  * - Track whether an event was processed, failed or ignored.
  * - Keep provider webhook logic separate from wallet ledger logic.
+ * - Preserve provider-side refund state independently from Loqum refund obligations.
  *
- * Example future flow:
+ * EMPLOYER REFUND FLOW:
  *
- * Paystack webhook received
- * → ProviderEvent recorded
- * → event normalized
- * → WalletFundingService credits wallet
- * → Transaction written
+ * Paystack refund webhook received
+ * → ProviderEvent recorded first
+ * → refund event normalized
+ * → employer refund batch/line resolved
+ * → EmployerRefundBatchService synchronizes provider refund state
+ * → escrow ledger movement is written only when the provider refund is processed
  * → ProviderEvent marked processed
+ *
+ * IMPORTANT:
+ *
+ * EmployerRefund is the occurrence-level refund obligation.
+ * EmployerRefundBatch is the execution container.
+ *
+ * A Paystack refund provider event belongs to the batch execution line, not to
+ * one individual EmployerRefund allocation, because one external refund can
+ * aggregate multiple occurrence-level refund obligations from the same Shift
+ * payment.
  */
 
 const isNonNegativeInteger = (value) => Number.isInteger(value) && value >= 0;
 
 const isOptionalNonNegativeInteger = (value) =>
   value === null || value === undefined || isNonNegativeInteger(value);
+
+const PAYSTACK_REFUND_EVENT_NAMES = Object.freeze([
+  "refund.pending",
+  "refund.processing",
+  "refund.needs-attention",
+  "refund.failed",
+  "refund.processed",
+]);
 
 const providerEventSchema = new mongoose.Schema(
   {
@@ -49,22 +69,41 @@ const providerEventSchema = new mongoose.Schema(
       required: true,
       trim: true,
       // Internal unique key used for idempotency.
-      // Example: paystack:event:123456
-      // Example: paystack:reference:trx_xxxxx
+      //
+      // Example:
+      // paystack:event:123456
+      //
+      // Example:
+      // paystack:charge.success:reference:trx_xxxxx
     },
 
     providerEventId: {
       type: String,
       trim: true,
       default: null,
-      // Provider's own event ID if available.
+      // Provider's own webhook/event ID if available.
     },
 
     providerReference: {
       type: String,
       trim: true,
       default: null,
-      // Provider payment/transfer/reference if available.
+      // Provider payment/transfer/reference used for general event lookup.
+    },
+
+    providerRefundId: {
+      type: String,
+      trim: true,
+      default: null,
+      // Provider refund ID when available.
+      // Example: Paystack refund ID returned by the Refund API.
+    },
+
+    providerRefundReference: {
+      type: String,
+      trim: true,
+      default: null,
+      // Provider refund reference from refund webhook/API payload when available.
     },
 
     eventName: {
@@ -72,7 +111,14 @@ const providerEventSchema = new mongoose.Schema(
       required: true,
       trim: true,
       lowercase: true,
-      // Example: charge.success, transfer.success.
+      // Examples:
+      // charge.success
+      // transfer.success
+      // refund.pending
+      // refund.processing
+      // refund.needs-attention
+      // refund.failed
+      // refund.processed
     },
 
     eventCategory: {
@@ -80,18 +126,27 @@ const providerEventSchema = new mongoose.Schema(
       enum: [
         "employer_wallet_funding",
         "shift_checkout_payment",
+
+        "employer_refund",
+
         "employer_withdrawal_payout",
         "employer_withdrawal_reversal",
+
         "professional_withdrawal_payout",
         "professional_withdrawal_reversal",
+
+        // Legacy/general compatibility categories.
         "wallet_funding",
         "checkout_payment",
         "withdrawal_transfer",
         "transfer_reversal",
+
         "other",
       ],
       default: "other",
       required: true,
+      trim: true,
+      lowercase: true,
     },
 
     // --- VERIFICATION ---
@@ -100,7 +155,7 @@ const providerEventSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
       required: true,
-      // True after signature verification.
+      // True after provider signature verification.
     },
 
     verifiedAt: {
@@ -250,6 +305,7 @@ const providerEventSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Transaction",
       default: null,
+      // Ledger transaction created/affected after provider-event processing.
     },
 
     dva: {
@@ -274,6 +330,19 @@ const providerEventSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "ShiftApplication",
       default: null,
+    },
+
+    employerRefundBatch: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "EmployerRefundBatch",
+      default: null,
+      // External provider refund execution belongs to the batch line.
+    },
+
+    employerRefundBatchLineId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+      // _id of the embedded EmployerRefundBatch.lines subdocument.
     },
 
     // --- RAW / NORMALIZED PAYLOADS ---
@@ -308,33 +377,141 @@ const providerEventSchema = new mongoose.Schema(
 providerEventSchema.index({ eventKey: 1 }, { unique: true });
 
 providerEventSchema.index(
-  { provider: 1, providerEventId: 1 },
+  {
+    provider: 1,
+    providerEventId: 1,
+  },
   {
     unique: true,
+
     partialFilterExpression: {
-      providerEventId: { $type: "string" },
+      providerEventId: {
+        $type: "string",
+      },
     },
   }
 );
 
-providerEventSchema.index({ provider: 1, providerReference: 1 });
-providerEventSchema.index({ provider: 1, eventName: 1 });
-providerEventSchema.index({ provider: 1, eventCategory: 1 });
+providerEventSchema.index({
+  provider: 1,
+  providerReference: 1,
+});
 
-providerEventSchema.index({ status: 1, receivedAt: -1 });
-providerEventSchema.index({ status: 1, nextRetryAt: 1 });
-providerEventSchema.index({ isVerified: 1, status: 1 });
+providerEventSchema.index({
+  provider: 1,
+  providerRefundId: 1,
+});
 
-providerEventSchema.index({ employer: 1, receivedAt: -1 });
-providerEventSchema.index({ professional: 1, receivedAt: -1 });
-providerEventSchema.index({ wallet: 1, receivedAt: -1 });
-providerEventSchema.index({ transaction: 1 }, { sparse: true });
-providerEventSchema.index({ dva: 1 }, { sparse: true });
-providerEventSchema.index({ bankAccount: 1 }, { sparse: true });
-providerEventSchema.index({ shift: 1 }, { sparse: true });
+providerEventSchema.index({
+  provider: 1,
+  providerRefundReference: 1,
+});
 
-providerEventSchema.index({ countryCode: 1, currency: 1 });
-providerEventSchema.index({ createdAt: -1 });
+providerEventSchema.index({
+  provider: 1,
+  eventName: 1,
+});
+
+providerEventSchema.index({
+  provider: 1,
+  eventCategory: 1,
+});
+
+providerEventSchema.index({
+  status: 1,
+  receivedAt: -1,
+});
+
+providerEventSchema.index({
+  status: 1,
+  nextRetryAt: 1,
+});
+
+providerEventSchema.index({
+  isVerified: 1,
+  status: 1,
+});
+
+providerEventSchema.index({
+  employer: 1,
+  receivedAt: -1,
+});
+
+providerEventSchema.index({
+  professional: 1,
+  receivedAt: -1,
+});
+
+providerEventSchema.index({
+  wallet: 1,
+  receivedAt: -1,
+});
+
+providerEventSchema.index(
+  {
+    transaction: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+providerEventSchema.index(
+  {
+    dva: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+providerEventSchema.index(
+  {
+    bankAccount: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+providerEventSchema.index(
+  {
+    shift: 1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+providerEventSchema.index(
+  {
+    employerRefundBatch: 1,
+    receivedAt: -1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+providerEventSchema.index(
+  {
+    employerRefundBatch: 1,
+    employerRefundBatchLineId: 1,
+    receivedAt: -1,
+  },
+  {
+    sparse: true,
+  }
+);
+
+providerEventSchema.index({
+  countryCode: 1,
+  currency: 1,
+});
+
+providerEventSchema.index({
+  createdAt: -1,
+});
 
 // --- VALIDATION / NORMALISATION ---
 
@@ -355,8 +532,20 @@ providerEventSchema.pre("validate", function () {
     this.providerReference = String(this.providerReference).trim();
   }
 
+  if (this.providerRefundId) {
+    this.providerRefundId = String(this.providerRefundId).trim();
+  }
+
+  if (this.providerRefundReference) {
+    this.providerRefundReference = String(this.providerRefundReference).trim();
+  }
+
   if (this.eventName) {
     this.eventName = String(this.eventName).toLowerCase().trim();
+  }
+
+  if (this.eventCategory) {
+    this.eventCategory = String(this.eventCategory).toLowerCase().trim();
   }
 
   if (!this.countryCode) {
@@ -368,6 +557,7 @@ providerEventSchema.pre("validate", function () {
   }
 
   this.countryCode = String(this.countryCode).toUpperCase().trim();
+
   this.currency = String(this.currency).toUpperCase().trim();
 
   if (!this.eventKey) {
@@ -382,6 +572,38 @@ providerEventSchema.pre("validate", function () {
     throw new Error("Provider event name is required.");
   }
 
+  /*
+   * A ProviderEvent must be recordable before its Loqum refund batch line
+   * has been resolved.
+   *
+   * Therefore the two refund-execution links are optional.
+   *
+   * Once one is supplied, however, both are required because an external
+   * refund belongs to one exact embedded execution line.
+   */
+  const hasEmployerRefundBatch = Boolean(this.employerRefundBatch);
+
+  const hasEmployerRefundBatchLineId = Boolean(this.employerRefundBatchLineId);
+
+  if (hasEmployerRefundBatch !== hasEmployerRefundBatchLineId) {
+    throw new Error("Provider event employer refund batch and batch line must be linked together.");
+  }
+
+  /*
+   * Only classify the documented Paystack refund lifecycle webhooks as
+   * employer_refund.
+   *
+   * An unknown future provider event should first be stored as `other`
+   * until the integration explicitly supports it.
+   */
+  if (
+    this.eventCategory === "employer_refund" &&
+    this.provider === "paystack" &&
+    !PAYSTACK_REFUND_EVENT_NAMES.includes(this.eventName)
+  ) {
+    throw new Error(`Unsupported Paystack employer refund event name: ${this.eventName}.`);
+  }
+
   if (this.isVerified && !this.verifiedAt) {
     this.verifiedAt = new Date();
   }
@@ -390,12 +612,14 @@ providerEventSchema.pre("validate", function () {
     this.verifiedAt = null;
   }
 
+  /*
+   * processingStartedAt is historical audit data.
+   *
+   * Once processing has started, retain the timestamp when the event later
+   * becomes processed, failed or ignored.
+   */
   if (this.status === "processing" && !this.processingStartedAt) {
     this.processingStartedAt = new Date();
-  }
-
-  if (this.status !== "processing") {
-    this.processingStartedAt = null;
   }
 
   if (this.status === "processed") {
@@ -405,8 +629,10 @@ providerEventSchema.pre("validate", function () {
 
     this.failedAt = null;
     this.failureReason = null;
+
     this.ignoredAt = null;
     this.ignoredReason = null;
+
     this.nextRetryAt = null;
   }
 

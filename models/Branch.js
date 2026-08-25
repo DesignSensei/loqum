@@ -2,6 +2,8 @@
 
 const mongoose = require("mongoose");
 
+const geoPointSchema = require("./helpers/geoPointSchema");
+
 /**
  * GEOLOCATION:
  *
@@ -10,59 +12,21 @@ const mongoose = require("mongoose");
  *
  * GeoJSON uses [longitude, latitude] order, not [latitude, longitude].
  *
- * Branch coordinates are used by the attendance service to validate whether
- * a professional is physically within the allowed geofence radius during
- * check-in and check-out.
+ * Branch creation requires a Google Places address selection. The selected
+ * place provides the formatted address, Google Place ID, longitude and
+ * latitude.
+ *
+ * Branch coordinates are used for:
+ *
+ * - attendance geofence validation
+ * - future distance-based shift filtering
+ * - future "closest to you" shift sorting
  *
  * Example:
  *
  * location.coordinates = [3.3792, 6.5244]
  * geofenceRadiusMeters = 100
  */
-
-const locationSchema = new mongoose.Schema(
-  {
-    type: {
-      type: String,
-      enum: ["Point"],
-      default: "Point",
-      required: true,
-    },
-
-    coordinates: {
-      type: [Number],
-      required: true,
-      validate: [
-        {
-          validator: (coordinates) => Array.isArray(coordinates) && coordinates.length === 2,
-          message: "Branch coordinates must contain longitude and latitude.",
-        },
-        {
-          validator: (coordinates) => {
-            if (!Array.isArray(coordinates) || coordinates.length !== 2) {
-              return false;
-            }
-
-            const [longitude, latitude] = coordinates;
-
-            return (
-              Number.isFinite(longitude) &&
-              Number.isFinite(latitude) &&
-              longitude >= -180 &&
-              longitude <= 180 &&
-              latitude >= -90 &&
-              latitude <= 90
-            );
-          },
-          message: "Coordinates must be [longitude, latitude] with valid ranges.",
-        },
-      ],
-    },
-  },
-  {
-    _id: false,
-  }
-);
 
 const branchSchema = new mongoose.Schema(
   {
@@ -84,6 +48,7 @@ const branchSchema = new mongoose.Schema(
     address: {
       type: String,
       trim: true,
+      required: true,
       maxlength: 250,
     },
 
@@ -106,19 +71,19 @@ const branchSchema = new mongoose.Schema(
     // GeoJSON Point.
     // coordinates: [longitude, latitude]
     //
-    // The entire location field remains undefined when the branch has not
-    // yet been geocoded.
+    // Branch creation requires a valid Google Places selection and resolved
+    // coordinates. An operational branch cannot exist without geolocation.
 
     googlePlaceId: {
       type: String,
       trim: true,
-      default: "",
+      required: true,
       maxlength: 250,
     },
 
     location: {
-      type: locationSchema,
-      default: undefined,
+      type: geoPointSchema,
+      required: true,
     },
 
     geofenceRadiusMeters: {
@@ -130,6 +95,7 @@ const branchSchema = new mongoose.Schema(
         validator: Number.isSafeInteger,
         message: "geofenceRadiusMeters must be a whole number.",
       },
+
       // Default attendance radius is 100 meters.
       //
       // Branch creation should preferably resolve the current default from
@@ -141,7 +107,7 @@ const branchSchema = new mongoose.Schema(
     contactPhoneCode: {
       type: String,
       trim: true,
-      default: "+234",
+      default: "",
       maxlength: 10,
     },
 
@@ -165,9 +131,6 @@ const branchSchema = new mongoose.Schema(
 
 // --- INDEXES ---
 
-branchSchema.index({ business: 1 });
-// All branches belonging to an employer.
-
 branchSchema.index({
   business: 1,
   isActive: 1,
@@ -176,11 +139,15 @@ branchSchema.index({
 // Active branches for an employer.
 // Used for the employer post-shift branch dropdown.
 
-branchSchema.index({ location: "2dsphere" }, { sparse: true });
-// Geospatial attendance and nearby-location queries.
-// Sparse because coordinates may be added after branch creation.
+branchSchema.index({
+  location: "2dsphere",
+});
+// Geospatial attendance, distance sorting and nearby-location queries.
 
-branchSchema.index({ state: 1, lga: 1 });
+branchSchema.index({
+  state: 1,
+  lga: 1,
+});
 // Location-based filtering.
 
 module.exports = mongoose.model("Branch", branchSchema);

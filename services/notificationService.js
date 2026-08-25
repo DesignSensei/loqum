@@ -462,7 +462,10 @@ class NotificationService {
   }
 
   /* ---------- Get user notifications ---------- */
-  static async getUserNotifications(userId, { status = null, category = null, limit = 20 } = {}) {
+  static async getUserNotifications(
+    userId,
+    { status = null, category = null, limit = 20, createdAfter = null } = {}
+  ) {
     if (!userId) {
       throw new Error("User ID is required.");
     }
@@ -479,6 +482,12 @@ class NotificationService {
       query.category = category;
     }
 
+    if (createdAfter instanceof Date && !Number.isNaN(createdAfter.getTime())) {
+      query.createdAt = {
+        $gte: createdAfter,
+      };
+    }
+
     return Notification.find(query)
       .sort({
         createdAt: -1,
@@ -487,15 +496,23 @@ class NotificationService {
   }
 
   /* ---------- Count unread notifications ---------- */
-  static async countUnreadNotifications(userId) {
+  static async countUnreadNotifications(userId, { createdAfter = null } = {}) {
     if (!userId) {
       throw new Error("User ID is required.");
     }
 
-    return Notification.countDocuments({
+    const query = {
       recipientUser: userId,
       status: "unread",
-    });
+    };
+
+    if (createdAfter instanceof Date && !Number.isNaN(createdAfter.getTime())) {
+      query.createdAt = {
+        $gte: createdAfter,
+      };
+    }
+
+    return Notification.countDocuments(query);
   }
 
   /* ---------- Mark notification as read ---------- */

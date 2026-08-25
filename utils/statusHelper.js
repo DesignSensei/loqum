@@ -32,7 +32,14 @@ const badgeClass = {
   reversed: "badge-light-info",
   deactivated: "badge-light-dark",
 
+  // Shift funding
+  pending_funding: "badge-light-warning",
+  unpaid: "badge-light-warning",
+  expired: "badge-light-dark",
+
+  // Shift lifecycle
   open: "badge-light-primary",
+  scheduled: "badge-light-info",
   assigned: "badge-light-warning",
   confirmed: "badge-light-info",
   in_progress: "badge-light-warning",
@@ -42,10 +49,12 @@ const badgeClass = {
   disputed: "badge-light-danger",
   no_show: "badge-light-danger",
 
+  // Refund lifecycle
+  not_eligible: "badge-light-secondary",
+
   deleted: "badge-light-danger",
   revoked: "badge-light-danger",
 };
-
 const formatStatus = (status) => {
   if (!status) return "Unknown";
 

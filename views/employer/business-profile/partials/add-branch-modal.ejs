@@ -30,13 +30,13 @@
         <div class="modal-body scroll-y px-10 px-lg-15 pt-0 pb-5">
           <div class="mb-13 text-center">
             <h1 class="mb-3">Add Branch</h1>
-            <div class="text-muted fw-semibold fs-5">
-              Add a pharmacy branch under your business account.
-            </div>
+
+            <div class="text-muted fw-semibold fs-5">Add a branch under your business account.</div>
           </div>
 
           <div class="fv-row mb-7">
-            <label class="form-label required">Branch Name</label>
+            <label class="form-label required"> Branch Name </label>
+
             <input
               type="text"
               name="name"
@@ -48,7 +48,8 @@
 
           <div class="row">
             <div class="col-lg-6 fv-row mb-7">
-              <label class="form-label required">State</label>
+              <label class="form-label required"> State </label>
+
               <select
                 id="addBranchStateSelect"
                 name="state"
@@ -63,7 +64,8 @@
             </div>
 
             <div class="col-lg-6 fv-row mb-7">
-              <label class="form-label required">LGA</label>
+              <label class="form-label required"> LGA </label>
+
               <select
                 id="addBranchLgaSelect"
                 name="lga"
@@ -79,7 +81,8 @@
           </div>
 
           <div class="fv-row mb-7">
-            <label class="form-label required">Branch Address</label>
+            <label class="form-label required"> Branch Address </label>
+
             <input
               type="text"
               id="addBranchAddressInput"
@@ -90,7 +93,9 @@
             />
 
             <input type="hidden" id="addBranchLatitudeInput" name="latitude" />
+
             <input type="hidden" id="addBranchLongitudeInput" name="longitude" />
+
             <input type="hidden" id="addBranchGooglePlaceIdInput" name="googlePlaceId" />
 
             <div class="form-text">
@@ -100,22 +105,19 @@
           </div>
 
           <!-- Branch Contact Phone -->
+
           <div class="fv-row mb-7">
-            <label class="form-label">Branch Contact Phone</label>
+            <label class="form-label"> Branch Contact Phone </label>
 
             <div class="row g-3">
               <div class="col-4">
-                <select
+                <input
+                  type="text"
                   name="contactPhoneCode"
-                  class="form-select"
-                  data-kt-select2="true"
-                  data-hide-search="false"
-                  data-placeholder="Code"
-                  data-dropdown-parent="#addBranchModal"
-                >
-                  <option value="" disabled>Code</option>
-                  <option value="+234" selected>🇳🇬 +234</option>
-                </select>
+                  class="form-control"
+                  value="<%= employerProfile.businessPhoneCode %>"
+                  readonly
+                />
               </div>
 
               <div class="col-8">
@@ -158,9 +160,11 @@
           <button type="button" class="btn btn-light me-3" data-bs-dismiss="modal">Cancel</button>
 
           <button type="submit" id="kt_add_branch_submit" class="btn btn-primary">
-            <span class="indicator-label">Save Branch</span>
+            <span class="indicator-label"> Save Branch </span>
+
             <span class="indicator-progress">
               Please wait...
+
               <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
             </span>
           </button>

@@ -18,7 +18,7 @@
     </a>
     <!--end::Home-->
 
-    <% if (user && user.role === 'professional') { %>
+    <% if (user && user.role === "professional") { %>
 
     <!--begin::Find Shifts-->
     <a
@@ -37,11 +37,12 @@
 
     <!--begin::My Shifts-->
     <div
+      class="menu menu-item loqum-sidebar-menu-item"
       data-kt-menu-trigger="{default: 'click', lg: 'hover'}"
       data-kt-menu-placement="right-start"
       data-kt-menu-attach="parent"
-      class="menu menu-item loqum-sidebar-menu-item"
     >
+      <!--begin::Menu link-->
       <span
         class="menu-link menu-center loqum-sidebar-link"
         data-bs-toggle="tooltip"
@@ -55,35 +56,52 @@
           </i>
         </span>
       </span>
+      <!--end::Menu link-->
 
+      <!--begin::Menu sub-->
       <div
         class="menu-sub menu-sub-dropdown menu-sub-indention px-2 py-4 w-175px"
         data-kt-menu="true"
       >
         <div class="menu-item">
           <div class="menu-content">
-            <span class="menu-section fs-5 fw-bolder ps-1 py-1">My Shifts</span>
+            <span class="menu-section fs-5 fw-bolder ps-1 py-1"> My Shifts </span>
           </div>
         </div>
 
+        <div class="separator my-2"></div>
+
         <div class="menu-item">
           <a class="menu-link" href="/professional/shifts/my?tab=pending">
-            <span class="menu-title">Pending</span>
+            <span class="menu-bullet">
+              <span class="bullet bullet-dot"></span>
+            </span>
+
+            <span class="menu-title"> Pending </span>
           </a>
         </div>
 
         <div class="menu-item">
           <a class="menu-link" href="/professional/shifts/my?tab=confirmed">
-            <span class="menu-title">Confirmed</span>
+            <span class="menu-bullet">
+              <span class="bullet bullet-dot"></span>
+            </span>
+
+            <span class="menu-title"> Confirmed </span>
           </a>
         </div>
 
         <div class="menu-item">
           <a class="menu-link" href="/professional/shifts/my?tab=completed">
-            <span class="menu-title">Completed</span>
+            <span class="menu-bullet">
+              <span class="bullet bullet-dot"></span>
+            </span>
+
+            <span class="menu-title"> Completed </span>
           </a>
         </div>
       </div>
+      <!--end::Menu sub-->
     </div>
     <!--end::My Shifts-->
 
@@ -104,25 +122,111 @@
     </a>
     <!--end::Billing-->
 
-    <% } else if (user && user.role === 'employer') { %>
+    <% } else if (user && user.role === "employer") { %>
 
     <!--begin::Manage Shifts-->
-    <a
-      href="/employer/shifts"
-      class="loqum-sidebar-link"
-      data-bs-toggle="tooltip"
-      data-bs-placement="right"
-      title="Manage Shifts"
+    <div
+      class="menu menu-item loqum-sidebar-menu-item"
+      data-kt-menu-trigger="{default: 'click', lg: 'hover'}"
+      data-kt-menu-placement="right-start"
+      data-kt-menu-overflow="true"
+      data-kt-menu-offset="0, 8"
     >
-      <i class="ki-duotone ki-calendar-tick fs-1">
-        <span class="path1"></span>
-        <span class="path2"></span>
-        <span class="path3"></span>
-        <span class="path4"></span>
-        <span class="path5"></span>
-        <span class="path6"></span>
-      </i>
-    </a>
+      <!--begin::Menu link-->
+      <span
+        class="menu-link menu-center loqum-sidebar-link"
+        data-bs-toggle="tooltip"
+        data-bs-placement="right"
+        title="Manage Shifts"
+      >
+        <span class="menu-icon me-0">
+          <i class="ki-duotone ki-calendar-tick fs-2x">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+            <span class="path4"></span>
+            <span class="path5"></span>
+            <span class="path6"></span>
+          </i>
+        </span>
+      </span>
+      <!--end::Menu link-->
+
+      <!--begin::Menu sub-->
+      <div
+        class="menu-sub menu-sub-dropdown menu-sub-indention loqum-shifts-submenu px-2 py-4 w-175px"
+        data-kt-menu="true"
+      >
+        <!--begin::Menu heading-->
+        <div class="menu-item">
+          <div class="menu-content px-3 py-2 ms-3">
+            <span class="fs-6 fw-bold text-gray-900"> Manage Shifts </span>
+          </div>
+        </div>
+        <!--end::Menu heading-->
+
+        <!--begin::All Shifts-->
+        <div class="menu-item">
+          <a class="menu-link" href="/employer/shifts">
+            <span class="menu-bullet">
+              <span class="bullet bullet-dot"></span>
+            </span>
+
+            <span class="menu-title"> All Shifts </span>
+          </a>
+        </div>
+        <!--end::All Shifts-->
+
+        <!--begin::Post a Shift-->
+        <div class="menu-item">
+          <a class="menu-link" href="/employer/shifts?open=post-shift">
+            <span class="menu-bullet">
+              <span class="bullet bullet-dot"></span>
+            </span>
+
+            <span class="menu-title"> Post a Shift </span>
+          </a>
+        </div>
+        <!--end::Post a Shift-->
+
+        <!--begin::Applications-->
+        <div class="menu-item">
+          <a class="menu-link" href="/employer/shifts/applications">
+            <span class="menu-bullet">
+              <span class="bullet bullet-dot"></span>
+            </span>
+
+            <span class="menu-title"> Applications </span>
+          </a>
+        </div>
+        <!--end::Applications-->
+
+        <!--begin::Assignments-->
+        <div class="menu-item">
+          <a class="menu-link" href="/employer/shifts/assignments">
+            <span class="menu-bullet">
+              <span class="bullet bullet-dot"></span>
+            </span>
+
+            <span class="menu-title"> Assignments </span>
+          </a>
+        </div>
+        <!--end::Assignments-->
+
+        <!--begin::Attendance-->
+        <div class="menu-item">
+          <a class="menu-link" href="/employer/shifts/attendance">
+            <span class="menu-bullet">
+              <span class="bullet bullet-dot"></span>
+            </span>
+
+            <span class="menu-title"> Attendance </span>
+          </a>
+        </div>
+        <!--end::Attendance-->
+      </div>
+      <!--end::Menu sub-->
+    </div>
     <!--end::Manage Shifts-->
 
     <!--begin::Billing-->
@@ -160,15 +264,16 @@
     </a>
     <!--end::Business Profile-->
 
-    <% } else if (user && user.role === 'admin') { %>
+    <% } else if (user && user.role === "admin") { %>
 
     <!--begin::User Management-->
     <div
+      class="menu menu-item loqum-sidebar-menu-item"
       data-kt-menu-trigger="{default: 'click', lg: 'hover'}"
       data-kt-menu-placement="right-start"
       data-kt-menu-attach="parent"
-      class="menu menu-item loqum-sidebar-menu-item"
     >
+      <!--begin::Menu link-->
       <span
         class="menu-link menu-center loqum-sidebar-link"
         data-bs-toggle="tooltip"
@@ -185,39 +290,53 @@
           </i>
         </span>
       </span>
+      <!--end::Menu link-->
 
+      <!--begin::Menu sub-->
       <div
         class="menu-sub menu-sub-dropdown menu-sub-indention px-2 py-4 w-175px"
         data-kt-menu="true"
       >
         <div class="menu-item">
           <div class="menu-content">
-            <span class="menu-section fs-5 fw-bolder ps-1 py-1">Users</span>
+            <span class="menu-section fs-5 fw-bolder ps-1 py-1"> Users </span>
           </div>
         </div>
 
+        <div class="separator my-2"></div>
+
         <div class="menu-item">
           <a class="menu-link" href="/admin/users?role=employer">
-            <span class="menu-title">Employers</span>
+            <span class="menu-bullet">
+              <span class="bullet bullet-dot"></span>
+            </span>
+
+            <span class="menu-title"> Employers </span>
           </a>
         </div>
 
         <div class="menu-item">
           <a class="menu-link" href="/admin/users?role=professional">
-            <span class="menu-title">Professionals</span>
+            <span class="menu-bullet">
+              <span class="bullet bullet-dot"></span>
+            </span>
+
+            <span class="menu-title"> Professionals </span>
           </a>
         </div>
       </div>
+      <!--end::Menu sub-->
     </div>
     <!--end::User Management-->
 
     <!--begin::Shift Management-->
     <div
+      class="menu menu-item loqum-sidebar-menu-item"
       data-kt-menu-trigger="{default: 'click', lg: 'hover'}"
       data-kt-menu-placement="right-start"
       data-kt-menu-attach="parent"
-      class="menu menu-item loqum-sidebar-menu-item"
     >
+      <!--begin::Menu link-->
       <span
         class="menu-link menu-center loqum-sidebar-link"
         data-bs-toggle="tooltip"
@@ -235,29 +354,42 @@
           </i>
         </span>
       </span>
+      <!--end::Menu link-->
 
+      <!--begin::Menu sub-->
       <div
         class="menu-sub menu-sub-dropdown menu-sub-indention px-2 py-4 w-175px"
         data-kt-menu="true"
       >
         <div class="menu-item">
           <div class="menu-content">
-            <span class="menu-section fs-5 fw-bolder ps-1 py-1">Shifts</span>
+            <span class="menu-section fs-5 fw-bolder ps-1 py-1"> Shifts </span>
           </div>
         </div>
 
+        <div class="separator my-2"></div>
+
         <div class="menu-item">
           <a class="menu-link" href="/admin/shifts">
-            <span class="menu-title">All Shifts</span>
+            <span class="menu-bullet">
+              <span class="bullet bullet-dot"></span>
+            </span>
+
+            <span class="menu-title"> All Shifts </span>
           </a>
         </div>
 
         <div class="menu-item">
           <a class="menu-link" href="/admin/disputes">
-            <span class="menu-title">Disputes</span>
+            <span class="menu-bullet">
+              <span class="bullet bullet-dot"></span>
+            </span>
+
+            <span class="menu-title"> Disputes </span>
           </a>
         </div>
       </div>
+      <!--end::Menu sub-->
     </div>
     <!--end::Shift Management-->
 
@@ -280,9 +412,11 @@
     <% } %>
   </div>
 
-  <!-- Bottom item -->
+  <!-- Bottom navigation -->
   <div class="loqum-sidebar-bottom">
-    <% if (user && user.role === 'admin') { %>
+    <% if (user && user.role === "admin") { %>
+
+    <!--begin::Platform Settings-->
     <a
       href="/admin/settings"
       class="loqum-sidebar-link"
@@ -295,7 +429,11 @@
         <span class="path2"></span>
       </i>
     </a>
+    <!--end::Platform Settings-->
+
     <% } else { %>
+
+    <!--begin::Account Settings-->
     <a
       href="/account/settings"
       class="loqum-sidebar-link"
@@ -308,6 +446,8 @@
         <span class="path2"></span>
       </i>
     </a>
+    <!--end::Account Settings-->
+
     <% } %>
   </div>
 </div>

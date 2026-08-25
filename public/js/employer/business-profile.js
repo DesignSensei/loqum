@@ -15,6 +15,18 @@ var EmployerBusinessProfile = (function () {
   var businessDetailsSubmitButton = null;
   var businessDetailsValidator = null;
 
+  /* ---------- Get employer country code ---------- */
+
+  function getEmployerCountryCode() {
+    var countryCodeInput = document.querySelector("#businessProfileCountryCode");
+
+    return String(countryCodeInput ? countryCodeInput.value : "ng")
+      .trim()
+      .toLowerCase();
+  }
+
+  /* ---------- Initialise Select2 ---------- */
+
   function initSelect2() {
     if (typeof $ === "undefined") return;
 
@@ -34,6 +46,8 @@ var EmployerBusinessProfile = (function () {
     });
   }
 
+  /* ---------- Set Select2 or normal select value ---------- */
+
   function setSelectValue(selector, value) {
     var select = document.querySelector(selector);
 
@@ -50,6 +64,8 @@ var EmployerBusinessProfile = (function () {
     select.value = value || "";
     select.dispatchEvent(new Event("change", { bubbles: true }));
   }
+
+  /* ---------- Initialise state and LGA pickers ---------- */
 
   function initLocationPicker() {
     if (typeof LocationPicker === "undefined") return;
@@ -72,6 +88,8 @@ var EmployerBusinessProfile = (function () {
     }, 150);
   }
 
+  /* ---------- Form revalidation helpers ---------- */
+
   function revalidateField(fieldName) {
     if (!addBranchValidator) return;
 
@@ -90,6 +108,8 @@ var EmployerBusinessProfile = (function () {
     businessDetailsValidator.revalidateField(fieldName);
   }
 
+  /* ---------- Business-details initial select values ---------- */
+
   function setBusinessDetailsInitialSelectValues() {
     var currentTypeInput = document.querySelector("#businessDetailsCurrentType");
     var currentContactRoleInput = document.querySelector("#businessDetailsCurrentContactRole");
@@ -105,6 +125,8 @@ var EmployerBusinessProfile = (function () {
     updateBusinessDetailsRegulatoryBodyDisplay();
   }
 
+  /* ---------- Update regulatory-body display ---------- */
+
   function updateBusinessDetailsRegulatoryBodyDisplay() {
     var typeSelect = document.querySelector("#businessTypeSelect");
     var stateSelect = document.querySelector("#businessDetailsStateSelect");
@@ -113,6 +135,7 @@ var EmployerBusinessProfile = (function () {
     if (!typeSelect || !stateSelect || !regulatoryBodyDisplay) return;
 
     var cleanType = String(typeSelect.value || "").trim();
+
     var cleanState = String(stateSelect.value || "")
       .trim()
       .toLowerCase();
@@ -124,6 +147,7 @@ var EmployerBusinessProfile = (function () {
 
     if (cleanType === "laboratory") {
       regulatoryBodyDisplay.value = "Medical Laboratory Science Council of Nigeria";
+
       return;
     }
 
@@ -138,6 +162,8 @@ var EmployerBusinessProfile = (function () {
 
     regulatoryBodyDisplay.value = "-";
   }
+
+  /* ---------- Bind add-branch select validation ---------- */
 
   function bindSelectValidation() {
     var stateSelect = document.querySelector("#addBranchStateSelect");
@@ -166,6 +192,8 @@ var EmployerBusinessProfile = (function () {
     }
   }
 
+  /* ---------- Bind edit-branch select validation ---------- */
+
   function bindEditSelectValidation() {
     var stateSelect = document.querySelector("#editBranchStateSelect");
     var lgaSelect = document.querySelector("#editBranchLgaSelect");
@@ -192,6 +220,8 @@ var EmployerBusinessProfile = (function () {
       });
     }
   }
+
+  /* ---------- Bind business-details select validation ---------- */
 
   function bindBusinessDetailsSelectValidation() {
     var typeSelect = document.querySelector("#businessTypeSelect");
@@ -246,6 +276,8 @@ var EmployerBusinessProfile = (function () {
     }
   }
 
+  /* ---------- Add-branch Google address autocomplete ---------- */
+
   function initAddBranchAddressAutocomplete() {
     var addressInput = document.querySelector("#addBranchAddressInput");
     var latitudeInput = document.querySelector("#addBranchLatitudeInput");
@@ -266,9 +298,11 @@ var EmployerBusinessProfile = (function () {
 
     var autocomplete = new google.maps.places.Autocomplete(addressInput, {
       componentRestrictions: {
-        country: "ng",
+        country: getEmployerCountryCode(),
       },
+
       fields: ["formatted_address", "geometry", "place_id"],
+
       types: ["geocode"],
     });
 
@@ -302,6 +336,8 @@ var EmployerBusinessProfile = (function () {
     });
   }
 
+  /* ---------- Edit-branch Google address autocomplete ---------- */
+
   function initEditBranchAddressAutocomplete() {
     var addressInput = document.querySelector("#editBranchAddressInput");
     var latitudeInput = document.querySelector("#editBranchLatitudeInput");
@@ -322,9 +358,11 @@ var EmployerBusinessProfile = (function () {
 
     var autocomplete = new google.maps.places.Autocomplete(addressInput, {
       componentRestrictions: {
-        country: "ng",
+        country: getEmployerCountryCode(),
       },
+
       fields: ["formatted_address", "geometry", "place_id"],
+
       types: ["geocode"],
     });
 
@@ -358,6 +396,8 @@ var EmployerBusinessProfile = (function () {
     });
   }
 
+  /* ---------- Business-details Google address autocomplete ---------- */
+
   function initBusinessDetailsAddressAutocomplete() {
     var addressInput = document.querySelector("#businessDetailsAddressInput");
     var latitudeInput = document.querySelector("#businessDetailsLatitude");
@@ -378,9 +418,11 @@ var EmployerBusinessProfile = (function () {
 
     var autocomplete = new google.maps.places.Autocomplete(addressInput, {
       componentRestrictions: {
-        country: "ng",
+        country: getEmployerCountryCode(),
       },
+
       fields: ["formatted_address", "geometry", "place_id"],
+
       types: ["geocode"],
     });
 
@@ -413,6 +455,8 @@ var EmployerBusinessProfile = (function () {
       revalidateBusinessDetailsField("address");
     });
   }
+
+  /* ---------- Add-branch validation ---------- */
 
   function handleAddBranchValidation() {
     addBranchForm = document.querySelector("#kt_add_branch_form");
@@ -452,15 +496,19 @@ var EmployerBusinessProfile = (function () {
               notEmpty: {
                 message: "Branch address is required.",
               },
+
               callback: {
                 message: "Please select a valid address from the Google suggestions.",
+
                 callback: function (input) {
                   var addressValue = String(input.value || "").trim();
 
                   if (!addressValue) return false;
 
                   var latitudeInput = document.querySelector("#addBranchLatitudeInput");
+
                   var longitudeInput = document.querySelector("#addBranchLongitudeInput");
+
                   var googlePlaceIdInput = document.querySelector("#addBranchGooglePlaceIdInput");
 
                   return Boolean(
@@ -480,6 +528,7 @@ var EmployerBusinessProfile = (function () {
             validators: {
               callback: {
                 message: "Enter a valid branch phone number.",
+
                 callback: function (input) {
                   var value = String(input.value || "").trim();
 
@@ -509,11 +558,13 @@ var EmployerBusinessProfile = (function () {
     handleAddBranchSubmission();
   }
 
+  /* ---------- Add-branch submission ---------- */
+
   function handleAddBranchSubmission() {
     if (!addBranchForm || !addBranchSubmitButton) return;
 
-    addBranchForm.addEventListener("submit", function (e) {
-      e.preventDefault();
+    addBranchForm.addEventListener("submit", function (event) {
+      event.preventDefault();
 
       var submitForm = function () {
         addBranchSubmitButton.setAttribute("data-kt-indicator", "on");
@@ -532,6 +583,7 @@ var EmployerBusinessProfile = (function () {
               icon: "success",
               buttonsStyling: false,
               confirmButtonText: "Ok, got it!",
+
               customClass: {
                 confirmButton: "btn btn-primary",
               },
@@ -546,9 +598,11 @@ var EmployerBusinessProfile = (function () {
 
             Swal.fire({
               text: error.response?.data?.message || "Unable to add branch.",
+
               icon: "error",
               buttonsStyling: false,
               confirmButtonText: "Ok, got it!",
+
               customClass: {
                 confirmButton: "btn btn-primary",
               },
@@ -570,6 +624,8 @@ var EmployerBusinessProfile = (function () {
     });
   }
 
+  /* ---------- View-branch modal ---------- */
+
   function handleViewBranchModal() {
     var modalElement = document.querySelector("#viewBranchModal");
 
@@ -585,33 +641,61 @@ var EmployerBusinessProfile = (function () {
       var address = button.getAttribute("data-branch-address") || "-";
       var state = button.getAttribute("data-branch-state") || "-";
       var lga = button.getAttribute("data-branch-lga") || "-";
+
       var manager = button.getAttribute("data-branch-manager") || "Not assigned";
+
       var managerId = button.getAttribute("data-branch-manager-id") || "";
-      var phoneCode = button.getAttribute("data-branch-phone-code") || "+234";
+
+      var phoneCode = button.getAttribute("data-branch-phone-code") || "";
+
       var phone = button.getAttribute("data-branch-phone") || "";
+
       var geofenceRadius = button.getAttribute("data-branch-geofence-radius") || "";
+
       var status = (button.getAttribute("data-branch-status") || "inactive").toLowerCase();
 
       var viewBranchName = document.querySelector("#viewBranchName");
       var viewBranchManager = document.querySelector("#viewBranchManager");
+
       var viewBranchManagerName = document.querySelector("#viewBranchManagerName");
+
       var viewBranchAddress = document.querySelector("#viewBranchAddress");
       var viewBranchState = document.querySelector("#viewBranchState");
       var viewBranchLga = document.querySelector("#viewBranchLga");
       var viewBranchPhone = document.querySelector("#viewBranchPhone");
+
       var viewBranchGeofenceRadius = document.querySelector("#viewBranchGeofenceRadius");
+
       var viewBranchStatus = document.querySelector("#viewBranchStatus");
+
       var viewBranchEditButton = document.querySelector("#viewBranchEditButton");
 
-      if (viewBranchName) viewBranchName.textContent = name;
-      if (viewBranchManager) viewBranchManager.textContent = "Manager: " + manager;
-      if (viewBranchManagerName) viewBranchManagerName.textContent = manager;
-      if (viewBranchAddress) viewBranchAddress.textContent = address;
-      if (viewBranchState) viewBranchState.textContent = state;
-      if (viewBranchLga) viewBranchLga.textContent = lga;
+      if (viewBranchName) {
+        viewBranchName.textContent = name;
+      }
+
+      if (viewBranchManager) {
+        viewBranchManager.textContent = "Manager: " + manager;
+      }
+
+      if (viewBranchManagerName) {
+        viewBranchManagerName.textContent = manager;
+      }
+
+      if (viewBranchAddress) {
+        viewBranchAddress.textContent = address;
+      }
+
+      if (viewBranchState) {
+        viewBranchState.textContent = state;
+      }
+
+      if (viewBranchLga) {
+        viewBranchLga.textContent = lga;
+      }
 
       if (viewBranchPhone) {
-        viewBranchPhone.textContent = phone ? phoneCode + " " + phone : "-";
+        viewBranchPhone.textContent = phone ? (phoneCode + " " + phone).trim() : "-";
       }
 
       if (viewBranchGeofenceRadius) {
@@ -631,18 +715,25 @@ var EmployerBusinessProfile = (function () {
         viewBranchEditButton.setAttribute("data-branch-address", address);
         viewBranchEditButton.setAttribute("data-branch-state", state);
         viewBranchEditButton.setAttribute("data-branch-lga", lga);
+
         viewBranchEditButton.setAttribute("data-branch-manager-id", managerId);
+
         viewBranchEditButton.setAttribute("data-branch-phone-code", phoneCode);
+
         viewBranchEditButton.setAttribute("data-branch-phone", phone);
+
         viewBranchEditButton.setAttribute("data-branch-geofence-radius", geofenceRadius);
+
         viewBranchEditButton.setAttribute(
           "data-branch-latitude",
           button.getAttribute("data-branch-latitude") || ""
         );
+
         viewBranchEditButton.setAttribute(
           "data-branch-longitude",
           button.getAttribute("data-branch-longitude") || ""
         );
+
         viewBranchEditButton.setAttribute(
           "data-branch-google-place-id",
           button.getAttribute("data-branch-google-place-id") || ""
@@ -651,41 +742,89 @@ var EmployerBusinessProfile = (function () {
     });
   }
 
+  /* ---------- Populate edit-branch form ---------- */
+
   function populateEditBranchForm(button) {
     if (!button) return;
 
     var branchId = button.getAttribute("data-branch-id") || "";
+
     var name = button.getAttribute("data-branch-name") || "";
+
     var address = button.getAttribute("data-branch-address") || "";
+
     var state = button.getAttribute("data-branch-state") || "";
+
     var lga = button.getAttribute("data-branch-lga") || "";
+
     var managerId = button.getAttribute("data-branch-manager-id") || "";
-    var phoneCode = button.getAttribute("data-branch-phone-code") || "+234";
+
+    var phoneCode = button.getAttribute("data-branch-phone-code") || "";
+
     var phone = button.getAttribute("data-branch-phone") || "";
+
     var geofenceRadius = button.getAttribute("data-branch-geofence-radius") || "100";
+
     var latitude = button.getAttribute("data-branch-latitude") || "";
+
     var longitude = button.getAttribute("data-branch-longitude") || "";
+
     var googlePlaceId = button.getAttribute("data-branch-google-place-id") || "";
 
     var branchIdInput = document.querySelector("#editBranchIdInput");
     var nameInput = document.querySelector("#editBranchNameInput");
     var addressInput = document.querySelector("#editBranchAddressInput");
+
+    var phoneCodeInput = document.querySelector("#editBranchPhoneCodeInput");
+
     var phoneInput = document.querySelector("#editBranchPhoneInput");
+
     var radiusInput = document.querySelector("#editBranchGeofenceRadiusInput");
+
     var latitudeInput = document.querySelector("#editBranchLatitudeInput");
+
     var longitudeInput = document.querySelector("#editBranchLongitudeInput");
+
     var googlePlaceIdInput = document.querySelector("#editBranchGooglePlaceIdInput");
 
-    if (branchIdInput) branchIdInput.value = branchId;
-    if (nameInput) nameInput.value = name;
-    if (addressInput) addressInput.value = address;
-    if (phoneInput) phoneInput.value = phone;
-    if (radiusInput) radiusInput.value = geofenceRadius;
-    if (latitudeInput) latitudeInput.value = latitude;
-    if (longitudeInput) longitudeInput.value = longitude;
-    if (googlePlaceIdInput) googlePlaceIdInput.value = googlePlaceId;
+    if (branchIdInput) {
+      branchIdInput.value = branchId;
+    }
 
-    setSelectValue("#editBranchPhoneCodeSelect", phoneCode);
+    if (nameInput) {
+      nameInput.value = name;
+    }
+
+    if (addressInput) {
+      addressInput.value = address;
+    }
+
+    if (phoneCodeInput) {
+      var defaultPhoneCode = phoneCodeInput.getAttribute("data-default-phone-code") || "";
+
+      phoneCodeInput.value = phoneCode || defaultPhoneCode;
+    }
+
+    if (phoneInput) {
+      phoneInput.value = phone;
+    }
+
+    if (radiusInput) {
+      radiusInput.value = geofenceRadius;
+    }
+
+    if (latitudeInput) {
+      latitudeInput.value = latitude;
+    }
+
+    if (longitudeInput) {
+      longitudeInput.value = longitude;
+    }
+
+    if (googlePlaceIdInput) {
+      googlePlaceIdInput.value = googlePlaceId;
+    }
+
     setSelectValue("#editBranchManagerSelect", managerId);
     setSelectValue("#editBranchStateSelect", state);
 
@@ -697,6 +836,8 @@ var EmployerBusinessProfile = (function () {
       editBranchValidator.resetForm(false);
     }
   }
+
+  /* ---------- Handle edit-branch modal ---------- */
 
   function handleEditBranchModal() {
     var modalElement = document.querySelector("#editBranchModal");
@@ -711,6 +852,8 @@ var EmployerBusinessProfile = (function () {
       populateEditBranchForm(button);
     });
   }
+
+  /* ---------- Open edit modal from view modal ---------- */
 
   function handleEditFromViewButton() {
     var viewBranchEditButton = document.querySelector("#viewBranchEditButton");
@@ -727,6 +870,7 @@ var EmployerBusinessProfile = (function () {
 
       var openEditModal = function () {
         var editModal = bootstrap.Modal.getOrCreateInstance(editModalElement);
+
         editModal.show();
       };
 
@@ -748,8 +892,11 @@ var EmployerBusinessProfile = (function () {
     });
   }
 
+  /* ---------- Edit-branch validation ---------- */
+
   function handleEditBranchValidation() {
     editBranchForm = document.querySelector("#kt_edit_branch_form");
+
     editBranchSubmitButton = document.querySelector("#kt_edit_branch_submit");
 
     if (!editBranchForm || !editBranchSubmitButton) return;
@@ -786,15 +933,19 @@ var EmployerBusinessProfile = (function () {
               notEmpty: {
                 message: "Branch address is required.",
               },
+
               callback: {
                 message: "Please select a valid address from the Google suggestions.",
+
                 callback: function (input) {
                   var addressValue = String(input.value || "").trim();
 
                   if (!addressValue) return false;
 
                   var latitudeInput = document.querySelector("#editBranchLatitudeInput");
+
                   var longitudeInput = document.querySelector("#editBranchLongitudeInput");
+
                   var googlePlaceIdInput = document.querySelector("#editBranchGooglePlaceIdInput");
 
                   return Boolean(
@@ -814,6 +965,7 @@ var EmployerBusinessProfile = (function () {
             validators: {
               callback: {
                 message: "Enter a valid branch phone number.",
+
                 callback: function (input) {
                   var value = String(input.value || "").trim();
 
@@ -828,11 +980,12 @@ var EmployerBusinessProfile = (function () {
           geofenceRadiusMeters: {
             validators: {
               callback: {
-                message: "Enter a radius between 50 and 1000 meters.",
+                message: "Enter a whole-number radius between 20 and 1000 meters.",
+
                 callback: function (input) {
                   var value = Number(input.value);
 
-                  return !Number.isNaN(value) && value >= 50 && value <= 1000;
+                  return Number.isSafeInteger(value) && value >= 20 && value <= 1000;
                 },
               },
             },
@@ -856,11 +1009,13 @@ var EmployerBusinessProfile = (function () {
     handleEditBranchSubmission();
   }
 
+  /* ---------- Edit-branch submission ---------- */
+
   function handleEditBranchSubmission() {
     if (!editBranchForm || !editBranchSubmitButton) return;
 
-    editBranchForm.addEventListener("submit", function (e) {
-      e.preventDefault();
+    editBranchForm.addEventListener("submit", function (event) {
+      event.preventDefault();
 
       var submitForm = function () {
         editBranchSubmitButton.setAttribute("data-kt-indicator", "on");
@@ -876,9 +1031,11 @@ var EmployerBusinessProfile = (function () {
 
             Swal.fire({
               text: response.data.message || "Branch updated successfully.",
+
               icon: "success",
               buttonsStyling: false,
               confirmButtonText: "Ok, got it!",
+
               customClass: {
                 confirmButton: "btn btn-primary",
               },
@@ -893,9 +1050,11 @@ var EmployerBusinessProfile = (function () {
 
             Swal.fire({
               text: error.response?.data?.message || "Unable to update branch.",
+
               icon: "error",
               buttonsStyling: false,
               confirmButtonText: "Ok, got it!",
+
               customClass: {
                 confirmButton: "btn btn-primary",
               },
@@ -917,8 +1076,11 @@ var EmployerBusinessProfile = (function () {
     });
   }
 
+  /* ---------- Business-details validation ---------- */
+
   function handleBusinessDetailsValidation() {
     businessDetailsForm = document.querySelector("#kt_business_details_form");
+
     businessDetailsSubmitButton = document.querySelector("#kt_business_details_submit");
 
     if (!businessDetailsForm || !businessDetailsSubmitButton) return;
@@ -947,6 +1109,7 @@ var EmployerBusinessProfile = (function () {
               notEmpty: {
                 message: "Business email is required.",
               },
+
               regexp: {
                 regexp: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
                 message: "Enter a valid business email address.",
@@ -967,8 +1130,10 @@ var EmployerBusinessProfile = (function () {
               notEmpty: {
                 message: "Business phone number is required.",
               },
+
               callback: {
                 message: "Enter a valid business phone number.",
+
                 callback: function (input) {
                   var value = String(input.value || "").trim();
 
@@ -983,8 +1148,10 @@ var EmployerBusinessProfile = (function () {
               notEmpty: {
                 message: "CAC registration number is required.",
               },
+
               regexp: {
                 regexp: /^(RC|BN|IT|LP|LLP)\d{4,10}$/i,
+
                 message: "Enter a valid CAC number, e.g. RC1234567 or BN1234567.",
               },
             },
@@ -995,8 +1162,10 @@ var EmployerBusinessProfile = (function () {
               notEmpty: {
                 message: "Regulatory registration number is required.",
               },
+
               regexp: {
                 regexp: /^[A-Z0-9/\\\- ]{4,30}$/i,
+
                 message: "Enter a valid regulatory registration number.",
               },
             },
@@ -1023,15 +1192,19 @@ var EmployerBusinessProfile = (function () {
               notEmpty: {
                 message: "Business address is required.",
               },
+
               callback: {
                 message: "Please select a valid address from the Google suggestions.",
+
                 callback: function (input) {
                   var addressValue = String(input.value || "").trim();
 
                   if (!addressValue) return false;
 
                   var latitudeInput = document.querySelector("#businessDetailsLatitude");
+
                   var longitudeInput = document.querySelector("#businessDetailsLongitude");
+
                   var googlePlaceIdInput = document.querySelector("#businessDetailsGooglePlaceId");
 
                   return Boolean(
@@ -1084,8 +1257,10 @@ var EmployerBusinessProfile = (function () {
               notEmpty: {
                 message: "Contact phone number is required.",
               },
+
               callback: {
                 message: "Enter a valid contact phone number.",
+
                 callback: function (input) {
                   var value = String(input.value || "").trim();
 
@@ -1113,14 +1288,17 @@ var EmployerBusinessProfile = (function () {
     handleBusinessDetailsSubmission();
   }
 
+  /* ---------- Business-details submission ---------- */
+
   function handleBusinessDetailsSubmission() {
     if (!businessDetailsForm || !businessDetailsSubmitButton) return;
 
-    businessDetailsForm.addEventListener("submit", function (e) {
-      e.preventDefault();
+    businessDetailsForm.addEventListener("submit", function (event) {
+      event.preventDefault();
 
       var submitForm = function () {
         businessDetailsSubmitButton.setAttribute("data-kt-indicator", "on");
+
         businessDetailsSubmitButton.disabled = true;
 
         var formData = new FormData(businessDetailsForm);
@@ -1133,9 +1311,11 @@ var EmployerBusinessProfile = (function () {
 
             Swal.fire({
               text: response.data.message || "Business details updated successfully.",
+
               icon: "success",
               buttonsStyling: false,
               confirmButtonText: "Ok, got it!",
+
               customClass: {
                 confirmButton: "btn btn-primary",
               },
@@ -1146,13 +1326,16 @@ var EmployerBusinessProfile = (function () {
           })
           .catch(function (error) {
             businessDetailsSubmitButton.removeAttribute("data-kt-indicator");
+
             businessDetailsSubmitButton.disabled = false;
 
             Swal.fire({
               text: error.response?.data?.message || "Unable to update business details.",
+
               icon: "error",
               buttonsStyling: false,
               confirmButtonText: "Ok, got it!",
+
               customClass: {
                 confirmButton: "btn btn-primary",
               },
@@ -1173,6 +1356,8 @@ var EmployerBusinessProfile = (function () {
       submitForm();
     });
   }
+
+  /* ---------- Copy text to clipboard ---------- */
 
   function copyTextToClipboard(text) {
     if (navigator.clipboard && window.isSecureContext) {
@@ -1209,6 +1394,8 @@ var EmployerBusinessProfile = (function () {
       }
     });
   }
+
+  /* ---------- Handle copy buttons ---------- */
 
   function handleCopyTextButtons() {
     document.addEventListener("click", function (event) {

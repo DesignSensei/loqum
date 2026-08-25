@@ -7,7 +7,8 @@ const ProviderEvent = require("../models/ProviderEvent");
 const money = require("../utils/money");
 
 class ProviderEventService {
-  /* ---------- Run with existing session or create new transaction ---------- */
+  /* ─────────────────────────────── TRANSACTIONS ─────────────────────────────── */
+
   static async runWithOptionalTransaction(options = {}, callback) {
     if (options.session) {
       return callback(options.session);
@@ -28,21 +29,31 @@ class ProviderEventService {
     }
   }
 
-  /* ---------- Clean string ---------- */
+  /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
+
   static cleanString(value) {
     const cleanValue = String(value || "").trim();
 
     return cleanValue || null;
   }
 
-  /* ---------- Clean lowercase string ---------- */
   static cleanLowerString(value) {
     const cleanValue = ProviderEventService.cleanString(value);
 
     return cleanValue ? cleanValue.toLowerCase() : null;
   }
 
-  /* ---------- Normalize optional minor-unit amount ---------- */
+  static normalizeCurrentTime(value) {
+    const currentTime =
+      value instanceof Date ? new Date(value.getTime()) : new Date(value || Date.now());
+
+    if (Number.isNaN(currentTime.getTime())) {
+      throw new Error("Provider event current time is invalid.");
+    }
+
+    return currentTime;
+  }
+
   static normalizeOptionalMinorUnitAmount(value, label) {
     if (value === null || value === undefined || value === "") {
       return null;
@@ -51,12 +62,151 @@ class ProviderEventService {
     return money.normalizeMinorUnitAmount(value, label);
   }
 
-  /* ---------- Build provider event key ---------- */
-  static buildEventKey({ provider, eventName, providerEventId = null, providerReference = null }) {
+  static normalizeEventCategory(value) {
+    const eventCategory = ProviderEventService.cleanLowerString(value || "other");
+
+    return eventCategory || "other";
+  }
+
+  static hasValue(value) {
+    return !(value === null || value === undefined || value === "");
+  }
+
+  static sameId(left, right) {
+    return Boolean(left && right && String(left) === String(right));
+  }
+
+  /* ─────────────────────────────── REFUND LINK VALIDATION ─────────────────────────────── */
+
+  static assertEmployerRefundExecutionLinkPair({
+    employerRefundBatch = null,
+    employerRefundBatchLineId = null,
+  }) {
+    const hasBatch = ProviderEventService.hasValue(employerRefundBatch);
+
+    const hasLine = ProviderEventService.hasValue(employerRefundBatchLineId);
+
+    if (hasBatch !== hasLine) {
+      throw new Error(
+        "Employer refund batch and employer refund batch line ID must be supplied together."
+      );
+    }
+
+    return {
+      employerRefundBatch: hasBatch ? employerRefundBatch : null,
+
+      employerRefundBatchLineId: hasLine ? employerRefundBatchLineId : null,
+    };
+  }
+
+  static applyEmployerRefundExecutionLink(
+    providerEvent,
+    {
+      employerRefundBatch,
+      employerRefundBatchLineId,
+
+      providerRefundId = null,
+      providerRefundReference = null,
+
+      employer = null,
+      shift = null,
+    }
+  ) {
+    const {
+      employerRefundBatch: normalizedBatch,
+
+      employerRefundBatchLineId: normalizedLineId,
+    } = ProviderEventService.assertEmployerRefundExecutionLinkPair({
+      employerRefundBatch,
+      employerRefundBatchLineId,
+    });
+
+    if (
+      providerEvent.employerRefundBatch &&
+      !ProviderEventService.sameId(providerEvent.employerRefundBatch, normalizedBatch)
+    ) {
+      throw new Error("Provider event is already linked to a different employer refund batch.");
+    }
+
+    if (
+      providerEvent.employerRefundBatchLineId &&
+      !ProviderEventService.sameId(providerEvent.employerRefundBatchLineId, normalizedLineId)
+    ) {
+      throw new Error(
+        "Provider event is already linked to a different employer refund batch line."
+      );
+    }
+
+    const cleanProviderRefundId = ProviderEventService.cleanString(providerRefundId);
+
+    const cleanProviderRefundReference = ProviderEventService.cleanString(providerRefundReference);
+
+    if (
+      providerEvent.providerRefundId &&
+      cleanProviderRefundId &&
+      providerEvent.providerRefundId !== cleanProviderRefundId
+    ) {
+      throw new Error("Provider event is already linked to a different provider refund ID.");
+    }
+
+    if (
+      providerEvent.providerRefundReference &&
+      cleanProviderRefundReference &&
+      providerEvent.providerRefundReference !== cleanProviderRefundReference
+    ) {
+      throw new Error("Provider event is already linked to a different provider refund reference.");
+    }
+
+    providerEvent.eventCategory = "employer_refund";
+
+    providerEvent.employerRefundBatch = normalizedBatch;
+
+    providerEvent.employerRefundBatchLineId = normalizedLineId;
+
+    if (cleanProviderRefundId) {
+      providerEvent.providerRefundId = cleanProviderRefundId;
+    }
+
+    if (cleanProviderRefundReference) {
+      providerEvent.providerRefundReference = cleanProviderRefundReference;
+    }
+
+    if (employer) {
+      providerEvent.employer = employer;
+    }
+
+    if (shift) {
+      providerEvent.shift = shift;
+    }
+
+    return providerEvent;
+  }
+
+  /* ─────────────────────────────── EVENT KEY ─────────────────────────────── */
+
+  static buildEventKey({
+    provider,
+    eventName,
+
+    providerEventId = null,
+
+    providerReference = null,
+
+    providerRefundId = null,
+
+    providerRefundReference = null,
+  }) {
     const cleanProvider = ProviderEventService.cleanLowerString(provider);
+
     const cleanEventName = ProviderEventService.cleanLowerString(eventName);
+
     const cleanProviderEventId = ProviderEventService.cleanString(providerEventId);
+
     const cleanProviderReference = ProviderEventService.cleanString(providerReference);
+
+    const cleanProviderRefundId = ProviderEventService.cleanString(providerRefundId);
+
+    const cleanProviderRefundReference = ProviderEventService.cleanString(providerRefundReference);
 
     if (!cleanProvider) {
       throw new Error("Provider is required.");
@@ -66,18 +216,49 @@ class ProviderEventService {
       throw new Error("Provider event name is required.");
     }
 
+    /*
+     * Prefer the provider's actual webhook/event ID
+     * whenever one exists.
+     */
     if (cleanProviderEventId) {
       return `${cleanProvider}:event:${cleanProviderEventId}`;
+    }
+
+    /*
+     * Refund lifecycle webhooks may not expose a
+     * separate event ID.
+     *
+     * eventName is deliberately included because the
+     * same refund can legitimately generate:
+     *
+     * refund.pending
+     * refund.processing
+     * refund.needs-attention
+     * refund.failed
+     * refund.processed
+     *
+     * A duplicate delivery of the same lifecycle event
+     * should still resolve to the same eventKey.
+     */
+    if (cleanProviderRefundId) {
+      return `${cleanProvider}:${cleanEventName}:refund:${cleanProviderRefundId}`;
+    }
+
+    if (cleanProviderRefundReference) {
+      return `${cleanProvider}:${cleanEventName}:refund-reference:${cleanProviderRefundReference}`;
     }
 
     if (cleanProviderReference) {
       return `${cleanProvider}:${cleanEventName}:reference:${cleanProviderReference}`;
     }
 
-    throw new Error("Provider event ID or provider reference is required.");
+    throw new Error(
+      "Provider event ID, provider refund ID, provider refund reference or provider reference is required."
+    );
   }
 
-  /* ---------- Find provider event by ID ---------- */
+  /* ─────────────────────────────── LOADERS ─────────────────────────────── */
+
   static async getProviderEventById(providerEventRecordId, options = {}) {
     if (!providerEventRecordId) {
       throw new Error("Provider event record ID is required.");
@@ -98,7 +279,8 @@ class ProviderEventService {
     return providerEvent;
   }
 
-  /* ---------- Record provider event idempotently ---------- */
+  /* ─────────────────────────────── RECORD EVENT ─────────────────────────────── */
+
   static async recordProviderEvent(
     {
       provider,
@@ -107,6 +289,10 @@ class ProviderEventService {
 
       providerEventId = null,
       providerReference = null,
+
+      providerRefundId = null,
+      providerRefundReference = null,
+
       eventKey = null,
 
       isVerified = false,
@@ -128,26 +314,58 @@ class ProviderEventService {
       shift = null,
       shiftApplication = null,
 
+      employerRefundBatch = null,
+      employerRefundBatchLineId = null,
+
       rawHeaders = {},
       rawPayload = {},
       normalizedPayload = {},
       metadata = {},
+
+      currentTime = new Date(),
     },
     options = {}
   ) {
     return ProviderEventService.runWithOptionalTransaction(options, async (session) => {
+      const normalizedCurrentTime = ProviderEventService.normalizeCurrentTime(currentTime);
+
       const cleanProvider = ProviderEventService.cleanLowerString(provider);
+
       const cleanEventName = ProviderEventService.cleanLowerString(eventName);
+
+      const cleanEventCategory = ProviderEventService.normalizeEventCategory(eventCategory);
+
       const cleanProviderEventId = ProviderEventService.cleanString(providerEventId);
+
       const cleanProviderReference = ProviderEventService.cleanString(providerReference);
+
+      const cleanProviderRefundId = ProviderEventService.cleanString(providerRefundId);
+
+      const cleanProviderRefundReference =
+        ProviderEventService.cleanString(providerRefundReference);
+
+      const {
+        employerRefundBatch: normalizedEmployerRefundBatch,
+
+        employerRefundBatchLineId: normalizedEmployerRefundBatchLineId,
+      } = ProviderEventService.assertEmployerRefundExecutionLinkPair({
+        employerRefundBatch,
+        employerRefundBatchLineId,
+      });
 
       const cleanEventKey =
         ProviderEventService.cleanString(eventKey) ||
         ProviderEventService.buildEventKey({
           provider: cleanProvider,
           eventName: cleanEventName,
+
           providerEventId: cleanProviderEventId,
+
           providerReference: cleanProviderReference,
+
+          providerRefundId: cleanProviderRefundId,
+
+          providerRefundReference: cleanProviderRefundReference,
         });
 
       const normalizedAmount = ProviderEventService.normalizeOptionalMinorUnitAmount(
@@ -183,22 +401,33 @@ class ProviderEventService {
 
       const providerEventData = {
         provider: cleanProvider,
+
         eventKey: cleanEventKey,
 
         providerEventId: cleanProviderEventId,
+
         providerReference: cleanProviderReference,
 
-        eventName: cleanEventName,
-        eventCategory,
+        providerRefundId: cleanProviderRefundId,
 
-        isVerified,
-        verifiedAt: isVerified ? new Date() : null,
+        providerRefundReference: cleanProviderRefundReference,
+
+        eventName: cleanEventName,
+
+        eventCategory: cleanEventCategory,
+
+        isVerified: Boolean(isVerified),
+
+        verifiedAt: isVerified ? normalizedCurrentTime : null,
 
         status: "received",
-        receivedAt: new Date(),
+
+        receivedAt: normalizedCurrentTime,
 
         amount: normalizedAmount,
+
         providerFee: normalizedProviderFee,
+
         netAmount: normalizedNetAmount,
 
         countryCode,
@@ -213,6 +442,10 @@ class ProviderEventService {
         bankAccount,
         shift,
         shiftApplication,
+
+        employerRefundBatch: normalizedEmployerRefundBatch,
+
+        employerRefundBatchLineId: normalizedEmployerRefundBatchLineId,
 
         rawHeaders,
         rawPayload,
@@ -235,13 +468,22 @@ class ProviderEventService {
           throw error;
         }
 
+        const duplicateConditions = [
+          {
+            eventKey: cleanEventKey,
+          },
+        ];
+
+        if (cleanProviderEventId) {
+          duplicateConditions.push({
+            provider: cleanProvider,
+
+            providerEventId: cleanProviderEventId,
+          });
+        }
+
         const duplicateQuery = ProviderEvent.findOne({
-          $or: [
-            { eventKey: cleanEventKey },
-            ...(cleanProviderEventId
-              ? [{ provider: cleanProvider, providerEventId: cleanProviderEventId }]
-              : []),
-          ],
+          $or: duplicateConditions,
         });
 
         duplicateQuery.session(session);
@@ -254,55 +496,29 @@ class ProviderEventService {
 
         return {
           providerEvent: existingProviderEvent,
+
           created: false,
+
           idempotent: true,
         };
       }
     });
   }
 
-  /* ---------- Mark provider event as processing ---------- */
-  static async markProcessing({ providerEventRecordId }, options = {}) {
-    return ProviderEventService.runWithOptionalTransaction(options, async (session) => {
-      const providerEvent = await ProviderEventService.getProviderEventById(providerEventRecordId, {
-        session,
-      });
+  /* ─────────────────────────────── LINK EMPLOYER REFUND EXECUTION ─────────────────────────────── */
 
-      if (providerEvent.status === "processed") {
-        return {
-          providerEvent,
-          alreadyProcessed: true,
-        };
-      }
-
-      if (providerEvent.status === "ignored") {
-        throw new Error("Ignored provider event cannot be processed.");
-      }
-
-      providerEvent.status = "processing";
-      providerEvent.processingStartedAt = new Date();
-
-      await providerEvent.save({ session });
-
-      return {
-        providerEvent,
-      };
-    });
-  }
-
-  /* ---------- Mark provider event as processed ---------- */
-  static async markProcessed(
+  static async linkEmployerRefundExecution(
     {
       providerEventRecordId,
 
-      transaction = null,
-      wallet = null,
+      employerRefundBatch,
+      employerRefundBatchLineId,
+
+      providerRefundId = null,
+      providerRefundReference = null,
+
       employer = null,
-      professional = null,
-      dva = null,
-      bankAccount = null,
       shift = null,
-      shiftApplication = null,
 
       normalizedPayload = null,
       metadata = {},
@@ -314,9 +530,148 @@ class ProviderEventService {
         session,
       });
 
+      ProviderEventService.applyEmployerRefundExecutionLink(providerEvent, {
+        employerRefundBatch,
+        employerRefundBatchLineId,
+
+        providerRefundId,
+        providerRefundReference,
+
+        employer,
+        shift,
+      });
+
+      if (normalizedPayload) {
+        providerEvent.normalizedPayload = normalizedPayload;
+      }
+
+      providerEvent.metadata = {
+        ...(providerEvent.metadata || {}),
+
+        ...metadata,
+      };
+
+      await providerEvent.save({
+        session,
+      });
+
+      return {
+        providerEvent,
+      };
+    });
+  }
+
+  /* ─────────────────────────────── MARK PROCESSING ─────────────────────────────── */
+
+  static async markProcessing(
+    {
+      providerEventRecordId,
+
+      currentTime = new Date(),
+    },
+    options = {}
+  ) {
+    return ProviderEventService.runWithOptionalTransaction(options, async (session) => {
+      const normalizedCurrentTime = ProviderEventService.normalizeCurrentTime(currentTime);
+
+      const providerEvent = await ProviderEventService.getProviderEventById(providerEventRecordId, {
+        session,
+      });
+
       if (providerEvent.status === "processed") {
         return {
           providerEvent,
+
+          alreadyProcessed: true,
+        };
+      }
+
+      if (providerEvent.status === "ignored") {
+        throw new Error("Ignored provider event cannot be processed.");
+      }
+
+      if (!providerEvent.isVerified) {
+        throw new Error("Unverified provider event cannot be processed.");
+      }
+
+      if (providerEvent.status === "processing") {
+        return {
+          providerEvent,
+
+          alreadyProcessing: true,
+        };
+      }
+
+      providerEvent.status = "processing";
+
+      /*
+       * Preserve the original processing
+       * start for audit history.
+       *
+       * A failed event may later be retried,
+       * but retrying must not replace the
+       * first time processing started.
+       */
+      providerEvent.processingStartedAt =
+        providerEvent.processingStartedAt || normalizedCurrentTime;
+
+      providerEvent.nextRetryAt = null;
+
+      await providerEvent.save({
+        session,
+      });
+
+      return {
+        providerEvent,
+
+        alreadyProcessing: false,
+      };
+    });
+  }
+
+  /* ─────────────────────────────── MARK PROCESSED ─────────────────────────────── */
+
+  static async markProcessed(
+    {
+      providerEventRecordId,
+
+      transaction = null,
+      wallet = null,
+
+      employer = null,
+      professional = null,
+
+      dva = null,
+      bankAccount = null,
+
+      shift = null,
+      shiftApplication = null,
+
+      employerRefundBatch = null,
+      employerRefundBatchLineId = null,
+
+      providerRefundId = null,
+      providerRefundReference = null,
+
+      normalizedPayload = null,
+
+      metadata = {},
+
+      currentTime = new Date(),
+    },
+    options = {}
+  ) {
+    return ProviderEventService.runWithOptionalTransaction(options, async (session) => {
+      const normalizedCurrentTime = ProviderEventService.normalizeCurrentTime(currentTime);
+
+      const providerEvent = await ProviderEventService.getProviderEventById(providerEventRecordId, {
+        session,
+      });
+
+      if (providerEvent.status === "processed") {
+        return {
+          providerEvent,
+
           alreadyProcessed: true,
         };
       }
@@ -329,17 +684,92 @@ class ProviderEventService {
         throw new Error("Unverified provider event cannot be marked as processed.");
       }
 
-      providerEvent.status = "processed";
-      providerEvent.processedAt = new Date();
+      const hasIncomingRefundBatch = ProviderEventService.hasValue(employerRefundBatch);
 
-      providerEvent.transaction = transaction || providerEvent.transaction;
-      providerEvent.wallet = wallet || providerEvent.wallet;
-      providerEvent.employer = employer || providerEvent.employer;
-      providerEvent.professional = professional || providerEvent.professional;
-      providerEvent.dva = dva || providerEvent.dva;
-      providerEvent.bankAccount = bankAccount || providerEvent.bankAccount;
-      providerEvent.shift = shift || providerEvent.shift;
-      providerEvent.shiftApplication = shiftApplication || providerEvent.shiftApplication;
+      const hasIncomingRefundLine = ProviderEventService.hasValue(employerRefundBatchLineId);
+
+      if (hasIncomingRefundBatch || hasIncomingRefundLine) {
+        ProviderEventService.applyEmployerRefundExecutionLink(providerEvent, {
+          employerRefundBatch,
+          employerRefundBatchLineId,
+
+          providerRefundId,
+          providerRefundReference,
+
+          employer,
+          shift,
+        });
+      } else {
+        const cleanProviderRefundId = ProviderEventService.cleanString(providerRefundId);
+
+        const cleanProviderRefundReference =
+          ProviderEventService.cleanString(providerRefundReference);
+
+        if (cleanProviderRefundId) {
+          if (
+            providerEvent.providerRefundId &&
+            providerEvent.providerRefundId !== cleanProviderRefundId
+          ) {
+            throw new Error("Provider event is already linked to a different provider refund ID.");
+          }
+
+          providerEvent.providerRefundId = cleanProviderRefundId;
+        }
+
+        if (cleanProviderRefundReference) {
+          if (
+            providerEvent.providerRefundReference &&
+            providerEvent.providerRefundReference !== cleanProviderRefundReference
+          ) {
+            throw new Error(
+              "Provider event is already linked to a different provider refund reference."
+            );
+          }
+
+          providerEvent.providerRefundReference = cleanProviderRefundReference;
+        }
+      }
+
+      providerEvent.status = "processed";
+
+      providerEvent.processingStartedAt =
+        providerEvent.processingStartedAt || normalizedCurrentTime;
+
+      providerEvent.processedAt = normalizedCurrentTime;
+
+      providerEvent.nextRetryAt = null;
+
+      if (transaction) {
+        providerEvent.transaction = transaction;
+      }
+
+      if (wallet) {
+        providerEvent.wallet = wallet;
+      }
+
+      if (employer) {
+        providerEvent.employer = employer;
+      }
+
+      if (professional) {
+        providerEvent.professional = professional;
+      }
+
+      if (dva) {
+        providerEvent.dva = dva;
+      }
+
+      if (bankAccount) {
+        providerEvent.bankAccount = bankAccount;
+      }
+
+      if (shift) {
+        providerEvent.shift = shift;
+      }
+
+      if (shiftApplication) {
+        providerEvent.shiftApplication = shiftApplication;
+      }
 
       if (normalizedPayload) {
         providerEvent.normalizedPayload = normalizedPayload;
@@ -347,23 +777,43 @@ class ProviderEventService {
 
       providerEvent.metadata = {
         ...(providerEvent.metadata || {}),
+
         ...metadata,
       };
 
-      await providerEvent.save({ session });
+      await providerEvent.save({
+        session,
+      });
 
       return {
         providerEvent,
+
+        alreadyProcessed: false,
       };
     });
   }
 
-  /* ---------- Mark provider event as failed ---------- */
+  /* ─────────────────────────────── MARK FAILED ─────────────────────────────── */
+
   static async markFailed(
-    { providerEventRecordId, failureReason, retryable = false, nextRetryAt = null, metadata = {} },
+    {
+      providerEventRecordId,
+
+      failureReason,
+
+      retryable = false,
+
+      nextRetryAt = null,
+
+      metadata = {},
+
+      currentTime = new Date(),
+    },
     options = {}
   ) {
     return ProviderEventService.runWithOptionalTransaction(options, async (session) => {
+      const normalizedCurrentTime = ProviderEventService.normalizeCurrentTime(currentTime);
+
       const providerEvent = await ProviderEventService.getProviderEventById(providerEventRecordId, {
         session,
       });
@@ -376,18 +826,40 @@ class ProviderEventService {
         throw new Error("Ignored provider event cannot be marked as failed.");
       }
 
+      let normalizedNextRetryAt = null;
+
+      if (retryable) {
+        if (!nextRetryAt) {
+          throw new Error("A retryable provider event failure requires nextRetryAt.");
+        }
+
+        normalizedNextRetryAt = ProviderEventService.normalizeCurrentTime(nextRetryAt);
+
+        if (normalizedNextRetryAt.getTime() <= normalizedCurrentTime.getTime()) {
+          throw new Error("Provider event next retry time must be in the future.");
+        }
+      }
+
       providerEvent.status = "failed";
-      providerEvent.failedAt = new Date();
-      providerEvent.failureReason = failureReason || "Provider event processing failed.";
+
+      providerEvent.failedAt = normalizedCurrentTime;
+
+      providerEvent.failureReason =
+        ProviderEventService.cleanString(failureReason) || "Provider event processing failed.";
+
       providerEvent.retryCount = Number(providerEvent.retryCount || 0) + 1;
-      providerEvent.nextRetryAt = retryable ? nextRetryAt : null;
+
+      providerEvent.nextRetryAt = retryable ? normalizedNextRetryAt : null;
 
       providerEvent.metadata = {
         ...(providerEvent.metadata || {}),
+
         ...metadata,
       };
 
-      await providerEvent.save({ session });
+      await providerEvent.save({
+        session,
+      });
 
       return {
         providerEvent,
@@ -395,9 +867,23 @@ class ProviderEventService {
     });
   }
 
-  /* ---------- Mark provider event as ignored ---------- */
-  static async markIgnored({ providerEventRecordId, ignoredReason, metadata = {} }, options = {}) {
+  /* ─────────────────────────────── MARK IGNORED ─────────────────────────────── */
+
+  static async markIgnored(
+    {
+      providerEventRecordId,
+
+      ignoredReason,
+
+      metadata = {},
+
+      currentTime = new Date(),
+    },
+    options = {}
+  ) {
     return ProviderEventService.runWithOptionalTransaction(options, async (session) => {
+      const normalizedCurrentTime = ProviderEventService.normalizeCurrentTime(currentTime);
+
       const providerEvent = await ProviderEventService.getProviderEventById(providerEventRecordId, {
         session,
       });
@@ -409,24 +895,34 @@ class ProviderEventService {
       if (providerEvent.status === "ignored") {
         return {
           providerEvent,
+
           alreadyIgnored: true,
         };
       }
 
       providerEvent.status = "ignored";
-      providerEvent.ignoredAt = new Date();
-      providerEvent.ignoredReason = ignoredReason || "Provider event ignored.";
+
+      providerEvent.ignoredAt = normalizedCurrentTime;
+
+      providerEvent.ignoredReason =
+        ProviderEventService.cleanString(ignoredReason) || "Provider event ignored.";
+
       providerEvent.nextRetryAt = null;
 
       providerEvent.metadata = {
         ...(providerEvent.metadata || {}),
+
         ...metadata,
       };
 
-      await providerEvent.save({ session });
+      await providerEvent.save({
+        session,
+      });
 
       return {
         providerEvent,
+
+        alreadyIgnored: false,
       };
     });
   }

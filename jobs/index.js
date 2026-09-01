@@ -1,15 +1,42 @@
 // jobs/index.js
 
-const WithdrawalReversalScheduler = require("./withdrawalReversalScheduler");
-
-const ShiftOccurrenceReconciliationScheduler = require("./shiftOccurrenceReconciliationScheduler");
-
+const ShiftLifecycleScheduler = require("./shiftLifecycleScheduler");
 const ShiftSettlementScheduler = require("./shiftSettlementScheduler");
+const WithdrawalReversalScheduler = require("./withdrawalReversalScheduler");
+const EmployerRefundBatchScheduler = require("./employerRefundBatchScheduler");
+const ProviderEventRetryScheduler = require("./providerEventRetryScheduler");
 
 const logger = require("../utils/logger");
 
+/**
+ * BACKGROUND JOB REGISTRY
+ *
+ * This module owns background scheduler startup and shutdown only.
+ *
+ * It does not own lifecycle, settlement, refund, withdrawal, ProviderEvent
+ * processing or reconciliation business logic. Each scheduler delegates those
+ * responsibilities to its authoritative service layer.
+ */
+
 exports.startBackgroundJobs = function startBackgroundJobs() {
   logger.info("Background jobs starting.");
+
+  ShiftLifecycleScheduler.start({
+    intervalMinutes: 5,
+    limit: 100,
+    runImmediately: false,
+  });
+
+  ShiftSettlementScheduler.start({
+    intervalMinutes: 5,
+    releaseReadinessLimit: 100,
+    batchOccurrenceLimit: 1000,
+    batchProcessingLimit: 100,
+    maximumProcessingAttempts: 5,
+    staleProcessingMinutes: 30,
+    payoutPolicy: {},
+    runImmediately: false,
+  });
 
   WithdrawalReversalScheduler.start({
     intervalMinutes: 10,
@@ -19,23 +46,20 @@ exports.startBackgroundJobs = function startBackgroundJobs() {
     runImmediately: false,
   });
 
-  ShiftOccurrenceReconciliationScheduler.start({
+  EmployerRefundBatchScheduler.start({
     intervalMinutes: 5,
-    deadlineBackfillLimit: 100,
-    expirationLimit: 100,
-    refundLimit: 100,
+    processingLimit: 100,
+    reconciliationLimit: 100,
+    lockTtlMs: 5 * 60 * 1000,
+    reconciliationMinAgeMs: 5 * 60 * 1000,
     runImmediately: false,
   });
 
-  ShiftSettlementScheduler.start({
+  ProviderEventRetryScheduler.start({
     intervalMinutes: 5,
-    approvalLimit: 100,
-    refundLimit: 100,
-    batchOccurrenceLimit: 1000,
-    batchProcessingLimit: 100,
-    maximumProcessingAttempts: 5,
+    retryLimit: 100,
     staleProcessingMinutes: 30,
-    payoutPolicy: {},
+    staleProcessingLimit: 100,
     runImmediately: false,
   });
 
@@ -43,11 +67,11 @@ exports.startBackgroundJobs = function startBackgroundJobs() {
 };
 
 exports.stopBackgroundJobs = function stopBackgroundJobs() {
-  WithdrawalReversalScheduler.stop();
-
-  ShiftOccurrenceReconciliationScheduler.stop();
-
+  ShiftLifecycleScheduler.stop();
   ShiftSettlementScheduler.stop();
+  WithdrawalReversalScheduler.stop();
+  EmployerRefundBatchScheduler.stop();
+  ProviderEventRetryScheduler.stop();
 
   logger.info("Background jobs stopped.");
 };

@@ -1,6 +1,7 @@
 // routes/adminRoutes.js
 
 const express = require("express");
+
 const router = express.Router();
 
 const {
@@ -11,10 +12,9 @@ const {
 } = require("../middleware/authMiddleware");
 
 const adminController = require("../controllers/adminController");
-
 const adminShiftClaimController = require("../controllers/adminShiftClaimController");
 
-/* ─────────────────────────────── MIDDLEWARE ─────────────────────────────── */
+/* ─────────────────────────────── ROUTE PROTECTION ─────────────────────────────── */
 
 router.use(isAuthenticated, isAccountAllowed, isVerified, hasRole("admin"));
 
@@ -22,10 +22,30 @@ router.use(isAuthenticated, isAccountAllowed, isVerified, hasRole("admin"));
 
 router.get("/dashboard", adminController.getDashboard);
 
-/* ─────────────────────────────── SHIFT CLAIM ROUTES ─────────────────────────────── */
+/* ─────────────────────────────── PROFESSIONAL CLAIM ADJUDICATION ─────────────────────────────── */
 
-// Makes the final admin decision on a claim already awaiting admin review.
+/*
+ * Admin resolves one issue within a professional claim case.
+ *
+ * The resolution service owns the final authoritative occurrence facts,
+ * settlement continuation, refund reevaluation and case-level completion.
+ */
+router.post(
+  "/shift-claims/:claimId/issues/:issueId/resolve",
+  adminShiftClaimController.resolveClaim
+);
 
-router.post("/shift-claims/:claimId/resolve", adminShiftClaimController.resolveClaim);
+/* ─────────────────────────────── EMPLOYER DISPUTE ADJUDICATION ─────────────────────────────── */
+
+/*
+ * Admin resolves one issue within an employer standalone dispute case.
+ *
+ * The resolution service owns the final authoritative occurrence facts,
+ * settlement continuation, refund reevaluation and case-level completion.
+ */
+router.post(
+  "/shift-disputes/:disputeId/issues/:issueId/resolve",
+  adminShiftClaimController.resolveDispute
+);
 
 module.exports = router;

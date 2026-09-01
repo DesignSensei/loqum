@@ -87,13 +87,8 @@ function getEmployerAttendanceContext(req) {
 /* ─────────────────────────────── CHECK-IN PIN ─────────────────────────────── */
 
 /**
- * Returns the check-in PIN for one exact ShiftOccurrence.
- *
- * occurrenceId may be omitted only for a single-date Shift. In that case the
- * attendance service resolves occurrence sequence 1.
- *
- * Employer access and branch scope are enforced by ShiftAttendanceService.
- * PIN access is not controlled by a time-based reveal window.
+ * Returns the check-in PIN for one ShiftOccurrence.
+ * Employer/branch authorization and PIN availability are service-owned.
  */
 exports.getCheckInPin = async (req, res) => {
   try {
@@ -125,13 +120,8 @@ exports.getCheckInPin = async (req, res) => {
 /* ─────────────────────────────── CHECK-OUT PIN ─────────────────────────────── */
 
 /**
- * Returns the check-out PIN for one exact ShiftOccurrence.
- *
- * occurrenceId may be omitted only for a single-date Shift. In that case the
- * attendance service resolves occurrence sequence 1.
- *
- * The attendance service permits check-out PIN access only after a successful
- * check-in and enforces employer/branch authorization.
+ * Returns the check-out PIN for one ShiftOccurrence.
+ * Employer/branch authorization and PIN availability are service-owned.
  */
 exports.getCheckOutPin = async (req, res) => {
   try {

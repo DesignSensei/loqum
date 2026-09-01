@@ -244,8 +244,9 @@ exports.PROFESSIONAL_REVIEW_SELECTION_TYPES = Object.freeze([
  *
  * Overtime is deliberately excluded from generic claims.
  *
- * An employer-rejected overtime request uses the dedicated overtime appeal
- * lifecycle. Employer-approved overtime is final in the ordinary lifecycle.
+ * Employer-approved overtime becomes final through the dedicated overtime
+ * lifecycle. An employer-rejected overtime request becomes contested and moves
+ * directly to admin review within that same overtime lifecycle.
  *
  * An absence explanation is also not a claim.
  */
@@ -424,7 +425,7 @@ exports.ADMIN_FINANCIAL_CLAIM_DECISIONS = Object.freeze([
  *
  * employer_counter_position:
  * Employer rejected the professional position and supplied a different factual
- * or financial position requiring  admin adjudication.
+ * or financial position requiring admin adjudication.
  *
  * employer_non_response:
  * Employer failed to decide the issue before the response deadline.
@@ -441,12 +442,21 @@ exports.OCCURRENCE_CLAIM_ESCALATION_REASONS = Object.freeze([
 /* ─────────────────────────────── OCCURRENCE EVIDENCE ─────────────────────────────── */
 
 /**
- * Evidence may be supplied by either party or by an administrator while a
- * professional claim issue, employer dispute issue, or overtime appeal is
- * being reviewed.
+ * Evidence may be supplied by either party or by an administrator while an
+ * ordinary professional claim, employer dispute, overtime request, employer OT
+ * rejection, or admin OT review is being handled.
+ *
+ * Party factual accounts are evidence even when no documentary upload exists.
+ * Supporting uploads are additional corroboration and are supplied where
+ * available. A party must not be forced to manufacture a file that does not
+ * exist.
  *
  * System-owned occurrence records remain authoritative in their own models and
  * do not need to be duplicated as uploaded evidence.
+ *
+ * message means an uploaded external communication record such as an SMS,
+ * WhatsApp or email record. It does not imply an in-app Loqum messaging
+ * feature.
  */
 exports.OCCURRENCE_EVIDENCE_TYPES = Object.freeze([
   "image",
@@ -496,8 +506,8 @@ exports.OCCURRENCE_EVIDENCE_SUBMITTER_ROLES = Object.freeze(["professional", "em
  *
  * - employer-approved overtime is binding and cannot be revoked through an
  *   employer dispute; and
- * - employer-rejected overtime is contested, if necessary, by the professional
- *   through the dedicated overtime appeal lifecycle.
+ * - employer-rejected overtime becomes contested inside the dedicated overtime
+ *   lifecycle and moves directly to admin adjudication.
  */
 exports.EMPLOYER_OCCURRENCE_DISPUTE_TYPES = Object.freeze([
   "attendance_correction",
@@ -696,8 +706,8 @@ exports.REFUND_EXECUTION_STATUSES = Object.freeze(["batched", "processing", "ref
  * scheduled/base refund executes.
  *
  * Overtime is separately funded. OT-only challengeability, a pending OT
- * request, employer OT rejection, professional OT appeal, or OT top-up does not
- * by itself hold the scheduled/base refund.
+ * request, employer OT rejection, pending OT admin review, or OT top-up does
+ * not by itself hold the scheduled/base refund.
  */
 exports.REFUND_HOLD_REASONS = Object.freeze([
   "attendance_review_pending",
@@ -778,23 +788,27 @@ exports.OVERTIME_SOURCES = Object.freeze(["late_checkout_prompt", "manual_reques
  * Overtime is its own decision lifecycle.
  *
  * pending:
- * The professional requested OT and the employer response window is open, or
- * the employer failed to respond and admin must decide directly.
+ * The professional submitted an OT request and the employer response window is
+ * open.
  *
  * approved:
  * OT entitlement is final. Employer approval is binding. Admin approval after
- * employer non-response or professional appeal is also final.
- *
- * rejected:
- * Employer rejected the request and the professional appeal opportunity is
- * either available, expired, or admin finally rejected OT.
+ * employer rejection or employer non-response is also final.
  *
  * disputed:
- * Professional appealed an employer rejection and admin must make the final OT
- * decision.
+ * Admin adjudication is required. Employer rejection moves the OT request
+ * directly into this state. Employer non-response also moves the unresolved OT
+ * request into admin review after the employer response deadline expires.
+ *
+ * rejected:
+ * Admin made the final decision that the requested OT is not payable.
  *
  * cancelled:
  * The OT request was cancelled before a final payable outcome existed.
+ *
+ * The professional's original OT request is already their asserted position.
+ * The professional is not required to submit a second appeal merely because the
+ * employer rejected that position.
  */
 exports.OVERTIME_STATUSES = Object.freeze([
   "pending",
@@ -804,42 +818,96 @@ exports.OVERTIME_STATUSES = Object.freeze([
   "cancelled",
 ]);
 
+/**
+ * decisionSource identifies the authority whose decision established the final
+ * OT outcome.
+ *
+ * employer:
+ * Employer approved the professional's OT request. Employer rejection is not a
+ * final OT decision and therefore does not use employer as a final rejection
+ * authority.
+ *
+ * admin:
+ * Admin made the final OT decision after employer rejection or employer
+ * non-response.
+ */
 exports.OVERTIME_DECISION_SOURCES = Object.freeze(["employer", "admin"]);
 
 /**
- * OT appeal is distinct from ShiftOccurrenceClaim.
+ * Employer rejection is a structured evidentiary position, not a bare veto.
  *
- * not_available:
- * No employer rejection currently creates an appeal opportunity.
+ * Every employer rejection must identify one rejection basis and provide a
+ * factual explanation.
  *
- * available:
- * Employer rejected OT and the professional may appeal before the deadline.
+ * Supporting documentary evidence is supplied where available. A supporting
+ * file is not mandatory when no relevant documentary evidence exists, but the
+ * employer must explicitly declare that no supporting evidence is available.
  *
- * submitted:
- * Professional appealed. Overtime status becomes disputed and admin owns the
- * next action.
+ * overtime_not_worked:
+ * Employer says the professional did not work beyond the scheduled end time.
  *
- * expired:
- * Professional did not appeal before the deadline. Employer rejection becomes
- * final.
+ * minutes_incorrect:
+ * Employer accepts that some overtime was worked but disputes the professional's
+ * requested duration. The employer should also provide the number of minutes
+ * they say were actually worked.
  *
- * resolved:
- * Admin made the final OT decision after a submitted appeal.
+ * remained_on_site_not_working:
+ * Employer says the professional remained at the workplace after the scheduled
+ * end time but was no longer working.
+ *
+ * worked_without_authorization:
+ * Employer says additional work occurred but was not requested or authorized.
+ * This records the employer's factual/policy position for admin adjudication.
+ * The basis alone does not automatically establish that worked time is
+ * non-payable.
+ *
+ * attendance_record_incorrect:
+ * Employer disputes the attendance or checkout record relied on by the
+ * professional's OT request.
+ *
+ * other:
+ * A materially different rejection basis not represented above. A factual
+ * explanation remains mandatory.
  */
-exports.OVERTIME_APPEAL_STATUSES = Object.freeze([
-  "not_available",
-  "available",
-  "submitted",
-  "expired",
-  "resolved",
+exports.OVERTIME_REJECTION_BASES = Object.freeze([
+  "overtime_not_worked",
+  "minutes_incorrect",
+  "remained_on_site_not_working",
+  "worked_without_authorization",
+  "attendance_record_incorrect",
+  "other",
 ]);
 
-exports.ACTIVE_OVERTIME_APPEAL_STATUSES = Object.freeze(["available", "submitted"]);
+/**
+ * These reasons identify why final OT decision authority moved to admin.
+ *
+ * employer_rejection:
+ * Employer rejected the professional's submitted OT position. The professional
+ * does not need to appeal because the original OT request already represents
+ * their asserted position. Admin adjudicates the professional position,
+ * employer position, submitted supporting evidence and Loqum system records.
+ *
+ * employer_non_response:
+ * Employer failed to decide the OT request before the employer response
+ * deadline. Admin decides the OT request from the professional's submitted
+ * position, supporting evidence and available Loqum system records.
+ */
+exports.OVERTIME_ADMIN_REVIEW_REASONS = Object.freeze([
+  "employer_rejection",
+  "employer_non_response",
+]);
 
-exports.OVERTIME_APPEAL_STATUSES_REQUIRING_PROFESSIONAL_ACTION = Object.freeze(["available"]);
-
-exports.OVERTIME_APPEAL_STATUSES_REQUIRING_ADMIN_ACTION = Object.freeze(["submitted"]);
-
+/**
+ * Admin makes the final decision whenever OT reaches admin review.
+ *
+ * approved:
+ * The available evidence supports a payable OT outcome. Admin may establish the
+ * final approved OT minutes rather than being restricted to blindly accepting
+ * either party's asserted duration.
+ *
+ * rejected:
+ * The available evidence does not establish a payable OT outcome.
+ */
 exports.OVERTIME_ADMIN_DECISIONS = Object.freeze(["approved", "rejected"]);
 
 /* ─────────────────────────────── CANCELLATION ─────────────────────────────── */

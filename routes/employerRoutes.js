@@ -24,14 +24,11 @@ const inviteController = require("../controllers/inviteController");
 const teamMemberController = require("../controllers/teamMemberController");
 const employerBillingController = require("../controllers/employerBillingController");
 const employerShiftController = require("../controllers/employerShiftController");
-
 const employerShiftApplicationController = require("../controllers/employerShiftApplicationController");
-
 const employerShiftAttendanceController = require("../controllers/employerShiftAttendanceController");
-
 const employerShiftClaimController = require("../controllers/employerShiftClaimController");
 
-/* ─────────────────────────────── EMPLOYER ROUTE PROTECTION ─────────────────────────────── */
+/* ─────────────────────────────── ROUTE PROTECTION ─────────────────────────────── */
 
 router.use(
   isAuthenticated,
@@ -43,11 +40,11 @@ router.use(
   attachEmployerContext
 );
 
-/* ─────────────────────────────── DASHBOARD ROUTES ─────────────────────────────── */
+/* ─────────────────────────────── DASHBOARD ─────────────────────────────── */
 
 router.get("/dashboard", employerController.getDashboard);
 
-/* ─────────────────────────────── BUSINESS PROFILE ROUTES ─────────────────────────────── */
+/* ─────────────────────────────── BUSINESS PROFILE ─────────────────────────────── */
 
 router.get("/business-profile", employerController.getBusinessProfile);
 
@@ -56,9 +53,8 @@ router.post(
   employerController.postUpdateBusinessDetails
 );
 
-/* ─────────────────────────────── BRANCH ROUTES ─────────────────────────────── */
+/* ─────────────────────────────── BRANCHES ─────────────────────────────── */
 
-// Safe GET redirects.
 router.get("/branches", branchController.getBranches);
 
 router.get("/branches/new", branchController.getNewBranch);
@@ -67,19 +63,16 @@ router.get("/branches/:branchId/edit", branchController.getEditBranch);
 
 router.get("/branches/:branchId/members", branchController.getBranchMembers);
 
-// Branch actions.
 router.post("/branches", branchController.postNewBranch);
 
 router.post("/branches/:branchId/edit", branchController.postEditBranch);
 
 router.post("/branches/:branchId/update", branchController.postEditBranch);
 
-// Business profile branch actions.
 router.post("/business-profile/branches/update", branchController.postEditBranch);
 
-/* ─────────────────────────────── TEAM MEMBER ROUTES ─────────────────────────────── */
+/* ─────────────────────────────── TEAM MEMBERS ─────────────────────────────── */
 
-// Team members are managed from /employer/business-profile?tab=team.
 router.get("/business-profile/team-members/:memberId", teamMemberController.getTeamMember);
 
 router.post(
@@ -92,18 +85,14 @@ router.post(
   teamMemberController.postRemoveTeamMember
 );
 
-/* ─────────────────────────────── INVITE ROUTES ─────────────────────────────── */
+/* ─────────────────────────────── INVITES ─────────────────────────────── */
 
-// Safe GET redirect.
-// Invites are managed from /employer/business-profile?tab=invites.
 router.get("/invites", inviteController.getInvites);
 
-// Invite actions.
 router.post("/invites", inviteController.postSendInvite);
 
 router.post("/invites/:inviteId/revoke", inviteController.postRevokeInvite);
 
-// Business profile invite actions.
 router.post("/business-profile/invites", inviteController.postSendInvite);
 
 router.post("/business-profile/invites/:inviteId/resend", inviteController.postResendInvite);
@@ -114,37 +103,27 @@ router.post("/business-profile/invites/:inviteId/revoke", inviteController.postR
 
 router.post("/business-profile/invites/revoke", inviteController.postRevokeInvite);
 
-/* ─────────────────────────────── SHIFT PAGE ROUTES ─────────────────────────────── */
+/* ─────────────────────────────── SHIFT PAGES ─────────────────────────────── */
 
-// Manage Shifts page.
 router.get("/shifts", employerShiftController.getManageShifts);
 
-// Returns occurrence schedule data for one Shift.
 router.get("/shifts/:shiftId/occurrences", employerShiftController.getShiftOccurrences);
 
 /*
- * Returns the employer cancellation or active-work cancellation preview.
- *
- * Employer delinquency does not prevent resolution of an existing Shift.
- * Therefore this route deliberately does not use canPostShifts.
+ * Existing-Shift resolution remains available during delinquency.
  */
 router.get("/shifts/:shiftId/cancellation-preview", employerShiftController.getCancellationPreview);
 
-/* ─────────────────────────────── SHIFT APPLICATION ROUTES ─────────────────────────────── */
+/* ─────────────────────────────── SHIFT APPLICATIONS ─────────────────────────────── */
 
 /*
- * Shortlisting changes application review state only.
- * It does not create a professional financial obligation.
+ * Shortlist/reject only change application state.
  */
 router.post(
   "/shifts/applications/:applicationId/shortlist",
   employerShiftApplicationController.shortlistApplication
 );
 
-/*
- * Rejection reduces/ends an application opportunity and does not create a new
- * employer obligation.
- */
 router.post(
   "/shifts/applications/:applicationId/reject",
   employerShiftApplicationController.rejectApplication
@@ -153,20 +132,16 @@ router.post(
 /*
  * Acceptance creates an assignment.
  *
- * Application-management role/branch authority is not identical to Shift
- * posting authority, so canPostShifts is deliberately not reused here.
- *
- * ShiftApplicationService must own the fresh business-level delinquency /
- * new-obligation check immediately before assignment creation.
+ * Application authority differs from posting authority. The application
+ * service owns the fresh delinquency check before creating the obligation.
  */
 router.post(
   "/shifts/applications/:applicationId/accept",
   employerShiftApplicationController.acceptApplication
 );
 
-/* ─────────────────────────────── SHIFT ATTENDANCE PIN ROUTES ─────────────────────────────── */
+/* ─────────────────────────────── ATTENDANCE PINS ─────────────────────────────── */
 
-// Occurrence-authoritative attendance PIN routes.
 router.get(
   "/shifts/:shiftId/occurrences/:occurrenceId/check-in-pin",
   employerShiftAttendanceController.getCheckInPin
@@ -177,44 +152,58 @@ router.get(
   employerShiftAttendanceController.getCheckOutPin
 );
 
-// Single-date Shift compatibility PIN routes.
-// ShiftAttendanceService resolves occurrence sequence 1.
+/*
+ * Single-date compatibility routes resolve occurrence sequence 1.
+ */
 router.get("/shifts/:shiftId/check-in-pin", employerShiftAttendanceController.getCheckInPin);
 
 router.get("/shifts/:shiftId/check-out-pin", employerShiftAttendanceController.getCheckOutPin);
 
-/* ─────────────────────────────── SHIFT CLAIM ROUTES ─────────────────────────────── */
+/* ─────────────────────────────── SHIFT DISPUTES ─────────────────────────────── */
 
 /*
- * Employer reviews one original financially relevant ShiftOccurrence claim.
+ * Employer disputes challenge an existing occurrence outcome.
  *
- * Claim review resolves an existing financial/factual issue and therefore
- * remains available during employer delinquency.
+ * They do not create a new Shift obligation, so delinquency must not
+ * prevent submission. The dispute service owns issue scope, overlap
+ * checks, challenge-window authority and financial consequences.
  */
-router.post("/shifts/claims/:claimId/review", employerShiftClaimController.reviewClaim);
+router.post(
+  "/shifts/:shiftId/occurrences/:occurrenceId/disputes",
+  employerShiftClaimController.submitDispute
+);
+
+/* ─────────────────────────────── SHIFT CLAIMS ─────────────────────────────── */
 
 /*
- * Dedicated parent Shift details page.
+ * Employer reviews one issue within an active professional claim.
  *
- * Keep this after every more-specific /shifts/... GET route so :shiftId does
- * not consume route segments such as applications.
+ * Claim review resolves an existing controversy and remains available
+ * during delinquency.
+ */
+router.post(
+  "/shifts/claims/:claimId/issues/:issueId/review",
+  employerShiftClaimController.reviewClaim
+);
+
+/* ─────────────────────────────── SHIFT DETAILS ─────────────────────────────── */
+
+/*
+ * Keep this after more-specific /shifts/... GET routes.
  */
 router.get("/shifts/:shiftId", employerShiftController.getShiftDetails);
 
-/* ─────────────────────────────── SHIFT CREATION ROUTES ─────────────────────────────── */
+/* ─────────────────────────────── SHIFT CREATION ─────────────────────────────── */
 
 /*
- * Creating a Shift creates a new employer obligation.
+ * Shift creation introduces a new employer obligation.
  */
 router.post("/shifts", canPostShifts, employerShiftController.postShift);
 
-/* ─────────────────────────────── SHIFT FUNDING ROUTES ─────────────────────────────── */
+/* ─────────────────────────────── SHIFT FUNDING ─────────────────────────────── */
 
 /*
- * A pending-funding Shift is not yet published.
- *
- * Funding activates/publishes that new Shift obligation, so the fresh
- * new-obligation restriction still applies.
+ * Funding publishes a pending Shift, so new-obligation restrictions apply.
  */
 router.post(
   "/shifts/:shiftId/fund-from-wallet",
@@ -228,28 +217,23 @@ router.post(
   employerShiftController.initializeShiftCheckout
 );
 
-/* ─────────────────────────────── SHIFT LIFECYCLE ROUTES ─────────────────────────────── */
+/* ─────────────────────────────── SHIFT LIFECYCLE ─────────────────────────────── */
 
 /*
- * Cancelling an existing Shift must remain available while the employer is
- * delinquent because it reduces or closes an existing obligation.
+ * Cancellation reduces or closes an existing obligation.
  */
 router.post("/shifts/:shiftId/cancel", employerShiftController.postCancelShift);
 
 /*
- * Employer-initiated active-work cancellation for one checked-in occurrence.
- *
- * This resolves work already in progress and must remain available while the
- * business is restricted from creating new obligations.
+ * Active-work cancellation resolves work already in progress.
  */
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/active-work-cancellation",
   employerShiftController.postActiveWorkCancellation
 );
 
-/* ─────────────────────────────── BILLING / WALLET ROUTES ─────────────────────────────── */
+/* ─────────────────────────────── BILLING / WALLET ─────────────────────────────── */
 
-// Safe GET redirects.
 router.get("/billing", employerBillingController.getBilling);
 
 router.get("/billing/wallet", (req, res) => {
@@ -257,9 +241,7 @@ router.get("/billing/wallet", (req, res) => {
 });
 
 /*
- * First-level employer delinquency does not freeze the employer wallet.
- *
- * Billing/account actions therefore do not use canPostShifts.
+ * Employer delinquency does not freeze ordinary wallet/account management.
  */
 router.post("/billing/setup-dva", employerBillingController.postSetupDVA);
 

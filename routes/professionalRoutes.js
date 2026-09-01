@@ -31,69 +31,41 @@ router.use(
   attachProfessionalProfile
 );
 
-/* ─────────────────────────────── PROTECTED PAGES ─────────────────────────────── */
+/* ─────────────────────────────── PAGES ─────────────────────────────── */
 
 router.get("/dashboard", professionalController.getDashboard);
 
-/* ─────────────────────────────── SHIFT ATTENDANCE ROUTES ─────────────────────────────── */
+/* ─────────────────────────────── SHIFT ATTENDANCE ─────────────────────────────── */
 
-/**
- * Check in to one exact assigned ShiftOccurrence.
- */
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/check-in",
   professionalShiftAttendanceController.checkIn
 );
 
-/**
- * Check out from one exact assigned ShiftOccurrence.
- *
- * Late checkout may record:
- *
- * - no overtime; or
- * - an overtime request.
- */
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/check-out",
   professionalShiftAttendanceController.checkOut
 );
 
-/**
- * Request manual checkout review when normal checkout cannot be completed.
- */
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/checkout-fallback",
   professionalShiftAttendanceController.requestCheckoutFallback
 );
 
 /**
- * Confirm that the professional did not work a recorded no-show occurrence
- * and submit the one absence explanation.
- *
- * This is attendance information, not a claim.
- *
- * If the professional says they actually worked, the attendance_correction
- * claim route below must be used instead.
+ * Absence explanations belong to attendance.
+ * Worked-but-recorded-absent cases use an attendance_correction claim.
  */
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/absence-explanation",
   professionalShiftAttendanceController.submitAbsenceExplanation
 );
 
-/* ─────────────────────────────── SHIFT CLAIM ROUTES ─────────────────────────────── */
+/* ─────────────────────────────── SHIFT CLAIMS ─────────────────────────────── */
 
 /**
- * Submit the professional's one original financially relevant claim for an
- * assigned occurrence.
- *
- * Supported claim types are service-controlled and include:
- *
- * - attendance_correction
- * - payment_calculation
- * - employer_fault
- *
- * affectedSettlementComponents is derived by the claim service and must not
- * be supplied as client authority.
+ * One claim case may contain multiple financial issues.
+ * Settlement-component scope is derived by the claim service.
  */
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/claims",
@@ -101,16 +73,20 @@ router.post(
 );
 
 /**
- * Submit the professional's one appeal after the employer rejects an original
- * occurrence claim.
+ * Appeal and rebuttal operate on one issue within the claim case.
  */
-router.post("/claims/:claimId/appeal", professionalShiftClaimController.submitAppeal);
+router.post(
+  "/claims/:claimId/issues/:issueId/appeal",
+  professionalShiftClaimController.submitAppeal
+);
+
+router.post(
+  "/claims/:claimId/issues/:issueId/rebuttal",
+  professionalShiftClaimController.submitRebuttal
+);
 
 /**
- * Withdraw an active occurrence claim.
- *
- * Withdrawal consumes the original claim opportunity and does not reopen the
- * occurrence challenge window.
+ * Withdrawal applies to the claim case and consumes the original claim right.
  */
 router.post("/claims/:claimId/withdraw", professionalShiftClaimController.withdrawClaim);
 

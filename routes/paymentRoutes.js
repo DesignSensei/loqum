@@ -1,18 +1,19 @@
 // routes/paymentRoutes.js
 
 const express = require("express");
+
 const router = express.Router();
 
 const paymentController = require("../controllers/paymentController");
 
-//─────────────────────────────── PAYSTACK CALLBACK ROUTES ───────────────────────────────//
+/* ─────────────────────────────── PAYSTACK CALLBACK ─────────────────────────────── */
 
 /*
- * Public browser callback used after an employer completes Paystack Checkout for shift funding.
+ * Public browser callback after employer Shift Checkout.
  *
- * The callback reference is not treated as proof of payment.
- * The controller verifies the transaction directly with Paystack before
- * escrow is credited and the shift is published.
+ * The callback reference is only an identifier. The controller verifies
+ * the transaction directly with Paystack before ShiftFundingService
+ * decides whether to fund the Shift or return the payment safely.
  */
 router.get("/paystack/shift-callback", paymentController.handleShiftCheckoutCallback);
 

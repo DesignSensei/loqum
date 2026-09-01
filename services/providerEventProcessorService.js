@@ -21,8 +21,6 @@ const PAYSTACK_REFUND_EVENT_STATUS_MAP = Object.freeze({
   "refund.processed": "processed",
 });
 
-const TERMINAL_REFUND_LINE_STATUSES = new Set(["completed", "failed", "cancelled"]);
-
 class ProviderEventProcessorService {
   static eventCategories = {
     employerWalletFunding: ["employer_wallet_funding", "wallet_funding"],
@@ -44,7 +42,7 @@ class ProviderEventProcessorService {
     ],
   };
 
-  /* ---------- Clean string ---------- */
+  /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
 
   static cleanString(value) {
     const cleanValue = String(value || "").trim();
@@ -52,19 +50,33 @@ class ProviderEventProcessorService {
     return cleanValue || null;
   }
 
-  /* ---------- Check event category ---------- */
+  static normalizeCurrentTime(value) {
+    const currentTime =
+      value instanceof Date ? new Date(value.getTime()) : new Date(value || Date.now());
+
+    if (Number.isNaN(currentTime.getTime())) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Provider event processing time is invalid.",
+        code: "INVALID_PROVIDER_EVENT_PROCESSING_TIME",
+        statusCode: 500,
+        retryable: false,
+      });
+    }
+
+    return currentTime;
+  }
+
+  /* ─────────────────────────────── EVENT CATEGORY ─────────────────────────────── */
 
   static isCategory(providerEvent, allowedCategories = []) {
     return allowedCategories.includes(providerEvent.eventCategory);
   }
 
-  /* ---------- Get normalized payload ---------- */
+  /* ─────────────────────────────── PAYLOAD ACCESS ─────────────────────────────── */
 
   static getNormalizedPayload(providerEvent) {
     return providerEvent.normalizedPayload || {};
   }
-
-  /* ---------- Get value from normalized payload or provider event ---------- */
 
   static getPayloadValue(providerEvent, key, fallbackKey = null) {
     const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
@@ -84,8 +96,6 @@ class ProviderEventProcessorService {
 
     return null;
   }
-
-  /* ---------- Get record ID ---------- */
 
   static getRecordId(value) {
     if (!value) {
@@ -110,8 +120,6 @@ class ProviderEventProcessorService {
     return null;
   }
 
-  /* ---------- Get nested value from object ---------- */
-
   static getNestedValue(source = {}, path = "") {
     if (!source || !path) {
       return null;
@@ -132,8 +140,6 @@ class ProviderEventProcessorService {
     }, source);
   }
 
-  /* ---------- Get value from normalized payload nested paths ---------- */
-
   static getNestedPayloadValue(providerEvent, paths = []) {
     const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
 
@@ -148,7 +154,50 @@ class ProviderEventProcessorService {
     return null;
   }
 
-  /* ---------- Get withdrawal transaction ID from provider event ---------- */
+  /* ─────────────────────────────── PROCESSING CLAIM ─────────────────────────────── */
+
+  static isProcessingClaimError(error) {
+    const code = ProviderEventProcessorService.cleanString(error?.code);
+
+    return Boolean(
+      code &&
+        (code.startsWith("PROVIDER_EVENT_PROCESSING_CLAIM_") ||
+          code === "INVALID_PROVIDER_EVENT_PROCESSING_CLAIM")
+    );
+  }
+
+  static async getProcessingClaimLostResult(
+    providerEventRecordId,
+    error,
+    options = {}
+  ) {
+    const providerEvent = await ProviderEventService.getProviderEventById(
+      providerEventRecordId,
+      {
+        session: options.session,
+      }
+    );
+
+    return {
+      providerEvent,
+
+      skipped: true,
+
+      processingClaimed: false,
+
+      processingClaimLost: true,
+
+      errorCode:
+        error?.code ||
+        "PROVIDER_EVENT_PROCESSING_CLAIM_LOST",
+
+      errorMessage:
+        error?.message ||
+        "Provider event processing ownership is no longer active.",
+    };
+  }
+
+  /* ─────────────────────────────── WITHDRAWAL IDENTIFIERS ─────────────────────────────── */
 
   static getWithdrawalTransactionId(providerEvent) {
     return (
@@ -157,16 +206,24 @@ class ProviderEventProcessorService {
         "withdrawalTransactionId",
         "transaction"
       ) ||
-      ProviderEventProcessorService.getPayloadValue(providerEvent, "transactionId", "transaction")
+      ProviderEventProcessorService.getPayloadValue(
+        providerEvent,
+        "transactionId",
+        "transaction"
+      )
     );
   }
 
-  /* ---------- Get Paystack transfer code from provider event ---------- */
-
   static getPaystackTransferCode(providerEvent) {
     return (
-      ProviderEventProcessorService.getPayloadValue(providerEvent, "paystackTransferCode") ||
-      ProviderEventProcessorService.getPayloadValue(providerEvent, "transferCode") ||
+      ProviderEventProcessorService.getPayloadValue(
+        providerEvent,
+        "paystackTransferCode"
+      ) ||
+      ProviderEventProcessorService.getPayloadValue(
+        providerEvent,
+        "transferCode"
+      ) ||
       ProviderEventProcessorService.getNestedPayloadValue(providerEvent, [
         "metadata.transferCode",
         "metadata.transfer_code",
@@ -174,13 +231,20 @@ class ProviderEventProcessorService {
     );
   }
 
-  /* ---------- Get Paystack transfer reference from provider event ---------- */
-
   static getPaystackTransferReference(providerEvent) {
     return (
-      ProviderEventProcessorService.getPayloadValue(providerEvent, "paystackTransferReference") ||
-      ProviderEventProcessorService.getPayloadValue(providerEvent, "transferReference") ||
-      ProviderEventProcessorService.getPayloadValue(providerEvent, "providerReference") ||
+      ProviderEventProcessorService.getPayloadValue(
+        providerEvent,
+        "paystackTransferReference"
+      ) ||
+      ProviderEventProcessorService.getPayloadValue(
+        providerEvent,
+        "transferReference"
+      ) ||
+      ProviderEventProcessorService.getPayloadValue(
+        providerEvent,
+        "providerReference"
+      ) ||
       ProviderEventProcessorService.getNestedPayloadValue(providerEvent, [
         "metadata.paystackTransferReference",
         "metadata.transferReference",
@@ -192,12 +256,18 @@ class ProviderEventProcessorService {
     );
   }
 
-  /* ---------- Get Paystack shift-funding reference ---------- */
+  /* ─────────────────────────────── SHIFT FUNDING IDENTIFIER ─────────────────────────────── */
 
   static getShiftFundingReference(providerEvent) {
     return ProviderEventProcessorService.cleanString(
-      ProviderEventProcessorService.getPayloadValue(providerEvent, "paystackReference") ||
-        ProviderEventProcessorService.getPayloadValue(providerEvent, "providerReference") ||
+      ProviderEventProcessorService.getPayloadValue(
+        providerEvent,
+        "paystackReference"
+      ) ||
+        ProviderEventProcessorService.getPayloadValue(
+          providerEvent,
+          "providerReference"
+        ) ||
         ProviderEventProcessorService.getNestedPayloadValue(providerEvent, [
           "metadata.reference",
           "metadata.paystackReference",
@@ -208,7 +278,7 @@ class ProviderEventProcessorService {
     );
   }
 
-  /* ---------- Create processor error ---------- */
+  /* ─────────────────────────────── PROCESSING ERRORS ─────────────────────────────── */
 
   static createProcessingError({
     message,
@@ -220,9 +290,7 @@ class ProviderEventProcessorService {
     const error = new Error(message);
 
     error.name = "ProviderEventProcessingError";
-
     error.code = code;
-
     error.statusCode = statusCode;
 
     if (typeof retryable === "boolean") {
@@ -236,15 +304,27 @@ class ProviderEventProcessorService {
     return error;
   }
 
-  /* ---------- Normalize Paystack refund status ---------- */
+  static isRetryableProcessingError(error) {
+    if (typeof error?.retryable === "boolean") {
+      return error.retryable;
+    }
+
+    const statusCode = Number(error?.statusCode);
+
+    if (!Number.isInteger(statusCode)) {
+      return true;
+    }
+
+    return statusCode >= 500 || [408, 425, 429].includes(statusCode);
+  }
+
+  /* ─────────────────────────────── REFUND STATUS ─────────────────────────────── */
 
   static normalizePaystackRefundStatus(value) {
     const cleanValue = ProviderEventProcessorService.cleanString(value);
 
     return cleanValue ? cleanValue.toLowerCase().replace(/-/g, "_") : null;
   }
-
-  /* ---------- Resolve Paystack refund status from event ---------- */
 
   static getPaystackRefundStatus(providerEvent) {
     const eventName = ProviderEventProcessorService.cleanString(
@@ -266,15 +346,26 @@ class ProviderEventProcessorService {
     }
 
     const rawStatus =
-      ProviderEventProcessorService.getPayloadValue(providerEvent, "refundStatus") ||
-      ProviderEventProcessorService.getPayloadValue(providerEvent, "paystackRefundStatus") ||
-      ProviderEventProcessorService.getPayloadValue(providerEvent, "paystackStatus");
+      ProviderEventProcessorService.getPayloadValue(
+        providerEvent,
+        "refundStatus"
+      ) ||
+      ProviderEventProcessorService.getPayloadValue(
+        providerEvent,
+        "paystackRefundStatus"
+      ) ||
+      ProviderEventProcessorService.getPayloadValue(
+        providerEvent,
+        "paystackStatus"
+      );
 
-    const payloadStatus = ProviderEventProcessorService.normalizePaystackRefundStatus(rawStatus);
+    const payloadStatus =
+      ProviderEventProcessorService.normalizePaystackRefundStatus(rawStatus);
 
     if (payloadStatus && payloadStatus !== expectedStatus) {
       throw ProviderEventProcessorService.createProcessingError({
-        message: "Paystack refund webhook status does not match the refund lifecycle event name.",
+        message:
+          "Paystack refund webhook status does not match the refund lifecycle event name.",
 
         code: "PAYSTACK_REFUND_EVENT_STATUS_MISMATCH",
 
@@ -284,9 +375,7 @@ class ProviderEventProcessorService {
 
         details: {
           eventName,
-
           expectedStatus,
-
           payloadStatus,
         },
       });
@@ -295,11 +384,13 @@ class ProviderEventProcessorService {
     return {
       status: expectedStatus,
 
-      rawStatus: ProviderEventProcessorService.cleanString(rawStatus) || expectedStatus,
+      rawStatus:
+        ProviderEventProcessorService.cleanString(rawStatus) ||
+        expectedStatus,
     };
   }
 
-  /* ---------- Get Paystack refund identifiers ---------- */
+  /* ─────────────────────────────── REFUND IDENTIFIERS ─────────────────────────────── */
 
   static getProviderRefundId(providerEvent) {
     return ProviderEventProcessorService.cleanString(
@@ -308,7 +399,10 @@ class ProviderEventProcessorService {
         "providerRefundId",
         "providerRefundId"
       ) ||
-        ProviderEventProcessorService.getPayloadValue(providerEvent, "paystackRefundId") ||
+        ProviderEventProcessorService.getPayloadValue(
+          providerEvent,
+          "paystackRefundId"
+        ) ||
         providerEvent.providerRefundId
     );
   }
@@ -320,7 +414,10 @@ class ProviderEventProcessorService {
         "providerRefundReference",
         "providerRefundReference"
       ) ||
-        ProviderEventProcessorService.getPayloadValue(providerEvent, "paystackRefundReference") ||
+        ProviderEventProcessorService.getPayloadValue(
+          providerEvent,
+          "paystackRefundReference"
+        ) ||
         providerEvent.providerRefundReference
     );
   }
@@ -341,7 +438,10 @@ class ProviderEventProcessorService {
 
   static getRefundTraceKey(providerEvent) {
     return ProviderEventProcessorService.cleanString(
-      ProviderEventProcessorService.getPayloadValue(providerEvent, "refundTraceKey") ||
+      ProviderEventProcessorService.getPayloadValue(
+        providerEvent,
+        "refundTraceKey"
+      ) ||
         ProviderEventProcessorService.getNestedPayloadValue(providerEvent, [
           "metadata.refundTraceKey",
           "metadata.metadata.refundTraceKey",
@@ -351,7 +451,10 @@ class ProviderEventProcessorService {
 
   static getRefundFailureReason(providerEvent) {
     return ProviderEventProcessorService.cleanString(
-      ProviderEventProcessorService.getPayloadValue(providerEvent, "refundReason") ||
+      ProviderEventProcessorService.getPayloadValue(
+        providerEvent,
+        "refundReason"
+      ) ||
         ProviderEventProcessorService.getNestedPayloadValue(providerEvent, [
           "metadata.refundReason",
           "metadata.reason",
@@ -362,13 +465,18 @@ class ProviderEventProcessorService {
 
   static getProviderEventMarker(providerEvent) {
     return ProviderEventProcessorService.cleanString(
-      providerEvent.providerEventId || providerEvent.eventKey || providerEvent._id
+      providerEvent.providerEventId ||
+        providerEvent.eventKey ||
+        providerEvent._id
     );
   }
 
-  /* ---------- Load one exact employer refund execution ---------- */
+  /* ─────────────────────────────── REFUND EXECUTION LOOKUP ─────────────────────────────── */
 
-  static async getEmployerRefundExecutionByIds({ batchId, lineId }, options = {}) {
+  static async getEmployerRefundExecutionByIds(
+    { batchId, lineId },
+    options = {}
+  ) {
     if (!batchId || !lineId) {
       return null;
     }
@@ -409,14 +517,11 @@ class ProviderEventProcessorService {
 
     return {
       batch,
-
       line,
 
       resolutionSource: "provider_event_link",
     };
   }
-
-  /* ---------- Find one unique employer refund execution ---------- */
 
   static async findUniqueEmployerRefundExecution({
     batchFilter,
@@ -426,7 +531,6 @@ class ProviderEventProcessorService {
   }) {
     const query = EmployerRefundBatch.find(batchFilter).sort({
       createdAt: -1,
-
       _id: -1,
     });
 
@@ -452,9 +556,7 @@ class ProviderEventProcessorService {
         ) {
           matches.push({
             batch,
-
             line,
-
             resolutionSource,
           });
         }
@@ -463,7 +565,8 @@ class ProviderEventProcessorService {
 
     if (matches.length > 1) {
       throw ProviderEventProcessorService.createProcessingError({
-        message: "Paystack refund event matches more than one employer refund execution line.",
+        message:
+          "Paystack refund event matches more than one employer refund execution line.",
 
         code: "AMBIGUOUS_EMPLOYER_REFUND_EXECUTION",
 
@@ -484,8 +587,6 @@ class ProviderEventProcessorService {
     return matches[0] || null;
   }
 
-  /* ---------- Resolve exact employer refund batch/line ---------- */
-
   static async resolveEmployerRefundExecution(providerEvent, options = {}) {
     const linkedBatchId = ProviderEventProcessorService.getRecordId(
       providerEvent.employerRefundBatch
@@ -498,7 +599,8 @@ class ProviderEventProcessorService {
     if (linkedBatchId || linkedLineId) {
       if (!linkedBatchId || !linkedLineId) {
         throw ProviderEventProcessorService.createProcessingError({
-          message: "Provider refund event contains an incomplete employer refund execution link.",
+          message:
+            "Provider refund event contains an incomplete employer refund execution link.",
 
           code: "INCOMPLETE_PROVIDER_REFUND_EXECUTION_LINK",
 
@@ -511,24 +613,28 @@ class ProviderEventProcessorService {
       return ProviderEventProcessorService.getEmployerRefundExecutionByIds(
         {
           batchId: linkedBatchId,
-
           lineId: linkedLineId,
         },
         options
       );
     }
 
-    const providerRefundId = ProviderEventProcessorService.getProviderRefundId(providerEvent);
+    const providerRefundId =
+      ProviderEventProcessorService.getProviderRefundId(providerEvent);
 
     const providerRefundReference =
       ProviderEventProcessorService.getProviderRefundReference(providerEvent);
 
-    const refundTraceKey = ProviderEventProcessorService.getRefundTraceKey(providerEvent);
+    const refundTraceKey =
+      ProviderEventProcessorService.getRefundTraceKey(providerEvent);
 
     const originalTransactionReference =
-      ProviderEventProcessorService.getRefundOriginalTransactionReference(providerEvent);
+      ProviderEventProcessorService.getRefundOriginalTransactionReference(
+        providerEvent
+      );
 
-    const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
+    const payload =
+      ProviderEventProcessorService.getNormalizedPayload(providerEvent);
 
     const amount =
       payload.amount !== null && payload.amount !== undefined
@@ -541,7 +647,8 @@ class ProviderEventProcessorService {
       payload.currency || providerEvent.currency
     );
 
-    const businessId = ProviderEventProcessorService.getRecordId(providerEvent.employer);
+    const businessId =
+      ProviderEventProcessorService.getRecordId(providerEvent.employer);
 
     const withScope = (filter) => ({
       ...filter,
@@ -560,19 +667,21 @@ class ProviderEventProcessorService {
     });
 
     if (providerRefundId) {
-      const byRefundId = await ProviderEventProcessorService.findUniqueEmployerRefundExecution({
-        batchFilter: withScope({
-          "lines.paystackRefund.refundId": providerRefundId,
-        }),
+      const byRefundId =
+        await ProviderEventProcessorService.findUniqueEmployerRefundExecution({
+          batchFilter: withScope({
+            "lines.paystackRefund.refundId": providerRefundId,
+          }),
 
-        lineMatches: ({ line }) =>
-          ProviderEventProcessorService.cleanString(line.paystackRefund?.refundId) ===
-          providerRefundId,
+          lineMatches: ({ line }) =>
+            ProviderEventProcessorService.cleanString(
+              line.paystackRefund?.refundId
+            ) === providerRefundId,
 
-        resolutionSource: "provider_refund_id",
+          resolutionSource: "provider_refund_id",
 
-        options,
-      });
+          options,
+        });
 
       if (byRefundId) {
         return byRefundId;
@@ -587,8 +696,9 @@ class ProviderEventProcessorService {
           }),
 
           lineMatches: ({ line }) =>
-            ProviderEventProcessorService.cleanString(line.paystackRefund?.reference) ===
-            providerRefundReference,
+            ProviderEventProcessorService.cleanString(
+              line.paystackRefund?.reference
+            ) === providerRefundReference,
 
           resolutionSource: "provider_refund_reference",
 
@@ -601,27 +711,31 @@ class ProviderEventProcessorService {
     }
 
     if (refundTraceKey) {
-      const byTraceKey = await ProviderEventProcessorService.findUniqueEmployerRefundExecution({
-        batchFilter: withScope({
-          $or: [
-            {
-              "lines.paystackRefund.idempotencyKey": refundTraceKey,
-            },
-            {
-              "lines.idempotencyKey": refundTraceKey,
-            },
-          ],
-        }),
+      const byTraceKey =
+        await ProviderEventProcessorService.findUniqueEmployerRefundExecution({
+          batchFilter: withScope({
+            $or: [
+              {
+                "lines.paystackRefund.idempotencyKey": refundTraceKey,
+              },
+              {
+                "lines.idempotencyKey": refundTraceKey,
+              },
+            ],
+          }),
 
-        lineMatches: ({ line }) =>
-          ProviderEventProcessorService.cleanString(line.paystackRefund?.idempotencyKey) ===
-            refundTraceKey ||
-          ProviderEventProcessorService.cleanString(line.idempotencyKey) === refundTraceKey,
+          lineMatches: ({ line }) =>
+            ProviderEventProcessorService.cleanString(
+              line.paystackRefund?.idempotencyKey
+            ) === refundTraceKey ||
+            ProviderEventProcessorService.cleanString(
+              line.idempotencyKey
+            ) === refundTraceKey,
 
-        resolutionSource: "refund_trace_key",
+          resolutionSource: "refund_trace_key",
 
-        options,
-      });
+          options,
+        });
 
       if (byTraceKey) {
         return byTraceKey;
@@ -632,18 +746,25 @@ class ProviderEventProcessorService {
       const byOriginalReference =
         await ProviderEventProcessorService.findUniqueEmployerRefundExecution({
           batchFilter: withScope({
-            "lines.originalPaystackReference": originalTransactionReference,
+            "lines.originalPaystackReference":
+              originalTransactionReference,
           }),
 
           lineMatches: ({ line }) => {
             if (
-              ProviderEventProcessorService.cleanString(line.originalPaystackReference) !==
-              originalTransactionReference
+              ProviderEventProcessorService.cleanString(
+                line.originalPaystackReference
+              ) !== originalTransactionReference
             ) {
               return false;
             }
 
-            if (TERMINAL_REFUND_LINE_STATUSES.has(line.status)) {
+            /*
+             * Cancelled lines never crossed the provider boundary.
+             * Completed/failed lines remain discoverable so late
+             * provider events can reconcile safely.
+             */
+            if (line.status === "cancelled") {
               return false;
             }
 
@@ -669,30 +790,35 @@ class ProviderEventProcessorService {
     }
 
     throw ProviderEventProcessorService.createProcessingError({
-      message: "Employer refund execution line was not found for Paystack refund event.",
+      message:
+        "Employer refund execution line was not found for Paystack refund event.",
 
       code: "EMPLOYER_REFUND_EXECUTION_NOT_FOUND",
 
       statusCode: 404,
 
       /*
-       * The provider webhook may race persistence of the
-       * initial refund response. A later retry can therefore
-       * legitimately resolve this event.
+       * Provider delivery may race persistence of the
+       * initial refund response, so retry can resolve it.
        */
       retryable: true,
     });
   }
 
-  /* ---------- Validate refund event against exact execution ---------- */
+  /* ─────────────────────────────── REFUND EXECUTION VALIDATION ─────────────────────────────── */
 
-  static assertEmployerRefundEventMatchesExecution({ providerEvent, batch, line }) {
+  static assertEmployerRefundEventMatchesExecution({
+    providerEvent,
+    batch,
+    line,
+  }) {
     if (
       line.fundingMethod !== "paystack_checkout" ||
       line.initialExecutionMethod !== "paystack_refund"
     ) {
       throw ProviderEventProcessorService.createProcessingError({
-        message: "Paystack refund webhook can only be linked to a Paystack Checkout refund line.",
+        message:
+          "Paystack refund webhook can only be linked to a Paystack Checkout refund line.",
 
         code: "PAYSTACK_REFUND_EXECUTION_METHOD_MISMATCH",
 
@@ -702,7 +828,8 @@ class ProviderEventProcessorService {
       });
     }
 
-    const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
+    const payload =
+      ProviderEventProcessorService.getNormalizedPayload(providerEvent);
 
     const amount =
       payload.amount !== null && payload.amount !== undefined
@@ -711,9 +838,14 @@ class ProviderEventProcessorService {
           ? Number(providerEvent.amount)
           : null;
 
-    if (amount !== null && Number.isSafeInteger(amount) && amount !== Number(line.totalAmount)) {
+    if (
+      amount !== null &&
+      Number.isSafeInteger(amount) &&
+      amount !== Number(line.totalAmount)
+    ) {
       throw ProviderEventProcessorService.createProcessingError({
-        message: "Paystack refund amount does not match the resolved refund line.",
+        message:
+          "Paystack refund amount does not match the resolved refund line.",
 
         code: "PAYSTACK_REFUND_AMOUNT_MISMATCH",
 
@@ -727,9 +859,14 @@ class ProviderEventProcessorService {
       payload.currency || providerEvent.currency
     );
 
-    if (currency && currency.toUpperCase() !== String(batch.currency).toUpperCase()) {
+    if (
+      currency &&
+      currency.toUpperCase() !==
+        String(batch.currency).toUpperCase()
+    ) {
       throw ProviderEventProcessorService.createProcessingError({
-        message: "Paystack refund currency does not match the resolved refund batch.",
+        message:
+          "Paystack refund currency does not match the resolved refund batch.",
 
         code: "PAYSTACK_REFUND_CURRENCY_MISMATCH",
 
@@ -739,13 +876,22 @@ class ProviderEventProcessorService {
       });
     }
 
-    const providerRefundId = ProviderEventProcessorService.getProviderRefundId(providerEvent);
+    const providerRefundId =
+      ProviderEventProcessorService.getProviderRefundId(providerEvent);
 
-    const lineRefundId = ProviderEventProcessorService.cleanString(line.paystackRefund?.refundId);
+    const lineRefundId =
+      ProviderEventProcessorService.cleanString(
+        line.paystackRefund?.refundId
+      );
 
-    if (providerRefundId && lineRefundId && providerRefundId !== lineRefundId) {
+    if (
+      providerRefundId &&
+      lineRefundId &&
+      providerRefundId !== lineRefundId
+    ) {
       throw ProviderEventProcessorService.createProcessingError({
-        message: "Paystack refund ID conflicts with the resolved refund line.",
+        message:
+          "Paystack refund ID conflicts with the resolved refund line.",
 
         code: "PAYSTACK_REFUND_ID_MISMATCH",
 
@@ -758,9 +904,10 @@ class ProviderEventProcessorService {
     const providerRefundReference =
       ProviderEventProcessorService.getProviderRefundReference(providerEvent);
 
-    const lineRefundReference = ProviderEventProcessorService.cleanString(
-      line.paystackRefund?.reference
-    );
+    const lineRefundReference =
+      ProviderEventProcessorService.cleanString(
+        line.paystackRefund?.reference
+      );
 
     if (
       providerRefundReference &&
@@ -768,7 +915,8 @@ class ProviderEventProcessorService {
       providerRefundReference !== lineRefundReference
     ) {
       throw ProviderEventProcessorService.createProcessingError({
-        message: "Paystack refund reference conflicts with the resolved refund line.",
+        message:
+          "Paystack refund reference conflicts with the resolved refund line.",
 
         code: "PAYSTACK_REFUND_REFERENCE_MISMATCH",
 
@@ -779,15 +927,19 @@ class ProviderEventProcessorService {
     }
 
     const originalTransactionReference =
-      ProviderEventProcessorService.getRefundOriginalTransactionReference(providerEvent);
+      ProviderEventProcessorService.getRefundOriginalTransactionReference(
+        providerEvent
+      );
 
     if (
       originalTransactionReference &&
       line.originalPaystackReference &&
-      originalTransactionReference !== line.originalPaystackReference
+      originalTransactionReference !==
+        line.originalPaystackReference
     ) {
       throw ProviderEventProcessorService.createProcessingError({
-        message: "Paystack original transaction reference does not match the resolved refund line.",
+        message:
+          "Paystack original transaction reference does not match the resolved refund line.",
 
         code: "PAYSTACK_REFUND_ORIGINAL_REFERENCE_MISMATCH",
 
@@ -797,9 +949,14 @@ class ProviderEventProcessorService {
       });
     }
 
-    if (providerEvent.employer && String(providerEvent.employer) !== String(batch.business)) {
+    if (
+      providerEvent.employer &&
+      String(providerEvent.employer) !==
+        String(batch.business)
+    ) {
       throw ProviderEventProcessorService.createProcessingError({
-        message: "Provider refund employer does not match the resolved refund batch.",
+        message:
+          "Provider refund employer does not match the resolved refund batch.",
 
         code: "PAYSTACK_REFUND_EMPLOYER_MISMATCH",
 
@@ -812,47 +969,38 @@ class ProviderEventProcessorService {
     return true;
   }
 
-  /* ---------- Get unique Shift from refund line ---------- */
-
   static getEmployerRefundLineShiftId(line) {
     const shiftIds = [
       ...new Set(
         (line.allocations || [])
-          .map((allocation) => ProviderEventProcessorService.getRecordId(allocation.shift))
+          .map((allocation) =>
+            ProviderEventProcessorService.getRecordId(allocation.shift)
+          )
           .filter(Boolean)
           .map(String)
       ),
     ];
 
-    return shiftIds.length === 1 ? shiftIds[0] : null;
+    return shiftIds.length === 1
+      ? shiftIds[0]
+      : null;
   }
 
-  /* ---------- Check if processing error is retryable ---------- */
+  /* ─────────────────────────────── WITHDRAWAL LOOKUP ─────────────────────────────── */
 
-  static isRetryableProcessingError(error) {
-    if (typeof error?.retryable === "boolean") {
-      return error.retryable;
-    }
-
-    const statusCode = Number(error?.statusCode);
-
-    if (!Number.isInteger(statusCode)) {
-      return true;
-    }
-
-    return statusCode >= 500 || [408, 425, 429].includes(statusCode);
-  }
-
-  /* ---------- Find withdrawal transaction from provider event ---------- */
-
-  static async findWithdrawalTransactionForProviderEvent(providerEvent, options = {}) {
+  static async findWithdrawalTransactionForProviderEvent(
+    providerEvent,
+    options = {}
+  ) {
     const withdrawalTransactionId =
       ProviderEventProcessorService.getWithdrawalTransactionId(providerEvent);
 
-    if (withdrawalTransactionId && mongoose.Types.ObjectId.isValid(withdrawalTransactionId)) {
+    if (
+      withdrawalTransactionId &&
+      mongoose.Types.ObjectId.isValid(withdrawalTransactionId)
+    ) {
       const query = Transaction.findOne({
         _id: withdrawalTransactionId,
-
         type: "withdrawal",
       });
 
@@ -871,7 +1019,9 @@ class ProviderEventProcessorService {
       ProviderEventProcessorService.getPaystackTransferCode(providerEvent);
 
     const paystackTransferReference =
-      ProviderEventProcessorService.getPaystackTransferReference(providerEvent);
+      ProviderEventProcessorService.getPaystackTransferReference(
+        providerEvent
+      );
 
     const orFilters = [];
 
@@ -887,25 +1037,29 @@ class ProviderEventProcessorService {
 
     if (paystackTransferReference) {
       orFilters.push({
-        "metadata.paystackTransferReference": paystackTransferReference,
+        "metadata.paystackTransferReference":
+          paystackTransferReference,
       });
 
       orFilters.push({
-        paystackReference: paystackTransferReference,
+        paystackReference:
+          paystackTransferReference,
       });
 
       orFilters.push({
-        reference: paystackTransferReference,
+        reference:
+          paystackTransferReference,
       });
     }
 
     if (!orFilters.length) {
-      throw new Error("Withdrawal transaction lookup value is required.");
+      throw new Error(
+        "Withdrawal transaction lookup value is required."
+      );
     }
 
     const query = Transaction.findOne({
       type: "withdrawal",
-
       $or: orFilters,
     });
 
@@ -916,56 +1070,89 @@ class ProviderEventProcessorService {
     const transaction = await query;
 
     if (!transaction) {
-      throw new Error("Withdrawal transaction not found for provider event.");
+      throw new Error(
+        "Withdrawal transaction not found for provider event."
+      );
     }
 
     return transaction;
   }
 
-  /* ---------- Get withdrawal owner context ---------- */
+  static getWithdrawalOwnerContext({
+    withdrawalTransaction,
+    providerEvent,
+  }) {
+    const metadata =
+      withdrawalTransaction.metadata || {};
 
-  static getWithdrawalOwnerContext({ withdrawalTransaction, providerEvent }) {
-    const metadata = withdrawalTransaction.metadata || {};
-
-    const employerProfileId = metadata.employerProfileId || providerEvent.employer || null;
+    const employerProfileId =
+      metadata.employerProfileId ||
+      providerEvent.employer ||
+      null;
 
     const professionalProfileId =
-      metadata.professionalProfileId || providerEvent.professional || null;
+      metadata.professionalProfileId ||
+      providerEvent.professional ||
+      null;
 
-    let ownerType = metadata.ownerType || null;
+    let ownerType =
+      metadata.ownerType || null;
 
-    if (!ownerType && professionalProfileId) {
+    if (
+      !ownerType &&
+      professionalProfileId
+    ) {
       ownerType = "professional";
     }
 
-    if (!ownerType && employerProfileId) {
+    if (
+      !ownerType &&
+      employerProfileId
+    ) {
       ownerType = "employer";
     }
 
     return {
       ownerType,
 
-      employer: ownerType === "employer" ? employerProfileId : null,
+      employer:
+        ownerType === "employer"
+          ? employerProfileId
+          : null,
 
-      professional: ownerType === "professional" ? professionalProfileId : null,
+      professional:
+        ownerType === "professional"
+          ? professionalProfileId
+          : null,
 
       employerProfileId,
-
       professionalProfileId,
     };
   }
 
-  /* ---------- Process recorded provider event ---------- */
+  /* ─────────────────────────────── PROCESS PROVIDER EVENT ─────────────────────────────── */
 
-  static async processProviderEvent({ providerEventRecordId }, options = {}) {
-    const providerEvent = await ProviderEventService.getProviderEventById(providerEventRecordId, {
-      session: options.session,
-    });
+  static async processProviderEvent(
+    {
+      providerEventRecordId,
+      currentTime = new Date(),
+    },
+    options = {}
+  ) {
+    const normalizedCurrentTime =
+      ProviderEventProcessorService.normalizeCurrentTime(currentTime);
+
+    let providerEvent =
+      await ProviderEventService.getProviderEventById(
+        providerEventRecordId,
+        {
+          session: options.session,
+        }
+      );
 
     if (providerEvent.status === "processed") {
       return {
         providerEvent,
-
         alreadyProcessed: true,
       };
     }
@@ -973,53 +1160,205 @@ class ProviderEventProcessorService {
     if (providerEvent.status === "ignored") {
       return {
         providerEvent,
-
         alreadyIgnored: true,
       };
     }
 
+    /*
+     * An unverified event never enters processing and
+     * therefore has no processing claim to present.
+     */
     if (!providerEvent.isVerified) {
-      const failedResult = await ProviderEventService.markFailed(
-        {
-          providerEventRecordId: providerEvent._id,
+      const failedResult =
+        await ProviderEventService.markFailed(
+          {
+            providerEventRecordId:
+              providerEvent._id,
 
-          failureReason: "Unverified provider event cannot be processed.",
+            failureReason:
+              "Unverified provider event cannot be processed.",
+
+            retryable: false,
+
+            metadata: {
+              processor:
+                "ProviderEventProcessorService",
+            },
+
+            currentTime:
+              normalizedCurrentTime,
+          },
+          {
+            session: options.session,
+          }
+        );
+
+      return {
+        providerEvent:
+          failedResult.providerEvent,
+
+        failed: true,
+
+        retryable: false,
+
+        errorMessage:
+          "Unverified provider event cannot be processed.",
+      };
+    }
+
+    /*
+     * Failed events may run again only when a retry
+     * was actually scheduled and that deadline is due.
+     */
+    if (providerEvent.status === "failed") {
+      if (!providerEvent.nextRetryAt) {
+        return {
+          providerEvent,
+
+          failed: true,
 
           retryable: false,
 
-          metadata: {
-            processor: "ProviderEventProcessorService",
+          retryUnavailable: true,
+
+          errorMessage:
+            providerEvent.failureReason ||
+            "Provider event failed and is not scheduled for retry.",
+        };
+      }
+
+      const nextRetryAt =
+        new Date(providerEvent.nextRetryAt);
+
+      if (Number.isNaN(nextRetryAt.getTime())) {
+        throw ProviderEventProcessorService.createProcessingError({
+          message:
+            "Provider event contains an invalid retry deadline.",
+
+          code:
+            "INVALID_PROVIDER_EVENT_RETRY_DEADLINE",
+
+          statusCode: 500,
+
+          retryable: false,
+
+          details: {
+            providerEventRecordId:
+              String(providerEvent._id),
           },
+        });
+      }
+
+      if (
+        nextRetryAt >
+        normalizedCurrentTime
+      ) {
+        return {
+          providerEvent,
+
+          failed: true,
+
+          retryable: true,
+
+          retryNotDue: true,
+
+          nextRetryAt,
+
+          errorMessage:
+            providerEvent.failureReason ||
+            "Provider event retry is not due yet.",
+        };
+      }
+    }
+
+    /*
+     * markProcessing() is the atomic ownership gate.
+     *
+     * The successful claim also creates the unique
+     * processingClaimId for this exact attempt.
+     */
+    const processingResult =
+      await ProviderEventService.markProcessing(
+        {
+          providerEventRecordId:
+            providerEvent._id,
+
+          currentTime:
+            normalizedCurrentTime,
         },
         {
           session: options.session,
         }
       );
 
+    if (
+      processingResult.alreadyProcessed ===
+      true
+    ) {
       return {
-        providerEvent: failedResult.providerEvent,
+        providerEvent:
+          processingResult.providerEvent,
 
-        failed: true,
-
-        errorMessage: "Unverified provider event cannot be processed.",
+        alreadyProcessed: true,
       };
     }
 
-    await ProviderEventService.markProcessing(
-      {
-        providerEventRecordId: providerEvent._id,
-      },
-      {
-        session: options.session,
-      }
-    );
+    if (
+      processingResult.claimedForProcessing !==
+      true
+    ) {
+      return {
+        providerEvent:
+          processingResult.providerEvent,
+
+        skipped: true,
+
+        alreadyProcessing:
+          processingResult.alreadyProcessing ===
+          true,
+
+        processingClaimed: false,
+      };
+    }
+
+    providerEvent =
+      processingResult.providerEvent;
+
+    const processingClaimId =
+      ProviderEventProcessorService.cleanString(
+        processingResult.processingClaimId ||
+          providerEvent.processingClaimId
+      );
+
+    /*
+     * A successful processing claim must always carry
+     * its ownership token. Missing it is an internal
+     * consistency error, not a business retry.
+     */
+    if (!processingClaimId) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message:
+          "Claimed ProviderEvent contains no processing claim ID.",
+
+        code:
+          "PROVIDER_EVENT_PROCESSING_CLAIM_MISSING",
+
+        statusCode: 500,
+
+        retryable: false,
+
+        details: {
+          providerEventRecordId:
+            String(providerEvent._id),
+        },
+      });
+    }
 
     try {
       /*
-       * Refund provider states such as failed and needs_attention
-       * are valid lifecycle events. They are synchronized into the
-       * refund batch and do not themselves mean ProviderEvent
-       * processing failed.
+       * Refund provider states such as failed and
+       * needs_attention are valid refund lifecycle
+       * events, not ProviderEvent processing failures.
        */
       if (
         ProviderEventProcessorService.isCategory(
@@ -1027,12 +1366,17 @@ class ProviderEventProcessorService {
           ProviderEventProcessorService.eventCategories.employerRefund
         )
       ) {
-        return ProviderEventProcessorService.processEmployerRefundEvent(providerEvent, options);
+        return ProviderEventProcessorService.processEmployerRefundEvent(
+          providerEvent,
+          processingClaimId,
+          options
+        );
       }
 
       /*
-       * Shift Checkout is checked before employer wallet funding
-       * because both payment paths arrive as charge.success.
+       * Shift Checkout is checked before employer
+       * wallet funding because both can arrive as
+       * charge.success.
        */
       if (
         ProviderEventProcessorService.isCategory(
@@ -1042,6 +1386,7 @@ class ProviderEventProcessorService {
       ) {
         return ProviderEventProcessorService.processShiftCheckoutPaymentEvent(
           providerEvent,
+          processingClaimId,
           options
         );
       }
@@ -1054,6 +1399,7 @@ class ProviderEventProcessorService {
       ) {
         return ProviderEventProcessorService.processEmployerWalletFundingEvent(
           providerEvent,
+          processingClaimId,
           options
         );
       }
@@ -1064,7 +1410,11 @@ class ProviderEventProcessorService {
           ProviderEventProcessorService.eventCategories.withdrawalPayout
         )
       ) {
-        return ProviderEventProcessorService.processWithdrawalPayoutEvent(providerEvent, options);
+        return ProviderEventProcessorService.processWithdrawalPayoutEvent(
+          providerEvent,
+          processingClaimId,
+          options
+        );
       }
 
       if (
@@ -1073,99 +1423,219 @@ class ProviderEventProcessorService {
           ProviderEventProcessorService.eventCategories.withdrawalReversal
         )
       ) {
-        return ProviderEventProcessorService.processWithdrawalReversalEvent(providerEvent, options);
+        return ProviderEventProcessorService.processWithdrawalReversalEvent(
+          providerEvent,
+          processingClaimId,
+          options
+        );
       }
 
-      const ignoredResult = await ProviderEventService.markIgnored(
-        {
-          providerEventRecordId: providerEvent._id,
+      const ignoredResult =
+        await ProviderEventService.markIgnored(
+          {
+            providerEventRecordId:
+              providerEvent._id,
 
-          ignoredReason: "Provider event category is not handled by this processor.",
+            processingClaimId,
 
-          metadata: {
-            processor: "ProviderEventProcessorService",
+            ignoredReason:
+              "Provider event category is not handled by this processor.",
+
+            metadata: {
+              processor:
+                "ProviderEventProcessorService",
+            },
+
+            currentTime:
+              normalizedCurrentTime,
           },
-        },
-        {
-          session: options.session,
-        }
-      );
+          {
+            session: options.session,
+          }
+        );
 
       return {
-        providerEvent: ignoredResult.providerEvent,
+        providerEvent:
+          ignoredResult.providerEvent,
 
         ignored: true,
       };
     } catch (error) {
-      const retryable = ProviderEventProcessorService.isRetryableProcessingError(error);
+      /*
+       * A claim conflict means this worker no longer
+       * owns the ProviderEvent.
+       *
+       * Do not turn that into another failed event:
+       * Worker B may already own or have completed it.
+       */
+      if (
+        ProviderEventProcessorService.isProcessingClaimError(
+          error
+        )
+      ) {
+        return ProviderEventProcessorService.getProcessingClaimLostResult(
+          providerEvent._id,
+          error,
+          options
+        );
+      }
+
+      const retryable =
+        ProviderEventProcessorService.isRetryableProcessingError(
+          error
+        );
 
       const failedAt = new Date();
 
       const nextRetryAt = retryable
-        ? new Date(failedAt.getTime() + PROVIDER_EVENT_RETRY_DELAY_MS)
+        ? new Date(
+            failedAt.getTime() +
+              PROVIDER_EVENT_RETRY_DELAY_MS
+          )
         : null;
 
-      const failedResult = await ProviderEventService.markFailed(
-        {
-          providerEventRecordId: providerEvent._id,
+      try {
+        const failedResult =
+          await ProviderEventService.markFailed(
+            {
+              providerEventRecordId:
+                providerEvent._id,
 
-          failureReason: error.message || "Provider event processing failed.",
+              processingClaimId,
+
+              failureReason:
+                error.message ||
+                "Provider event processing failed.",
+
+              retryable,
+
+              nextRetryAt,
+
+              metadata: {
+                processor:
+                  "ProviderEventProcessorService",
+
+                errorCode:
+                  error.code || null,
+
+                statusCode:
+                  Number.isInteger(
+                    Number(error.statusCode)
+                  )
+                    ? Number(error.statusCode)
+                    : null,
+
+                errorDetails:
+                  error.details || null,
+              },
+
+              currentTime:
+                failedAt,
+            },
+            {
+              session:
+                options.session,
+            }
+          );
+
+        return {
+          providerEvent:
+            failedResult.providerEvent,
+
+          failed: true,
 
           retryable,
 
           nextRetryAt,
 
-          metadata: {
-            processor: "ProviderEventProcessorService",
+          errorCode:
+            error.code || null,
 
-            errorCode: error.code || null,
-
-            statusCode: Number.isInteger(Number(error.statusCode))
-              ? Number(error.statusCode)
-              : null,
-
-            errorDetails: error.details || null,
-          },
-        },
-        {
-          session: options.session,
+          errorMessage:
+            error.message ||
+            "Provider event processing failed.",
+        };
+      } catch (markFailedError) {
+        /*
+         * Ownership may have expired between the
+         * business error and markFailed().
+         *
+         * In that case the stale worker must stop
+         * without modifying the new owner's state.
+         */
+        if (
+          ProviderEventProcessorService.isProcessingClaimError(
+            markFailedError
+          )
+        ) {
+          return ProviderEventProcessorService.getProcessingClaimLostResult(
+            providerEvent._id,
+            markFailedError,
+            options
+          );
         }
-      );
 
-      return {
-        providerEvent: failedResult.providerEvent,
-
-        failed: true,
-
-        retryable,
-
-        nextRetryAt,
-
-        errorCode: error.code || null,
-
-        errorMessage: error.message || "Provider event processing failed.",
-      };
+        throw markFailedError;
+      }
     }
   }
 
-  /* ---------- Process employer Paystack refund event ---------- */
+  /* ─────────────────────────────── EMPLOYER PAYSTACK REFUND ─────────────────────────────── */
 
-  static async processEmployerRefundEvent(providerEvent, options = {}) {
-    const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
+  static async processEmployerRefundEvent(
+    providerEvent,
+    processingClaimId,
+    options = {}
+  ) {
+    const payload =
+      ProviderEventProcessorService.getNormalizedPayload(providerEvent);
 
-    const { status: refundStatus, rawStatus } =
+    const { status: refundStatus } =
       ProviderEventProcessorService.getPaystackRefundStatus(providerEvent);
 
-    const providerRefundId = ProviderEventProcessorService.getProviderRefundId(providerEvent);
+    const providerRefundId =
+      ProviderEventProcessorService.getProviderRefundId(providerEvent);
 
     const providerRefundReference =
       ProviderEventProcessorService.getProviderRefundReference(providerEvent);
 
-    if (!providerRefundId && !providerRefundReference) {
-      throw ProviderEventProcessorService.createProcessingError({
-        message: "Paystack refund event requires a refund ID or refund reference.",
+    const refundTraceKey =
+      ProviderEventProcessorService.getRefundTraceKey(providerEvent);
 
-        code: "PAYSTACK_REFUND_IDENTIFIER_REQUIRED",
+    const originalTransactionReference =
+      ProviderEventProcessorService.getRefundOriginalTransactionReference(
+        providerEvent
+      );
+
+    const linkedBatchId =
+      ProviderEventProcessorService.getRecordId(
+        providerEvent.employerRefundBatch
+      );
+
+    const linkedLineId =
+      ProviderEventProcessorService.getRecordId(
+        providerEvent.employerRefundBatchLineId
+      );
+
+    /*
+     * Paystack refund webhooks can omit refund resource
+     * identifiers. Original transaction reference and
+     * Loqum trace key remain valid identities.
+     */
+    if (
+      !linkedBatchId &&
+      !linkedLineId &&
+      !providerRefundId &&
+      !providerRefundReference &&
+      !refundTraceKey &&
+      !originalTransactionReference
+    ) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message:
+          "Paystack refund event contains no usable refund reconciliation identity.",
+
+        code:
+          "PAYSTACK_REFUND_RECONCILIATION_IDENTITY_REQUIRED",
 
         statusCode: 422,
 
@@ -1173,12 +1643,13 @@ class ProviderEventProcessorService {
       });
     }
 
-    const execution = await ProviderEventProcessorService.resolveEmployerRefundExecution(
-      providerEvent,
-      {
-        session: options.session,
-      }
-    );
+    const execution =
+      await ProviderEventProcessorService.resolveEmployerRefundExecution(
+        providerEvent,
+        {
+          session: options.session,
+        }
+      );
 
     ProviderEventProcessorService.assertEmployerRefundEventMatchesExecution({
       providerEvent,
@@ -1188,429 +1659,659 @@ class ProviderEventProcessorService {
       line: execution.line,
     });
 
-    const batchId = execution.batch._id;
+    const batchId =
+      execution.batch._id;
 
-    const lineId = execution.line._id;
+    const lineId =
+      execution.line._id;
 
-    const employerId = execution.batch.business;
+    const employerId =
+      execution.batch.business;
 
-    const shiftId = ProviderEventProcessorService.getEmployerRefundLineShiftId(execution.line);
+    const shiftId =
+      ProviderEventProcessorService.getEmployerRefundLineShiftId(
+        execution.line
+      );
 
-    const providerEventMarker = ProviderEventProcessorService.getProviderEventMarker(providerEvent);
+    const providerEventMarker =
+      ProviderEventProcessorService.getProviderEventMarker(
+        providerEvent
+      );
 
-    const originalTransactionReference =
-      ProviderEventProcessorService.getRefundOriginalTransactionReference(providerEvent) ||
+    const resolvedOriginalTransactionReference =
+      originalTransactionReference ||
       execution.line.originalPaystackReference;
-
-    const refundTraceKey = ProviderEventProcessorService.getRefundTraceKey(providerEvent);
 
     const failureReason =
       refundStatus === "failed"
-        ? ProviderEventProcessorService.getRefundFailureReason(providerEvent) ||
+        ? ProviderEventProcessorService.getRefundFailureReason(
+            providerEvent
+          ) ||
           "Paystack reported that the employer refund failed."
         : null;
 
     /*
-     * Persist the exact execution link before changing batch state.
-     * A later retry can then target the same line without rediscovery.
+     * Persist the exact execution link before mutating
+     * provider refund state so retries target the same
+     * line.
+     *
+     * processingClaimId is supplied so this mutation
+     * can also be fenced to the active worker.
      */
     await ProviderEventService.linkEmployerRefundExecution(
       {
-        providerEventRecordId: providerEvent._id,
+        providerEventRecordId:
+          providerEvent._id,
 
-        employerRefundBatch: batchId,
+        processingClaimId,
 
-        employerRefundBatchLineId: lineId,
+        employerRefundBatch:
+          batchId,
+
+        employerRefundBatchLineId:
+          lineId,
 
         providerRefundId,
 
         providerRefundReference,
 
-        employer: employerId,
+        employer:
+          employerId,
 
-        shift: shiftId,
+        shift:
+          shiftId,
       },
       {
-        session: options.session,
+        session:
+          options.session,
       }
     );
 
     /*
-     * EmployerRefundBatchService owns the provider-state transition
-     * and every financial consequence.
+     * EmployerRefundBatchService owns provider state
+     * and every resulting financial consequence.
      *
-     * This processor does not debit escrow or complete
-     * EmployerRefund obligations itself.
+     * Its operations remain independently idempotent,
+     * which protects a retry if a worker dies after
+     * the downstream operation but before ProviderEvent
+     * completion is recorded.
      */
-    const syncResult = await EmployerRefundBatchService.syncPaystackRefundStatus({
-      batchId,
+    const syncResult =
+      await EmployerRefundBatchService.syncPaystackRefundStatus({
+        batchId,
 
-      lineId,
+        lineId,
 
-      status: refundStatus,
-
-      refundId: providerRefundId,
-
-      reference: providerRefundReference,
-
-      providerEventId: providerEventMarker,
-
-      failureReason,
-
-      rawStatus,
-
-      currentTime: new Date(),
-    });
-
-    const processedResult = await ProviderEventService.markProcessed(
-      {
-        providerEventRecordId: providerEvent._id,
-
-        employer: employerId,
-
-        shift: shiftId,
-
-        providerRefundId,
-
-        providerRefundReference,
-
-        employerRefundBatch: batchId,
-
-        employerRefundBatchLineId: lineId,
-
-        normalizedPayload: {
-          ...payload,
-
+        status:
           refundStatus,
 
-          paystackRefundStatus: refundStatus,
+        refundId:
+          providerRefundId,
+
+        reference:
+          providerRefundReference,
+
+        providerEventId:
+          providerEventMarker,
+
+        failureReason,
+
+        currentTime:
+          new Date(),
+      });
+
+    const processedResult =
+      await ProviderEventService.markProcessed(
+        {
+          providerEventRecordId:
+            providerEvent._id,
+
+          processingClaimId,
+
+          employer:
+            employerId,
+
+          shift:
+            shiftId,
 
           providerRefundId,
 
           providerRefundReference,
 
-          originalTransactionReference,
+          employerRefundBatch:
+            batchId,
 
-          refundTraceKey,
+          employerRefundBatchLineId:
+            lineId,
 
-          employerProfileId: employerId ? String(employerId) : null,
+          normalizedPayload: {
+            ...payload,
 
-          shiftId: shiftId ? String(shiftId) : null,
+            refundStatus,
 
-          employerRefundBatchId: String(batchId),
+            paystackRefundStatus:
+              refundStatus,
 
-          employerRefundBatchLineId: String(lineId),
+            providerRefundId,
+
+            providerRefundReference,
+
+            originalTransactionReference:
+              resolvedOriginalTransactionReference,
+
+            refundTraceKey,
+
+            employerProfileId:
+              employerId
+                ? String(employerId)
+                : null,
+
+            shiftId:
+              shiftId
+                ? String(shiftId)
+                : null,
+
+            employerRefundBatchId:
+              String(batchId),
+
+            employerRefundBatchLineId:
+              String(lineId),
+          },
+
+          metadata: {
+            processor:
+              "ProviderEventProcessorService",
+
+            employerRefundSynchronized:
+              true,
+
+            employerRefundBatchId:
+              String(batchId),
+
+            employerRefundBatchLineId:
+              String(lineId),
+
+            refundStatus,
+
+            resolutionSource:
+              execution.resolutionSource,
+
+            providerEventMarker,
+          },
         },
-
-        metadata: {
-          processor: "ProviderEventProcessorService",
-
-          employerRefundSynchronized: true,
-
-          employerRefundBatchId: String(batchId),
-
-          employerRefundBatchLineId: String(lineId),
-
-          refundStatus,
-
-          resolutionSource: execution.resolutionSource,
-
-          providerEventMarker,
-        },
-      },
-      {
-        session: options.session,
-      }
-    );
+        {
+          session:
+            options.session,
+        }
+      );
 
     return {
-      providerEvent: processedResult.providerEvent,
+      providerEvent:
+        processedResult.providerEvent,
 
-      batch: syncResult?.batch || execution.batch,
+      batch:
+        syncResult?.batch ||
+        execution.batch,
 
-      line: syncResult?.line || syncResult?.refundLine || execution.line,
+      line:
+        syncResult?.line ||
+        syncResult?.refundLine ||
+        execution.line,
 
       processed: true,
 
       refundStatus,
 
-      employerRefundBatchId: String(batchId),
+      employerRefundBatchId:
+        String(batchId),
 
-      employerRefundBatchLineId: String(lineId),
+      employerRefundBatchLineId:
+        String(lineId),
     };
   }
 
-  /* ---------- Process shift Checkout payment event ---------- */
+  /* ─────────────────────────────── SHIFT CHECKOUT PAYMENT ─────────────────────────────── */
 
-  static async processShiftCheckoutPaymentEvent(providerEvent, options = {}) {
-    const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
+  static async processShiftCheckoutPaymentEvent(
+    providerEvent,
+    processingClaimId,
+    options = {}
+  ) {
+    const payload =
+      ProviderEventProcessorService.getNormalizedPayload(providerEvent);
 
-    const reference = ProviderEventProcessorService.getShiftFundingReference(providerEvent);
+    const reference =
+      ProviderEventProcessorService.getShiftFundingReference(providerEvent);
 
-    const providerEventId = ProviderEventProcessorService.cleanString(
-      payload.providerEventId || providerEvent.providerEventId
-    );
+    const providerEventId =
+      ProviderEventProcessorService.cleanString(
+        payload.providerEventId ||
+          providerEvent.providerEventId
+      );
 
     if (!reference) {
-      throw new Error("Paystack reference is required to process shift Checkout funding.");
+      throw new Error(
+        "Paystack reference is required to process shift Checkout funding."
+      );
     }
 
     /*
-     * The provider event is only a trigger.
+     * Provider delivery is only a trigger.
+     * ShiftFundingService independently verifies Paystack
+     * and owns fund, return, or integrity-conflict handling.
      *
-     * ShiftFundingService independently verifies the reference
-     * with Paystack before crediting escrow or opening the Shift.
-     *
-     * finalizePaystackShiftFunding owns its own finalization
-     * transaction. The ProviderEvent transaction is not stretched
-     * across provider verification or financial movement.
+     * Its funding/return operations remain independently
+     * idempotent for safe ProviderEvent retry.
      */
-    const fundingResult = await ShiftFundingService.finalizePaystackShiftFunding({
-      reference,
+    const fundingResult =
+      await ShiftFundingService.finalizePaystackShiftFunding({
+        reference,
+        providerEventId,
+      });
 
-      providerEventId,
-    });
-
-    const shift = fundingResult.shift || null;
+    const shift =
+      fundingResult.shift || null;
 
     const shiftId =
       ProviderEventProcessorService.getRecordId(shift) ||
-      ProviderEventProcessorService.getRecordId(fundingResult.shiftId) ||
-      ProviderEventProcessorService.getRecordId(payload.shiftId) ||
-      ProviderEventProcessorService.getRecordId(providerEvent.shift);
+      ProviderEventProcessorService.getRecordId(
+        fundingResult.shiftId
+      ) ||
+      ProviderEventProcessorService.getRecordId(
+        payload.shiftId
+      ) ||
+      ProviderEventProcessorService.getRecordId(
+        providerEvent.shift
+      );
 
     if (!shiftId) {
-      throw new Error("Funded shift could not be identified after Paystack verification.");
+      throw new Error(
+        "Shift could not be identified after Paystack verification."
+      );
     }
 
     const fundingTransaction =
-      fundingResult.transaction || fundingResult.fundingTransaction || shift?.fundingTransaction;
-
-    const fundingTransactionId =
-      ProviderEventProcessorService.getRecordId(fundingTransaction) || null;
-
-    const escrowWallet =
-      fundingResult.wallet ||
-      fundingResult.escrowWallet ||
-      fundingResult.escrow ||
-      fundingTransaction?.wallet ||
+      fundingResult.transaction ||
+      fundingResult.paystackTransaction ||
+      fundingResult.fundingTransaction ||
       null;
 
-    const escrowWalletId = ProviderEventProcessorService.getRecordId(escrowWallet) || null;
+    const fundingTransactionId =
+      ProviderEventProcessorService.getRecordId(
+        fundingTransaction
+      ) ||
+      ProviderEventProcessorService.getRecordId(
+        shift?.fundingTransaction
+      ) ||
+      null;
+
+    let fundingTransactionRecord =
+      null;
+
+    if (fundingTransactionId) {
+      fundingTransactionRecord =
+        await Transaction.findById(
+          fundingTransactionId
+        );
+    }
+
+    const escrowWalletId =
+      ProviderEventProcessorService.getRecordId(
+        fundingTransactionRecord?.wallet
+      ) || null;
 
     const employerProfileId =
-      ProviderEventProcessorService.getRecordId(shift?.business) ||
-      ProviderEventProcessorService.getRecordId(fundingResult.employerProfileId) ||
-      ProviderEventProcessorService.getRecordId(payload.employerProfileId) ||
-      ProviderEventProcessorService.getRecordId(providerEvent.employer);
+      ProviderEventProcessorService.getRecordId(
+        fundingTransactionRecord?.metadata?.employerProfileId
+      ) ||
+      ProviderEventProcessorService.getRecordId(
+        fundingResult.employerProfileId
+      ) ||
+      ProviderEventProcessorService.getRecordId(
+        payload.employerProfileId
+      ) ||
+      ProviderEventProcessorService.getRecordId(
+        providerEvent.employer
+      );
 
-    const alreadyFunded = Boolean(
-      fundingResult.alreadyFunded ||
-      fundingResult.idempotent ||
-      fundingResult.idempotentFunding ||
-      fundingResult.alreadyCompleted
-    );
+    const fundingApplied =
+      fundingResult.fundingApplied === true;
 
-    const processedResult = await ProviderEventService.markProcessed(
-      {
-        providerEventRecordId: providerEvent._id,
+    const returnedToEmployerWallet =
+      fundingResult.returnedToEmployerWallet ===
+      true;
 
-        transaction: fundingTransactionId,
+    const returnReason =
+      returnedToEmployerWallet
+        ? ProviderEventProcessorService.cleanString(
+            fundingResult.returnReason
+          )
+        : null;
 
-        wallet: escrowWalletId,
+    const alreadyFunded =
+      fundingApplied &&
+      Boolean(
+        fundingResult.alreadyFunded ||
+          fundingResult.idempotent ||
+          fundingResult.idempotentFunding ||
+          fundingResult.alreadyCompleted
+      );
 
-        employer: employerProfileId,
+    const processedResult =
+      await ProviderEventService.markProcessed(
+        {
+          providerEventRecordId:
+            providerEvent._id,
 
-        shift: shiftId,
+          processingClaimId,
 
-        normalizedPayload: {
-          ...payload,
+          transaction:
+            fundingTransactionId,
 
-          providerReference: reference,
+          wallet:
+            escrowWalletId,
 
-          paystackReference: reference,
+          employer:
+            employerProfileId,
 
-          providerEventId,
+          shift:
+            shiftId,
 
-          employerProfileId: employerProfileId ? String(employerProfileId) : null,
+          normalizedPayload: {
+            ...payload,
 
-          shiftId: String(shiftId),
+            providerReference:
+              reference,
 
-          shiftReferenceCode:
-            ProviderEventProcessorService.cleanString(shift?.referenceCode) ||
-            ProviderEventProcessorService.cleanString(payload.shiftReferenceCode),
+            paystackReference:
+              reference,
 
-          fundingTransactionId: fundingTransactionId ? String(fundingTransactionId) : null,
+            providerEventId,
 
-          escrowWalletId: escrowWalletId ? String(escrowWalletId) : null,
+            employerProfileId:
+              employerProfileId
+                ? String(employerProfileId)
+                : null,
+
+            shiftId:
+              String(shiftId),
+
+            shiftReferenceCode:
+              ProviderEventProcessorService.cleanString(
+                shift?.referenceCode
+              ) ||
+              ProviderEventProcessorService.cleanString(
+                payload.shiftReferenceCode
+              ),
+
+            fundingTransactionId:
+              fundingTransactionId
+                ? String(fundingTransactionId)
+                : null,
+
+            escrowWalletId:
+              escrowWalletId
+                ? String(escrowWalletId)
+                : null,
+
+            fundingApplied,
+
+            returnedToEmployerWallet,
+
+            returnReason,
+          },
+
+          metadata: {
+            processor:
+              "ProviderEventProcessorService",
+
+            shiftCheckoutFinalized:
+              true,
+
+            fundingApplied,
+
+            returnedToEmployerWallet,
+
+            returnReason,
+
+            idempotentShiftFunding:
+              alreadyFunded,
+
+            fundingTransactionId:
+              fundingTransactionId
+                ? String(fundingTransactionId)
+                : null,
+
+            escrowWalletId:
+              escrowWalletId
+                ? String(escrowWalletId)
+                : null,
+          },
         },
-
-        metadata: {
-          processor: "ProviderEventProcessorService",
-
-          shiftCheckoutFinalized: true,
-
-          idempotentShiftFunding: alreadyFunded,
-
-          fundingTransactionId: fundingTransactionId ? String(fundingTransactionId) : null,
-
-          escrowWalletId: escrowWalletId ? String(escrowWalletId) : null,
-        },
-      },
-      options
-    );
+        options
+      );
 
     return {
-      providerEvent: processedResult.providerEvent,
+      providerEvent:
+        processedResult.providerEvent,
 
       shift,
 
-      wallet: escrowWallet,
-
-      transaction: fundingTransaction,
+      transaction:
+        fundingTransactionRecord ||
+        fundingTransaction,
 
       processed: true,
 
+      fundingApplied,
+
+      returnedToEmployerWallet,
+
+      returnReason,
+
       alreadyFunded,
 
-      idempotentShiftFunding: alreadyFunded,
+      idempotentShiftFunding:
+        alreadyFunded,
     };
   }
 
-  /* ---------- Process employer wallet funding event ---------- */
+  /* ─────────────────────────────── EMPLOYER WALLET FUNDING ─────────────────────────────── */
 
-  static async processEmployerWalletFundingEvent(providerEvent, options = {}) {
-    const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
+  static async processEmployerWalletFundingEvent(
+    providerEvent,
+    processingClaimId,
+    options = {}
+  ) {
+    const payload =
+      ProviderEventProcessorService.getNormalizedPayload(providerEvent);
 
     const employerProfileId =
-      payload.employerProfileId || payload.employer || providerEvent.employer;
+      payload.employerProfileId ||
+      payload.employer ||
+      providerEvent.employer;
 
-    const dvaId = payload.dvaId || payload.dva || providerEvent.dva;
+    const dvaId =
+      payload.dvaId ||
+      payload.dva ||
+      providerEvent.dva;
 
     const amount =
-      payload.amount !== null && payload.amount !== undefined
+      payload.amount !== null &&
+      payload.amount !== undefined
         ? payload.amount
         : providerEvent.amount;
 
     const providerFee =
-      payload.providerFee !== null && payload.providerFee !== undefined
+      payload.providerFee !== null &&
+      payload.providerFee !== undefined
         ? payload.providerFee
         : providerEvent.providerFee;
 
     const netAmount =
-      payload.netAmount !== null && payload.netAmount !== undefined
+      payload.netAmount !== null &&
+      payload.netAmount !== undefined
         ? payload.netAmount
         : providerEvent.netAmount;
 
-    const currency = payload.currency || providerEvent.currency || "NGN";
+    const currency =
+      payload.currency ||
+      providerEvent.currency ||
+      "NGN";
 
-    const providerReference = payload.providerReference || providerEvent.providerReference;
+    const providerReference =
+      payload.providerReference ||
+      providerEvent.providerReference;
 
-    const providerEventId = payload.providerEventId || providerEvent.providerEventId;
+    const providerEventId =
+      payload.providerEventId ||
+      providerEvent.providerEventId;
 
     if (!employerProfileId) {
-      throw new Error("Employer profile ID is required to process wallet funding event.");
+      throw new Error(
+        "Employer profile ID is required to process wallet funding event."
+      );
     }
 
     if (!dvaId) {
-      throw new Error("DVA ID is required to process wallet funding event.");
+      throw new Error(
+        "DVA ID is required to process wallet funding event."
+      );
     }
 
-    if (amount === null || amount === undefined) {
-      throw new Error("Amount is required to process wallet funding event.");
+    if (
+      amount === null ||
+      amount === undefined
+    ) {
+      throw new Error(
+        "Amount is required to process wallet funding event."
+      );
     }
 
     if (!providerReference) {
-      throw new Error("Provider reference is required to process wallet funding event.");
+      throw new Error(
+        "Provider reference is required to process wallet funding event."
+      );
     }
 
-    const fundingResult = await WalletFundingService.creditEmployerWalletFromDvaFunding(
-      {
-        employerProfileId,
+    const fundingResult =
+      await WalletFundingService.creditEmployerWalletFromDvaFunding(
+        {
+          employerProfileId,
 
-        dvaId,
-
-        amount,
-
-        currency,
-
-        provider: providerEvent.provider,
-
-        providerReference,
-
-        providerEventId,
-
-        providerFee,
-
-        netAmount,
-
-        metadata: {
-          providerEventRecordId: String(providerEvent._id),
-
-          providerEventKey: providerEvent.eventKey,
-
-          sourceEventName: providerEvent.eventName,
-        },
-      },
-      options
-    );
-
-    const processedResult = await ProviderEventService.markProcessed(
-      {
-        providerEventRecordId: providerEvent._id,
-
-        transaction: fundingResult.transaction._id,
-
-        wallet: fundingResult.wallet._id,
-
-        employer: employerProfileId,
-
-        dva: dvaId,
-
-        normalizedPayload: {
-          ...payload,
-
-          employerProfileId: String(employerProfileId),
-
-          dvaId: String(dvaId),
+          dvaId,
 
           amount,
 
           currency,
 
+          provider:
+            providerEvent.provider,
+
           providerReference,
 
           providerEventId,
+
+          providerFee,
+
+          netAmount,
+
+          metadata: {
+            providerEventRecordId:
+              String(providerEvent._id),
+
+            providerEventKey:
+              providerEvent.eventKey,
+
+            sourceEventName:
+              providerEvent.eventName,
+          },
         },
+        options
+      );
 
-        metadata: {
-          processor: "ProviderEventProcessorService",
+    const processedResult =
+      await ProviderEventService.markProcessed(
+        {
+          providerEventRecordId:
+            providerEvent._id,
 
-          walletFundingTransactionId: String(fundingResult.transaction._id),
+          processingClaimId,
 
-          idempotentWalletFunding: Boolean(fundingResult.idempotent),
+          transaction:
+            fundingResult.transaction._id,
+
+          wallet:
+            fundingResult.wallet._id,
+
+          employer:
+            employerProfileId,
+
+          dva:
+            dvaId,
+
+          normalizedPayload: {
+            ...payload,
+
+            employerProfileId:
+              String(employerProfileId),
+
+            dvaId:
+              String(dvaId),
+
+            amount,
+
+            currency,
+
+            providerReference,
+
+            providerEventId,
+          },
+
+          metadata: {
+            processor:
+              "ProviderEventProcessorService",
+
+            walletFundingTransactionId:
+              String(
+                fundingResult.transaction._id
+              ),
+
+            idempotentWalletFunding:
+              Boolean(
+                fundingResult.idempotent
+              ),
+          },
         },
-      },
-      options
-    );
+        options
+      );
 
     return {
-      providerEvent: processedResult.providerEvent,
+      providerEvent:
+        processedResult.providerEvent,
 
-      wallet: fundingResult.wallet,
+      wallet:
+        fundingResult.wallet,
 
-      transaction: fundingResult.transaction,
+      transaction:
+        fundingResult.transaction,
 
       processed: true,
 
-      idempotentWalletFunding: Boolean(fundingResult.idempotent),
+      idempotentWalletFunding:
+        Boolean(fundingResult.idempotent),
     };
   }
 
-  /* ---------- Process withdrawal payout success event ---------- */
+  /* ─────────────────────────────── WITHDRAWAL PAYOUT ─────────────────────────────── */
 
-  static async processWithdrawalPayoutEvent(providerEvent, options = {}) {
-    const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
+  static async processWithdrawalPayoutEvent(
+    providerEvent,
+    processingClaimId,
+    options = {}
+  ) {
+    const payload =
+      ProviderEventProcessorService.getNormalizedPayload(providerEvent);
 
     const withdrawalTransaction =
       await ProviderEventProcessorService.findWithdrawalTransactionForProviderEvent(
@@ -1618,91 +2319,142 @@ class ProviderEventProcessorService {
         options
       );
 
-    const completedResult = await WalletWithdrawalService.markWithdrawalCompleted(
-      {
-        withdrawalTransactionId: withdrawalTransaction._id,
+    /*
+     * Withdrawal service remains independently
+     * idempotent because a worker can die after this
+     * operation but before ProviderEvent completion.
+     */
+    const completedResult =
+      await WalletWithdrawalService.markWithdrawalCompleted(
+        {
+          withdrawalTransactionId:
+            withdrawalTransaction._id,
 
-        metadata: {
-          providerEventRecordId: String(providerEvent._id),
+          metadata: {
+            providerEventRecordId:
+              String(providerEvent._id),
 
-          providerEventKey: providerEvent.eventKey,
+            providerEventKey:
+              providerEvent.eventKey,
 
-          sourceEventName: providerEvent.eventName,
+            sourceEventName:
+              providerEvent.eventName,
 
-          providerReference: providerEvent.providerReference,
+            providerReference:
+              providerEvent.providerReference,
 
-          providerEventId: providerEvent.providerEventId,
+            providerEventId:
+              providerEvent.providerEventId,
+          },
         },
-      },
-      options
-    );
+        options
+      );
 
-    const ownerContext = ProviderEventProcessorService.getWithdrawalOwnerContext({
-      withdrawalTransaction: completedResult.transaction,
+    const ownerContext =
+      ProviderEventProcessorService.getWithdrawalOwnerContext({
+        withdrawalTransaction:
+          completedResult.transaction,
 
-      providerEvent,
-    });
+        providerEvent,
+      });
 
-    const processedResult = await ProviderEventService.markProcessed(
-      {
-        providerEventRecordId: providerEvent._id,
+    const processedResult =
+      await ProviderEventService.markProcessed(
+        {
+          providerEventRecordId:
+            providerEvent._id,
 
-        transaction: completedResult.transaction._id,
+          processingClaimId,
 
-        wallet: completedResult.transaction.wallet,
+          transaction:
+            completedResult.transaction._id,
 
-        employer: ownerContext.employer,
+          wallet:
+            completedResult.transaction.wallet,
 
-        professional: ownerContext.professional,
+          employer:
+            ownerContext.employer,
 
-        bankAccount: completedResult.transaction.bankAccount || providerEvent.bankAccount,
+          professional:
+            ownerContext.professional,
 
-        normalizedPayload: {
-          ...payload,
+          bankAccount:
+            completedResult.transaction.bankAccount ||
+            providerEvent.bankAccount,
 
-          withdrawalTransactionId: String(completedResult.transaction._id),
+          normalizedPayload: {
+            ...payload,
 
-          ownerType: ownerContext.ownerType,
+            withdrawalTransactionId:
+              String(
+                completedResult.transaction._id
+              ),
 
-          employerProfileId: ownerContext.employerProfileId
-            ? String(ownerContext.employerProfileId)
-            : null,
+            ownerType:
+              ownerContext.ownerType,
 
-          professionalProfileId: ownerContext.professionalProfileId
-            ? String(ownerContext.professionalProfileId)
-            : null,
+            employerProfileId:
+              ownerContext.employerProfileId
+                ? String(
+                    ownerContext.employerProfileId
+                  )
+                : null,
+
+            professionalProfileId:
+              ownerContext.professionalProfileId
+                ? String(
+                    ownerContext.professionalProfileId
+                  )
+                : null,
+          },
+
+          metadata: {
+            processor:
+              "ProviderEventProcessorService",
+
+            withdrawalCompleted:
+              true,
+
+            ownerType:
+              ownerContext.ownerType,
+
+            alreadyCompleted:
+              Boolean(
+                completedResult.alreadyCompleted
+              ),
+          },
         },
-
-        metadata: {
-          processor: "ProviderEventProcessorService",
-
-          withdrawalCompleted: true,
-
-          ownerType: ownerContext.ownerType,
-
-          alreadyCompleted: Boolean(completedResult.alreadyCompleted),
-        },
-      },
-      options
-    );
+        options
+      );
 
     return {
-      providerEvent: processedResult.providerEvent,
+      providerEvent:
+        processedResult.providerEvent,
 
-      transaction: completedResult.transaction,
+      transaction:
+        completedResult.transaction,
 
       processed: true,
 
-      ownerType: ownerContext.ownerType,
+      ownerType:
+        ownerContext.ownerType,
 
-      alreadyCompleted: Boolean(completedResult.alreadyCompleted),
+      alreadyCompleted:
+        Boolean(
+          completedResult.alreadyCompleted
+        ),
     };
   }
 
-  /* ---------- Process withdrawal reversal event ---------- */
+  /* ─────────────────────────────── WITHDRAWAL REVERSAL ─────────────────────────────── */
 
-  static async processWithdrawalReversalEvent(providerEvent, options = {}) {
-    const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
+  static async processWithdrawalReversalEvent(
+    providerEvent,
+    processingClaimId,
+    options = {}
+  ) {
+    const payload =
+      ProviderEventProcessorService.getNormalizedPayload(providerEvent);
 
     const withdrawalTransaction =
       await ProviderEventProcessorService.findWithdrawalTransactionForProviderEvent(
@@ -1710,94 +2462,144 @@ class ProviderEventProcessorService {
         options
       );
 
-    const reversalResult = await WalletWithdrawalService.reverseFailedWithdrawal(
-      {
-        withdrawalTransactionId: withdrawalTransaction._id,
+    /*
+     * Reversal service remains independently
+     * idempotent for the same crash/retry boundary.
+     */
+    const reversalResult =
+      await WalletWithdrawalService.reverseFailedWithdrawal(
+        {
+          withdrawalTransactionId:
+            withdrawalTransaction._id,
 
-        reversalReason:
-          payload.reversalReason ||
-          "Provider reported withdrawal failed or reversed. Wallet balance reversed.",
+          reversalReason:
+            payload.reversalReason ||
+            "Provider reported withdrawal failed or reversed. Wallet balance reversed.",
 
-        metadata: {
-          providerEventRecordId: String(providerEvent._id),
+          metadata: {
+            providerEventRecordId:
+              String(providerEvent._id),
 
-          providerEventKey: providerEvent.eventKey,
+            providerEventKey:
+              providerEvent.eventKey,
 
-          sourceEventName: providerEvent.eventName,
+            sourceEventName:
+              providerEvent.eventName,
 
-          providerReference: providerEvent.providerReference,
+            providerReference:
+              providerEvent.providerReference,
 
-          providerEventId: providerEvent.providerEventId,
+            providerEventId:
+              providerEvent.providerEventId,
+          },
         },
-      },
-      options
-    );
+        options
+      );
 
-    const ownerContext = ProviderEventProcessorService.getWithdrawalOwnerContext({
-      withdrawalTransaction: reversalResult.originalTransaction,
+    const ownerContext =
+      ProviderEventProcessorService.getWithdrawalOwnerContext({
+        withdrawalTransaction:
+          reversalResult.originalTransaction,
 
-      providerEvent,
-    });
+        providerEvent,
+      });
 
-    const processedResult = await ProviderEventService.markProcessed(
-      {
-        providerEventRecordId: providerEvent._id,
+    const processedResult =
+      await ProviderEventService.markProcessed(
+        {
+          providerEventRecordId:
+            providerEvent._id,
 
-        transaction: reversalResult.transaction._id,
+          processingClaimId,
 
-        wallet: reversalResult.wallet._id,
+          transaction:
+            reversalResult.transaction._id,
 
-        employer: ownerContext.employer,
+          wallet:
+            reversalResult.wallet._id,
 
-        professional: ownerContext.professional,
+          employer:
+            ownerContext.employer,
 
-        bankAccount: reversalResult.transaction.bankAccount || providerEvent.bankAccount,
+          professional:
+            ownerContext.professional,
 
-        normalizedPayload: {
-          ...payload,
+          bankAccount:
+            reversalResult.transaction.bankAccount ||
+            providerEvent.bankAccount,
 
-          withdrawalTransactionId: String(reversalResult.originalTransaction._id),
+          normalizedPayload: {
+            ...payload,
 
-          reversalTransactionId: String(reversalResult.transaction._id),
+            withdrawalTransactionId:
+              String(
+                reversalResult.originalTransaction._id
+              ),
 
-          ownerType: ownerContext.ownerType,
+            reversalTransactionId:
+              String(
+                reversalResult.transaction._id
+              ),
 
-          employerProfileId: ownerContext.employerProfileId
-            ? String(ownerContext.employerProfileId)
-            : null,
+            ownerType:
+              ownerContext.ownerType,
 
-          professionalProfileId: ownerContext.professionalProfileId
-            ? String(ownerContext.professionalProfileId)
-            : null,
+            employerProfileId:
+              ownerContext.employerProfileId
+                ? String(
+                    ownerContext.employerProfileId
+                  )
+                : null,
+
+            professionalProfileId:
+              ownerContext.professionalProfileId
+                ? String(
+                    ownerContext.professionalProfileId
+                  )
+                : null,
+          },
+
+          metadata: {
+            processor:
+              "ProviderEventProcessorService",
+
+            withdrawalReversed:
+              true,
+
+            ownerType:
+              ownerContext.ownerType,
+
+            idempotentReversal:
+              Boolean(
+                reversalResult.idempotent
+              ),
+          },
         },
-
-        metadata: {
-          processor: "ProviderEventProcessorService",
-
-          withdrawalReversed: true,
-
-          ownerType: ownerContext.ownerType,
-
-          idempotentReversal: Boolean(reversalResult.idempotent),
-        },
-      },
-      options
-    );
+        options
+      );
 
     return {
-      providerEvent: processedResult.providerEvent,
+      providerEvent:
+        processedResult.providerEvent,
 
-      wallet: reversalResult.wallet,
+      wallet:
+        reversalResult.wallet,
 
-      transaction: reversalResult.transaction,
+      transaction:
+        reversalResult.transaction,
 
-      originalTransaction: reversalResult.originalTransaction,
+      originalTransaction:
+        reversalResult.originalTransaction,
 
       processed: true,
 
-      ownerType: ownerContext.ownerType,
+      ownerType:
+        ownerContext.ownerType,
 
-      idempotentReversal: Boolean(reversalResult.idempotent),
+      idempotentReversal:
+        Boolean(
+          reversalResult.idempotent
+        ),
     };
   }
 }

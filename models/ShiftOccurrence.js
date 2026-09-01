@@ -60,8 +60,12 @@ const {
   OVERTIME_SOURCES,
   OVERTIME_STATUSES,
   OVERTIME_DECISION_SOURCES,
-  OVERTIME_APPEAL_STATUSES,
+  OVERTIME_REJECTION_BASES,
+  OVERTIME_ADMIN_REVIEW_REASONS,
   OVERTIME_ADMIN_DECISIONS,
+
+  OCCURRENCE_EVIDENCE_TYPES,
+  OCCURRENCE_EVIDENCE_SUBMITTER_ROLES,
 
   CANCELLATION_ACTORS,
   USER_CANCELLATION_ACTORS,
@@ -344,6 +348,52 @@ const platformFeeAuditSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Transaction",
       default: null,
+    },
+  },
+  {
+    _id: false,
+  }
+);
+
+/* ─────────────────────────────── OCCURRENCE EVIDENCE ─────────────────────────────── */
+
+const occurrenceEvidenceItemSchema = new mongoose.Schema(
+  {
+    type: {
+      type: String,
+      enum: OCCURRENCE_EVIDENCE_TYPES,
+      required: true,
+    },
+
+    reference: {
+      type: String,
+      trim: true,
+      maxlength: 1000,
+      required: true,
+    },
+
+    description: {
+      type: String,
+      trim: true,
+      maxlength: 500,
+      default: null,
+    },
+
+    submittedByRole: {
+      type: String,
+      enum: OCCURRENCE_EVIDENCE_SUBMITTER_ROLES,
+      required: true,
+    },
+
+    submittedByUser: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+
+    recordedAt: {
+      type: Date,
+      required: true,
     },
   },
   {
@@ -1005,18 +1055,27 @@ const shiftOccurrenceSchema = new mongoose.Schema(
         default: null,
       },
 
-      reason: {
+      /**
+       * Professional's factual account of the work said to have continued
+       * beyond the scheduled end time.
+       *
+       * This is required for both late_checkout_prompt and manual_request.
+       * Supporting documentary evidence remains optional.
+       */
+      requestStatement: {
         type: String,
         trim: true,
-        maxlength: 300,
+        maxlength: 1000,
         default: null,
       },
 
+      requestEvidence: {
+        type: [occurrenceEvidenceItemSchema],
+        default: [],
+      },
+
       /**
-       * Immutable requested OT duration.
-       *
-       * OT approval accepts the professional's submitted request as the
-       * payable duration. Rejection creates the one OT-specific appeal path.
+       * Immutable OT duration originally requested by the professional.
        */
       requestedMinutes: {
         type: Number,
@@ -1031,6 +1090,26 @@ const shiftOccurrenceSchema = new mongoose.Schema(
         },
       },
 
+      /**
+       * Final payable OT duration.
+       *
+       * Employer approval accepts requestedMinutes exactly.
+       * Admin may establish a different evidence-supported duration when
+       * resolving an employer rejection or employer non-response.
+       */
+      approvedMinutes: {
+        type: Number,
+        default: null,
+        min: 1,
+        max: MINUTES_PER_DAY,
+
+        validate: {
+          validator: (value) => value === null || Number.isSafeInteger(value),
+
+          message: "overtime.approvedMinutes must be a whole number.",
+        },
+      },
+
       status: {
         type: String,
         enum: [...OVERTIME_STATUSES, null],
@@ -1038,9 +1117,17 @@ const shiftOccurrenceSchema = new mongoose.Schema(
       },
 
       /**
-       * Final decision authority.
+       * Final OT decision authority.
        *
-       * It remains null while an employer rejection can still be appealed.
+       * employer:
+       * Employer approved the professional's request.
+       *
+       * admin:
+       * Admin made the final decision after employer rejection or employer
+       * non-response.
+       *
+       * Employer rejection itself is not a final decision, so decisionSource
+       * remains null while status is disputed.
        */
       decisionSource: {
         type: String,
@@ -1080,10 +1167,11 @@ const shiftOccurrenceSchema = new mongoose.Schema(
         default: null,
       },
 
+      // --- EMPLOYER OT REJECTION ---
+
       /**
-       * Employer rejection audit.
-       *
-       * It remains historical if admin later changes the result on appeal.
+       * Employer rejection is an adverse factual position, not a final OT
+       * decision. A rejection moves the OT request directly to admin review.
        */
       rejectedAt: {
         type: Date,
@@ -1096,46 +1184,74 @@ const shiftOccurrenceSchema = new mongoose.Schema(
         default: null,
       },
 
+      rejectionBasis: {
+        type: String,
+        enum: [...OVERTIME_REJECTION_BASES, null],
+        default: null,
+      },
+
       rejectionReason: {
-        type: String,
-        trim: true,
-        maxlength: 500,
-        default: null,
-      },
-
-      // --- PROFESSIONAL OT APPEAL ---
-
-      appealStatus: {
-        type: String,
-        enum: OVERTIME_APPEAL_STATUSES,
-        default: "not_available",
-        required: true,
-      },
-
-      appealDeadlineAt: {
-        type: Date,
-        default: null,
-      },
-
-      appealedAt: {
-        type: Date,
-        default: null,
-      },
-
-      appealedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-        default: null,
-      },
-
-      appealReason: {
         type: String,
         trim: true,
         maxlength: 1000,
         default: null,
       },
 
-      // --- ADMIN OT DECISION ---
+      /**
+       * Structured employer counter-position used only when the employer
+       * accepts that some OT was worked but disputes the requested duration.
+       */
+      employerProposedMinutes: {
+        type: Number,
+        default: null,
+        min: 1,
+        max: MINUTES_PER_DAY,
+
+        validate: {
+          validator: (value) => value === null || Number.isSafeInteger(value),
+
+          message: "overtime.employerProposedMinutes must be a whole number.",
+        },
+      },
+
+      rejectionEvidence: {
+        type: [occurrenceEvidenceItemSchema],
+        default: [],
+      },
+
+      /**
+       * Explicit employer declaration used when no supporting documentary
+       * evidence exists.
+       *
+       * It must be true only when rejectionEvidence is empty.
+       */
+      rejectionNoSupportingEvidence: {
+        type: Boolean,
+        default: false,
+      },
+
+      // --- ADMIN OT REVIEW / FINAL DECISION ---
+
+      adminReviewReason: {
+        type: String,
+        enum: [...OVERTIME_ADMIN_REVIEW_REASONS, null],
+        default: null,
+      },
+
+      adminReviewStartedAt: {
+        type: Date,
+        default: null,
+      },
+
+      /**
+       * Supporting evidence added by an administrator while OT is under
+       * adjudication. System-owned occurrence facts remain authoritative in
+       * their own fields and do not need to be duplicated here.
+       */
+      adminEvidence: {
+        type: [occurrenceEvidenceItemSchema],
+        default: [],
+      },
 
       adminDecision: {
         type: String,
@@ -1629,19 +1745,12 @@ function validateChallengeWindow(document) {
    * rights, but challengeDeadlineAt has not yet arrived.
    */
 
-  const overtimeOrdinarilyFinal = Boolean(
-    document.overtime?.status === "approved" ||
-    document.overtime?.status === "cancelled" ||
-    (document.overtime?.status === "rejected" &&
-      (["expired", "resolved"].includes(document.overtime?.appealStatus) ||
-        (document.overtime?.appealStatus === "not_available" &&
-          document.overtime?.decisionSource === "admin")))
-  );
+  const overtimeSelectionConsumed = document.overtime?.requested === true;
 
-  if (overtimeOrdinarilyFinal && challengeComponents.includes("overtime")) {
+  if (overtimeSelectionConsumed && challengeComponents.includes("overtime")) {
     document.invalidate(
       "challengeableSettlementComponents",
-      "A final overtime outcome cannot remain ordinarily challengeable."
+      "Overtime cannot remain ordinarily challengeable after the professional has submitted an overtime request."
     );
   }
 
@@ -2054,7 +2163,7 @@ function validatePricing(document) {
   if (hasDocumentValue(document.billableHours) && hasDocumentValue(document.baseBillableHours)) {
     const approvedOvertimeHours =
       document.overtime?.status === "approved"
-        ? Number(document.overtime.requestedMinutes || 0) / 60
+        ? Number(document.overtime.approvedMinutes || 0) / 60
         : 0;
 
     if (
@@ -2850,6 +2959,48 @@ function getAuthoritativeAttendanceEnd(document) {
   return document.checkedOutAt || null;
 }
 
+function validateOvertimeEvidenceItems(
+  document,
+  evidenceItems,
+  pathPrefix,
+  expectedRole,
+  expectedUserId,
+  earliestRecordedAt
+) {
+  const items = Array.isArray(evidenceItems) ? evidenceItems : [];
+
+  items.forEach((item, index) => {
+    const itemPath = `${pathPrefix}.${index}`;
+
+    if (item?.submittedByRole !== expectedRole) {
+      document.invalidate(
+        `${itemPath}.submittedByRole`,
+        `${pathPrefix} may only contain ${expectedRole}-submitted evidence.`
+      );
+    }
+
+    if (
+      expectedUserId &&
+      item?.submittedByUser &&
+      String(item.submittedByUser) !== String(expectedUserId)
+    ) {
+      document.invalidate(
+        `${itemPath}.submittedByUser`,
+        `${pathPrefix} submittedByUser must match the user who submitted that OT position.`
+      );
+    }
+
+    if (item?.recordedAt && earliestRecordedAt && item.recordedAt < earliestRecordedAt) {
+      document.invalidate(
+        `${itemPath}.recordedAt`,
+        `${pathPrefix} evidence cannot be recorded before the related OT position was submitted.`
+      );
+    }
+  });
+
+  return items;
+}
+
 function validateOvertime(document) {
   const overtime = document.overtime || {};
 
@@ -2863,13 +3014,27 @@ function validateOvertime(document) {
 
   const requestedMinutes = Number(overtime.requestedMinutes || 0);
 
-  const appealStatus = overtime.appealStatus || "not_available";
+  const approvedMinutes = Number(overtime.approvedMinutes || 0);
 
-  const hasEmployerRejectionAudit = hasAny([
-    overtime.rejectedAt,
-    overtime.rejectedBy,
-    overtime.rejectionReason,
-  ]);
+  const requestEvidence = Array.isArray(overtime.requestEvidence) ? overtime.requestEvidence : [];
+
+  const rejectionEvidence = Array.isArray(overtime.rejectionEvidence)
+    ? overtime.rejectionEvidence
+    : [];
+
+  const adminEvidence = Array.isArray(overtime.adminEvidence) ? overtime.adminEvidence : [];
+
+  const hasEmployerRejectionAudit = Boolean(
+    overtime.rejectedAt ||
+    overtime.rejectedBy ||
+    overtime.rejectionBasis ||
+    overtime.rejectionReason ||
+    hasDocumentValue(overtime.employerProposedMinutes) ||
+    rejectionEvidence.length > 0 ||
+    overtime.rejectionNoSupportingEvidence === true
+  );
+
+  const hasAdminReviewAudit = Boolean(overtime.adminReviewReason || overtime.adminReviewStartedAt);
 
   const hasAdminDecisionAudit = hasAny([
     overtime.adminDecision,
@@ -2878,21 +3043,15 @@ function validateOvertime(document) {
     overtime.adminDecisionReason,
   ]);
 
-  const hasAppealAudit = hasAny([
-    overtime.appealDeadlineAt,
-    overtime.appealedAt,
-    overtime.appealedBy,
-    overtime.appealReason,
-  ]);
-
   const overtimeHasData =
     overtime.requested === true ||
     hasAny([
       overtime.requestedBy,
       overtime.requestedAt,
       overtime.source,
-      overtime.reason,
+      overtime.requestStatement,
       overtime.requestedMinutes,
+      overtime.approvedMinutes,
       overtime.status,
       overtime.decisionSource,
       overtime.employerResponseDeadlineAt,
@@ -2902,11 +3061,11 @@ function validateOvertime(document) {
       overtime.approvedBy,
       overtime.rejectedAt,
       overtime.rejectedBy,
+      overtime.rejectionBasis,
       overtime.rejectionReason,
-      overtime.appealDeadlineAt,
-      overtime.appealedAt,
-      overtime.appealedBy,
-      overtime.appealReason,
+      overtime.employerProposedMinutes,
+      overtime.adminReviewReason,
+      overtime.adminReviewStartedAt,
       overtime.adminDecision,
       overtime.adminDecidedAt,
       overtime.adminDecidedBy,
@@ -2918,8 +3077,11 @@ function validateOvertime(document) {
       overtime.topUpPaidAt,
       document.topUpTransaction,
     ]) ||
+    requestEvidence.length > 0 ||
+    rejectionEvidence.length > 0 ||
+    adminEvidence.length > 0 ||
+    overtime.rejectionNoSupportingEvidence === true ||
     overtime.topUpPaid === true ||
-    appealStatus !== "not_available" ||
     overtimeProfessionalPay > 0 ||
     overtimePlatformFee > 0 ||
     topUpRequired > 0 ||
@@ -2944,15 +3106,32 @@ function validateOvertime(document) {
     !overtime.requestedBy ||
     !overtime.requestedAt ||
     !overtime.source ||
+    !overtime.requestStatement ||
     !overtime.status ||
     !Number.isSafeInteger(requestedMinutes) ||
     requestedMinutes <= 0
   ) {
     document.invalidate(
       "overtime.requestedAt",
-      "Requested overtime requires requester, request time, source, status and positive whole requestedMinutes."
+      "Requested overtime requires requester, request time, source, factual statement, status and positive whole requestedMinutes."
     );
   }
+
+  validateDetailsLength(
+    document,
+    "overtime.requestStatement",
+    overtime.requestStatement,
+    "Overtime request statement"
+  );
+
+  validateOvertimeEvidenceItems(
+    document,
+    requestEvidence,
+    "overtime.requestEvidence",
+    "professional",
+    overtime.requestedBy,
+    overtime.requestedAt
+  );
 
   if (overtime.requestedAt && document.endTime && overtime.requestedAt < document.endTime) {
     document.invalidate(
@@ -2980,10 +3159,6 @@ function validateOvertime(document) {
   }
 
   if (overtime.source === "manual_request") {
-    if (!overtime.reason) {
-      document.invalidate("overtime.reason", "A manual overtime request requires a reason.");
-    }
-
     if (!document.challengeWindowOpenedAt || !document.challengeDeadlineAt) {
       document.invalidate(
         "overtime.requestedAt",
@@ -2997,10 +3172,10 @@ function validateOvertime(document) {
         );
       }
 
-      if (overtime.requestedAt > document.challengeDeadlineAt) {
+      if (overtime.requestedAt >= document.challengeDeadlineAt) {
         document.invalidate(
           "overtime.requestedAt",
-          "A manual overtime request must be submitted within the shared occurrence review window."
+          "A manual overtime request must be submitted before the shared occurrence review deadline."
         );
       }
     }
@@ -3019,11 +3194,11 @@ function validateOvertime(document) {
 
     if (
       amount(document.lateCheckout?.minutesLate) > 0 &&
-      requestedMinutes !== amount(document.lateCheckout.minutesLate)
+      requestedMinutes > amount(document.lateCheckout.minutesLate)
     ) {
       document.invalidate(
         "overtime.requestedMinutes",
-        "Late-checkout overtime requestedMinutes must match the observed late-checkout minutes."
+        "Late-checkout overtime requestedMinutes cannot exceed the observed post-schedule attendance minutes."
       );
     }
   }
@@ -3052,11 +3227,11 @@ function validateOvertime(document) {
   if (
     overtime.employerRespondedAt &&
     overtime.employerResponseDeadlineAt &&
-    overtime.employerRespondedAt > overtime.employerResponseDeadlineAt
+    overtime.employerRespondedAt >= overtime.employerResponseDeadlineAt
   ) {
     document.invalidate(
       "overtime.employerRespondedAt",
-      "Employer response cannot be recorded after the employer response deadline."
+      "Employer response must be recorded before the employer response deadline."
     );
   }
 
@@ -3090,12 +3265,43 @@ function validateOvertime(document) {
     if (
       !overtime.rejectedAt ||
       !overtime.rejectedBy ||
+      !overtime.rejectionBasis ||
       !overtime.rejectionReason ||
       !overtime.employerRespondedAt
     ) {
       document.invalidate(
         "overtime.rejectedAt",
-        "Employer overtime rejection requires rejectedAt, rejectedBy, rejectionReason and employerRespondedAt."
+        "Employer overtime rejection requires rejectedAt, rejectedBy, rejectionBasis, rejectionReason and employerRespondedAt."
+      );
+    }
+
+    validateDetailsLength(
+      document,
+      "overtime.rejectionReason",
+      overtime.rejectionReason,
+      "Overtime rejection reason"
+    );
+
+    validateOvertimeEvidenceItems(
+      document,
+      rejectionEvidence,
+      "overtime.rejectionEvidence",
+      "employer",
+      overtime.rejectedBy,
+      overtime.rejectedAt
+    );
+
+    if (rejectionEvidence.length === 0 && overtime.rejectionNoSupportingEvidence !== true) {
+      document.invalidate(
+        "overtime.rejectionNoSupportingEvidence",
+        "Employer overtime rejection without supporting documentary evidence requires an explicit no-supporting-evidence declaration."
+      );
+    }
+
+    if (rejectionEvidence.length > 0 && overtime.rejectionNoSupportingEvidence === true) {
+      document.invalidate(
+        "overtime.rejectionNoSupportingEvidence",
+        "rejectionNoSupportingEvidence must be false when employer rejection evidence is supplied."
       );
     }
 
@@ -3109,134 +3315,106 @@ function validateOvertime(document) {
         "Employer rejectedAt must match employerRespondedAt."
       );
     }
+
+    if (overtime.rejectionBasis === "minutes_incorrect") {
+      const employerProposedMinutes = Number(overtime.employerProposedMinutes || 0);
+
+      if (
+        !Number.isSafeInteger(employerProposedMinutes) ||
+        employerProposedMinutes <= 0 ||
+        employerProposedMinutes >= requestedMinutes
+      ) {
+        document.invalidate(
+          "overtime.employerProposedMinutes",
+          "minutes_incorrect requires positive whole employerProposedMinutes lower than the professional's requestedMinutes."
+        );
+      }
+    } else if (hasDocumentValue(overtime.employerProposedMinutes)) {
+      document.invalidate(
+        "overtime.employerProposedMinutes",
+        "employerProposedMinutes may only be set when rejectionBasis is minutes_incorrect."
+      );
+    }
+  } else if (
+    overtime.rejectionNoSupportingEvidence === true ||
+    rejectionEvidence.length > 0 ||
+    hasDocumentValue(overtime.employerProposedMinutes)
+  ) {
+    document.invalidate(
+      "overtime.rejectedAt",
+      "Employer rejection evidence and counter-position fields require a complete employer rejection."
+    );
   }
 
-  if (appealStatus === "not_available") {
-    if (hasAppealAudit) {
+  if (hasAdminReviewAudit) {
+    if (!overtime.adminReviewReason || !overtime.adminReviewStartedAt) {
       document.invalidate(
-        "overtime.appealStatus",
-        "not_available overtime appeal status cannot contain appeal audit fields."
-      );
-    }
-  }
-
-  if (["available", "submitted", "expired", "resolved"].includes(appealStatus)) {
-    if (!hasEmployerRejectionAudit || !overtime.appealDeadlineAt || !overtime.rejectedAt) {
-      document.invalidate(
-        "overtime.appealStatus",
-        `${appealStatus} overtime appeal status requires an employer rejection and appeal deadline.`
+        "overtime.adminReviewReason",
+        "OT admin review requires adminReviewReason and adminReviewStartedAt together."
       );
     }
 
-    if (
-      overtime.rejectedAt &&
-      overtime.appealDeadlineAt &&
-      overtime.appealDeadlineAt <= overtime.rejectedAt
-    ) {
-      document.invalidate(
-        "overtime.appealDeadlineAt",
-        "Overtime appeal deadline must be later than the employer rejection."
-      );
-    }
-  }
+    if (overtime.adminReviewReason === "employer_rejection") {
+      if (!hasEmployerRejectionAudit || !overtime.employerRespondedAt) {
+        document.invalidate(
+          "overtime.adminReviewReason",
+          "employer_rejection admin review requires a complete employer rejection audit."
+        );
+      }
 
-  if (appealStatus === "available") {
-    if (overtime.status !== "rejected") {
-      document.invalidate(
-        "overtime.status",
-        "An available overtime appeal requires rejected overtime."
-      );
-    }
-
-    if (
-      overtime.appealedAt ||
-      overtime.appealedBy ||
-      overtime.appealReason ||
-      hasAdminDecisionAudit ||
-      overtime.decisionSource
-    ) {
-      document.invalidate(
-        "overtime.appealStatus",
-        "An available overtime appeal cannot contain submitted appeal, admin decision or final-decision details."
-      );
+      if (
+        overtime.adminReviewStartedAt &&
+        overtime.rejectedAt &&
+        overtime.adminReviewStartedAt < overtime.rejectedAt
+      ) {
+        document.invalidate(
+          "overtime.adminReviewStartedAt",
+          "Employer-rejection admin review cannot start before rejectedAt."
+        );
+      }
     }
 
-    if (!["awaiting_overtime_review", "disputed"].includes(document.settlementStatus)) {
-      document.invalidate(
-        "settlementStatus",
-        "Employer-rejected overtime with an open professional appeal opportunity must remain awaiting_overtime_review unless an ordinary challenge makes the occurrence disputed."
-      );
-    }
-  }
+    if (overtime.adminReviewReason === "employer_non_response") {
+      if (
+        !overtime.employerResponseOverdueAt ||
+        overtime.employerRespondedAt ||
+        hasEmployerRejectionAudit
+      ) {
+        document.invalidate(
+          "overtime.adminReviewReason",
+          "employer_non_response admin review requires an overdue unanswered employer response and no employer rejection."
+        );
+      }
 
-  if (appealStatus === "submitted") {
-    if (
-      overtime.status !== "disputed" ||
-      !overtime.appealedAt ||
-      !overtime.appealedBy ||
-      !overtime.appealReason
-    ) {
-      document.invalidate(
-        "overtime.appealStatus",
-        "A submitted overtime appeal requires disputed status, appealedAt, appealedBy and appealReason."
-      );
-    }
-
-    if (overtime.appealedAt && overtime.rejectedAt && overtime.appealedAt < overtime.rejectedAt) {
-      document.invalidate(
-        "overtime.appealedAt",
-        "Overtime appeal cannot be submitted before employer rejection."
-      );
-    }
-
-    if (
-      overtime.appealedAt &&
-      overtime.appealDeadlineAt &&
-      overtime.appealedAt > overtime.appealDeadlineAt
-    ) {
-      document.invalidate(
-        "overtime.appealedAt",
-        "Overtime appeal must be submitted before the appeal deadline."
-      );
-    }
-
-    if (hasAdminDecisionAudit || overtime.decisionSource) {
-      document.invalidate(
-        "overtime.appealStatus",
-        "A submitted overtime appeal cannot already contain a final admin decision."
-      );
+      if (
+        overtime.adminReviewStartedAt &&
+        overtime.employerResponseOverdueAt &&
+        overtime.adminReviewStartedAt < overtime.employerResponseOverdueAt
+      ) {
+        document.invalidate(
+          "overtime.adminReviewStartedAt",
+          "Employer-non-response admin review cannot start before employerResponseOverdueAt."
+        );
+      }
     }
   }
 
-  if (appealStatus === "expired") {
-    if (
-      overtime.status !== "rejected" ||
-      overtime.appealedAt ||
-      overtime.appealedBy ||
-      overtime.appealReason ||
-      hasAdminDecisionAudit ||
-      overtime.decisionSource !== "employer"
-    ) {
+  if (adminEvidence.length > 0) {
+    if (!hasAdminReviewAudit) {
       document.invalidate(
-        "overtime.appealStatus",
-        "Expired overtime appeal requires final employer rejection with no submitted appeal."
+        "overtime.adminEvidence",
+        "Admin overtime evidence requires an established admin review."
       );
     }
-  }
 
-  if (appealStatus === "resolved") {
-    if (
-      !overtime.appealedAt ||
-      !overtime.appealedBy ||
-      !overtime.appealReason ||
-      !hasAdminDecisionAudit ||
-      overtime.decisionSource !== "admin"
-    ) {
-      document.invalidate(
-        "overtime.appealStatus",
-        "Resolved overtime appeal requires submitted appeal audit and a final admin decision."
-      );
-    }
+    validateOvertimeEvidenceItems(
+      document,
+      adminEvidence,
+      "overtime.adminEvidence",
+      "admin",
+      null,
+      overtime.adminReviewStartedAt
+    );
   }
 
   if (hasAdminDecisionAudit) {
@@ -3252,6 +3430,20 @@ function validateOvertime(document) {
       );
     }
 
+    validateDetailsLength(
+      document,
+      "overtime.adminDecisionReason",
+      overtime.adminDecisionReason,
+      "Admin overtime decision reason"
+    );
+
+    if (!hasAdminReviewAudit) {
+      document.invalidate(
+        "overtime.adminReviewReason",
+        "A final admin overtime decision requires an established admin review."
+      );
+    }
+
     if (overtime.decisionSource !== "admin") {
       document.invalidate(
         "overtime.decisionSource",
@@ -3259,42 +3451,14 @@ function validateOvertime(document) {
       );
     }
 
-    const decisionAfterAppeal = appealStatus === "resolved";
-
-    const decisionAfterEmployerNonResponse = Boolean(
-      overtime.employerResponseOverdueAt &&
-      !overtime.employerRespondedAt &&
-      appealStatus === "not_available"
-    );
-
-    if (!decisionAfterAppeal && !decisionAfterEmployerNonResponse) {
-      document.invalidate(
-        "overtime.adminDecision",
-        "Admin may decide overtime only after employer non-response or a submitted professional appeal."
-      );
-    }
-
     if (
-      decisionAfterAppeal &&
       overtime.adminDecidedAt &&
-      overtime.appealedAt &&
-      overtime.adminDecidedAt < overtime.appealedAt
+      overtime.adminReviewStartedAt &&
+      overtime.adminDecidedAt < overtime.adminReviewStartedAt
     ) {
       document.invalidate(
         "overtime.adminDecidedAt",
-        "Admin overtime decision cannot predate the professional appeal."
-      );
-    }
-
-    if (
-      decisionAfterEmployerNonResponse &&
-      overtime.adminDecidedAt &&
-      overtime.employerResponseOverdueAt &&
-      overtime.adminDecidedAt < overtime.employerResponseOverdueAt
-    ) {
-      document.invalidate(
-        "overtime.adminDecidedAt",
-        "Admin overtime decision cannot predate employer response expiry."
+        "Admin overtime decision cannot predate adminReviewStartedAt."
       );
     }
 
@@ -3319,24 +3483,20 @@ function validateOvertime(document) {
   }
 
   if (overtime.status === "pending") {
-    if (overtime.decisionSource) {
-      document.invalidate(
-        "overtime.decisionSource",
-        "Pending overtime cannot have a final decisionSource."
-      );
-    }
-
     if (
+      overtime.decisionSource ||
       overtime.employerRespondedAt ||
+      overtime.employerResponseOverdueAt ||
       hasEmployerRejectionAudit ||
+      hasAdminReviewAudit ||
+      hasAdminDecisionAudit ||
       overtime.approvedAt ||
       overtime.approvedBy ||
-      appealStatus !== "not_available" ||
-      hasAdminDecisionAudit
+      hasDocumentValue(overtime.approvedMinutes)
     ) {
       document.invalidate(
         "overtime.status",
-        "Pending overtime cannot contain employer decision, appeal, approval or admin-decision audit."
+        "Pending overtime cannot contain employer decision, delinquency, admin-review, approval or final-decision audit."
       );
     }
 
@@ -3350,16 +3510,63 @@ function validateOvertime(document) {
     if (!["awaiting_overtime_review", "disputed"].includes(document.settlementStatus)) {
       document.invalidate(
         "settlementStatus",
-        "Pending overtime requires awaiting_overtime_review unless another active ordinary challenge makes the occurrence disputed."
+        "Pending overtime requires awaiting_overtime_review unless an active ordinary challenge makes the occurrence disputed."
+      );
+    }
+  }
+
+  if (overtime.status === "disputed") {
+    if (
+      !hasAdminReviewAudit ||
+      overtime.decisionSource ||
+      hasAdminDecisionAudit ||
+      overtime.approvedAt ||
+      overtime.approvedBy ||
+      hasDocumentValue(overtime.approvedMinutes) ||
+      document.settlementStatus !== "disputed"
+    ) {
+      document.invalidate(
+        "overtime.status",
+        "Disputed overtime requires active admin review, no final decision and disputed settlementStatus."
+      );
+    }
+
+    if (overtime.adminReviewReason === "employer_rejection" && !hasEmployerRejectionAudit) {
+      document.invalidate(
+        "overtime.adminReviewReason",
+        "Employer-rejection disputed OT requires the employer rejection audit."
+      );
+    }
+
+    if (
+      overtime.adminReviewReason === "employer_non_response" &&
+      !overtime.employerResponseOverdueAt
+    ) {
+      document.invalidate(
+        "overtime.adminReviewReason",
+        "Employer-non-response disputed OT requires employerResponseOverdueAt."
+      );
+    }
+
+    if (hasOvertimeFinancialData(document)) {
+      document.invalidate(
+        "overtime.status",
+        "Disputed overtime cannot contain final professional pay, earned platform fee or top-up state."
       );
     }
   }
 
   if (overtime.status === "approved") {
-    if (!overtime.approvedAt || !overtime.approvedBy || !overtime.decisionSource) {
+    if (
+      !overtime.approvedAt ||
+      !overtime.approvedBy ||
+      !overtime.decisionSource ||
+      !Number.isSafeInteger(approvedMinutes) ||
+      approvedMinutes <= 0
+    ) {
       document.invalidate(
         "overtime.approvedAt",
-        "Approved overtime requires approvedAt, approvedBy and final decisionSource."
+        "Approved overtime requires approvedAt, approvedBy, final decisionSource and positive whole approvedMinutes."
       );
     }
 
@@ -3370,16 +3577,25 @@ function validateOvertime(document) {
       );
     }
 
+    if (approvedMinutes > requestedMinutes) {
+      document.invalidate(
+        "overtime.approvedMinutes",
+        "Approved overtime cannot exceed the professional's requested overtime minutes."
+      );
+    }
+
     if (overtime.decisionSource === "employer") {
       if (
         !overtime.employerRespondedAt ||
         hasEmployerRejectionAudit ||
-        appealStatus !== "not_available" ||
-        hasAdminDecisionAudit
+        overtime.employerResponseOverdueAt ||
+        hasAdminReviewAudit ||
+        hasAdminDecisionAudit ||
+        approvedMinutes !== requestedMinutes
       ) {
         document.invalidate(
           "overtime.decisionSource",
-          "Employer-approved overtime requires a timely employer response and no rejection, appeal or admin decision."
+          "Employer-approved overtime requires a timely employer response, exact requestedMinutes approval and no rejection or admin-review state."
         );
       }
 
@@ -3399,11 +3615,12 @@ function validateOvertime(document) {
       if (
         overtime.adminDecision !== "approved" ||
         !overtime.adminDecidedAt ||
-        !overtime.adminDecidedBy
+        !overtime.adminDecidedBy ||
+        !hasAdminReviewAudit
       ) {
         document.invalidate(
           "overtime.adminDecision",
-          "Admin-approved overtime requires a complete approved admin decision."
+          "Admin-approved overtime requires a complete approved admin decision and admin-review audit."
         );
       }
 
@@ -3430,6 +3647,11 @@ function validateOvertime(document) {
       }
     }
 
+    /**
+     * Attendance timing is an upper boundary, not proof that every minute was
+     * worked. Approval authority still comes from employer acceptance or admin
+     * adjudication of the parties' positions and evidence.
+     */
     const authoritativeAttendanceEnd = getAuthoritativeAttendanceEnd(document);
 
     if (
@@ -3438,7 +3660,7 @@ function validateOvertime(document) {
       authoritativeAttendanceEnd <= document.endTime
     ) {
       document.invalidate(
-        "overtime.requestedMinutes",
+        "overtime.approvedMinutes",
         "Approved overtime requires authoritative attendance beyond the scheduled endTime."
       );
     } else {
@@ -3446,9 +3668,9 @@ function validateOvertime(document) {
         (authoritativeAttendanceEnd.getTime() - document.endTime.getTime()) / (60 * 1000)
       );
 
-      if (requestedMinutes > observableOvertimeMinutes) {
+      if (approvedMinutes > observableOvertimeMinutes) {
         document.invalidate(
-          "overtime.requestedMinutes",
+          "overtime.approvedMinutes",
           "Approved overtime cannot exceed authoritative observed attendance."
         );
       }
@@ -3459,7 +3681,7 @@ function validateOvertime(document) {
     try {
       expectedProfessionalPay = money.calculateMinorPayFromMinutes({
         hourlyRateMinor: amount(document.hourlyRate),
-        minutes: requestedMinutes,
+        minutes: approvedMinutes,
         fieldName: "Approved overtime professional pay",
       });
     } catch (error) {
@@ -3476,7 +3698,7 @@ function validateOvertime(document) {
     ) {
       document.invalidate(
         "overtimeProfessionalPay",
-        "Approved overtimeProfessionalPay must equal requestedMinutes multiplied by the snapshotted hourlyRate."
+        "Approved overtimeProfessionalPay must equal approvedMinutes multiplied by the snapshotted hourlyRate."
       );
     }
 
@@ -3599,7 +3821,7 @@ function validateOvertime(document) {
       if (!["awaiting_topup", "disputed"].includes(document.settlementStatus)) {
         document.invalidate(
           "settlementStatus",
-          "Approved unpaid overtime requires awaiting_topup unless another active ordinary challenge makes the occurrence disputed."
+          "Approved unpaid overtime requires awaiting_topup unless an active ordinary challenge makes the occurrence disputed."
         );
       }
     }
@@ -3649,55 +3871,29 @@ function validateOvertime(document) {
   }
 
   if (overtime.status === "rejected") {
-    if (hasOvertimeFinancialData(document)) {
+    if (
+      overtime.decisionSource !== "admin" ||
+      overtime.adminDecision !== "rejected" ||
+      !hasAdminReviewAudit ||
+      !hasAdminDecisionAudit
+    ) {
       document.invalidate(
         "overtime.status",
-        "Rejected overtime cannot retain professional pay, earned platform fee or top-up state."
+        "Rejected overtime is final and requires a complete admin rejection after employer rejection or employer non-response."
       );
     }
 
-    const employerRejectionPath = hasEmployerRejectionAudit;
-
-    const adminDirectRejectionPath =
-      overtime.decisionSource === "admin" &&
-      overtime.adminDecision === "rejected" &&
-      overtime.employerResponseOverdueAt &&
-      !overtime.employerRespondedAt;
-
-    if (!employerRejectionPath && !adminDirectRejectionPath) {
+    if (overtime.approvedAt || overtime.approvedBy || hasDocumentValue(overtime.approvedMinutes)) {
       document.invalidate(
-        "overtime.status",
-        "Rejected overtime requires either employer rejection audit or final admin rejection after employer non-response."
-      );
-    }
-
-    if (employerRejectionPath && !["available", "expired", "resolved"].includes(appealStatus)) {
-      document.invalidate(
-        "overtime.appealStatus",
-        "Employer-rejected overtime requires an available, expired or resolved appeal lifecycle."
-      );
-    }
-
-    if (appealStatus === "resolved" && overtime.adminDecision !== "rejected") {
-      document.invalidate(
-        "overtime.adminDecision",
-        "Resolved appeal with rejected overtime requires final admin rejection."
-      );
-    }
-  }
-
-  if (overtime.status === "disputed") {
-    if (appealStatus !== "submitted" || document.settlementStatus !== "disputed") {
-      document.invalidate(
-        "overtime.status",
-        "Disputed overtime requires a submitted professional OT appeal and disputed settlementStatus."
+        "overtime.approvedMinutes",
+        "Final rejected overtime cannot retain positive approval fields."
       );
     }
 
     if (hasOvertimeFinancialData(document)) {
       document.invalidate(
         "overtime.status",
-        "Disputed overtime cannot contain final professional pay, earned platform fee or top-up state."
+        "Rejected overtime cannot retain professional pay, earned platform fee or top-up state."
       );
     }
   }
@@ -3708,15 +3904,16 @@ function validateOvertime(document) {
       overtime.employerRespondedAt ||
       overtime.employerResponseOverdueAt ||
       hasEmployerRejectionAudit ||
+      hasAdminReviewAudit ||
+      hasAdminDecisionAudit ||
       overtime.approvedAt ||
       overtime.approvedBy ||
-      appealStatus !== "not_available" ||
-      hasAdminDecisionAudit ||
+      hasDocumentValue(overtime.approvedMinutes) ||
       hasOvertimeFinancialData(document)
     ) {
       document.invalidate(
         "overtime.status",
-        "Cancelled overtime cannot retain decision, appeal, delinquency or financial outcome state."
+        "Cancelled overtime cannot retain employer decision, admin-review, delinquency or financial outcome state."
       );
     }
   }
@@ -3777,15 +3974,13 @@ function validateSettlementState(document) {
   }
 
   const overtimeAwaitingDecision = Boolean(
-    document.overtime?.requested === true &&
-    (document.overtime?.status === "pending" ||
-      (document.overtime?.status === "rejected" && document.overtime?.appealStatus === "available"))
+    document.overtime?.requested === true && document.overtime?.status === "pending"
   );
 
   if (document.settlementStatus === "awaiting_overtime_review" && !overtimeAwaitingDecision) {
     document.invalidate(
       "overtime.status",
-      "awaiting_overtime_review requires pending employer/admin OT review or an open professional OT appeal opportunity."
+      "awaiting_overtime_review requires a pending employer OT review."
     );
   }
 
@@ -3824,15 +4019,13 @@ function validateSettlementState(document) {
 
   const overtimeUnresolvedForCompletion = Boolean(
     document.overtime?.requested === true &&
-    (document.overtime?.status === "pending" ||
-      document.overtime?.status === "disputed" ||
-      (document.overtime?.status === "rejected" && document.overtime?.appealStatus === "available"))
+    ["pending", "disputed"].includes(document.overtime?.status)
   );
 
   if (document.settlementStatus === "released" && overtimeUnresolvedForCompletion) {
     document.invalidate(
       "settlementStatus",
-      "Overall professional settlement cannot be released while the overtime decision or overtime appeal opportunity remains unresolved."
+      "Overall professional settlement cannot be released while overtime employer review or admin adjudication remains unresolved."
     );
   }
 
@@ -4947,8 +5140,9 @@ shiftOccurrenceSchema.index({
 });
 
 shiftOccurrenceSchema.index({
-  "overtime.appealStatus": 1,
-  "overtime.appealDeadlineAt": 1,
+  "overtime.status": 1,
+  "overtime.adminReviewReason": 1,
+  "overtime.adminReviewStartedAt": 1,
 });
 
 shiftOccurrenceSchema.index({

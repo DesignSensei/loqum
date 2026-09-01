@@ -80,32 +80,99 @@ function getIdempotencyKey(req) {
   return String(req.get("Idempotency-Key") || req.body?.idempotencyKey || "").trim();
 }
 
-function buildAttendanceCorrectionInput(body = {}) {
-  if (
-    body.attendanceCorrection &&
-    typeof body.attendanceCorrection === "object" &&
-    !Array.isArray(body.attendanceCorrection)
-  ) {
-    return body.attendanceCorrection;
+function getClaimAffectedSettlementComponents(claim) {
+  if (!claim || !Array.isArray(claim.issues)) {
+    return [];
   }
 
-  const correctedCheckInAt = body.correctedCheckInAt;
-  const correctedCheckOutAt = body.correctedCheckOutAt;
+  return [
+    ...new Set(
+      claim.issues.flatMap((issue) =>
+        Array.isArray(issue.affectedSettlementComponents) ? issue.affectedSettlementComponents : []
+      )
+    ),
+  ];
+}
 
-  const hasCorrectedCheckInAt =
-    correctedCheckInAt !== undefined && correctedCheckInAt !== null && correctedCheckInAt !== "";
-
-  const hasCorrectedCheckOutAt =
-    correctedCheckOutAt !== undefined && correctedCheckOutAt !== null && correctedCheckOutAt !== "";
-
-  if (!hasCorrectedCheckInAt && !hasCorrectedCheckOutAt) {
+function buildClaimIssueResponse(issue) {
+  if (!issue) {
     return null;
   }
 
   return {
-    correctedCheckInAt: hasCorrectedCheckInAt ? correctedCheckInAt : null,
+    id: issue._id ? String(issue._id) : null,
 
-    correctedCheckOutAt: hasCorrectedCheckOutAt ? correctedCheckOutAt : null,
+    type: issue.type,
+
+    affectedSettlementComponents: Array.isArray(issue.affectedSettlementComponents)
+      ? [...issue.affectedSettlementComponents]
+      : [],
+
+    details: issue.details || null,
+
+    statement: issue.statement || null,
+
+    evidence: Array.isArray(issue.evidence) ? [...issue.evidence] : [],
+
+    status: issue.status,
+
+    employerDecision: issue.employerDecision || null,
+
+    employerDecisionReason: issue.employerDecisionReason || null,
+
+    employerDecidedAt: issue.employerDecidedAt || null,
+
+    employerDecidedBy: issue.employerDecidedBy ? String(issue.employerDecidedBy) : null,
+
+    employerCounterPosition: issue.employerCounterPosition || null,
+
+    employerEvidence: Array.isArray(issue.employerEvidence) ? [...issue.employerEvidence] : [],
+
+    appealStatus: issue.appealStatus || "not_available",
+
+    appealDeadlineAt: issue.appealDeadlineAt || null,
+
+    appealedAt: issue.appealedAt || null,
+
+    appealedBy: issue.appealedBy ? String(issue.appealedBy) : null,
+
+    appealStatement: issue.appealStatement || null,
+
+    appealEvidence: Array.isArray(issue.appealEvidence) ? [...issue.appealEvidence] : [],
+
+    rebuttalStatus: issue.rebuttalStatus || "not_available",
+
+    rebuttalDeadlineAt: issue.rebuttalDeadlineAt || null,
+
+    rebuttedAt: issue.rebuttedAt || null,
+
+    rebuttedBy: issue.rebuttedBy ? String(issue.rebuttedBy) : null,
+
+    rebuttalStatement: issue.rebuttalStatement || null,
+
+    rebuttalEvidence: Array.isArray(issue.rebuttalEvidence) ? [...issue.rebuttalEvidence] : [],
+
+    escalatedAt: issue.escalatedAt || null,
+
+    escalationReason: issue.escalationReason || null,
+
+    escalatedBy: issue.escalatedBy ? String(issue.escalatedBy) : null,
+
+    escalationNotes: issue.escalationNotes || null,
+
+    adminDecision: issue.adminDecision || null,
+
+    adminDecisionReason: issue.adminDecisionReason || null,
+
+    adminDecidedAt: issue.adminDecidedAt || null,
+
+    adminDecidedBy: issue.adminDecidedBy ? String(issue.adminDecidedBy) : null,
+
+    adminOutcome: issue.adminOutcome || null,
+
+    adminEvidence: Array.isArray(issue.adminEvidence) ? [...issue.adminEvidence] : [],
+
+    resolvedAt: issue.resolvedAt || null,
   };
 }
 
@@ -123,51 +190,31 @@ function buildClaimResponse(claim) {
 
     occurrenceId: claim.occurrence ? String(claim.occurrence) : null,
 
-    claimType: claim.claimType,
-
-    affectedSettlementComponents: Array.isArray(claim.affectedSettlementComponents)
-      ? [...claim.affectedSettlementComponents]
+    submittedIssueTypes: Array.isArray(claim.submittedIssueTypes)
+      ? [...claim.submittedIssueTypes]
       : [],
 
-    issueDetails: claim.issueDetails || null,
+    issues: Array.isArray(claim.issues)
+      ? claim.issues.map((issue) => buildClaimIssueResponse(issue))
+      : [],
 
     status: claim.status,
 
-    submittedAt: claim.submittedAt,
+    submittedAt: claim.submittedAt || null,
 
-    claimWindowOpenedAt: claim.claimWindowOpenedAt || null,
+    challengeWindowOpenedAt: claim.challengeWindowOpenedAt || null,
 
-    claimDeadlineAt: claim.claimDeadlineAt,
+    challengeDeadlineAt: claim.challengeDeadlineAt || null,
 
     employerResponseDeadlineAt: claim.employerResponseDeadlineAt || null,
-
-    employerFinancialDecision: claim.employerFinancialDecision || null,
-
-    employerDecisionReason: claim.employerDecisionReason || null,
-
-    employerDecidedAt: claim.employerDecidedAt || null,
-
-    appealStatus: claim.appealStatus,
-
-    appealDeadlineAt: claim.appealDeadlineAt || null,
-
-    appealedAt: claim.appealedAt || null,
-
-    escalationReason: claim.escalationReason || null,
-
-    escalatedAt: claim.escalatedAt || null,
-
-    adminFinancialDecision: claim.adminFinancialDecision || null,
-
-    adminDecisionReason: claim.adminDecisionReason || null,
-
-    adminDecidedAt: claim.adminDecidedAt || null,
 
     employerRefundId: claim.employerRefund ? String(claim.employerRefund) : null,
 
     resolvedAt: claim.resolvedAt || null,
 
     withdrawnAt: claim.withdrawnAt || null,
+
+    withdrawnBy: claim.withdrawnBy ? String(claim.withdrawnBy) : null,
 
     withdrawalReason: claim.withdrawalReason || null,
   };
@@ -208,21 +255,8 @@ function buildOccurrenceResponse(occurrence) {
 /* ─────────────────────────────── SUBMIT CLAIM ─────────────────────────────── */
 
 /**
- * Professional submits the one original financially relevant claim available
- * for an assigned occurrence.
- *
- * Supported claim flows are service-owned:
- *
- * - attendance_correction
- * - payment_calculation
- * - employer_fault
- *
- * Absence explanations do not enter this controller. They belong to the
- * professional attendance controller.
- *
- * The claim service derives and freezes affectedSettlementComponents from the
- * submitted issue details. The controller never accepts a client-supplied
- * settlement-component scope as authority.
+ * One occurrence claim case may contain multiple financial issues.
+ * Issue validation and settlement scope are service-owned.
  */
 exports.submitClaim = async (req, res) => {
   try {
@@ -237,38 +271,47 @@ exports.submitClaim = async (req, res) => {
 
       submittedByUserId: req.user._id,
 
-      claimType: req.body.claimType,
-
-      attendanceCorrection: buildAttendanceCorrectionInput(req.body),
-
-      payIssueArea: req.body.payIssueArea,
-
-      statement: req.body.statement,
-
-      evidence: req.body.evidence || [],
+      issues: req.body.issues,
 
       idempotencyKey: getIdempotencyKey(req),
 
       currentTime: new Date(),
     });
 
+    const submittedIssueTypes = Array.isArray(result?.submittedIssueTypes)
+      ? [...result.submittedIssueTypes]
+      : Array.isArray(result?.claim?.submittedIssueTypes)
+        ? [...result.claim.submittedIssueTypes]
+        : [];
+
+    const affectedSettlementComponents = Array.isArray(result?.affectedSettlementComponents)
+      ? [...result.affectedSettlementComponents]
+      : getClaimAffectedSettlementComponents(result?.claim);
+
     setNoStoreHeaders(res);
 
-    return res.status(result.created === true ? 201 : 200).json({
+    return res.status(result?.created === true ? 201 : 200).json({
       success: true,
 
       message:
-        result.idempotent === true
+        result?.idempotent === true
           ? "This claim has already been submitted."
           : "Your claim has been submitted.",
 
-      created: result.created === true,
+      created: result?.created === true,
 
-      idempotent: result.idempotent === true,
+      idempotent: result?.idempotent === true,
 
-      claim: buildClaimResponse(result.claim),
+      submittedIssueTypes,
 
-      occurrence: buildOccurrenceResponse(result.occurrence),
+      affectedSettlementComponents,
+
+      employerResponseDeadlineAt:
+        result?.employerResponseDeadlineAt || result?.claim?.employerResponseDeadlineAt || null,
+
+      claim: buildClaimResponse(result?.claim),
+
+      occurrence: buildOccurrenceResponse(result?.occurrence),
     });
   } catch (error) {
     return handleJsonError({
@@ -288,11 +331,7 @@ exports.submitClaim = async (req, res) => {
 /* ─────────────────────────────── SUBMIT APPEAL ─────────────────────────────── */
 
 /**
- * Professional submits the one appeal available after an employer rejects an
- * original financial claim.
- *
- * Appeal eligibility and appealDeadlineAt are authoritative in the claim
- * service/model. The controller does not reopen or extend that window.
+ * Appeal applies to one rejected issue without an employer counter-position.
  */
 exports.submitAppeal = async (req, res) => {
   try {
@@ -301,13 +340,15 @@ exports.submitAppeal = async (req, res) => {
     const result = await ShiftOccurrenceClaimService.submitAppeal({
       claimId: req.params.claimId,
 
+      issueId: req.params.issueId,
+
       professionalId: professionalProfileId,
 
       submittedByUserId: req.user._id,
 
       statement: req.body.statement,
 
-      evidence: req.body.evidence || [],
+      evidence: req.body.evidence === undefined ? [] : req.body.evidence,
 
       currentTime: new Date(),
     });
@@ -319,11 +360,15 @@ exports.submitAppeal = async (req, res) => {
 
       message: "Your appeal has been submitted for review.",
 
-      submitted: result.submitted === true,
+      submitted: result?.submitted === true,
 
-      finalAdminReviewRequired: result.finalAdminReviewRequired === true,
+      issueStatus: result?.issueStatus || result?.issue?.status || null,
 
-      claim: buildClaimResponse(result.claim),
+      finalAdminReviewRequired: result?.finalAdminReviewRequired === true,
+
+      claim: buildClaimResponse(result?.claim),
+
+      issue: buildClaimIssueResponse(result?.issue),
     });
   } catch (error) {
     return handleJsonError({
@@ -340,14 +385,69 @@ exports.submitAppeal = async (req, res) => {
   }
 };
 
+/* ─────────────────────────────── SUBMIT REBUTTAL ─────────────────────────────── */
+
+/**
+ * Rebuttal applies to one rejected issue with an employer counter-position.
+ */
+exports.submitRebuttal = async (req, res) => {
+  try {
+    const professionalProfileId = getProfessionalProfileId(req);
+
+    const result = await ShiftOccurrenceClaimService.submitRebuttal({
+      claimId: req.params.claimId,
+
+      issueId: req.params.issueId,
+
+      professionalId: professionalProfileId,
+
+      submittedByUserId: req.user._id,
+
+      statement: req.body.statement,
+
+      evidence: req.body.evidence === undefined ? [] : req.body.evidence,
+
+      currentTime: new Date(),
+    });
+
+    setNoStoreHeaders(res);
+
+    return res.status(200).json({
+      success: true,
+
+      message: "Your response has been submitted for review.",
+
+      submitted: result?.submitted === true,
+
+      issueStatus: result?.issueStatus || result?.issue?.status || null,
+
+      rebuttalStatus: result?.rebuttalStatus || result?.issue?.rebuttalStatus || null,
+
+      finalAdminReviewRequired: result?.finalAdminReviewRequired === true,
+
+      claim: buildClaimResponse(result?.claim),
+
+      issue: buildClaimIssueResponse(result?.issue),
+    });
+  } catch (error) {
+    return handleJsonError({
+      res,
+
+      error,
+
+      logContext: "Professional occurrence claim rebuttal",
+
+      fallbackMessage: "Your response could not be submitted. Please try again.",
+
+      fallbackCode: "OCCURRENCE_CLAIM_REBUTTAL_FAILED",
+    });
+  }
+};
+
 /* ─────────────────────────────── WITHDRAW CLAIM ─────────────────────────────── */
 
 /**
- * Professional withdraws an active occurrence claim.
- *
- * Withdrawal consumes the one original claim opportunity. The service restores
- * the pre-claim occurrence state for the affected financial scope, clears the
- * active claim and reevaluates any employer refund dependency.
+ * Withdrawal applies to the entire claim case and consumes the original claim right.
  */
 exports.withdrawClaim = async (req, res) => {
   try {
@@ -372,11 +472,11 @@ exports.withdrawClaim = async (req, res) => {
 
       message: "Your claim has been withdrawn.",
 
-      withdrawn: result.withdrawn === true,
+      withdrawn: result?.withdrawn === true,
 
-      claim: buildClaimResponse(result.claim),
+      claim: buildClaimResponse(result?.claim),
 
-      occurrence: buildOccurrenceResponse(result.occurrence),
+      occurrence: buildOccurrenceResponse(result?.occurrence),
     });
   } catch (error) {
     return handleJsonError({

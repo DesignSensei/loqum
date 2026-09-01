@@ -353,8 +353,6 @@ exports.postShift = async (req, res) => {
 
       pricing: result.pricing,
 
-      paymentReview: result.paymentReview,
-
       shiftDetailsUrl,
 
       manageShiftsUrl: EMPLOYER_SHIFTS_URL,

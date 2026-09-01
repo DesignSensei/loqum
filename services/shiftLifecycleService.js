@@ -9,6 +9,7 @@ const ShiftAssignment = require("../models/ShiftAssignment");
 const PlatformSettingsService = require("./platformSettingsService");
 const ShiftSettlementService = require("./shiftSettlementService");
 const ShiftRefundService = require("./shiftRefundService");
+const ShiftApplicationService = require("./shiftApplicationService");
 const ShiftOccurrenceReconciliationService = require("./shiftOccurrenceReconciliationService");
 
 const { createServiceError } = require("./helpers/serviceErrorHelper");
@@ -19,6 +20,7 @@ const { FINANCIAL_RATE_SCALE } = require("../constants/shiftPosting");
 const {
   SHIFT_CANCELLABLE_FROM_STATUSES,
   REFUND_EXECUTION_STATUSES,
+  EXPIRED_FROM_ASSIGNMENT_STATUSES,
 } = require("../constants/shiftLifecycle");
 
 const money = require("../utils/money");
@@ -37,10 +39,12 @@ const MANAGED_ASSIGNMENT_STATUSES = Object.freeze(["scheduled", "active", "endin
 
 const REFUND_EXECUTION_STARTED_STATUSES = Object.freeze([...REFUND_EXECUTION_STATUSES]);
 
+const EXPIRABLE_ASSIGNMENT_STATUSES = Object.freeze([...EXPIRED_FROM_ASSIGNMENT_STATUSES]);
+
 /**
  * SHIFT LIFECYCLE SERVICE ARCHITECTURE
  *
- * This service owns cancellation and lifecycle facts.
+ * This service owns Shift / ShiftOccurrence lifecycle transitions.
  *
  * It may:
  *
@@ -48,25 +52,46 @@ const REFUND_EXECUTION_STARTED_STATUSES = Object.freeze([...REFUND_EXECUTION_STA
  * - determine the cancellation mode;
  * - calculate professional cancellation compensation;
  * - record cancellation / active-work-cancellation facts;
+ * - expire unfunded parent Shifts when their funding deadline is reached;
+ * - finalize funded unassigned / replacement-required occurrences when their
+ *   persisted unfilledFinalizationAt deadline is reached;
+ * - close or shrink the parent replacement-hiring tail after occurrence
+ *   finalization;
  * - close affected assignments; and
- * - orchestrate downstream settlement, refund-obligation and parent
- *   reconciliation services.
+ * - orchestrate downstream application cleanup, settlement, refund-obligation
+ *   and parent reconciliation services.
  *
  * It does not:
  *
  * - decide whether the business may create a new obligation;
  * - use employerContext.canPostShifts as lifecycle authorization;
+ * - calculate or backfill unfilledFinalizationAt;
  * - earn, recalculate, collect or reverse platform fees;
  * - own professional settlement component state;
  * - execute employer refunds;
  * - move protected funds; or
  * - rebuild parent Shift financial/occurrence summaries itself.
  *
+ * UNFILLED-OCCURRENCE POLICY
+ *
+ * unfilledFinalizationAt is persisted upstream. This service consumes that
+ * deadline; it does not derive one from startTime, endTime or fillCutoffAt.
+ *
+ * Ordinary unassigned occurrence:
+ * - no professional was confirmed;
+ * - base platform fee must therefore remain unearned; and
+ * - the unused scheduled allocation becomes refundable.
+ *
+ * Replacement-required occurrence:
+ * - the original assignment may already have earned the BASE platform fee;
+ * - replacement failure does not un-earn that fee; and
+ * - only the remaining scheduled allocation becomes refundable.
+ *
  * PLATFORM-FEE POLICY
  *
  * Base platform fee is earned by the assignment/confirmation flow. Once
- * earned, cancellation does not recalculate it from cancellation compensation
- * and does not reverse it.
+ * earned, cancellation or replacement failure does not recalculate or reverse
+ * it. This service never edits basePlatformFeeAudit.
  *
  * REFUND POLICY
  *
@@ -77,10 +102,14 @@ const REFUND_EXECUTION_STARTED_STATUSES = Object.freeze([...REFUND_EXECUTION_STA
  *   - already-earned base platform fee
  *   - professional cancellation entitlement
  *
- * That preview is not financial mutation authority. ShiftRefundService
- * re-derives the authoritative BASE refund from persisted occurrence state,
- * owns the resulting EmployerRefund obligation and its holds, and weekly
- * EmployerRefundBatch owns financial execution.
+ * ShiftRefundService remains authoritative for the actual EmployerRefund
+ * obligation, automatic holds and downstream execution eligibility. Weekly
+ * EmployerRefundBatch remains the external refund execution owner.
+ *
+ * PARENT RECONCILIATION
+ *
+ * ShiftOccurrenceReconciliationService is aggregation only. Lifecycle truth is
+ * changed here first, then reconciliation rebuilds the parent Shift summary.
  */
 
 class ShiftLifecycleService {
@@ -285,6 +314,36 @@ class ShiftLifecycleService {
     }
 
     return shift;
+  }
+
+  static async getSystemOccurrence({ shiftId, occurrenceId, session = null }) {
+    const normalizedShiftId = ShiftLifecycleService.normalizeObjectId(shiftId, "shift ID");
+
+    const normalizedOccurrenceId = ShiftLifecycleService.normalizeObjectId(
+      occurrenceId,
+      "occurrence ID"
+    );
+
+    const query = ShiftOccurrence.findOne({
+      _id: normalizedOccurrenceId,
+      shift: normalizedShiftId,
+    });
+
+    if (session) {
+      query.session(session);
+    }
+
+    const occurrence = await query;
+
+    if (!occurrence) {
+      throw ShiftLifecycleService.createError({
+        message: "Shift occurrence not found.",
+        code: "SHIFT_OCCURRENCE_NOT_FOUND",
+        statusCode: 404,
+      });
+    }
+
+    return occurrence;
   }
 
   static async getOccurrences({ shiftId, session = null }) {
@@ -1396,6 +1455,8 @@ class ShiftLifecycleService {
     try {
       const result = await ShiftRefundService.reevaluateOccurrenceRefund(
         {
+          shift,
+          occurrence,
           shiftId: shift._id,
           occurrenceId: occurrence._id,
           reason,
@@ -1430,6 +1491,45 @@ class ShiftLifecycleService {
       throw ShiftLifecycleService.createError({
         message: error.message,
         code: error.code || "EMPLOYER_REFUND_OBLIGATION_FAILED",
+        statusCode: error.statusCode || 500,
+        details: error.details && typeof error.details === "object" ? error.details : null,
+      });
+    }
+  }
+
+  static async expireOpenApplications({
+    shiftId,
+    applicationRound = null,
+    occurrenceId = undefined,
+    session,
+  }) {
+    if (typeof ShiftApplicationService.expireOpenApplicationsForShift !== "function") {
+      throw ShiftLifecycleService.createError({
+        message: "ShiftApplicationService.expireOpenApplicationsForShift is not implemented.",
+        code: "SHIFT_APPLICATION_EXPIRATION_SERVICE_NOT_IMPLEMENTED",
+        statusCode: 500,
+      });
+    }
+
+    try {
+      return await ShiftApplicationService.expireOpenApplicationsForShift(
+        {
+          shiftId,
+          applicationRound,
+          occurrenceId,
+        },
+        {
+          session,
+        }
+      );
+    } catch (error) {
+      if (error?.name !== "ShiftApplicationServiceError") {
+        throw error;
+      }
+
+      throw ShiftLifecycleService.createError({
+        message: error.message,
+        code: error.code || "SHIFT_APPLICATION_EXPIRATION_FAILED",
         statusCode: error.statusCode || 500,
         details: error.details && typeof error.details === "object" ? error.details : null,
       });
@@ -2164,6 +2264,1016 @@ class ShiftLifecycleService {
       expired: results.filter((item) => item.success && item.result?.expired).length,
       failed: results.filter((item) => !item.success).length,
       results,
+    };
+  }
+
+  /* ─────────────────────────────── FUNDED UNFILLED OCCURRENCE EXPIRATION ─────────────────────────────── */
+
+  static componentHasSettlementActivity(component) {
+    if (!component) {
+      return false;
+    }
+
+    const status = String(component.status || "not_due")
+      .trim()
+      .toLowerCase();
+
+    return status !== "not_due";
+  }
+
+  static occurrenceHasAttendanceActivity(occurrence) {
+    return Boolean(
+      occurrence?.checkedInAt ||
+      occurrence?.checkedOutAt ||
+      occurrence?.checkInPinUsedAt ||
+      occurrence?.checkOutPinUsedAt ||
+      String(occurrence?.attendanceStatus || "not_started") !== "not_started"
+    );
+  }
+
+  static occurrenceHasSettlementActivity(occurrence) {
+    return Boolean(
+      String(occurrence?.settlementStatus || "not_due") !== "not_due" ||
+      occurrence?.reviewStartedAt ||
+      occurrence?.reviewDeadlineAt ||
+      occurrence?.settledAt ||
+      ShiftLifecycleService.componentHasSettlementActivity(occurrence?.baseSettlement) ||
+      ShiftLifecycleService.componentHasSettlementActivity(occurrence?.overtimeSettlement) ||
+      occurrence?.topUpTransaction ||
+      Number(occurrence?.topUpRequired || 0) > 0 ||
+      occurrence?.overtime?.requested === true
+    );
+  }
+
+  static occurrenceHasChallengeActivity(occurrence) {
+    return Boolean(
+      occurrence?.activeClaim ||
+      occurrence?.activeDispute ||
+      occurrence?.challengeWindowOpenedAt ||
+      occurrence?.challengeDeadlineAt ||
+      occurrence?.challengeWindowClosedAt
+    );
+  }
+
+  static occurrenceHasRefundActivity(occurrence) {
+    const refundStatus = String(occurrence?.refundStatus || "not_eligible")
+      .trim()
+      .toLowerCase();
+
+    return Boolean(
+      refundStatus !== "not_eligible" ||
+      Number(occurrence?.refundableAmount || 0) !== 0 ||
+      Number(occurrence?.refundedAmount || 0) !== 0 ||
+      occurrence?.refundReason ||
+      occurrence?.refundEligibleAt ||
+      occurrence?.refundLastEvaluatedAt ||
+      occurrence?.refundHeldAt ||
+      occurrence?.refundHoldReason ||
+      occurrence?.employerRefund ||
+      occurrence?.refundBatch ||
+      occurrence?.refundProcessingStartedAt ||
+      occurrence?.refundedAt
+    );
+  }
+
+  static hasAnyReplacementAudit(occurrence) {
+    return Boolean(
+      occurrence?.replacementRequiredAt ||
+      occurrence?.replacementForAssignment ||
+      occurrence?.replacementCase ||
+      occurrence?.replacementReasonCode ||
+      occurrence?.replacementReasonDetails
+    );
+  }
+
+  static hasCompleteReplacementAudit(occurrence) {
+    return Boolean(
+      occurrence?.replacementRequiredAt &&
+      occurrence?.replacementForAssignment &&
+      occurrence?.replacementReasonCode
+    );
+  }
+
+  static getPersistedUnfilledFinalizationDeadline(occurrence) {
+    if (!occurrence?.fillCutoffAt) {
+      throw ShiftLifecycleService.createError({
+        message: "The occurrence fill cutoff is missing.",
+        code: "OCCURRENCE_FILL_CUTOFF_MISSING",
+        statusCode: 500,
+        details: {
+          occurrenceId: occurrence?._id ? String(occurrence._id) : null,
+        },
+      });
+    }
+
+    if (!occurrence?.unfilledFinalizationAt) {
+      throw ShiftLifecycleService.createError({
+        message: "The occurrence unfilled-finalization deadline is missing.",
+        code: "OCCURRENCE_UNFILLED_FINALIZATION_DEADLINE_MISSING",
+        statusCode: 500,
+        details: {
+          occurrenceId: occurrence?._id ? String(occurrence._id) : null,
+        },
+      });
+    }
+
+    const fillCutoffAt = new Date(occurrence.fillCutoffAt);
+    const unfilledFinalizationAt = new Date(occurrence.unfilledFinalizationAt);
+
+    if (Number.isNaN(fillCutoffAt.getTime())) {
+      throw ShiftLifecycleService.createError({
+        message: "The occurrence fill cutoff is invalid.",
+        code: "INVALID_OCCURRENCE_FILL_CUTOFF",
+        statusCode: 500,
+        details: {
+          occurrenceId: occurrence?._id ? String(occurrence._id) : null,
+        },
+      });
+    }
+
+    if (Number.isNaN(unfilledFinalizationAt.getTime())) {
+      throw ShiftLifecycleService.createError({
+        message: "The occurrence unfilled-finalization deadline is invalid.",
+        code: "INVALID_OCCURRENCE_UNFILLED_FINALIZATION_DEADLINE",
+        statusCode: 500,
+        details: {
+          occurrenceId: occurrence?._id ? String(occurrence._id) : null,
+        },
+      });
+    }
+
+    if (unfilledFinalizationAt <= fillCutoffAt) {
+      throw ShiftLifecycleService.createError({
+        message:
+          "The occurrence unfilled-finalization deadline must be later than its fill cutoff.",
+        code: "INVALID_OCCURRENCE_UNFILLED_FINALIZATION_ORDER",
+        statusCode: 500,
+        details: {
+          occurrenceId: occurrence?._id ? String(occurrence._id) : null,
+          fillCutoffAt,
+          unfilledFinalizationAt,
+        },
+      });
+    }
+
+    return unfilledFinalizationAt;
+  }
+
+  static assertUnfilledExpirationAuditState(occurrence) {
+    if (occurrence.assignmentStatus === "replacement_required") {
+      if (!ShiftLifecycleService.hasCompleteReplacementAudit(occurrence)) {
+        throw ShiftLifecycleService.createError({
+          message:
+            "The replacement-required occurrence does not contain a complete replacement audit.",
+          code: "INCOMPLETE_REPLACEMENT_REQUIRED_AUDIT",
+          statusCode: 500,
+          details: {
+            occurrenceId: String(occurrence._id),
+          },
+        });
+      }
+
+      return true;
+    }
+
+    if (
+      occurrence.assignmentStatus === "unassigned" &&
+      ShiftLifecycleService.hasAnyReplacementAudit(occurrence)
+    ) {
+      throw ShiftLifecycleService.createError({
+        message: "An ordinary unassigned occurrence cannot contain replacement audit data.",
+        code: "UNASSIGNED_OCCURRENCE_REPLACEMENT_AUDIT_CONFLICT",
+        statusCode: 500,
+        details: {
+          occurrenceId: String(occurrence._id),
+        },
+      });
+    }
+
+    return true;
+  }
+
+  static getUnfilledExpirationIneligibilityReason({ shift, occurrence, currentTime }) {
+    const fundedAmount = ShiftLifecycleService.assertSafeNonNegativeAmount(
+      shift?.fundedAmount,
+      "Shift funded amount"
+    );
+
+    if (!shift?.publishedAt || shift?.paymentStatus === "unpaid" || fundedAmount <= 0) {
+      return "engagement_not_funded";
+    }
+
+    if (["completed", "cancelled", "no_show"].includes(shift.status)) {
+      return "parent_status_changed";
+    }
+
+    if (
+      occurrence.assignmentStatus === "expired_unfilled" ||
+      occurrence.status === "expired_unfilled"
+    ) {
+      return "already_expired_unfilled";
+    }
+
+    if (!EXPIRABLE_ASSIGNMENT_STATUSES.includes(occurrence.assignmentStatus)) {
+      return "assignment_status_changed";
+    }
+
+    ShiftLifecycleService.assertUnfilledExpirationAuditState(occurrence);
+
+    if (occurrence.assignedProfessional || occurrence.assignment || occurrence.assignedAt) {
+      return "occurrence_assigned";
+    }
+
+    if (occurrence.status !== "scheduled") {
+      return "occurrence_status_changed";
+    }
+
+    if (ShiftLifecycleService.occurrenceHasAttendanceActivity(occurrence)) {
+      return "attendance_activity_recorded";
+    }
+
+    if (ShiftLifecycleService.occurrenceHasSettlementActivity(occurrence)) {
+      return "settlement_activity_recorded";
+    }
+
+    if (ShiftLifecycleService.occurrenceHasChallengeActivity(occurrence)) {
+      return "challenge_activity_recorded";
+    }
+
+    if (ShiftLifecycleService.occurrenceHasRefundActivity(occurrence)) {
+      return "refund_workflow_already_started";
+    }
+
+    const deadline = ShiftLifecycleService.getPersistedUnfilledFinalizationDeadline(occurrence);
+
+    if (deadline > currentTime) {
+      return "unfilled_finalization_deadline_not_reached";
+    }
+
+    return null;
+  }
+
+  static getUnfilledExpirationFinancialOutcome(occurrence) {
+    const estimatedEmployerCharge = ShiftLifecycleService.assertSafeNonNegativeAmount(
+      occurrence?.estimatedEmployerCharge,
+      "occurrence estimated employer charge"
+    );
+
+    if (estimatedEmployerCharge <= 0) {
+      throw ShiftLifecycleService.createError({
+        message: "The funded occurrence does not contain a positive scheduled employer allocation.",
+        code: "INVALID_UNFILLED_OCCURRENCE_ESTIMATED_EMPLOYER_CHARGE",
+        statusCode: 500,
+        details: {
+          occurrenceId: occurrence?._id ? String(occurrence._id) : null,
+          estimatedEmployerCharge,
+        },
+      });
+    }
+
+    const baseProfessionalPay = ShiftLifecycleService.assertSafeNonNegativeAmount(
+      occurrence?.baseProfessionalPay,
+      "occurrence base professional pay"
+    );
+
+    const overtimeProfessionalPay = ShiftLifecycleService.assertSafeNonNegativeAmount(
+      occurrence?.overtimeProfessionalPay,
+      "occurrence overtime professional pay"
+    );
+
+    const overtimePlatformFee = ShiftLifecycleService.assertSafeNonNegativeAmount(
+      occurrence?.overtimePlatformFee,
+      "occurrence overtime platform fee"
+    );
+
+    const overtimeEmployerCharge = ShiftLifecycleService.assertSafeNonNegativeAmount(
+      occurrence?.overtimeEmployerCharge,
+      "occurrence overtime employer charge"
+    );
+
+    const topUpRequired = ShiftLifecycleService.assertSafeNonNegativeAmount(
+      occurrence?.topUpRequired,
+      "occurrence top-up required"
+    );
+
+    if (baseProfessionalPay > 0 || overtimeProfessionalPay > 0) {
+      throw ShiftLifecycleService.createError({
+        message: "An unfilled occurrence cannot contain professional earnings.",
+        code: "UNFILLED_OCCURRENCE_PROFESSIONAL_EARNINGS_CONFLICT",
+        statusCode: 500,
+        details: {
+          occurrenceId: String(occurrence._id),
+          baseProfessionalPay,
+          overtimeProfessionalPay,
+        },
+      });
+    }
+
+    const overtimeFeeAudit = occurrence?.overtimePlatformFeeAudit || {};
+
+    if (
+      overtimePlatformFee > 0 ||
+      overtimeEmployerCharge > 0 ||
+      topUpRequired > 0 ||
+      occurrence?.topUpTransaction ||
+      occurrence?.overtime?.requested === true ||
+      overtimeFeeAudit.earnedAt ||
+      overtimeFeeAudit.outstandingAt ||
+      overtimeFeeAudit.collectedAt ||
+      overtimeFeeAudit.collectionTransaction
+    ) {
+      throw ShiftLifecycleService.createError({
+        message: "An unfilled occurrence cannot contain overtime or top-up activity.",
+        code: "UNFILLED_OCCURRENCE_OVERTIME_CONFLICT",
+        statusCode: 500,
+        details: {
+          occurrenceId: String(occurrence._id),
+        },
+      });
+    }
+
+    const retainedBasePlatformFee = ShiftLifecycleService.getRetainedBasePlatformFee(occurrence);
+
+    const estimatedPlatformFee = ShiftLifecycleService.assertSafeNonNegativeAmount(
+      occurrence?.estimatedPlatformFee,
+      "occurrence estimated platform fee"
+    );
+
+    if (retainedBasePlatformFee > 0 && retainedBasePlatformFee !== estimatedPlatformFee) {
+      throw ShiftLifecycleService.createError({
+        message:
+          "The retained earned BASE platform fee does not match the occurrence pricing snapshot.",
+        code: "UNFILLED_OCCURRENCE_BASE_PLATFORM_FEE_PRICING_MISMATCH",
+        statusCode: 500,
+        details: {
+          occurrenceId: String(occurrence._id),
+          retainedBasePlatformFee,
+          estimatedPlatformFee,
+        },
+      });
+    }
+
+    if (
+      occurrence.assignmentStatus === "replacement_required" &&
+      estimatedPlatformFee > 0 &&
+      retainedBasePlatformFee === 0
+    ) {
+      throw ShiftLifecycleService.createError({
+        message:
+          "A replacement-required occurrence is missing its previously earned BASE platform fee.",
+        code: "REPLACEMENT_REQUIRED_BASE_PLATFORM_FEE_MISSING",
+        statusCode: 500,
+        details: {
+          occurrenceId: String(occurrence._id),
+          estimatedPlatformFee,
+        },
+      });
+    }
+
+    const baseFeeAudit = occurrence?.basePlatformFeeAudit || {};
+
+    if (occurrence.assignmentStatus === "unassigned") {
+      if (
+        retainedBasePlatformFee !== 0 ||
+        baseFeeAudit.earnedAt ||
+        baseFeeAudit.outstandingAt ||
+        baseFeeAudit.collectedAt ||
+        baseFeeAudit.collectionTransaction
+      ) {
+        throw ShiftLifecycleService.createError({
+          message: "An ordinary unassigned occurrence cannot retain BASE platform-fee activity.",
+          code: "UNASSIGNED_OCCURRENCE_BASE_PLATFORM_FEE_CONFLICT",
+          statusCode: 500,
+          details: {
+            occurrenceId: String(occurrence._id),
+            retainedBasePlatformFee,
+          },
+        });
+      }
+    }
+
+    if (
+      occurrence.assignmentStatus === "replacement_required" &&
+      retainedBasePlatformFee > 0 &&
+      (!baseFeeAudit.earnedAt ||
+        !baseFeeAudit.collectedAt ||
+        !baseFeeAudit.collectionTransaction ||
+        baseFeeAudit.outstandingAt)
+    ) {
+      throw ShiftLifecycleService.createError({
+        message:
+          "A replacement-required occurrence must retain its completed BASE platform-fee audit.",
+        code: "REPLACEMENT_REQUIRED_BASE_PLATFORM_FEE_AUDIT_INCOMPLETE",
+        statusCode: 500,
+        details: {
+          occurrenceId: String(occurrence._id),
+          retainedBasePlatformFee,
+        },
+      });
+    }
+
+    const existingBaseEmployerCharge = ShiftLifecycleService.assertSafeNonNegativeAmount(
+      occurrence?.baseEmployerCharge,
+      "occurrence base employer charge"
+    );
+
+    if (existingBaseEmployerCharge !== retainedBasePlatformFee) {
+      throw ShiftLifecycleService.createError({
+        message:
+          "The unfilled occurrence BASE employer charge does not match its retained earned BASE platform fee.",
+        code: "UNFILLED_OCCURRENCE_BASE_CHARGE_CONFLICT",
+        statusCode: 500,
+        details: {
+          occurrenceId: String(occurrence._id),
+          existingBaseEmployerCharge,
+          retainedBasePlatformFee,
+        },
+      });
+    }
+
+    const refundableAmount = estimatedEmployerCharge - retainedBasePlatformFee;
+
+    if (!Number.isSafeInteger(refundableAmount) || refundableAmount < 0) {
+      throw ShiftLifecycleService.createError({
+        message: "The unfilled occurrence contains an invalid refundable scheduled balance.",
+        code: "INVALID_UNFILLED_OCCURRENCE_REFUND_AMOUNT",
+        statusCode: 500,
+        details: {
+          occurrenceId: String(occurrence._id),
+          estimatedEmployerCharge,
+          retainedBasePlatformFee,
+          refundableAmount,
+        },
+      });
+    }
+
+    return {
+      estimatedEmployerCharge,
+      retainedBasePlatformFee,
+      refundableAmount,
+    };
+  }
+
+  static resetUnfilledExpirationRefundMirror(occurrence) {
+    occurrence.refundableAmount = 0;
+    occurrence.refundedAmount = 0;
+    occurrence.refundStatus = "not_eligible";
+    occurrence.refundReason = null;
+    occurrence.refundEligibleAt = null;
+    occurrence.refundLastEvaluatedAt = null;
+    occurrence.refundHeldAt = null;
+    occurrence.refundHoldReason = null;
+    occurrence.employerRefund = null;
+    occurrence.refundBatch = null;
+    occurrence.refundProcessingStartedAt = null;
+    occurrence.refundedAt = null;
+
+    if (occurrence.schema?.path("refundTransaction")) {
+      occurrence.refundTransaction = null;
+    }
+
+    return occurrence;
+  }
+
+  static setOccurrenceExpiredUnfilledFacts({ occurrence, currentTime }) {
+    const expiredFromAssignmentStatus = String(occurrence.assignmentStatus || "")
+      .trim()
+      .toLowerCase();
+
+    if (!EXPIRABLE_ASSIGNMENT_STATUSES.includes(expiredFromAssignmentStatus)) {
+      throw ShiftLifecycleService.createError({
+        message: "The occurrence is not in an assignment state that may expire unfilled.",
+        code: "OCCURRENCE_NOT_EXPIRABLE_UNFILLED",
+        statusCode: 409,
+        details: {
+          occurrenceId: String(occurrence._id),
+          assignmentStatus: occurrence.assignmentStatus,
+        },
+      });
+    }
+
+    const financialOutcome =
+      ShiftLifecycleService.getUnfilledExpirationFinancialOutcome(occurrence);
+
+    occurrence.assignmentStatus = "expired_unfilled";
+    occurrence.expiredFromAssignmentStatus = expiredFromAssignmentStatus;
+
+    occurrence.assignedProfessional = null;
+    occurrence.assignment = null;
+    occurrence.assignedAt = null;
+
+    occurrence.status = "expired_unfilled";
+    occurrence.attendanceStatus = "not_started";
+    occurrence.settlementStatus = "not_due";
+    occurrence.expiredUnfilledAt = currentTime;
+
+    occurrence.checkedInAt = null;
+    occurrence.checkedOutAt = null;
+    occurrence.checkInPinUsedAt = null;
+    occurrence.checkOutPinUsedAt = null;
+
+    occurrence.baseBillableHours = 0;
+    occurrence.billableHours = 0;
+
+    occurrence.baseProfessionalPay = 0;
+    occurrence.basePlatformFee = financialOutcome.retainedBasePlatformFee;
+    occurrence.baseEmployerCharge = financialOutcome.retainedBasePlatformFee;
+
+    occurrence.overtimeProfessionalPay = 0;
+    occurrence.overtimePlatformFee = 0;
+    occurrence.overtimeEmployerCharge = 0;
+
+    occurrence.topUpRequired = 0;
+    occurrence.topUpTransaction = null;
+
+    occurrence.set("baseSettlement", {
+      status: "not_due",
+    });
+
+    occurrence.set("overtimeSettlement", {
+      status: "not_due",
+    });
+
+    occurrence.reviewStartedAt = null;
+    occurrence.reviewDeadlineAt = null;
+    occurrence.settledAt = null;
+
+    ShiftLifecycleService.resetUnfilledExpirationRefundMirror(occurrence);
+
+    return financialOutcome;
+  }
+
+  static isOccurrenceInParentReplacementTail({ shift, occurrence }) {
+    const replacementHiring = shift?.replacementHiring || {};
+
+    if (String(replacementHiring.status || "closed") !== "open") {
+      return false;
+    }
+
+    if (!replacementHiring.replacementForAssignment || !occurrence?.replacementForAssignment) {
+      return false;
+    }
+
+    if (
+      String(replacementHiring.replacementForAssignment) !==
+      String(occurrence.replacementForAssignment)
+    ) {
+      return false;
+    }
+
+    if (!replacementHiring.assignmentCase || !occurrence.replacementCase) {
+      return false;
+    }
+
+    if (String(replacementHiring.assignmentCase) !== String(occurrence.replacementCase)) {
+      return false;
+    }
+
+    const sequenceNumber = Number(occurrence.sequenceNumber);
+    const startSequenceNumber = Number(replacementHiring.startSequenceNumber);
+    const endSequenceNumber = Number(replacementHiring.endSequenceNumber);
+
+    if (
+      !Number.isSafeInteger(sequenceNumber) ||
+      !Number.isSafeInteger(startSequenceNumber) ||
+      !Number.isSafeInteger(endSequenceNumber)
+    ) {
+      return false;
+    }
+
+    return sequenceNumber >= startSequenceNumber && sequenceNumber <= endSequenceNumber;
+  }
+
+  static getParentReplacementTailOccurrences({ shift, occurrences }) {
+    return occurrences.filter(
+      (occurrence) =>
+        occurrence.assignmentStatus === "replacement_required" &&
+        occurrence.status === "scheduled" &&
+        ShiftLifecycleService.isOccurrenceInParentReplacementTail({
+          shift,
+          occurrence,
+        })
+    );
+  }
+
+  static assertContiguousReplacementRange(occurrences) {
+    if (!Array.isArray(occurrences) || occurrences.length <= 1) {
+      return true;
+    }
+
+    const sortedOccurrences = [...occurrences].sort(
+      (left, right) => Number(left.sequenceNumber) - Number(right.sequenceNumber)
+    );
+
+    for (let index = 1; index < sortedOccurrences.length; index += 1) {
+      const previousSequence = Number(sortedOccurrences[index - 1].sequenceNumber);
+      const currentSequence = Number(sortedOccurrences[index].sequenceNumber);
+
+      if (currentSequence !== previousSequence + 1) {
+        throw ShiftLifecycleService.createError({
+          message: "The parent replacement occurrence range is not contiguous.",
+          code: "NON_CONTIGUOUS_REPLACEMENT_RANGE",
+          statusCode: 500,
+          details: {
+            previousSequence,
+            currentSequence,
+          },
+        });
+      }
+    }
+
+    return true;
+  }
+
+  static updateParentReplacementHiringRange({ shift, remainingOccurrences }) {
+    ShiftLifecycleService.assertContiguousReplacementRange(remainingOccurrences);
+
+    if (!Array.isArray(remainingOccurrences) || remainingOccurrences.length === 0) {
+      throw ShiftLifecycleService.createError({
+        message: "At least one replacement occurrence is required to keep replacement hiring open.",
+        code: "EMPTY_REPLACEMENT_RANGE",
+        statusCode: 500,
+      });
+    }
+
+    const sortedOccurrences = [...remainingOccurrences].sort(
+      (left, right) => Number(left.sequenceNumber) - Number(right.sequenceNumber)
+    );
+
+    shift.replacementHiring.startSequenceNumber = Number(sortedOccurrences[0].sequenceNumber);
+    shift.replacementHiring.endSequenceNumber = Number(
+      sortedOccurrences[sortedOccurrences.length - 1].sequenceNumber
+    );
+    shift.replacementHiring.occurrenceCount = sortedOccurrences.length;
+
+    return shift;
+  }
+
+  static closeParentReplacementHiring(shift) {
+    shift.replacementHiring = {
+      status: "closed",
+      assignmentCase: null,
+      applicationRound: null,
+      replacementForAssignment: null,
+      startSequenceNumber: null,
+      endSequenceNumber: null,
+      occurrenceCount: 0,
+      reasonCode: null,
+      reasonDetails: null,
+      openedAt: null,
+      openedBy: null,
+      filledAt: null,
+      filledByAssignment: null,
+      cancelledAt: null,
+      cancelledBy: null,
+      cancellationReason: null,
+    };
+
+    return shift;
+  }
+
+  static async reconcileReplacementHiringAfterUnfilledExpiration({
+    shift,
+    occurrences,
+    expiredOccurrence,
+    currentTime,
+    session,
+  }) {
+    if (expiredOccurrence.expiredFromAssignmentStatus !== "replacement_required") {
+      return {
+        parentReplacementTailAffected: false,
+        remainingReplacementOccurrenceCount: 0,
+        expiredOccurrenceApplicationCount: 0,
+        expiredParentApplicationCount: 0,
+      };
+    }
+
+    const isolatedApplicationResult = await ShiftLifecycleService.expireOpenApplications({
+      shiftId: shift._id,
+      occurrenceId: expiredOccurrence._id,
+      session,
+    });
+
+    const wasInParentReplacementTail = ShiftLifecycleService.isOccurrenceInParentReplacementTail({
+      shift,
+      occurrence: expiredOccurrence,
+    });
+
+    if (!wasInParentReplacementTail) {
+      return {
+        parentReplacementTailAffected: false,
+        remainingReplacementOccurrenceCount: 0,
+        expiredOccurrenceApplicationCount: Number(
+          isolatedApplicationResult?.expiredApplicationCount || 0
+        ),
+        expiredParentApplicationCount: 0,
+      };
+    }
+
+    const remainingTailOccurrences = ShiftLifecycleService.getParentReplacementTailOccurrences({
+      shift,
+      occurrences,
+    }).filter((occurrence) => String(occurrence._id) !== String(expiredOccurrence._id));
+
+    let expiredParentApplicationCount = 0;
+
+    if (remainingTailOccurrences.length > 0) {
+      ShiftLifecycleService.updateParentReplacementHiringRange({
+        shift,
+        remainingOccurrences: remainingTailOccurrences,
+      });
+    } else {
+      const applicationRound = shift.replacementHiring?.applicationRound ?? null;
+
+      if (applicationRound !== null && applicationRound !== undefined) {
+        const parentApplicationResult = await ShiftLifecycleService.expireOpenApplications({
+          shiftId: shift._id,
+          applicationRound,
+          occurrenceId: undefined,
+          session,
+        });
+
+        expiredParentApplicationCount = Number(
+          parentApplicationResult?.expiredApplicationCount || 0
+        );
+      }
+
+      ShiftLifecycleService.closeParentReplacementHiring(shift);
+    }
+
+    await shift.save({
+      session,
+    });
+
+    return {
+      parentReplacementTailAffected: true,
+      remainingReplacementOccurrenceCount: remainingTailOccurrences.length,
+      expiredOccurrenceApplicationCount: Number(
+        isolatedApplicationResult?.expiredApplicationCount || 0
+      ),
+      expiredParentApplicationCount,
+      currentTime,
+    };
+  }
+
+  static async expireUnfilledOccurrence({ shiftId, occurrenceId, now = new Date() }, options = {}) {
+    const expirationDate = ShiftLifecycleService.normalizeDate(now, "expiration date");
+
+    return ShiftLifecycleService.runWithOptionalTransaction(options, async (session) => {
+      const shift = await ShiftLifecycleService.getSystemShift({
+        shiftId,
+        session,
+      });
+
+      const occurrence = await ShiftLifecycleService.getSystemOccurrence({
+        shiftId,
+        occurrenceId,
+        session,
+      });
+
+      if (
+        occurrence.assignmentStatus === "expired_unfilled" &&
+        occurrence.status === "expired_unfilled"
+      ) {
+        return {
+          expired: true,
+          alreadyFinalized: true,
+          shiftId: String(shift._id),
+          occurrenceId: String(occurrence._id),
+          referenceCode: occurrence.referenceCode,
+          expiredFromAssignmentStatus: occurrence.expiredFromAssignmentStatus || null,
+          expiredUnfilledAt: occurrence.expiredUnfilledAt || null,
+        };
+      }
+
+      const ineligibilityReason = ShiftLifecycleService.getUnfilledExpirationIneligibilityReason({
+        shift,
+        occurrence,
+        currentTime: expirationDate,
+      });
+
+      if (ineligibilityReason) {
+        return {
+          expired: false,
+          alreadyFinalized: false,
+          shiftId: String(shift._id),
+          occurrenceId: String(occurrence._id),
+          referenceCode: occurrence.referenceCode,
+          assignmentStatus: occurrence.assignmentStatus,
+          status: occurrence.status,
+          reason: ineligibilityReason,
+          unfilledFinalizationAt: occurrence.unfilledFinalizationAt || null,
+        };
+      }
+
+      const occurrences = await ShiftLifecycleService.getOccurrences({
+        shiftId: shift._id,
+        session,
+      });
+
+      const targetOccurrence = occurrences.find(
+        (item) => String(item._id) === String(occurrence._id)
+      );
+
+      if (!targetOccurrence) {
+        throw ShiftLifecycleService.createError({
+          message: "The occurrence could not be resolved inside its parent occurrence set.",
+          code: "SHIFT_OCCURRENCE_CONTEXT_NOT_FOUND",
+          statusCode: 500,
+        });
+      }
+
+      if (
+        targetOccurrence.assignmentStatus === "replacement_required" &&
+        ShiftLifecycleService.isOccurrenceInParentReplacementTail({
+          shift,
+          occurrence: targetOccurrence,
+        })
+      ) {
+        const tailOccurrences = ShiftLifecycleService.getParentReplacementTailOccurrences({
+          shift,
+          occurrences,
+        });
+
+        ShiftLifecycleService.assertContiguousReplacementRange(tailOccurrences);
+
+        const firstTailOccurrence = [...tailOccurrences].sort(
+          (left, right) => Number(left.sequenceNumber) - Number(right.sequenceNumber)
+        )[0];
+
+        if (
+          firstTailOccurrence &&
+          String(firstTailOccurrence._id) !== String(targetOccurrence._id)
+        ) {
+          return {
+            expired: false,
+            alreadyFinalized: false,
+            shiftId: String(shift._id),
+            occurrenceId: String(targetOccurrence._id),
+            referenceCode: targetOccurrence.referenceCode,
+            assignmentStatus: targetOccurrence.assignmentStatus,
+            status: targetOccurrence.status,
+            reason: "earlier_replacement_occurrence_pending",
+            blockingOccurrenceId: String(firstTailOccurrence._id),
+            blockingSequenceNumber: firstTailOccurrence.sequenceNumber,
+          };
+        }
+      }
+
+      const financialOutcome = ShiftLifecycleService.setOccurrenceExpiredUnfilledFacts({
+        occurrence: targetOccurrence,
+        currentTime: expirationDate,
+      });
+
+      const refundResult = await ShiftLifecycleService.reevaluateRefundObligation({
+        shift,
+        occurrence: targetOccurrence,
+        reason: "expired_unfilled",
+        initiatedBy: {
+          role: "system",
+          userId: null,
+        },
+        currentTime: expirationDate,
+        session,
+      });
+
+      const resolvedOccurrence = refundResult?.occurrence || targetOccurrence;
+
+      const replacementResult =
+        await ShiftLifecycleService.reconcileReplacementHiringAfterUnfilledExpiration({
+          shift,
+          occurrences,
+          expiredOccurrence: resolvedOccurrence,
+          currentTime: expirationDate,
+          session,
+        });
+
+      const reconciliation = await ShiftLifecycleService.reconcileParentShift({
+        shiftId: shift._id,
+        currentTime: expirationDate,
+        session,
+      });
+
+      logger.info(
+        `Occurrence ${resolvedOccurrence.referenceCode} expired unfilled from ${resolvedOccurrence.expiredFromAssignmentStatus}`
+      );
+
+      return {
+        expired: true,
+        alreadyFinalized: false,
+        shiftId: String(shift._id),
+        occurrenceId: String(resolvedOccurrence._id),
+        referenceCode: resolvedOccurrence.referenceCode,
+        sequenceNumber: resolvedOccurrence.sequenceNumber,
+        expiredFromAssignmentStatus: resolvedOccurrence.expiredFromAssignmentStatus,
+        expiredUnfilledAt: expirationDate,
+        retainedBasePlatformFee: financialOutcome.retainedBasePlatformFee,
+        refundableAmount: Number(refundResult?.amount ?? financialOutcome.refundableAmount),
+        employerRefundId: refundResult?.employerRefund?._id
+          ? String(refundResult.employerRefund._id)
+          : null,
+        replacementResult,
+        parentStatus: reconciliation?.shift?.status || reconciliation?.status || shift.status,
+      };
+    });
+  }
+
+  static async expireUnfilledOccurrences({ now = new Date(), limit = 100 } = {}) {
+    const expirationDate = ShiftLifecycleService.normalizeDate(now, "expiration date");
+    const batchLimit = ShiftLifecycleService.normalizeBatchLimit(limit);
+
+    const candidates = await ShiftOccurrence.find({
+      assignmentStatus: {
+        $in: EXPIRABLE_ASSIGNMENT_STATUSES,
+      },
+      status: "scheduled",
+      attendanceStatus: "not_started",
+      settlementStatus: "not_due",
+      assignedProfessional: null,
+      assignment: null,
+      assignedAt: null,
+      unfilledFinalizationAt: {
+        $ne: null,
+        $lte: expirationDate,
+      },
+      refundStatus: "not_eligible",
+    })
+      .select("_id shift referenceCode sequenceNumber assignmentStatus unfilledFinalizationAt")
+      .sort({
+        unfilledFinalizationAt: 1,
+        shift: 1,
+        sequenceNumber: 1,
+        _id: 1,
+      })
+      .limit(batchLimit)
+      .lean();
+
+    const results = [];
+
+    for (const candidate of candidates) {
+      try {
+        const result = await ShiftLifecycleService.expireUnfilledOccurrence({
+          shiftId: candidate.shift,
+          occurrenceId: candidate._id,
+          now: expirationDate,
+        });
+
+        results.push({
+          shiftId: String(candidate.shift),
+          occurrenceId: String(candidate._id),
+          success: true,
+          result,
+        });
+      } catch (error) {
+        logger.error(`Failed to expire unfilled occurrence ${candidate._id}: ${error.message}`);
+
+        results.push({
+          shiftId: String(candidate.shift),
+          occurrenceId: String(candidate._id),
+          success: false,
+          code: error.code || "UNFILLED_OCCURRENCE_EXPIRATION_FAILED",
+          message: error.message,
+        });
+      }
+    }
+
+    return {
+      checked: candidates.length,
+      expired: results.filter((item) => item.success && item.result?.expired).length,
+      skipped: results.filter(
+        (item) => item.success && item.result && item.result.expired === false
+      ).length,
+      failed: results.filter((item) => !item.success).length,
+      results,
+    };
+  }
+
+  static async runLifecycleDeadlineCycle({ now = new Date(), limit = 100 } = {}) {
+    const currentTime = ShiftLifecycleService.normalizeDate(now, "lifecycle cycle date");
+    const batchLimit = ShiftLifecycleService.normalizeBatchLimit(limit);
+
+    const unfundedExpiration = await ShiftLifecycleService.expireUnfundedShifts({
+      now: currentTime,
+      limit: batchLimit,
+    });
+
+    const unfilledOccurrenceExpiration = await ShiftLifecycleService.expireUnfilledOccurrences({
+      now: currentTime,
+      limit: batchLimit,
+    });
+
+    return {
+      currentTime,
+      unfundedExpiration,
+      unfilledOccurrenceExpiration,
+      checked:
+        Number(unfundedExpiration?.checked || 0) +
+        Number(unfilledOccurrenceExpiration?.checked || 0),
+      expired:
+        Number(unfundedExpiration?.expired || 0) +
+        Number(unfilledOccurrenceExpiration?.expired || 0),
+      failed:
+        Number(unfundedExpiration?.failed || 0) + Number(unfilledOccurrenceExpiration?.failed || 0),
     };
   }
 

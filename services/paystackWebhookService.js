@@ -23,8 +23,6 @@ class PaystackWebhookService {
     "transfer.reversed",
   ]);
 
-  static employerRefundFallbackTransferCategory = "employer_refund_fallback_transfer";
-
   /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
 
   static cleanString(value) {
@@ -298,26 +296,6 @@ class PaystackWebhookService {
     );
   }
 
-  static getNormalizedTransferCode(normalizedEvent = {}) {
-    const normalizedPayload =
-      normalizedEvent.normalizedPayload &&
-      typeof normalizedEvent.normalizedPayload === "object" &&
-      !Array.isArray(normalizedEvent.normalizedPayload)
-        ? normalizedEvent.normalizedPayload
-        : {};
-
-    return (
-      PaystackWebhookService.cleanString(normalizedPayload.paystackTransferCode) ||
-      PaystackWebhookService.cleanString(normalizedPayload.transferCode)
-    );
-  }
-
-  static isEmployerRefundFallbackTransferReference(reference) {
-    const normalizedReference = PaystackWebhookService.cleanLowerString(reference);
-
-    return Boolean(normalizedReference && normalizedReference.startsWith("erf_"));
-  }
-
   static getAllowedWithdrawalTransferCategories(eventName) {
     const normalizedEventName = PaystackWebhookService.cleanLowerString(eventName);
 
@@ -377,35 +355,11 @@ class PaystackWebhookService {
           `Paystack refund event ${eventName} was not normalized as employer_refund.`
         );
       }
-
-      const providerRefundId = PaystackWebhookService.cleanString(normalizedEvent.providerRefundId);
-
-      const providerRefundReference = PaystackWebhookService.cleanString(
-        normalizedEvent.providerRefundReference
-      );
-
-      if (!providerRefundId && !providerRefundReference) {
-        throw new Error(
-          `Paystack refund event ${eventName} requires a provider refund ID or refund reference.`
-        );
-      }
     }
 
     if (PaystackWebhookService.isTransferLifecycleEvent(eventName)) {
-      /*
-       * Paystack sends conclusive Transfer webhooks as:
-       *
-       * - transfer.success
-       * - transfer.failed
-       * - transfer.reversed
-       *
-       * The provider Transfer reference is Loqum's durable reconciliation
-       * authority. Do not accept a Transfer lifecycle event without it.
-       */
       const transferReference =
         PaystackWebhookService.getNormalizedTransferReference(normalizedEvent);
-
-      const transferCode = PaystackWebhookService.getNormalizedTransferCode(normalizedEvent);
 
       if (!transferReference) {
         throw new Error(
@@ -413,54 +367,14 @@ class PaystackWebhookService {
         );
       }
 
-      const isFallbackReference =
-        PaystackWebhookService.isEmployerRefundFallbackTransferReference(transferReference);
+      const allowedCategories =
+        PaystackWebhookService.getAllowedWithdrawalTransferCategories(eventName);
 
-      const isFallbackCategory =
-        eventCategory === PaystackWebhookService.employerRefundFallbackTransferCategory;
-
-      /*
-       * Employer-refund fallback Transfers use deterministic Loqum references
-       * beginning with "erf_".
-       *
-       * This is an important staged-deployment boundary:
-       * the older event normalizer treats every Paystack Transfer as a
-       * withdrawal. Recording that incorrect category would allow the
-       * ProviderEvent idempotency key to permanently claim the event before
-       * the refund-fallback processor exists.
-       *
-       * Therefore fallback-reference/category disagreement fails before
-       * ProviderEvent persistence.
-       */
-      if (isFallbackReference && !isFallbackCategory) {
+      if (!allowedCategories.includes(eventCategory)) {
         throw new Error(
-          `Paystack fallback Transfer ${transferReference} was not normalized as ${PaystackWebhookService.employerRefundFallbackTransferCategory}.`
+          `Paystack Transfer event ${eventName} was normalized to unsupported category ${eventCategory}.`
         );
       }
-
-      if (isFallbackCategory && !isFallbackReference) {
-        throw new Error(
-          "An employer-refund fallback Transfer event must retain its deterministic erf_ Transfer reference."
-        );
-      }
-
-      if (!isFallbackCategory) {
-        const allowedCategories =
-          PaystackWebhookService.getAllowedWithdrawalTransferCategories(eventName);
-
-        if (!allowedCategories.includes(eventCategory)) {
-          throw new Error(
-            `Paystack Transfer event ${eventName} was normalized to unsupported category ${eventCategory}.`
-          );
-        }
-      }
-
-      /*
-       * Transfer code is useful provider audit data but is not the primary
-       * reconciliation key. Some provider edge responses may omit it, so the
-       * deterministic Transfer reference remains the hard requirement.
-       */
-      void transferCode;
     }
 
     return {
@@ -474,16 +388,6 @@ class PaystackWebhookService {
     const categories = ProviderEventProcessorService?.eventCategories?.employerRefund;
 
     return Array.isArray(categories) && categories.includes("employer_refund");
-  }
-
-  static processorSupportsEmployerRefundFallbackTransfer() {
-    const categories =
-      ProviderEventProcessorService?.eventCategories?.employerRefundFallbackTransfer;
-
-    return (
-      Array.isArray(categories) &&
-      categories.includes(PaystackWebhookService.employerRefundFallbackTransferCategory)
-    );
   }
 
   /* ─────────────────────────────── EVENT NORMALIZATION ─────────────────────────────── */
@@ -675,25 +579,6 @@ class PaystackWebhookService {
         processedImmediately: false,
 
         skippedProcessingReason: "Employer refund provider-event processing is not aligned yet.",
-      };
-    }
-
-    if (
-      normalizedEvent.eventCategory ===
-        PaystackWebhookService.employerRefundFallbackTransferCategory &&
-      !PaystackWebhookService.processorSupportsEmployerRefundFallbackTransfer()
-    ) {
-      return {
-        ...recordResult,
-
-        recorded: true,
-
-        isVerified: true,
-
-        processedImmediately: false,
-
-        skippedProcessingReason:
-          "Employer refund fallback-Transfer provider-event processing is not aligned yet.",
       };
     }
 

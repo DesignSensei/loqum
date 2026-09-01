@@ -65,13 +65,11 @@ exports.handleWebhook = async (req, res) => {
     });
 
     /*
-     * Do not return internal/provider details to the
-     * webhook caller.
+     * A non-200 response is reserved for webhook requests
+     * that could not be safely verified or durably recorded.
      *
-     * A non-200 response is deliberate here:
-     * if a verified Paystack event could not be safely
-     * recorded or processed, Paystack should be allowed
-     * to redeliver it.
+     * Once recorded, downstream processing and retries are
+     * owned by the ProviderEvent lifecycle.
      */
     return res
       .status(

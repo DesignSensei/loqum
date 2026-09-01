@@ -846,59 +846,6 @@ class ShiftFundingService {
     };
   }
 
-  static buildPaystackFundingResponse({ shift, transaction, escrowWallet, currency, idempotent }) {
-    return {
-      alreadyFunded: idempotent,
-      fundingApplied: true,
-      returnedToEmployerWallet: false,
-
-      shift: {
-        id: String(shift._id),
-        referenceCode: shift.referenceCode,
-        status: shift.status,
-        paymentStatus: shift.paymentStatus,
-        fundingMethod: shift.fundingMethod,
-
-        professionalPay: shift.estimatedProfessionalPay,
-
-        professionalPayDisplay: ShiftFundingService.formatAmount(
-          shift.estimatedProfessionalPay,
-          currency
-        ),
-
-        platformFee: shift.estimatedPlatformFee,
-
-        platformFeeDisplay: ShiftFundingService.formatAmount(shift.estimatedPlatformFee, currency),
-
-        fundedAmount: shift.fundedAmount,
-
-        fundedAmountDisplay: ShiftFundingService.formatAmount(shift.fundedAmount, currency),
-
-        fundedAt: shift.fundedAt,
-        publishedAt: shift.publishedAt,
-      },
-
-      transaction: {
-        id: String(transaction._id),
-        reference: transaction.reference,
-        paystackReference: transaction.paystackReference,
-        status: transaction.status,
-        paystackStatus: transaction.paystackStatus,
-      },
-
-      escrow: {
-        walletId: String(escrowWallet._id),
-        availableBalance: escrowWallet.availableBalance,
-      },
-
-      message: idempotent
-        ? `Shift ${shift.referenceCode} was already funded and published.`
-        : `Shift ${shift.referenceCode} was funded through Paystack and published successfully.`,
-
-      redirectUrl: EMPLOYER_SHIFTS_URL,
-    };
-  }
-
   static buildPaystackReturnResponse({
     shift,
     transaction,
@@ -907,10 +854,24 @@ class ShiftFundingService {
     returnReason,
     idempotent,
   }) {
-    const message =
-      returnReason === "duplicate"
-        ? `The additional successful Paystack payment for Shift ${shift.referenceCode} was returned to the employer wallet because the Shift had already been funded.`
-        : `The successful Paystack payment for Shift ${shift.referenceCode} was returned to the employer wallet because it was completed after the funding deadline.`;
+    const messages = {
+      duplicate:
+        `The additional successful Paystack payment for Shift ${shift.referenceCode} ` +
+        `was returned to the employer wallet because the Shift had already been funded.`,
+
+      late:
+        `The successful Paystack payment for Shift ${shift.referenceCode} ` +
+        `was returned to the employer wallet because it was completed after the funding deadline.`,
+
+      timely_expired:
+        `The payment for Shift ${shift.referenceCode} was completed before the funding deadline, ` +
+        `but the Shift was cancelled at the funding deadline before the payment could be confirmed and applied. ` +
+        `The amount was returned to the employer wallet.`,
+
+      employer_cancelled:
+        `The successful Paystack payment for Shift ${shift.referenceCode} ` +
+        `was returned to the employer wallet because the Shift had already been cancelled.`,
+    };
 
     return {
       alreadyFunded: ShiftFundingService.isShiftFullyFunded(shift),
@@ -951,7 +912,59 @@ class ShiftFundingService {
         availableBalance: employerWallet.availableBalance,
       },
 
-      message,
+      message:
+        messages[returnReason] ||
+        `The successful Paystack payment for Shift ${shift.referenceCode} ` +
+          `was returned to the employer wallet.`,
+
+      redirectUrl: EMPLOYER_SHIFTS_URL,
+    };
+  }
+
+  static buildPaystackFundingResponse({ shift, transaction, currency, idempotent = false }) {
+    return {
+      alreadyFunded: idempotent,
+      fundingApplied: true,
+      returnedToEmployerWallet: false,
+      idempotent,
+
+      shift: {
+        id: String(shift._id),
+        referenceCode: shift.referenceCode,
+        status: shift.status,
+        paymentStatus: shift.paymentStatus,
+        fundingMethod: shift.fundingMethod,
+
+        professionalPay: shift.estimatedProfessionalPay,
+
+        professionalPayDisplay: ShiftFundingService.formatAmount(
+          shift.estimatedProfessionalPay,
+          currency
+        ),
+
+        platformFee: shift.estimatedPlatformFee,
+
+        platformFeeDisplay: ShiftFundingService.formatAmount(shift.estimatedPlatformFee, currency),
+
+        fundedAmount: shift.fundedAmount,
+
+        fundedAmountDisplay: ShiftFundingService.formatAmount(shift.fundedAmount, currency),
+
+        fundedAt: shift.fundedAt,
+        publishedAt: shift.publishedAt,
+      },
+
+      transaction: {
+        id: String(transaction._id),
+        reference: transaction.reference,
+        paystackReference: transaction.paystackReference,
+        amount: transaction.amount,
+        status: transaction.status,
+      },
+
+      message: idempotent
+        ? `Shift ${shift.referenceCode} has already been funded through Paystack and published.`
+        : `Shift ${shift.referenceCode} was funded through Paystack and published successfully.`,
 
       redirectUrl: EMPLOYER_SHIFTS_URL,
     };
@@ -1035,7 +1048,7 @@ class ShiftFundingService {
     };
   }
 
-  static async markPaystackTransactionReconciliationRequired({
+  static async markPaystackFundingIntegrityConflict({
     transaction,
     shift,
     reason,
@@ -1049,14 +1062,14 @@ class ShiftFundingService {
       appliedToShift: false,
       returnedToEmployerWallet: false,
 
-      reconciliationRequired: true,
-      reconciliationReason: reason,
-      reconciliationRequiredAt: currentTime,
+      fundingIntegrityConflict: true,
+      fundingIntegrityReason: reason,
+      fundingIntegrityDetectedAt: currentTime,
 
       verifiedPaymentTime,
 
-      shiftStatusAtReconciliation: shift.status,
-      shiftPaymentStatusAtReconciliation: shift.paymentStatus,
+      shiftStatusAtConflict: shift.status,
+      shiftPaymentStatusAtConflict: shift.paymentStatus,
 
       authoritativeFundingTransactionId: shift.fundingTransaction
         ? String(shift.fundingTransaction)
@@ -1069,21 +1082,23 @@ class ShiftFundingService {
       session,
     });
 
+    logger.error(
+      `Paystack funding integrity conflict for Shift ${shift.referenceCode}: ` +
+        `${reason}. Payment ${transaction.paystackReference} remains protected in escrow.`
+    );
+
     return {
-      reconciliationRequired: true,
+      fundingIntegrityConflict: true,
       reason,
 
       shiftId: String(shift._id),
       referenceCode: shift.referenceCode,
 
-      shiftStatus: shift.status,
-      shiftPaymentStatus: shift.paymentStatus,
-
       transactionId: String(transaction._id),
       paystackReference: transaction.paystackReference,
 
-      verifiedPaymentTime,
       amount: transaction.amount,
+      verifiedPaymentTime,
     };
   }
 
@@ -1201,14 +1216,6 @@ class ShiftFundingService {
             ? String(shift.fundingTransaction)
             : null,
         },
-
-        /*
-         * This is an involuntary return of the employer's money,
-         * not an elective wallet top-up. It must not become stuck
-         * merely because the normal employer-wallet maximum would
-         * otherwise be exceeded.
-         */
-        allowDestinationMaximumBalanceOverride: true,
       },
       {
         session,
@@ -1232,8 +1239,9 @@ class ShiftFundingService {
 
       returnedAt: transaction.metadata?.returnedAt || currentTime,
 
-      reconciliationRequired: false,
-      reconciliationReason: null,
+      fundingIntegrityConflict: false,
+
+      fundingIntegrityReason: null,
 
       verifiedPaymentTime,
 
@@ -1611,17 +1619,17 @@ class ShiftFundingService {
       ) {
         throw ShiftFundingService.createFundingError({
           message:
-            "A successful Paystack payment exists for this Shift and " +
-            "must be reconciled before another Checkout attempt is created.",
+            "A successful unapplied Paystack payment already exists for this Shift. " +
+            "Another Checkout cannot be created.",
 
-          code: "PAYSTACK_SHIFT_RECONCILIATION_REQUIRED",
+          code: "PAYSTACK_SHIFT_FUNDING_INTEGRITY_CONFLICT",
           statusCode: 409,
 
           details: {
             transactionId: String(latestAttempt._id),
             paystackReference: latestAttempt.paystackReference,
 
-            reconciliationReason: latestAttempt.metadata?.reconciliationReason || null,
+            fundingIntegrityReason: latestAttempt.metadata?.fundingIntegrityReason || null,
           },
         });
       }
@@ -1699,7 +1707,7 @@ class ShiftFundingService {
 
             appliedToShift: false,
             returnedToEmployerWallet: false,
-            reconciliationRequired: false,
+            fundingIntegrityConflict: false,
           },
         },
         {
@@ -1847,9 +1855,7 @@ class ShiftFundingService {
         );
       } else {
         /*
-         * A timeout or network error may occur after Paystack accepted
-         * the request. Keep the attempt pending so a later callback,
-         * webhook or reconciliation check cannot create duplicate funding.
+         * Keep uncertain Paystack attempts pending to prevent duplicate funding.
          */
         await Transaction.updateOne(
           {
@@ -2129,12 +2135,7 @@ class ShiftFundingService {
       }
 
       /*
-       * Record the successful provider payment exactly once.
-       *
-       * Every successful Paystack Checkout payment first becomes a
-       * completed external credit on the escrow wallet. Only after
-       * that accounting fact is recorded do we determine whether
-       * it funds the Shift, is returned, or requires reconciliation.
+       * Record successful Paystack money in escrow before fund/return/integrity handling.
        */
       const completedCredit = await WalletService.completePendingExternalCredit(
         {
@@ -2226,8 +2227,9 @@ class ShiftFundingService {
 
             returnedToEmployerWallet: false,
 
-            reconciliationRequired: false,
-            reconciliationReason: null,
+            fundingIntegrityConflict: false,
+
+            fundingIntegrityReason: null,
 
             authoritativeFundingTransactionId: String(completedTransaction._id),
           };
@@ -2241,7 +2243,6 @@ class ShiftFundingService {
           return ShiftFundingService.buildPaystackFundingResponse({
             shift,
             transaction: completedTransaction,
-            escrowWallet,
             currency: completedTransaction.currency,
             idempotent: true,
           });
@@ -2261,16 +2262,31 @@ class ShiftFundingService {
         });
       }
 
+      if (
+        shift.status === "cancelled" &&
+        shift.cancelledFromStatus === "pending_funding" &&
+        shift.cancellationCode === "employer_cancelled"
+      ) {
+        return ShiftFundingService.returnSuccessfulPaystackPaymentToEmployer({
+          transaction: completedTransaction,
+          shift,
+          escrowWallet,
+
+          returnReason: "employer_cancelled",
+
+          verifiedPaymentTime,
+          currentTime: normalizedCurrentTime,
+
+          session,
+        });
+      }
+
       const paymentMissedFundingDeadline = verifiedPaymentTime >= shiftStartTime;
 
       const confirmationArrivedAfterStart = normalizedCurrentTime >= shiftStartTime;
 
       /*
-       * The provider confirms that the employer actually paid at
-       * or after the Shift start. This is a genuinely late payment.
-       *
-       * The Shift remains or becomes expired, and the payment is
-       * returned from escrow to the employer wallet.
+       * A payment completed at/after startTime is genuinely late.
        */
       if (paymentMissedFundingDeadline) {
         if (shift.status === "pending_funding" && shift.paymentStatus === "unpaid") {
@@ -2305,28 +2321,11 @@ class ShiftFundingService {
       }
 
       /*
-       * The employer paid before startTime, but Loqum only confirmed
-       * the provider payment after the Shift had already reached its
-       * operational start or after another cancellation state had
-       * been recorded.
-       *
-       * This is not a genuinely late payment and must not be
-       * mislabeled as late_shift_payment_return.
-       *
-       * The successful external credit remains in escrow and is
-       * explicitly flagged for lifecycle reconciliation.
+       * The employer paid on time, but confirmation arrived after the
+       * unfunded Shift reached its operational start.
        */
-      if (
-        confirmationArrivedAfterStart ||
-        shift.status === "cancelled" ||
-        shift.status !== "pending_funding" ||
-        shift.paymentStatus !== "unpaid"
-      ) {
-        if (
-          confirmationArrivedAfterStart &&
-          shift.status === "pending_funding" &&
-          shift.paymentStatus === "unpaid"
-        ) {
+      if (confirmationArrivedAfterStart) {
+        if (shift.status === "pending_funding" && shift.paymentStatus === "unpaid") {
           await ShiftLifecycleService.expireUnfundedShift(
             {
               shiftId: shift._id,
@@ -2343,14 +2342,57 @@ class ShiftFundingService {
           });
         }
 
-        return ShiftFundingService.markPaystackTransactionReconciliationRequired({
+        if (shift.status === "cancelled" && shift.cancellationCode === "funding_deadline_passed") {
+          return ShiftFundingService.returnSuccessfulPaystackPaymentToEmployer({
+            transaction: completedTransaction,
+            shift,
+            escrowWallet,
+
+            returnReason: "timely_expired",
+
+            verifiedPaymentTime,
+            currentTime: normalizedCurrentTime,
+
+            session,
+          });
+        }
+
+        return ShiftFundingService.markPaystackFundingIntegrityConflict({
           transaction: completedTransaction,
           shift,
 
-          reason:
-            verifiedPaymentTime < shiftStartTime && confirmationArrivedAfterStart
-              ? "timely_payment_confirmed_after_operational_expiration"
-              : "shift_state_no_longer_accepts_initial_funding",
+          reason: "timely_payment_state_conflict_after_start",
+
+          verifiedPaymentTime,
+          currentTime: normalizedCurrentTime,
+
+          session,
+        });
+      }
+
+      /*
+       * Any non-standard funding state before start requires investigation.
+       */
+      if (shift.fundingMethod && shift.fundingMethod !== "paystack_checkout") {
+        return ShiftFundingService.markPaystackFundingIntegrityConflict({
+          transaction: completedTransaction,
+          shift,
+
+          reason: "another_funding_method_selected_without_completed_funding",
+
+          verifiedPaymentTime,
+          currentTime: normalizedCurrentTime,
+
+          session,
+        });
+      }
+
+      if (shift.status !== "pending_funding" || shift.paymentStatus !== "unpaid") {
+        return ShiftFundingService.markPaystackFundingIntegrityConflict({
+          transaction: completedTransaction,
+          shift,
+
+          reason: "shift_state_no_longer_accepts_initial_funding",
 
           verifiedPaymentTime,
           currentTime: normalizedCurrentTime,
@@ -2366,20 +2408,6 @@ class ShiftFundingService {
           message: "The Shift funding state changed while the Paystack payment was processed.",
           code: "INCONSISTENT_SHIFT_FUNDING_STATE",
           statusCode: 409,
-        });
-      }
-
-      if (shift.fundingMethod && shift.fundingMethod !== "paystack_checkout") {
-        return ShiftFundingService.markPaystackTransactionReconciliationRequired({
-          transaction: completedTransaction,
-          shift,
-
-          reason: "another_funding_method_selected_without_completed_funding",
-
-          verifiedPaymentTime,
-          currentTime: normalizedCurrentTime,
-
-          session,
         });
       }
 
@@ -2419,8 +2447,9 @@ class ShiftFundingService {
 
         returnedToEmployerWallet: false,
 
-        reconciliationRequired: false,
-        reconciliationReason: null,
+        fundingIntegrityConflict: false,
+
+        fundingIntegrityReason: null,
 
         authoritativeFundingTransactionId: String(completedTransaction._id),
       };
@@ -2463,20 +2492,18 @@ class ShiftFundingService {
       return ShiftFundingService.buildPaystackFundingResponse({
         shift,
         transaction: completedTransaction,
-        escrowWallet,
         currency: completedTransaction.currency,
         idempotent: false,
       });
     });
 
-    if (finalizationResult?.reconciliationRequired) {
+    if (finalizationResult?.fundingIntegrityConflict) {
       throw ShiftFundingService.createFundingError({
         message:
-          "The Paystack payment succeeded and was recorded in escrow, " +
-          "but the Shift requires lifecycle reconciliation before the " +
-          "money can be applied or returned.",
+          "The Paystack payment succeeded and remains protected in escrow, " +
+          "but the Shift funding state is financially inconsistent and requires investigation.",
 
-        code: "PAYSTACK_SHIFT_RECONCILIATION_REQUIRED",
+        code: "PAYSTACK_SHIFT_FUNDING_INTEGRITY_CONFLICT",
         statusCode: 409,
 
         details: finalizationResult,

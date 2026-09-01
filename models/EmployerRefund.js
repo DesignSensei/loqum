@@ -1,79 +1,42 @@
-// models/EmployerRefundBatch.js
+// models/EmployerRefund.js
 
 const mongoose = require("mongoose");
 
 const {
   minorUnitAmountField,
-  nonNegativeIntegerField,
   requiredPositiveMinorUnitAmountField,
 } = require("./helpers/schemaFields");
 
-const { isValidLocalDateString, isValidTimeZone } = require("./helpers/schemaValidators");
-
 const {
+  REFUND_STATUSES,
+  REFUND_EXECUTION_STATUSES,
+  REFUND_HOLD_REASONS,
+  REFUND_REASONS,
   EMPLOYER_REFUND_FUNDING_METHODS,
-  EMPLOYER_REFUND_EXECUTION_METHODS,
-  EMPLOYER_REFUND_BATCH_EXECUTION_METHODS,
-  PAYSTACK_REFUND_STATUSES,
 } = require("../constants/shiftLifecycle");
 
 /* ─────────────────────────────── CONSTANTS ─────────────────────────────── */
 
-const MONDAY_WEEKDAY = 1;
-
-const EMPLOYER_REFUND_BATCH_STATUSES = Object.freeze([
-  "scheduled",
-  "processing",
-  "awaiting_provider",
-  "awaiting_action",
-  "partially_completed",
-  "completed",
-  "failed",
-  "cancelled",
+const EMPLOYER_REFUND_STATUSES = Object.freeze([
+  ...REFUND_STATUSES.filter((status) => status !== "not_eligible"),
+  "voided",
 ]);
 
-const EMPLOYER_REFUND_LINE_STATUSES = Object.freeze([
-  "queued",
-  "processing",
-  "pending_provider",
-  "awaiting_action",
-  "completed",
-  "failed",
-  "cancelled",
+const EMPLOYER_REFUND_RESERVATION_STATUSES = Object.freeze(["reserved", "released"]);
+
+const EMPLOYER_REFUND_FINAL_EXECUTION_METHODS = Object.freeze([
+  "wallet_balance",
+  "paystack_refund",
 ]);
 
-const REFUND_BANK_CONSENT_STATUSES = Object.freeze([
-  "not_required",
-  "awaiting_consent",
-  "confirmed",
-  "withdrawn",
-]);
+const REFUND_PROCESSING_STATUSES = Object.freeze(
+  REFUND_EXECUTION_STATUSES.filter((status) => status !== "batched")
+);
 
-const PAYSTACK_REFUND_RETRY_STATUSES = Object.freeze([
-  "not_required",
-  "queued",
-  "submitting",
-  "submitted",
-  "completed",
-  "failed",
-]);
+const PROFESSIONAL_CLAIM_HOLD_REASON = "professional_claim_pending";
+const EMPLOYER_DISPUTE_HOLD_REASON = "employer_dispute_pending";
 
-const PAYSTACK_REFUND_FALLBACK_STATUSES = Object.freeze([
-  "not_required",
-  "admin_review",
-  "awaiting_consent",
-  "consent_withdrawn",
-  "ready",
-  "processing",
-  "completed",
-  "failed",
-]);
-
-const BATCH_INITIATORS = Object.freeze(["system", "admin"]);
-
-const BATCH_CANCELLATION_ACTORS = Object.freeze(["system", "admin"]);
-
-const TERMINAL_REFUND_LINE_STATUSES = Object.freeze(["completed", "failed", "cancelled"]);
+const TERMINAL_EMPLOYER_REFUND_STATUSES = Object.freeze(["refunded", "voided"]);
 
 /* ─────────────────────────────── HELPERS ─────────────────────────────── */
 
@@ -91,839 +54,15 @@ const hasValue = (value) => {
 
 const hasAny = (values) => Array.isArray(values) && values.some(hasValue);
 
-const hasAll = (values) => Array.isArray(values) && values.length > 0 && values.every(hasValue);
-
 const hasArrayValues = (values) => Array.isArray(values) && values.length > 0;
 
-const normalizeIdStrings = (values) =>
-  (Array.isArray(values) ? values : []).map((value) => String(value));
+/* ─────────────────────────────── EMPLOYER REFUND ─────────────────────────────── */
 
-const hasDuplicateValues = (values) => new Set(values).size !== values.length;
-
-const sumSafeIntegerValues = (values) => {
-  let total = 0;
-
-  for (const value of values) {
-    const normalizedValue = Number(value);
-
-    if (!Number.isSafeInteger(normalizedValue) || normalizedValue < 0) {
-      return null;
-    }
-
-    total += normalizedValue;
-
-    if (!Number.isSafeInteger(total)) {
-      return null;
-    }
-  }
-
-  return total;
-};
-
-const getLocalDateWeekday = (localDate) => {
-  if (!isValidLocalDateString(localDate)) {
-    return null;
-  }
-
-  const date = new Date(`${localDate}T00:00:00.000Z`);
-
-  if (Number.isNaN(date.getTime())) {
-    return null;
-  }
-
-  return date.getUTCDay();
-};
-
-const validateBankConsent = ({ document, consent, path = "bankConsent" }) => {
-  const status = consent?.status || "not_required";
-
-  const hasConsentAudit = hasAny([
-    consent?.bankAccount,
-    consent?.requestedAt,
-    consent?.confirmedAt,
-    consent?.confirmedBy,
-    consent?.withdrawnAt,
-    consent?.withdrawnBy,
-    consent?.withdrawalReason,
-  ]);
-
-  if (status === "not_required") {
-    if (hasConsentAudit) {
-      document.invalidate(
-        `${path}.status`,
-        "Bank-consent audit fields require an active consent workflow."
-      );
-    }
-
-    return;
-  }
-
-  if (status === "awaiting_consent") {
-    if (!consent.bankAccount || !consent.requestedAt) {
-      document.invalidate(
-        `${path}.status`,
-        "awaiting_consent requires bankAccount and requestedAt."
-      );
-    }
-
-    if (
-      consent.confirmedAt ||
-      consent.confirmedBy ||
-      consent.withdrawnAt ||
-      consent.withdrawnBy ||
-      consent.withdrawalReason
-    ) {
-      document.invalidate(
-        `${path}.status`,
-        "awaiting_consent cannot contain confirmation or withdrawal details."
-      );
-    }
-
-    return;
-  }
-
-  if (status === "confirmed") {
-    if (
-      !consent.bankAccount ||
-      !consent.requestedAt ||
-      !consent.confirmedAt ||
-      !consent.confirmedBy
-    ) {
-      document.invalidate(
-        `${path}.status`,
-        "Confirmed bank consent requires bankAccount, requestedAt, confirmedAt and confirmedBy."
-      );
-    }
-
-    if (consent.confirmedAt && consent.requestedAt && consent.confirmedAt < consent.requestedAt) {
-      document.invalidate(
-        `${path}.confirmedAt`,
-        "Bank consent cannot be confirmed before it is requested."
-      );
-    }
-
-    if (consent.withdrawnAt || consent.withdrawnBy || consent.withdrawalReason) {
-      document.invalidate(
-        `${path}.status`,
-        "Confirmed bank consent cannot contain withdrawal details."
-      );
-    }
-
-    return;
-  }
-
-  if (status === "withdrawn") {
-    if (
-      !consent.bankAccount ||
-      !consent.requestedAt ||
-      !consent.withdrawnAt ||
-      !consent.withdrawnBy ||
-      !consent.withdrawalReason
-    ) {
-      document.invalidate(
-        `${path}.status`,
-        "Withdrawn bank consent requires bankAccount, requestedAt, withdrawnAt, withdrawnBy and withdrawalReason."
-      );
-    }
-
-    if (consent.withdrawnAt && consent.requestedAt && consent.withdrawnAt < consent.requestedAt) {
-      document.invalidate(
-        `${path}.withdrawnAt`,
-        "Bank consent cannot be withdrawn before it is requested."
-      );
-    }
-  }
-};
-
-/* ─────────────────────────────── REFUND ALLOCATION ─────────────────────────────── */
-
-/**
- * One allocation snapshots one occurrence-level EmployerRefund inside an
- * aggregated execution line.
- *
- * The allocation amount is frozen when the obligation enters the batch.
- *
- * EmployerRefundBatchService must reverify the underlying EmployerRefund and
- * ShiftOccurrence immediately before the line begins financial execution.
+/*
+ * One positive scheduled/base refund obligation per occurrence.
+ * ShiftRefundService owns amount/blocker truth; EmployerRefundBatch owns execution.
  */
-const employerRefundAllocationSchema = new mongoose.Schema(
-  {
-    employerRefund: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "EmployerRefund",
-      required: true,
-    },
-
-    shift: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Shift",
-      required: true,
-    },
-
-    occurrence: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "ShiftOccurrence",
-      required: true,
-    },
-
-    originalFundingTransaction: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Transaction",
-      required: true,
-    },
-
-    amount: requiredPositiveMinorUnitAmountField(),
-  },
-  {
-    _id: true,
-  }
-);
-
-/* ─────────────────────────────── WALLET MOVEMENT ─────────────────────────────── */
-
-const walletRefundMovementSchema = new mongoose.Schema(
-  {
-    groupReference: {
-      type: String,
-      trim: true,
-      maxlength: 200,
-      default: null,
-    },
-
-    escrowDebitTransaction: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Transaction",
-      default: null,
-    },
-
-    employerCreditTransaction: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Transaction",
-      default: null,
-    },
-
-    completedAt: {
-      type: Date,
-      default: null,
-    },
-  },
-  {
-    _id: false,
-  }
-);
-
-/* ─────────────────────────────── BANK CONSENT ─────────────────────────────── */
-
-/**
- * One refund-specific bank consent is stored per Paystack execution line.
- *
- * Consent is required only for the manual fallback Paystack Transfer to the
- * employer's verified bank account.
- *
- * Retrying the original Paystack refund does not require bank consent because
- * Retry Refund still uses the original payment route.
- */
-const refundBankConsentSchema = new mongoose.Schema(
-  {
-    status: {
-      type: String,
-      enum: REFUND_BANK_CONSENT_STATUSES,
-      default: "not_required",
-      required: true,
-    },
-
-    bankAccount: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "BankAccount",
-      default: null,
-    },
-
-    requestedAt: {
-      type: Date,
-      default: null,
-    },
-
-    confirmedAt: {
-      type: Date,
-      default: null,
-    },
-
-    confirmedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
-
-    withdrawnAt: {
-      type: Date,
-      default: null,
-    },
-
-    withdrawnBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
-
-    withdrawalReason: {
-      type: String,
-      trim: true,
-      maxlength: 500,
-      default: null,
-    },
-  },
-  {
-    _id: false,
-  }
-);
-
-/* ─────────────────────────────── PAYSTACK REFUND ─────────────────────────────── */
-
-const paystackRefundSchema = new mongoose.Schema(
-  {
-    idempotencyKey: {
-      type: String,
-      trim: true,
-      maxlength: 200,
-      default: null,
-    },
-
-    refundId: {
-      type: String,
-      trim: true,
-      maxlength: 150,
-      default: null,
-    },
-
-    reference: {
-      type: String,
-      trim: true,
-      maxlength: 200,
-      default: null,
-    },
-
-    status: {
-      type: String,
-      enum: PAYSTACK_REFUND_STATUSES,
-      default: "not_started",
-      required: true,
-    },
-
-    submittedAt: {
-      type: Date,
-      default: null,
-    },
-
-    processingAt: {
-      type: Date,
-      default: null,
-    },
-
-    needsAttentionAt: {
-      type: Date,
-      default: null,
-    },
-
-    processedAt: {
-      type: Date,
-      default: null,
-    },
-
-    failedAt: {
-      type: Date,
-      default: null,
-    },
-
-    failureReason: {
-      type: String,
-      trim: true,
-      maxlength: 1000,
-      default: null,
-    },
-
-    lastSyncedAt: {
-      type: Date,
-      default: null,
-    },
-
-    lastProviderEventId: {
-      type: String,
-      trim: true,
-      maxlength: 200,
-      default: null,
-    },
-
-    rawStatus: {
-      type: String,
-      trim: true,
-      maxlength: 100,
-      default: null,
-    },
-  },
-  {
-    _id: false,
-  }
-);
-
-/* ─────────────────────────────── PAYSTACK RETRY REFUND ─────────────────────────────── */
-
-/**
- * Retry Refund remains on the original Paystack refund route.
- *
- * It does not require employer bank consent and must not run concurrently with
- * a fallback Paystack Transfer.
- *
- * submitted means the retry request has been sent and provider outcome is
- * still pending.
- *
- * completed closes the retry workflow after paystackRefund reaches processed.
- */
-const paystackRefundRetrySchema = new mongoose.Schema(
-  {
-    status: {
-      type: String,
-      enum: PAYSTACK_REFUND_RETRY_STATUSES,
-      default: "not_required",
-      required: true,
-    },
-
-    idempotencyKey: {
-      type: String,
-      trim: true,
-      maxlength: 200,
-      default: null,
-    },
-
-    attemptCount: nonNegativeIntegerField({
-      defaultValue: 0,
-    }),
-
-    queuedAt: {
-      type: Date,
-      default: null,
-    },
-
-    submittingAt: {
-      type: Date,
-      default: null,
-    },
-
-    submittedAt: {
-      type: Date,
-      default: null,
-    },
-
-    /**
-     * Set when a submitted Retry Refund is confirmed successful through the
-     * original Paystack refund route.
-     *
-     * The provider refund itself remains authoritative in paystackRefund.
-     * This timestamp closes the retry workflow without creating a second
-     * refund authority.
-     */
-    completedAt: {
-      type: Date,
-      default: null,
-    },
-
-    failedAt: {
-      type: Date,
-      default: null,
-    },
-
-    lastError: {
-      type: String,
-      trim: true,
-      maxlength: 1000,
-      default: null,
-    },
-  },
-  {
-    _id: false,
-  }
-);
-
-/* ─────────────────────────────── FALLBACK TRANSFER ─────────────────────────────── */
-
-/**
- * Fallback Transfer is an exceptional recovery route.
- *
- * It is available only after the original Paystack refund route has failed.
- *
- * It requires:
- *
- * - explicit admin review;
- * - explicit employer bank consent;
- * - a verified employer bank account; and
- * - its own idempotent Transaction / Paystack Transfer attempt.
- *
- * The service layer verifies that the linked BankAccount is still valid and
- * verified immediately before execution.
- */
-const fallbackTransferSchema = new mongoose.Schema(
-  {
-    status: {
-      type: String,
-      enum: PAYSTACK_REFUND_FALLBACK_STATUSES,
-      default: "not_required",
-      required: true,
-    },
-
-    adminReviewStartedAt: {
-      type: Date,
-      default: null,
-    },
-
-    adminApprovedAt: {
-      type: Date,
-      default: null,
-    },
-
-    adminApprovedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
-
-    adminNotes: {
-      type: String,
-      trim: true,
-      maxlength: 1000,
-      default: null,
-    },
-
-    idempotencyKey: {
-      type: String,
-      trim: true,
-      maxlength: 200,
-      default: null,
-    },
-
-    attemptCount: nonNegativeIntegerField({
-      defaultValue: 0,
-    }),
-
-    lastAttemptAt: {
-      type: Date,
-      default: null,
-    },
-
-    transaction: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Transaction",
-      default: null,
-    },
-
-    paystackTransferCode: {
-      type: String,
-      trim: true,
-      maxlength: 200,
-      default: null,
-    },
-
-    submittedAt: {
-      type: Date,
-      default: null,
-    },
-
-    completedAt: {
-      type: Date,
-      default: null,
-    },
-
-    failedAt: {
-      type: Date,
-      default: null,
-    },
-
-    failureReason: {
-      type: String,
-      trim: true,
-      maxlength: 1000,
-      default: null,
-    },
-  },
-  {
-    _id: false,
-  }
-);
-
-/* ─────────────────────────────── REFUND EXECUTION LINE ─────────────────────────────── */
-
-/**
- * WALLET-FUNDED LINE
- *
- * One wallet_balance line may aggregate every wallet-funded refund obligation
- * belonging to the employer in the weekly cycle.
- *
- * The actual ledger movement is one paired internal transfer:
- *
- *   escrow debit
- *   +
- *   employer wallet credit
- *
- * PAYSTACK-FUNDED LINE
- *
- * One paystack_checkout line belongs to exactly one original parent Shift
- * Checkout payment.
- *
- * All included allocations must therefore share:
- *
- * - one Shift;
- * - one original funding Transaction; and
- * - one original Paystack payment reference.
- *
- * The Paystack line owns the provider refund, Retry Refund and fallback
- * workflow shared by all included occurrence-level EmployerRefund obligations.
- *
- * Bank consent belongs only to the explicit fallback Transfer path.
- *
- * BATCHING IS NOT EXECUTION AUTHORITY
- *
- * eligibilityCheckedAt records the first eligibility check during batching.
- *
- * executionEligibilityCheckedAt records the mandatory second check immediately
- * before financial execution.
- */
-const employerRefundLineSchema = new mongoose.Schema(
-  {
-    lineReference: {
-      type: String,
-      trim: true,
-      uppercase: true,
-      required: true,
-    },
-
-    idempotencyKey: {
-      type: String,
-      trim: true,
-      maxlength: 200,
-      required: true,
-    },
-
-    fundingMethod: {
-      type: String,
-      enum: EMPLOYER_REFUND_FUNDING_METHODS,
-      required: true,
-    },
-
-    initialExecutionMethod: {
-      type: String,
-      enum: EMPLOYER_REFUND_BATCH_EXECUTION_METHODS,
-      required: true,
-    },
-
-    /**
-     * Set only after the line completes.
-     *
-     * A Paystack-funded line may finish through:
-     *
-     * - paystack_refund; or
-     * - paystack_transfer.
-     */
-    finalExecutionMethod: {
-      type: String,
-      enum: [...EMPLOYER_REFUND_EXECUTION_METHODS, null],
-      default: null,
-    },
-
-    originalPaystackReference: {
-      type: String,
-      trim: true,
-      maxlength: 200,
-      default: null,
-    },
-
-    allocations: {
-      type: [employerRefundAllocationSchema],
-      required: true,
-      default: undefined,
-
-      validate: {
-        validator: (values) => Array.isArray(values) && values.length > 0,
-
-        message: "A refund execution line requires at least one refund allocation.",
-      },
-    },
-
-    allocationCount: {
-      type: Number,
-      required: true,
-      min: 1,
-
-      validate: {
-        validator: Number.isSafeInteger,
-
-        message: "allocationCount must be a whole number.",
-      },
-    },
-
-    shiftCount: {
-      type: Number,
-      required: true,
-      min: 1,
-
-      validate: {
-        validator: Number.isSafeInteger,
-
-        message: "shiftCount must be a whole number.",
-      },
-    },
-
-    totalAmount: requiredPositiveMinorUnitAmountField(),
-
-    /**
-     * Eligibility snapshot taken when allocations are first attached to the
-     * batch.
-     */
-    eligibilityCheckedAt: {
-      type: Date,
-      required: true,
-    },
-
-    /**
-     * Mandatory second eligibility check performed immediately before any
-     * financial execution begins.
-     *
-     * This protects against a valid BASE-affecting challenge appearing after
-     * batching but before money moves.
-     */
-    executionEligibilityCheckedAt: {
-      type: Date,
-      default: null,
-    },
-
-    status: {
-      type: String,
-      enum: EMPLOYER_REFUND_LINE_STATUSES,
-      default: "queued",
-      required: true,
-    },
-
-    attemptCount: nonNegativeIntegerField({
-      defaultValue: 0,
-    }),
-
-    lastAttemptAt: {
-      type: Date,
-      default: null,
-    },
-
-    processingStartedAt: {
-      type: Date,
-      default: null,
-    },
-
-    pendingProviderAt: {
-      type: Date,
-      default: null,
-    },
-
-    awaitingActionAt: {
-      type: Date,
-      default: null,
-    },
-
-    completedAt: {
-      type: Date,
-      default: null,
-    },
-
-    failedAt: {
-      type: Date,
-      default: null,
-    },
-
-    failureReason: {
-      type: String,
-      trim: true,
-      maxlength: 1000,
-      default: null,
-    },
-
-    cancelledAt: {
-      type: Date,
-      default: null,
-    },
-
-    cancellationReason: {
-      type: String,
-      trim: true,
-      maxlength: 500,
-      default: null,
-    },
-
-    executionTransactions: {
-      type: [
-        {
-          type: mongoose.Schema.Types.ObjectId,
-          ref: "Transaction",
-        },
-      ],
-      default: [],
-    },
-
-    completedTransaction: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Transaction",
-      default: null,
-    },
-
-    walletMovement: {
-      type: walletRefundMovementSchema,
-      default: () => ({}),
-    },
-
-    paystackRefund: {
-      type: paystackRefundSchema,
-      default: () => ({}),
-    },
-
-    bankConsent: {
-      type: refundBankConsentSchema,
-      default: () => ({}),
-    },
-
-    retry: {
-      type: paystackRefundRetrySchema,
-      default: () => ({}),
-    },
-
-    fallbackTransfer: {
-      type: fallbackTransferSchema,
-      default: () => ({}),
-    },
-  },
-  {
-    _id: true,
-  }
-);
-
-/* ─────────────────────────────── EMPLOYER REFUND BATCH ─────────────────────────────── */
-
-/**
- * One EmployerRefundBatch belongs to:
- *
- * - one employer business;
- * - one employer wallet;
- * - one escrow wallet;
- * - one country and currency; and
- * - one weekly Monday employer-refund cycle.
- *
- * The batch is created only after the corresponding professional settlement
- * cycle has been confirmed complete.
- *
- * BATCHING IS NOT EXECUTION AUTHORITY
- *
- * Every execution line snapshots eligibility when batched and must revalidate
- * every allocation immediately before money moves.
- *
- * A new BASE blocker discovered after batching can therefore prevent the
- * affected obligation from entering financial execution. The batch service
- * must release that pre-execution batch reservation back to the refund
- * obligation rather than moving money.
- */
-const employerRefundBatchSchema = new mongoose.Schema(
+const employerRefundSchema = new mongoose.Schema(
   {
     // --- IDENTITY ---
 
@@ -935,14 +74,6 @@ const employerRefundBatchSchema = new mongoose.Schema(
       immutable: true,
     },
 
-    cycleKey: {
-      type: String,
-      trim: true,
-      maxlength: 200,
-      required: true,
-      immutable: true,
-    },
-
     idempotencyKey: {
       type: String,
       trim: true,
@@ -951,7 +82,19 @@ const employerRefundBatchSchema = new mongoose.Schema(
       immutable: true,
     },
 
-    // --- EMPLOYER AND WALLETS ---
+    shift: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Shift",
+      required: true,
+      immutable: true,
+    },
+
+    occurrence: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ShiftOccurrence",
+      required: true,
+      immutable: true,
+    },
 
     business: {
       type: mongoose.Schema.Types.ObjectId,
@@ -960,21 +103,34 @@ const employerRefundBatchSchema = new mongoose.Schema(
       immutable: true,
     },
 
-    employerWallet: {
+    branch: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Wallet",
+      ref: "Branch",
       required: true,
       immutable: true,
     },
 
-    escrowWallet: {
+    // --- CURRENT HOLD CASE ---
+
+    claim: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Wallet",
-      required: true,
-      immutable: true,
+      ref: "ShiftOccurrenceClaim",
+      default: null,
     },
 
-    // --- COUNTRY AND CURRENCY ---
+    dispute: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ShiftOccurrenceDispute",
+      default: null,
+    },
+
+    // --- MONEY ---
+
+    amount: requiredPositiveMinorUnitAmountField(),
+
+    refundedAmount: minorUnitAmountField({
+      defaultValue: 0,
+    }),
 
     countryCode: {
       type: String,
@@ -994,245 +150,160 @@ const employerRefundBatchSchema = new mongoose.Schema(
       immutable: true,
     },
 
-    // --- WEEKLY REFUND CYCLE ---
+    // --- ORIGINAL SHIFT FUNDING SOURCE ---
 
-    refundDate: {
+    // Immutable source used to fund the parent Shift.
+    fundingMethod: {
       type: String,
-      trim: true,
-      required: true,
-      immutable: true,
-
-      validate: {
-        validator: isValidLocalDateString,
-        message: "refundDate must be a valid date in YYYY-MM-DD format.",
-      },
-    },
-
-    timeZone: {
-      type: String,
-      trim: true,
-      maxlength: 100,
-      required: true,
-      immutable: true,
-
-      validate: {
-        validator: isValidTimeZone,
-        message: "timeZone must be a valid IANA timezone.",
-      },
-    },
-
-    cutoffAt: {
-      type: Date,
+      enum: EMPLOYER_REFUND_FUNDING_METHODS,
       required: true,
       immutable: true,
     },
 
-    scheduledFor: {
-      type: Date,
+    originalFundingTransaction: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Transaction",
       required: true,
       immutable: true,
     },
 
-    // --- PROFESSIONAL SETTLEMENT SEQUENCE ---
-
-    professionalSettlementCycleKey: {
+    originalPaystackReference: {
       type: String,
       trim: true,
       maxlength: 200,
-      required: true,
+      default: null,
       immutable: true,
     },
 
-    professionalSettlementConfirmedAt: {
-      type: Date,
-      required: true,
-      immutable: true,
-    },
-
-    // --- EXECUTION LINES ---
-
-    lines: {
-      type: [employerRefundLineSchema],
-      required: true,
-      default: undefined,
-
-      validate: {
-        validator: (values) => Array.isArray(values) && values.length > 0,
-        message: "An employer refund batch requires at least one execution line.",
-      },
-    },
-
-    lineCount: {
-      type: Number,
-      required: true,
-      min: 1,
-
-      validate: {
-        validator: Number.isSafeInteger,
-        message: "lineCount must be a whole number.",
-      },
-    },
-
-    shiftCount: {
-      type: Number,
-      required: true,
-      min: 1,
-
-      validate: {
-        validator: Number.isSafeInteger,
-        message: "shiftCount must be a whole number.",
-      },
-    },
-
-    occurrenceCount: {
-      type: Number,
-      required: true,
-      min: 1,
-
-      validate: {
-        validator: Number.isSafeInteger,
-        message: "occurrenceCount must be a whole number.",
-      },
-    },
-
-    refundCount: {
-      type: Number,
-      required: true,
-      min: 1,
-
-      validate: {
-        validator: Number.isSafeInteger,
-        message: "refundCount must be a whole number.",
-      },
-    },
-
-    totalAmount: requiredPositiveMinorUnitAmountField(),
-
-    completedAmount: minorUnitAmountField({
-      required: true,
-      defaultValue: 0,
-    }),
-
-    failedAmount: minorUnitAmountField({
-      required: true,
-      defaultValue: 0,
-    }),
-
-    // --- STATUS ---
+    // --- REFUND ENTITLEMENT ---
 
     status: {
       type: String,
-      enum: EMPLOYER_REFUND_BATCH_STATUSES,
-      default: "scheduled",
+      enum: EMPLOYER_REFUND_STATUSES,
       required: true,
     },
 
-    // --- PROCESSING LOCK ---
-
-    processingToken: {
+    reason: {
       type: String,
-      trim: true,
-      maxlength: 200,
-      default: null,
-      select: false,
+      enum: REFUND_REASONS,
+      required: true,
     },
 
-    lockedAt: {
+    holdReason: {
+      type: String,
+      enum: [...REFUND_HOLD_REASONS, null],
+      default: null,
+    },
+
+    lastEvaluatedAt: {
+      type: Date,
+      required: true,
+    },
+
+    heldAt: {
       type: Date,
       default: null,
     },
 
-    lockExpiresAt: {
+    eligibleAt: {
       type: Date,
       default: null,
     },
 
-    // --- PROCESSING AUDIT ---
-
-    attemptCount: nonNegativeIntegerField({
-      defaultValue: 0,
-    }),
-
-    lastAttemptAt: {
+    scheduledProcessingAt: {
       type: Date,
       default: null,
     },
 
-    processingStartedAt: {
+    // --- ESCROW RESERVATION ---
+
+    reservationStatus: {
+      type: String,
+      enum: EMPLOYER_REFUND_RESERVATION_STATUSES,
+      default: "reserved",
+      required: true,
+    },
+
+    reservedAt: {
+      type: Date,
+      default: null,
+      required: true,
+    },
+
+    reservationReleasedAt: {
       type: Date,
       default: null,
     },
 
-    awaitingProviderAt: {
+    // --- WEEKLY REFUND BATCH ---
+
+    batch: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "EmployerRefundBatch",
+      default: null,
+    },
+
+    batchLineId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
+
+    batchedAt: {
       type: Date,
       default: null,
     },
 
-    awaitingActionAt: {
+    // --- FINANCIAL EXECUTION ---
+
+    executionMethod: {
+      type: String,
+      enum: [...EMPLOYER_REFUND_FINAL_EXECUTION_METHODS, null],
+      default: null,
+    },
+
+    executionStartedAt: {
       type: Date,
       default: null,
     },
 
-    partiallyCompletedAt: {
+    executionTransactions: {
+      type: [
+        {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Transaction",
+        },
+      ],
+      default: [],
+    },
+
+    completedTransaction: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Transaction",
+      default: null,
+    },
+
+    refundedAt: {
       type: Date,
       default: null,
     },
 
-    completedAt: {
+    // --- VOID AUDIT ---
+
+    voidedAt: {
       type: Date,
       default: null,
     },
 
-    lastFailedAt: {
-      type: Date,
+    voidedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
       default: null,
     },
 
-    lastFailureReason: {
+    voidReason: {
       type: String,
       trim: true,
       maxlength: 1000,
-      default: null,
-    },
-
-    // --- CANCELLATION ---
-
-    cancelledAt: {
-      type: Date,
-      default: null,
-    },
-
-    cancelledBy: {
-      type: String,
-      enum: [...BATCH_CANCELLATION_ACTORS, null],
-      default: null,
-    },
-
-    cancelledByUser: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
-
-    cancellationReason: {
-      type: String,
-      trim: true,
-      maxlength: 500,
-      default: null,
-    },
-
-    // --- INITIATOR ---
-
-    initiatedBy: {
-      type: String,
-      enum: BATCH_INITIATORS,
-      default: "system",
-      required: true,
-    },
-
-    initiatedByUser: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
       default: null,
     },
   },
@@ -1241,1677 +312,206 @@ const employerRefundBatchSchema = new mongoose.Schema(
   }
 );
 
-/* ─────────────────────────────── LINE VALIDATION ─────────────────────────────── */
+/* ─────────────────────────────── VALIDATION ─────────────────────────────── */
 
-employerRefundLineSchema.pre("validate", function validateEmployerRefundLine() {
-  const allocations = Array.isArray(this.allocations) ? this.allocations : [];
+employerRefundSchema.pre("validate", function validateEmployerRefund() {
+  if (!this.reservedAt && this.lastEvaluatedAt) {
+    this.reservedAt = this.lastEvaluatedAt;
+  }
+
+  const refundedAmount = Number(this.refundedAmount || 0);
 
   const executionTransactions = Array.isArray(this.executionTransactions)
     ? this.executionTransactions
     : [];
 
-  const walletMovement = this.walletMovement || {};
-  const paystackRefund = this.paystackRefund || {};
-  const bankConsent = this.bankConsent || {};
-  const retry = this.retry || {};
-  const fallbackTransfer = this.fallbackTransfer || {};
+  const hasBatchAudit = hasAny([this.batch, this.batchLineId, this.batchedAt]);
 
-  const refundIds = allocations.map((allocation) => String(allocation.employerRefund));
-
-  const occurrenceIds = allocations.map((allocation) => String(allocation.occurrence));
-
-  const shiftIds = allocations.map((allocation) => String(allocation.shift));
-
-  const fundingTransactionIds = allocations.map((allocation) =>
-    String(allocation.originalFundingTransaction)
-  );
-
-  const allocationAmounts = allocations.map((allocation) => allocation.amount);
-
-  const executionTransactionIds = normalizeIdStrings(executionTransactions);
-
-  const uniqueShiftIds = [...new Set(shiftIds)];
-
-  const uniqueFundingTransactionIds = [...new Set(fundingTransactionIds)];
-
-  const hasWalletMovementAudit = hasAny([
-    walletMovement.groupReference,
-    walletMovement.escrowDebitTransaction,
-    walletMovement.employerCreditTransaction,
-    walletMovement.completedAt,
-  ]);
-
-  const hasPaystackRefundAudit = hasAny([
-    paystackRefund.idempotencyKey,
-    paystackRefund.refundId,
-    paystackRefund.reference,
-    paystackRefund.submittedAt,
-    paystackRefund.processingAt,
-    paystackRefund.needsAttentionAt,
-    paystackRefund.processedAt,
-    paystackRefund.failedAt,
-    paystackRefund.failureReason,
-    paystackRefund.lastSyncedAt,
-    paystackRefund.lastProviderEventId,
-    paystackRefund.rawStatus,
-  ]);
-
-  const hasRetryAudit =
-    Number(retry.attemptCount || 0) > 0 ||
+  const hasExecutionAudit =
+    REFUND_PROCESSING_STATUSES.includes(this.status) ||
     hasAny([
-      retry.idempotencyKey,
-      retry.queuedAt,
-      retry.submittingAt,
-      retry.submittedAt,
-      retry.completedAt,
-      retry.failedAt,
-      retry.lastError,
-    ]);
+      this.executionMethod,
+      this.executionStartedAt,
+      this.completedTransaction,
+      this.refundedAt,
+    ]) ||
+    hasArrayValues(executionTransactions) ||
+    refundedAmount > 0;
 
-  const hasFallbackAudit =
-    Number(fallbackTransfer.attemptCount || 0) > 0 ||
-    hasAny([
-      fallbackTransfer.adminReviewStartedAt,
-      fallbackTransfer.adminApprovedAt,
-      fallbackTransfer.adminApprovedBy,
-      fallbackTransfer.adminNotes,
-      fallbackTransfer.idempotencyKey,
-      fallbackTransfer.lastAttemptAt,
-      fallbackTransfer.transaction,
-      fallbackTransfer.paystackTransferCode,
-      fallbackTransfer.submittedAt,
-      fallbackTransfer.completedAt,
-      fallbackTransfer.failedAt,
-      fallbackTransfer.failureReason,
-    ]);
+  const hasVoidAudit = hasAny([this.voidedAt, this.voidedBy, this.voidReason]);
 
-  const hasCancellationAudit = hasAny([this.cancelledAt, this.cancellationReason]);
+  /* ─────────────────────────────── FUNDING SOURCE ─────────────────────────────── */
 
-  /* ─────────────────────────────── ALLOCATION UNIQUENESS ─────────────────────────────── */
-
-  if (hasDuplicateValues(refundIds)) {
+  if (this.fundingMethod === "wallet_balance" && this.originalPaystackReference) {
     this.invalidate(
-      "allocations",
-      "A refund line cannot contain the same EmployerRefund more than once."
+      "originalPaystackReference",
+      "A wallet-funded employer refund cannot contain an original Paystack reference."
     );
   }
 
-  if (hasDuplicateValues(occurrenceIds)) {
+  if (this.fundingMethod === "paystack_checkout" && !this.originalPaystackReference) {
     this.invalidate(
-      "allocations",
-      "A refund line cannot contain the same ShiftOccurrence more than once."
+      "originalPaystackReference",
+      "A Paystack-funded employer refund requires the original Paystack reference."
     );
   }
 
-  if (this.allocationCount !== allocations.length) {
+  /* ─────────────────────────────── REFUNDED AMOUNT ─────────────────────────────── */
+
+  if (!Number.isSafeInteger(refundedAmount) || refundedAmount < 0) {
     this.invalidate(
-      "allocationCount",
-      "allocationCount must match the number of refund allocations."
+      "refundedAmount",
+      "refundedAmount must be a non-negative integer minor-unit amount."
     );
   }
 
-  if (this.shiftCount !== uniqueShiftIds.length) {
-    this.invalidate("shiftCount", "shiftCount must match the number of unique included Shifts.");
+  if (refundedAmount > Number(this.amount || 0)) {
+    this.invalidate("refundedAmount", "refundedAmount cannot exceed amount.");
   }
 
-  const calculatedTotalAmount = sumSafeIntegerValues(allocationAmounts);
+  /* ─────────────────────────────── CURRENT HOLD CASE ─────────────────────────────── */
 
-  if (calculatedTotalAmount === null) {
-    this.invalidate("totalAmount", "Refund allocations contain an invalid amount.");
-  } else if (Number(this.totalAmount) !== calculatedTotalAmount) {
-    this.invalidate("totalAmount", "totalAmount must equal the sum of all refund allocations.");
-  }
+  if (this.status === "held") {
+    if (!this.holdReason || !this.heldAt) {
+      this.invalidate("holdReason", "A held employer refund requires holdReason and heldAt.");
+    }
 
-  /* ─────────────────────────────── FUNDING ROUTE ─────────────────────────────── */
+    if (this.holdReason === PROFESSIONAL_CLAIM_HOLD_REASON) {
+      if (!this.claim) {
+        this.invalidate(
+          "claim",
+          "professional_claim_pending requires the active professional claim."
+        );
+      }
 
-  if (this.fundingMethod === "wallet_balance") {
-    if (this.initialExecutionMethod !== "wallet_balance") {
+      if (this.dispute) {
+        this.invalidate(
+          "dispute",
+          "professional_claim_pending cannot simultaneously reference an employer dispute."
+        );
+      }
+    } else if (this.holdReason === EMPLOYER_DISPUTE_HOLD_REASON) {
+      if (!this.dispute) {
+        this.invalidate(
+          "dispute",
+          "employer_dispute_pending requires the active employer dispute."
+        );
+      }
+
+      if (this.claim) {
+        this.invalidate(
+          "claim",
+          "employer_dispute_pending cannot simultaneously reference a professional claim."
+        );
+      }
+    } else if (this.claim || this.dispute) {
       this.invalidate(
-        "initialExecutionMethod",
-        "A wallet-funded line must initially execute through wallet_balance."
+        "holdReason",
+        "Only claim- or dispute-specific hold reasons may carry a current claim or dispute link."
+      );
+    }
+  } else {
+    if (this.holdReason || this.heldAt) {
+      this.invalidate("holdReason", "holdReason and heldAt require held status.");
+    }
+
+    if (this.claim || this.dispute) {
+      this.invalidate(
+        "status",
+        "Current claim and dispute links may exist only while the refund is held by that case."
+      );
+    }
+  }
+
+  /* ─────────────────────────────── HELD ─────────────────────────────── */
+
+  if (this.status === "held") {
+    if (this.eligibleAt || this.scheduledProcessingAt) {
+      this.invalidate(
+        "eligibleAt",
+        "A held employer refund cannot contain eligibility or scheduled-processing audit."
       );
     }
 
-    if (this.originalPaystackReference) {
+    if (hasBatchAudit || hasExecutionAudit || hasVoidAudit) {
       this.invalidate(
-        "originalPaystackReference",
-        "A wallet-funded line cannot contain an original Paystack reference."
+        "status",
+        "A held employer refund cannot contain batch, execution, completion or void audit."
       );
     }
 
-    if (paystackRefund.status !== "not_started" || hasPaystackRefundAudit) {
+    if (this.reservationStatus !== "reserved" || this.reservationReleasedAt) {
       this.invalidate(
-        "paystackRefund.status",
-        "A wallet-funded line cannot contain Paystack refund details."
+        "reservationStatus",
+        "A held employer refund must retain its escrow reservation."
+      );
+    }
+  }
+
+  /* ─────────────────────────────── ELIGIBLE ─────────────────────────────── */
+
+  if (this.status === "eligible") {
+    if (!this.eligibleAt || !this.scheduledProcessingAt) {
+      this.invalidate(
+        "eligibleAt",
+        "An eligible employer refund requires eligibleAt and scheduledProcessingAt."
+      );
+    }
+
+    if (hasBatchAudit || hasExecutionAudit || hasVoidAudit) {
+      this.invalidate(
+        "status",
+        "An eligible employer refund cannot contain batch, execution, completion or void audit."
+      );
+    }
+
+    if (this.reservationStatus !== "reserved" || this.reservationReleasedAt) {
+      this.invalidate(
+        "reservationStatus",
+        "An eligible employer refund must retain its escrow reservation."
+      );
+    }
+  }
+
+  /* ─────────────────────────────── BATCHED ─────────────────────────────── */
+
+  if (this.status === "batched") {
+    if (!this.batch || !this.batchLineId || !this.batchedAt) {
+      this.invalidate(
+        "status",
+        "A batched employer refund requires batch, batchLineId and batchedAt."
+      );
+    }
+
+    if (!this.eligibleAt || !this.scheduledProcessingAt) {
+      this.invalidate(
+        "eligibleAt",
+        "A batched employer refund must retain its eligibility and scheduling audit."
       );
     }
 
     if (
-      bankConsent.status !== "not_required" ||
-      retry.status !== "not_required" ||
-      fallbackTransfer.status !== "not_required" ||
-      hasRetryAudit ||
-      hasFallbackAudit
-    ) {
-      this.invalidate(
-        "fundingMethod",
-        "A wallet-funded line cannot contain Paystack consent, retry or fallback details."
-      );
-    }
-
-    if (this.finalExecutionMethod && this.finalExecutionMethod !== "wallet_balance") {
-      this.invalidate(
-        "finalExecutionMethod",
-        "A wallet-funded line can only complete through wallet_balance."
-      );
-    }
-  }
-
-  if (this.fundingMethod === "paystack_checkout") {
-    if (this.initialExecutionMethod !== "paystack_refund") {
-      this.invalidate(
-        "initialExecutionMethod",
-        "A Paystack-funded line must initially execute through paystack_refund."
-      );
-    }
-
-    if (!this.originalPaystackReference) {
-      this.invalidate(
-        "originalPaystackReference",
-        "A Paystack-funded line requires the original Paystack payment reference."
-      );
-    }
-
-    if (uniqueShiftIds.length !== 1) {
-      this.invalidate(
-        "allocations",
-        "A Paystack refund line must contain allocations from exactly one parent Shift."
-      );
-    }
-
-    if (uniqueFundingTransactionIds.length !== 1) {
-      this.invalidate(
-        "allocations",
-        "A Paystack refund line must reference exactly one original Shift funding transaction."
-      );
-    }
-
-    if (hasWalletMovementAudit) {
-      this.invalidate(
-        "walletMovement",
-        "A Paystack-funded line cannot contain wallet-refund movement details."
-      );
-    }
-
-    if (this.finalExecutionMethod === "wallet_balance") {
-      this.invalidate(
-        "finalExecutionMethod",
-        "A Paystack-funded line cannot complete through wallet_balance."
-      );
-    }
-  }
-
-  /* ─────────────────────────────── LINE ATTEMPT AUDIT ─────────────────────────────── */
-
-  if (Number(this.attemptCount || 0) === 0 && this.lastAttemptAt) {
-    this.invalidate(
-      "lastAttemptAt",
-      "lastAttemptAt requires at least one line-processing attempt."
-    );
-  }
-
-  if (Number(this.attemptCount || 0) > 0 && !this.lastAttemptAt) {
-    this.invalidate("lastAttemptAt", "A line with processing attempts requires lastAttemptAt.");
-  }
-
-  if (
-    this.processingStartedAt &&
-    this.lastAttemptAt &&
-    this.processingStartedAt > this.lastAttemptAt
-  ) {
-    this.invalidate(
-      "processingStartedAt",
-      "processingStartedAt cannot be later than lastAttemptAt."
-    );
-  }
-
-  /* ─────────────────────────────── EXECUTION ELIGIBILITY RECHECK ─────────────────────────────── */
-
-  if (
-    this.executionEligibilityCheckedAt &&
-    this.eligibilityCheckedAt &&
-    this.executionEligibilityCheckedAt < this.eligibilityCheckedAt
-  ) {
-    this.invalidate(
-      "executionEligibilityCheckedAt",
-      "executionEligibilityCheckedAt cannot be earlier than the original batch eligibility check."
-    );
-  }
-
-  if (
-    this.processingStartedAt &&
-    this.executionEligibilityCheckedAt &&
-    this.executionEligibilityCheckedAt > this.processingStartedAt
-  ) {
-    this.invalidate(
-      "executionEligibilityCheckedAt",
-      "Execution eligibility must be rechecked before financial processing starts."
-    );
-  }
-
-  if (this.status === "queued" && this.executionEligibilityCheckedAt) {
-    this.invalidate(
-      "executionEligibilityCheckedAt",
-      "A queued refund line has not yet reached its immediate pre-execution eligibility check."
-    );
-  }
-
-  if (
-    ["processing", "pending_provider", "awaiting_action", "completed", "failed"].includes(
-      this.status
-    ) &&
-    !this.executionEligibilityCheckedAt
-  ) {
-    this.invalidate(
-      "executionEligibilityCheckedAt",
-      `${this.status} requires an immediate pre-execution eligibility check.`
-    );
-  }
-
-  /* ─────────────────────────────── WALLET MOVEMENT ─────────────────────────────── */
-
-  if (hasWalletMovementAudit) {
-    if (
-      !walletMovement.groupReference ||
-      !walletMovement.escrowDebitTransaction ||
-      !walletMovement.employerCreditTransaction ||
-      !walletMovement.completedAt
-    ) {
-      this.invalidate(
-        "walletMovement",
-        "Wallet movement requires groupReference, escrowDebitTransaction, employerCreditTransaction and completedAt together."
-      );
-    }
-
-    if (this.fundingMethod !== "wallet_balance") {
-      this.invalidate("walletMovement", "Wallet movement details require wallet_balance funding.");
-    }
-
-    if (
-      walletMovement.escrowDebitTransaction &&
-      walletMovement.employerCreditTransaction &&
-      String(walletMovement.escrowDebitTransaction) ===
-        String(walletMovement.employerCreditTransaction)
-    ) {
-      this.invalidate(
-        "walletMovement.employerCreditTransaction",
-        "The escrow debit and employer credit must be different Transaction records."
-      );
-    }
-
-    if (
-      walletMovement.escrowDebitTransaction &&
-      !executionTransactionIds.includes(String(walletMovement.escrowDebitTransaction))
-    ) {
-      this.invalidate(
-        "executionTransactions",
-        "executionTransactions must include the escrow refund debit."
-      );
-    }
-
-    if (
-      walletMovement.employerCreditTransaction &&
-      !executionTransactionIds.includes(String(walletMovement.employerCreditTransaction))
-    ) {
-      this.invalidate(
-        "executionTransactions",
-        "executionTransactions must include the employer wallet refund credit."
-      );
-    }
-  }
-
-  /* ─────────────────────────────── PAYSTACK REFUND ─────────────────────────────── */
-
-  if (paystackRefund.status === "not_started") {
-    if (hasPaystackRefundAudit) {
-      this.invalidate(
-        "paystackRefund.status",
-        "Paystack refund audit fields require a started provider refund."
-      );
-    }
-  }
-
-  if (paystackRefund.status === "pending") {
-    if (
-      !paystackRefund.idempotencyKey ||
-      !paystackRefund.submittedAt ||
-      (!paystackRefund.refundId && !paystackRefund.reference)
-    ) {
-      this.invalidate(
-        "paystackRefund.status",
-        "A pending Paystack refund requires idempotencyKey, submittedAt and a provider identifier."
-      );
-    }
-  }
-
-  if (paystackRefund.status === "processing") {
-    if (
-      !paystackRefund.idempotencyKey ||
-      !paystackRefund.submittedAt ||
-      !paystackRefund.processingAt ||
-      (!paystackRefund.refundId && !paystackRefund.reference)
-    ) {
-      this.invalidate(
-        "paystackRefund.status",
-        "A processing Paystack refund requires submission, processingAt and a provider identifier."
-      );
-    }
-
-    if (
-      paystackRefund.processingAt &&
-      paystackRefund.submittedAt &&
-      paystackRefund.processingAt < paystackRefund.submittedAt
-    ) {
-      this.invalidate(
-        "paystackRefund.processingAt",
-        "Paystack refund processing cannot begin before submission."
-      );
-    }
-  }
-
-  if (paystackRefund.status === "needs_attention") {
-    if (
-      !paystackRefund.idempotencyKey ||
-      !paystackRefund.submittedAt ||
-      !paystackRefund.needsAttentionAt ||
-      (!paystackRefund.refundId && !paystackRefund.reference)
-    ) {
-      this.invalidate(
-        "paystackRefund.status",
-        "needs_attention requires submission, needsAttentionAt and a provider identifier."
-      );
-    }
-
-    /*
-     * needs_attention remains on the original refund route.
-     *
-     * The line may enter awaiting_action before a Retry Refund has actually
-     * been queued. This leaves room for the provider to recover the original
-     * refund asynchronously without manufacturing a retry audit.
-     *
-     * Bank consent is not required merely because the provider refund needs
-     * attention.
-     */
-  }
-
-  if (paystackRefund.status === "processed") {
-    if (
-      !paystackRefund.idempotencyKey ||
-      !paystackRefund.submittedAt ||
-      !paystackRefund.processedAt ||
-      (!paystackRefund.refundId && !paystackRefund.reference)
-    ) {
-      this.invalidate(
-        "paystackRefund.status",
-        "A processed Paystack refund requires submission, processedAt and a provider identifier."
-      );
-    }
-
-    if (fallbackTransfer.status !== "not_required") {
-      this.invalidate(
-        "fallbackTransfer.status",
-        "A processed Paystack refund cannot retain a fallback Transfer workflow."
-      );
-    }
-
-    if (hasRetryAudit && retry.status !== "completed") {
-      this.invalidate(
-        "retry.status",
-        "A processed Paystack refund with Retry Refund audit must close that retry as completed."
-      );
-    }
-  }
-
-  if (paystackRefund.status === "failed") {
-    if (
-      !paystackRefund.idempotencyKey ||
-      !paystackRefund.submittedAt ||
-      !paystackRefund.failedAt ||
-      !paystackRefund.failureReason
-    ) {
-      this.invalidate(
-        "paystackRefund.status",
-        "A failed Paystack refund requires submission, failedAt and failureReason."
-      );
-    }
-
-    const retryWorkflowStarted = retry.status !== "not_required";
-
-    const fallbackWorkflowStarted = fallbackTransfer.status !== "not_required";
-
-    if (!retryWorkflowStarted && !fallbackWorkflowStarted) {
-      this.invalidate(
-        "retry.status",
-        "A failed Paystack refund must enter Retry Refund or explicit fallback review."
-      );
-    }
-  }
-
-  if (
-    paystackRefund.processedAt &&
-    paystackRefund.submittedAt &&
-    paystackRefund.processedAt < paystackRefund.submittedAt
-  ) {
-    this.invalidate(
-      "paystackRefund.processedAt",
-      "Paystack refund cannot complete before submission."
-    );
-  }
-
-  if (
-    paystackRefund.failedAt &&
-    paystackRefund.submittedAt &&
-    paystackRefund.failedAt < paystackRefund.submittedAt
-  ) {
-    this.invalidate("paystackRefund.failedAt", "Paystack refund cannot fail before submission.");
-  }
-
-  /* ─────────────────────────────── BANK CONSENT ─────────────────────────────── */
-
-  validateBankConsent({
-    document: this,
-    consent: bankConsent,
-  });
-
-  /* ─────────────────────────────── RETRY REFUND ─────────────────────────────── */
-
-  if (retry.status === "not_required") {
-    if (hasRetryAudit) {
-      this.invalidate(
-        "retry.status",
-        "Retry audit fields require an active Retry Refund workflow."
-      );
-    }
-  }
-
-  if (retry.status === "queued") {
-    if (
-      !retry.idempotencyKey ||
-      !retry.queuedAt ||
-      !["needs_attention", "failed"].includes(paystackRefund.status)
-    ) {
-      this.invalidate(
-        "retry.status",
-        "A queued Retry Refund requires idempotencyKey, queuedAt and a Paystack refund that needs attention or failed."
-      );
-    }
-
-    if (
-      Number(retry.attemptCount || 0) !== 0 ||
-      retry.submittingAt ||
-      retry.submittedAt ||
-      retry.completedAt ||
-      retry.failedAt ||
-      retry.lastError
-    ) {
-      this.invalidate(
-        "retry.status",
-        "A queued Retry Refund cannot contain attempt, submission or failure details."
-      );
-    }
-  }
-
-  if (retry.status === "submitting") {
-    if (
-      !retry.idempotencyKey ||
-      !retry.queuedAt ||
-      !retry.submittingAt ||
-      Number(retry.attemptCount || 0) < 1 ||
-      !["needs_attention", "failed"].includes(paystackRefund.status)
-    ) {
-      this.invalidate(
-        "retry.status",
-        "A submitting Retry Refund requires queue audit, at least one attempt and a Paystack refund that needs attention or failed."
-      );
-    }
-
-    if (retry.submittedAt || retry.completedAt || retry.failedAt || retry.lastError) {
-      this.invalidate(
-        "retry.status",
-        "A submitting Retry Refund cannot contain submitted, completed or failure details."
-      );
-    }
-  }
-
-  if (retry.status === "submitted") {
-    if (
-      !retry.idempotencyKey ||
-      !retry.queuedAt ||
-      !retry.submittingAt ||
-      !retry.submittedAt ||
-      Number(retry.attemptCount || 0) < 1 ||
-      !["needs_attention", "failed"].includes(paystackRefund.status)
-    ) {
-      this.invalidate(
-        "retry.status",
-        "A submitted Retry Refund requires complete queue and submission audit for a Paystack refund that needs attention or failed."
-      );
-    }
-
-    if (retry.completedAt || retry.failedAt || retry.lastError) {
-      this.invalidate(
-        "retry.status",
-        "A submitted Retry Refund cannot contain completion or failure details."
-      );
-    }
-  }
-
-  if (retry.status === "completed") {
-    if (
-      !retry.idempotencyKey ||
-      !retry.queuedAt ||
-      !retry.submittingAt ||
-      !retry.submittedAt ||
-      !retry.completedAt ||
-      Number(retry.attemptCount || 0) < 1 ||
-      paystackRefund.status !== "processed"
-    ) {
-      this.invalidate(
-        "retry.status",
-        "A completed Retry Refund requires complete queue/submission audit and a processed Paystack refund."
-      );
-    }
-
-    if (retry.failedAt || retry.lastError) {
-      this.invalidate("retry.status", "A completed Retry Refund cannot contain failure details.");
-    }
-  }
-
-  if (retry.status === "failed") {
-    if (
-      !retry.idempotencyKey ||
-      !retry.queuedAt ||
-      !retry.submittingAt ||
-      retry.completedAt ||
-      !retry.failedAt ||
-      !retry.lastError ||
-      Number(retry.attemptCount || 0) < 1
-    ) {
-      this.invalidate(
-        "retry.status",
-        "A failed Retry Refund requires queue, attempt and failure audit."
-      );
-    }
-
-    if (fallbackTransfer.status === "not_required") {
-      this.invalidate(
-        "fallbackTransfer.status",
-        "A failed Retry Refund must enter fallback review."
-      );
-    }
-  }
-
-  if (retry.submittingAt && retry.queuedAt && retry.submittingAt < retry.queuedAt) {
-    this.invalidate(
-      "retry.submittingAt",
-      "Retry Refund submission cannot begin before it is queued."
-    );
-  }
-
-  if (retry.submittedAt && retry.submittingAt && retry.submittedAt < retry.submittingAt) {
-    this.invalidate(
-      "retry.submittedAt",
-      "Retry Refund submission cannot complete before it begins."
-    );
-  }
-
-  if (retry.completedAt && retry.submittedAt && retry.completedAt < retry.submittedAt) {
-    this.invalidate("retry.completedAt", "Retry Refund cannot complete before it is submitted.");
-  }
-
-  if (
-    retry.completedAt &&
-    paystackRefund.processedAt &&
-    retry.completedAt < paystackRefund.processedAt
-  ) {
-    this.invalidate(
-      "retry.completedAt",
-      "Retry Refund completedAt cannot be earlier than the provider processedAt timestamp."
-    );
-  }
-
-  if (retry.failedAt && retry.submittingAt && retry.failedAt < retry.submittingAt) {
-    this.invalidate("retry.failedAt", "Retry Refund cannot fail before submission begins.");
-  }
-
-  /* ─────────────────────────────── FALLBACK TRANSFER ─────────────────────────────── */
-
-  const refundRouteFailed = paystackRefund.status === "failed" || retry.status === "failed";
-
-  const retryStillActive = ["queued", "submitting", "submitted"].includes(retry.status);
-
-  if (fallbackTransfer.status !== "not_required" && retryStillActive) {
-    this.invalidate(
-      "fallbackTransfer.status",
-      "A fallback Transfer cannot run while a Retry Refund is still active."
-    );
-  }
-
-  if (fallbackTransfer.status === "not_required") {
-    if (hasFallbackAudit) {
-      this.invalidate(
-        "fallbackTransfer.status",
-        "Fallback audit fields require an active fallback workflow."
-      );
-    }
-  }
-
-  if (fallbackTransfer.status === "admin_review") {
-    if (!refundRouteFailed || !fallbackTransfer.adminReviewStartedAt) {
-      this.invalidate(
-        "fallbackTransfer.status",
-        "Fallback admin review requires a failed refund route and adminReviewStartedAt."
-      );
-    }
-
-    if (
-      fallbackTransfer.adminApprovedAt ||
-      fallbackTransfer.adminApprovedBy ||
-      fallbackTransfer.idempotencyKey ||
-      Number(fallbackTransfer.attemptCount || 0) > 0 ||
-      fallbackTransfer.lastAttemptAt ||
-      fallbackTransfer.transaction ||
-      fallbackTransfer.paystackTransferCode ||
-      fallbackTransfer.submittedAt ||
-      fallbackTransfer.completedAt ||
-      fallbackTransfer.failedAt ||
-      fallbackTransfer.failureReason
-    ) {
-      this.invalidate(
-        "fallbackTransfer.status",
-        "Fallback admin review cannot contain approval or execution details."
-      );
-    }
-  }
-
-  if (fallbackTransfer.status === "awaiting_consent") {
-    if (
-      !refundRouteFailed ||
-      !fallbackTransfer.adminReviewStartedAt ||
-      !fallbackTransfer.adminApprovedAt ||
-      !fallbackTransfer.adminApprovedBy ||
-      bankConsent.status !== "awaiting_consent"
-    ) {
-      this.invalidate(
-        "fallbackTransfer.status",
-        "Fallback awaiting_consent requires a failed refund route, admin approval and an open bank-consent request."
-      );
-    }
-
-    if (
-      fallbackTransfer.idempotencyKey ||
-      Number(fallbackTransfer.attemptCount || 0) > 0 ||
-      fallbackTransfer.lastAttemptAt ||
-      fallbackTransfer.transaction ||
-      fallbackTransfer.paystackTransferCode ||
-      fallbackTransfer.submittedAt ||
-      fallbackTransfer.completedAt ||
-      fallbackTransfer.failedAt ||
-      fallbackTransfer.failureReason
-    ) {
-      this.invalidate(
-        "fallbackTransfer.status",
-        "Fallback awaiting_consent cannot contain Transfer execution details."
-      );
-    }
-  }
-
-  if (fallbackTransfer.status === "consent_withdrawn") {
-    if (
-      !refundRouteFailed ||
-      !fallbackTransfer.adminReviewStartedAt ||
-      !fallbackTransfer.adminApprovedAt ||
-      !fallbackTransfer.adminApprovedBy ||
-      bankConsent.status !== "withdrawn"
-    ) {
-      this.invalidate(
-        "fallbackTransfer.status",
-        "consent_withdrawn requires a failed refund route, admin-approved fallback and withdrawn bank consent."
-      );
-    }
-
-    if (
-      fallbackTransfer.idempotencyKey ||
-      Number(fallbackTransfer.attemptCount || 0) > 0 ||
-      fallbackTransfer.lastAttemptAt ||
-      fallbackTransfer.transaction ||
-      fallbackTransfer.paystackTransferCode ||
-      fallbackTransfer.submittedAt ||
-      fallbackTransfer.completedAt ||
-      fallbackTransfer.failedAt ||
-      fallbackTransfer.failureReason
-    ) {
-      this.invalidate(
-        "fallbackTransfer.status",
-        "A consent-withdrawn fallback cannot contain Transfer execution details."
-      );
-    }
-  }
-
-  if (fallbackTransfer.status === "ready") {
-    if (
-      !refundRouteFailed ||
-      !fallbackTransfer.adminReviewStartedAt ||
-      !fallbackTransfer.adminApprovedAt ||
-      !fallbackTransfer.adminApprovedBy ||
-      !fallbackTransfer.idempotencyKey ||
-      bankConsent.status !== "confirmed"
-    ) {
-      this.invalidate(
-        "fallbackTransfer.status",
-        "A ready fallback Transfer requires failure audit, admin approval, idempotencyKey and confirmed bank consent."
-      );
-    }
-
-    if (
-      Number(fallbackTransfer.attemptCount || 0) !== 0 ||
-      fallbackTransfer.lastAttemptAt ||
-      fallbackTransfer.transaction ||
-      fallbackTransfer.paystackTransferCode ||
-      fallbackTransfer.submittedAt ||
-      fallbackTransfer.completedAt ||
-      fallbackTransfer.failedAt ||
-      fallbackTransfer.failureReason
-    ) {
-      this.invalidate(
-        "fallbackTransfer.status",
-        "A ready fallback Transfer cannot contain attempt or outcome details."
-      );
-    }
-  }
-
-  if (fallbackTransfer.status === "processing") {
-    if (
-      !refundRouteFailed ||
-      !fallbackTransfer.adminReviewStartedAt ||
-      !fallbackTransfer.adminApprovedAt ||
-      !fallbackTransfer.adminApprovedBy ||
-      !fallbackTransfer.idempotencyKey ||
-      !fallbackTransfer.transaction ||
-      Number(fallbackTransfer.attemptCount || 0) < 1 ||
-      !fallbackTransfer.lastAttemptAt ||
-      bankConsent.status !== "confirmed"
-    ) {
-      this.invalidate(
-        "fallbackTransfer.status",
-        "A processing fallback Transfer requires approval, consent, transaction and attempt audit."
-      );
-    }
-
-    if (Boolean(fallbackTransfer.paystackTransferCode) !== Boolean(fallbackTransfer.submittedAt)) {
-      this.invalidate(
-        "fallbackTransfer.paystackTransferCode",
-        "paystackTransferCode and submittedAt must be recorded together."
-      );
-    }
-
-    if (
-      fallbackTransfer.completedAt ||
-      fallbackTransfer.failedAt ||
-      fallbackTransfer.failureReason
-    ) {
-      this.invalidate(
-        "fallbackTransfer.status",
-        "A processing fallback Transfer cannot contain completed or failed details."
-      );
-    }
-  }
-
-  if (fallbackTransfer.status === "completed") {
-    if (
-      !refundRouteFailed ||
-      !fallbackTransfer.adminReviewStartedAt ||
-      !fallbackTransfer.adminApprovedAt ||
-      !fallbackTransfer.adminApprovedBy ||
-      !fallbackTransfer.idempotencyKey ||
-      !fallbackTransfer.transaction ||
-      !fallbackTransfer.paystackTransferCode ||
-      !fallbackTransfer.submittedAt ||
-      !fallbackTransfer.completedAt ||
-      Number(fallbackTransfer.attemptCount || 0) < 1 ||
-      !fallbackTransfer.lastAttemptAt ||
-      bankConsent.status !== "confirmed"
-    ) {
-      this.invalidate(
-        "fallbackTransfer.status",
-        "A completed fallback Transfer requires complete approval, consent, submission and completion audit."
-      );
-    }
-  }
-
-  if (fallbackTransfer.status === "failed") {
-    if (
-      !refundRouteFailed ||
-      !fallbackTransfer.adminReviewStartedAt ||
-      !fallbackTransfer.adminApprovedAt ||
-      !fallbackTransfer.adminApprovedBy ||
-      !fallbackTransfer.idempotencyKey ||
-      !fallbackTransfer.transaction ||
-      !fallbackTransfer.failedAt ||
-      !fallbackTransfer.failureReason ||
-      Number(fallbackTransfer.attemptCount || 0) < 1 ||
-      !fallbackTransfer.lastAttemptAt ||
-      bankConsent.status !== "confirmed"
-    ) {
-      this.invalidate(
-        "fallbackTransfer.status",
-        "A failed fallback Transfer requires complete approval, consent, attempt and failure audit."
-      );
-    }
-
-    if (Boolean(fallbackTransfer.paystackTransferCode) !== Boolean(fallbackTransfer.submittedAt)) {
-      this.invalidate(
-        "fallbackTransfer.paystackTransferCode",
-        "paystackTransferCode and submittedAt must be recorded together."
-      );
-    }
-  }
-
-  if (
-    fallbackTransfer.adminApprovedAt &&
-    fallbackTransfer.adminReviewStartedAt &&
-    fallbackTransfer.adminApprovedAt < fallbackTransfer.adminReviewStartedAt
-  ) {
-    this.invalidate(
-      "fallbackTransfer.adminApprovedAt",
-      "Fallback Transfer cannot be approved before admin review begins."
-    );
-  }
-
-  if (
-    fallbackTransfer.lastAttemptAt &&
-    fallbackTransfer.adminApprovedAt &&
-    fallbackTransfer.lastAttemptAt < fallbackTransfer.adminApprovedAt
-  ) {
-    this.invalidate(
-      "fallbackTransfer.lastAttemptAt",
-      "Fallback Transfer cannot be attempted before admin approval."
-    );
-  }
-
-  if (
-    fallbackTransfer.submittedAt &&
-    fallbackTransfer.lastAttemptAt &&
-    fallbackTransfer.submittedAt < fallbackTransfer.lastAttemptAt
-  ) {
-    this.invalidate(
-      "fallbackTransfer.submittedAt",
-      "Fallback Transfer submission cannot be earlier than its attempt time."
-    );
-  }
-
-  if (
-    fallbackTransfer.completedAt &&
-    fallbackTransfer.submittedAt &&
-    fallbackTransfer.completedAt < fallbackTransfer.submittedAt
-  ) {
-    this.invalidate(
-      "fallbackTransfer.completedAt",
-      "Fallback Transfer cannot complete before submission."
-    );
-  }
-
-  if (
-    fallbackTransfer.failedAt &&
-    fallbackTransfer.lastAttemptAt &&
-    fallbackTransfer.failedAt < fallbackTransfer.lastAttemptAt
-  ) {
-    this.invalidate(
-      "fallbackTransfer.failedAt",
-      "Fallback Transfer cannot fail before its attempt."
-    );
-  }
-
-  if (
-    fallbackTransfer.transaction &&
-    !executionTransactionIds.includes(String(fallbackTransfer.transaction))
-  ) {
-    this.invalidate(
-      "executionTransactions",
-      "executionTransactions must include the fallback Transfer transaction."
-    );
-  }
-
-  /* ─────────────────────────────── LINE STATUS ─────────────────────────────── */
-
-  if (this.status === "queued") {
-    if (
-      Number(this.attemptCount || 0) !== 0 ||
-      this.lastAttemptAt ||
-      this.processingStartedAt ||
-      this.pendingProviderAt ||
-      this.awaitingActionAt ||
-      this.completedAt ||
-      this.failedAt ||
-      this.failureReason ||
-      hasCancellationAudit ||
+      this.executionMethod ||
+      this.executionStartedAt ||
       hasArrayValues(executionTransactions) ||
       this.completedTransaction ||
-      this.finalExecutionMethod ||
-      hasWalletMovementAudit ||
-      hasPaystackRefundAudit ||
-      bankConsent.status !== "not_required" ||
-      retry.status !== "not_required" ||
-      fallbackTransfer.status !== "not_required"
+      refundedAmount > 0 ||
+      this.refundedAt
     ) {
       this.invalidate(
         "status",
-        "A queued refund line cannot contain processing, provider, consent or outcome details."
-      );
-    }
-  }
-
-  if (this.status === "processing") {
-    if (!this.processingStartedAt || Number(this.attemptCount || 0) < 1 || !this.lastAttemptAt) {
-      this.invalidate(
-        "status",
-        "A processing refund line requires processingStartedAt and at least one attempt."
+        "A batched employer refund cannot contain financial execution or completion audit."
       );
     }
 
-    if (
-      this.completedAt ||
-      this.failedAt ||
-      this.failureReason ||
-      hasCancellationAudit ||
-      this.finalExecutionMethod
-    ) {
+    if (hasVoidAudit) {
+      this.invalidate("voidedAt", "A batched employer refund cannot contain void audit.");
+    }
+
+    if (this.reservationStatus !== "reserved" || this.reservationReleasedAt) {
       this.invalidate(
-        "status",
-        "A processing refund line cannot contain terminal outcome details."
-      );
-    }
-  }
-
-  if (this.status === "pending_provider") {
-    const waitingForPaystack = ["pending", "processing"].includes(paystackRefund.status);
-
-    const waitingForRetry = retry.status === "submitted";
-
-    const waitingForFallback =
-      fallbackTransfer.status === "processing" && Boolean(fallbackTransfer.submittedAt);
-
-    if (
-      !this.processingStartedAt ||
-      !this.pendingProviderAt ||
-      Number(this.attemptCount || 0) < 1 ||
-      (!waitingForPaystack && !waitingForRetry && !waitingForFallback)
-    ) {
-      this.invalidate(
-        "status",
-        "pending_provider requires processing audit and a pending original refund, submitted Retry Refund or submitted fallback Transfer."
-      );
-    }
-
-    if (
-      this.completedAt ||
-      this.failedAt ||
-      this.failureReason ||
-      hasCancellationAudit ||
-      this.finalExecutionMethod
-    ) {
-      this.invalidate("status", "A provider-pending line cannot contain terminal outcome details.");
-    }
-  }
-
-  if (this.status === "awaiting_action") {
-    const retryActionRequired =
-      paystackRefund.status === "needs_attention" || retry.status === "queued";
-
-    const fallbackActionRequired = [
-      "admin_review",
-      "awaiting_consent",
-      "consent_withdrawn",
-      "ready",
-    ].includes(fallbackTransfer.status);
-
-    if (
-      !this.processingStartedAt ||
-      !this.awaitingActionAt ||
-      Number(this.attemptCount || 0) < 1 ||
-      (!retryActionRequired && !fallbackActionRequired)
-    ) {
-      this.invalidate(
-        "status",
-        "awaiting_action requires processing audit and an unresolved Retry Refund, consent or fallback action."
-      );
-    }
-
-    if (
-      this.completedAt ||
-      this.failedAt ||
-      this.failureReason ||
-      hasCancellationAudit ||
-      this.finalExecutionMethod
-    ) {
-      this.invalidate("status", "An action-required line cannot contain terminal outcome details.");
-    }
-  }
-
-  if (this.status === "completed") {
-    if (
-      !this.processingStartedAt ||
-      !this.completedAt ||
-      !this.completedTransaction ||
-      !this.finalExecutionMethod ||
-      Number(this.attemptCount || 0) < 1
-    ) {
-      this.invalidate(
-        "status",
-        "A completed refund line requires processing, completion, final execution method and Transaction audit."
-      );
-    }
-
-    if (!executionTransactionIds.includes(String(this.completedTransaction))) {
-      this.invalidate(
-        "completedTransaction",
-        "completedTransaction must also be included in executionTransactions."
-      );
-    }
-
-    if (this.failedAt || this.failureReason || hasCancellationAudit) {
-      this.invalidate(
-        "status",
-        "A completed refund line cannot contain failed or cancelled details."
-      );
-    }
-
-    if (this.fundingMethod === "wallet_balance") {
-      if (
-        this.finalExecutionMethod !== "wallet_balance" ||
-        !walletMovement.groupReference ||
-        !walletMovement.escrowDebitTransaction ||
-        !walletMovement.employerCreditTransaction ||
-        !walletMovement.completedAt
-      ) {
-        this.invalidate(
-          "walletMovement",
-          "A completed wallet refund requires complete paired wallet movement details."
-        );
-      }
-
-      if (String(this.completedTransaction) !== String(walletMovement.employerCreditTransaction)) {
-        this.invalidate(
-          "completedTransaction",
-          "The completed wallet refund Transaction must be the employer wallet credit."
-        );
-      }
-    }
-
-    if (this.fundingMethod === "paystack_checkout") {
-      const completedByRefund =
-        paystackRefund.status === "processed" && this.finalExecutionMethod === "paystack_refund";
-
-      const completedByFallback =
-        fallbackTransfer.status === "completed" &&
-        this.finalExecutionMethod === "paystack_transfer" &&
-        String(this.completedTransaction) === String(fallbackTransfer.transaction);
-
-      if (!completedByRefund && !completedByFallback) {
-        this.invalidate(
-          "status",
-          "A completed Paystack line requires a processed Paystack refund or completed fallback Transfer."
-        );
-      }
-    }
-  }
-
-  if (this.status === "failed") {
-    if (
-      !this.processingStartedAt ||
-      !this.failedAt ||
-      !this.failureReason ||
-      Number(this.attemptCount || 0) < 1
-    ) {
-      this.invalidate("status", "A failed refund line requires processing and failure audit.");
-    }
-
-    if (
-      this.completedAt ||
-      this.completedTransaction ||
-      this.finalExecutionMethod ||
-      hasCancellationAudit
-    ) {
-      this.invalidate(
-        "status",
-        "A failed refund line cannot contain completed or cancelled details."
-      );
-    }
-
-    /*
-     * A Paystack line is finally failed only when the consent-gated fallback
-     * Transfer itself has failed.
-     *
-     * A withdrawn consent is awaiting_action, not a financial failure.
-     */
-    if (this.fundingMethod === "paystack_checkout" && fallbackTransfer.status !== "failed") {
-      this.invalidate(
-        "fallbackTransfer.status",
-        "A Paystack refund line becomes finally failed only after its fallback Transfer fails."
-      );
-    }
-  }
-
-  if (this.status === "cancelled") {
-    if (!this.cancelledAt || !this.cancellationReason) {
-      this.invalidate(
-        "status",
-        "A cancelled refund line requires cancelledAt and cancellationReason."
-      );
-    }
-
-    if (
-      Number(this.attemptCount || 0) > 0 ||
-      this.lastAttemptAt ||
-      this.processingStartedAt ||
-      this.pendingProviderAt ||
-      this.awaitingActionAt ||
-      this.completedAt ||
-      this.failedAt ||
-      this.failureReason ||
-      hasArrayValues(executionTransactions) ||
-      this.completedTransaction ||
-      this.finalExecutionMethod ||
-      hasWalletMovementAudit ||
-      hasPaystackRefundAudit ||
-      bankConsent.status !== "not_required" ||
-      retry.status !== "not_required" ||
-      fallbackTransfer.status !== "not_required"
-    ) {
-      this.invalidate("status", "A refund line may only be cancelled before processing starts.");
-    }
-  } else if (hasCancellationAudit) {
-    this.invalidate("cancelledAt", "Refund-line cancellation details require cancelled status.");
-  }
-
-  if (this.status !== "completed" && this.finalExecutionMethod) {
-    this.invalidate(
-      "finalExecutionMethod",
-      "finalExecutionMethod may only be set when the line is completed."
-    );
-  }
-
-  if (
-    this.completedTransaction &&
-    !executionTransactionIds.includes(String(this.completedTransaction))
-  ) {
-    this.invalidate(
-      "completedTransaction",
-      "completedTransaction must be included in executionTransactions."
-    );
-  }
-
-  if (hasDuplicateValues(executionTransactionIds)) {
-    this.invalidate(
-      "executionTransactions",
-      "executionTransactions cannot contain duplicate Transaction references."
-    );
-  }
-
-  /* ─────────────────────────────── LINE TIMESTAMP ORDERING ─────────────────────────────── */
-
-  if (
-    this.pendingProviderAt &&
-    this.processingStartedAt &&
-    this.pendingProviderAt < this.processingStartedAt
-  ) {
-    this.invalidate(
-      "pendingProviderAt",
-      "pendingProviderAt cannot be earlier than processingStartedAt."
-    );
-  }
-
-  if (
-    this.awaitingActionAt &&
-    this.processingStartedAt &&
-    this.awaitingActionAt < this.processingStartedAt
-  ) {
-    this.invalidate(
-      "awaitingActionAt",
-      "awaitingActionAt cannot be earlier than processingStartedAt."
-    );
-  }
-
-  if (this.completedAt && this.processingStartedAt && this.completedAt < this.processingStartedAt) {
-    this.invalidate("completedAt", "completedAt cannot be earlier than processingStartedAt.");
-  }
-
-  if (this.failedAt && this.processingStartedAt && this.failedAt < this.processingStartedAt) {
-    this.invalidate("failedAt", "failedAt cannot be earlier than processingStartedAt.");
-  }
-});
-
-/* ─────────────────────────────── BATCH VALIDATION ─────────────────────────────── */
-
-employerRefundBatchSchema.pre("validate", function validateEmployerRefundBatch() {
-  const lines = Array.isArray(this.lines) ? this.lines : [];
-
-  const lineReferences = [];
-  const lineIdempotencyKeys = [];
-
-  const allRefundIds = [];
-  const allOccurrenceIds = [];
-  const allShiftIds = [];
-
-  const lineAmounts = [];
-  const completedLineAmounts = [];
-  const failedLineAmounts = [];
-
-  const lineStatuses = [];
-
-  const paystackRefundIds = [];
-  const paystackRefundReferences = [];
-  const paystackRefundIdempotencyKeys = [];
-
-  const retryIdempotencyKeys = [];
-
-  const fallbackIdempotencyKeys = [];
-  const fallbackTransferCodes = [];
-
-  let walletLineCount = 0;
-
-  for (const line of lines) {
-    const allocations = Array.isArray(line.allocations) ? line.allocations : [];
-
-    lineReferences.push(String(line.lineReference || ""));
-
-    lineIdempotencyKeys.push(String(line.idempotencyKey || ""));
-
-    lineAmounts.push(line.totalAmount);
-
-    lineStatuses.push(line.status);
-
-    if (line.status === "completed") {
-      completedLineAmounts.push(line.totalAmount);
-    }
-
-    if (line.status === "failed") {
-      failedLineAmounts.push(line.totalAmount);
-    }
-
-    if (line.fundingMethod === "wallet_balance") {
-      walletLineCount += 1;
-    }
-
-    for (const allocation of allocations) {
-      allRefundIds.push(String(allocation.employerRefund));
-      allOccurrenceIds.push(String(allocation.occurrence));
-      allShiftIds.push(String(allocation.shift));
-    }
-
-    const paystackRefund = line.paystackRefund || {};
-    const retry = line.retry || {};
-    const fallbackTransfer = line.fallbackTransfer || {};
-
-    if (paystackRefund.refundId) {
-      paystackRefundIds.push(String(paystackRefund.refundId));
-    }
-
-    if (paystackRefund.reference) {
-      paystackRefundReferences.push(String(paystackRefund.reference));
-    }
-
-    if (paystackRefund.idempotencyKey) {
-      paystackRefundIdempotencyKeys.push(String(paystackRefund.idempotencyKey));
-    }
-
-    if (retry.idempotencyKey) {
-      retryIdempotencyKeys.push(String(retry.idempotencyKey));
-    }
-
-    if (fallbackTransfer.idempotencyKey) {
-      fallbackIdempotencyKeys.push(String(fallbackTransfer.idempotencyKey));
-    }
-
-    if (fallbackTransfer.paystackTransferCode) {
-      fallbackTransferCodes.push(String(fallbackTransfer.paystackTransferCode));
-    }
-  }
-
-  /* ─────────────────────────────── WEEKLY CYCLE ─────────────────────────────── */
-
-  if (this.refundDate && getLocalDateWeekday(this.refundDate) !== MONDAY_WEEKDAY) {
-    this.invalidate("refundDate", "refundDate must be a Monday.");
-  }
-
-  if (this.cutoffAt && this.scheduledFor && this.scheduledFor <= this.cutoffAt) {
-    this.invalidate("scheduledFor", "scheduledFor must be later than cutoffAt.");
-  }
-
-  if (
-    this.professionalSettlementConfirmedAt &&
-    this.cutoffAt &&
-    this.professionalSettlementConfirmedAt < this.cutoffAt
-  ) {
-    this.invalidate(
-      "professionalSettlementConfirmedAt",
-      "Professional settlement cannot be confirmed before the refund-cycle cutoff."
-    );
-  }
-
-  if (
-    this.scheduledFor &&
-    this.professionalSettlementConfirmedAt &&
-    this.scheduledFor < this.professionalSettlementConfirmedAt
-  ) {
-    this.invalidate(
-      "scheduledFor",
-      "Employer refund processing cannot be scheduled before professional settlement is confirmed."
-    );
-  }
-
-  /* ─────────────────────────────── LINE / ALLOCATION UNIQUENESS ─────────────────────────────── */
-
-  if (hasDuplicateValues(lineReferences)) {
-    this.invalidate("lines", "Each refund line must have a unique lineReference within the batch.");
-  }
-
-  if (hasDuplicateValues(lineIdempotencyKeys)) {
-    this.invalidate(
-      "lines",
-      "Each refund line must have a unique idempotencyKey within the batch."
-    );
-  }
-
-  if (hasDuplicateValues(allRefundIds)) {
-    this.invalidate("lines", "An EmployerRefund cannot appear more than once in the batch.");
-  }
-
-  if (hasDuplicateValues(allOccurrenceIds)) {
-    this.invalidate("lines", "A ShiftOccurrence cannot appear more than once in the batch.");
-  }
-
-  /**
-   * One Shift remains in one execution line.
-   *
-   * Wallet-funded Shifts share one aggregated wallet line.
-   *
-   * Each Paystack-funded Shift owns its own Paystack line.
-   */
-  const shiftLineOwnership = new Map();
-
-  for (const line of lines) {
-    const allocations = Array.isArray(line.allocations) ? line.allocations : [];
-
-    for (const allocation of allocations) {
-      const shiftId = String(allocation.shift);
-
-      const existingLineId = shiftLineOwnership.get(shiftId);
-
-      if (existingLineId && existingLineId !== String(line._id)) {
-        this.invalidate(
-          "lines",
-          "A Shift cannot appear in more than one execution line in the same batch."
-        );
-
-        break;
-      }
-
-      shiftLineOwnership.set(shiftId, String(line._id));
-    }
-  }
-
-  const fundingTransactionLineOwnership = new Map();
-
-  for (const line of lines) {
-    const allocations = Array.isArray(line.allocations) ? line.allocations : [];
-
-    for (const allocation of allocations) {
-      const transactionId = String(allocation.originalFundingTransaction);
-
-      const existingLineId = fundingTransactionLineOwnership.get(transactionId);
-
-      if (existingLineId && existingLineId !== String(line._id)) {
-        this.invalidate(
-          "lines",
-          "An original funding Transaction cannot appear in more than one execution line in the same batch."
-        );
-
-        break;
-      }
-
-      fundingTransactionLineOwnership.set(transactionId, String(line._id));
-    }
-  }
-
-  if (hasDuplicateValues(paystackRefundIds)) {
-    this.invalidate("lines", "A Paystack refund ID cannot appear in more than one line.");
-  }
-
-  if (hasDuplicateValues(paystackRefundReferences)) {
-    this.invalidate("lines", "A Paystack refund reference cannot appear in more than one line.");
-  }
-
-  if (hasDuplicateValues(paystackRefundIdempotencyKeys)) {
-    this.invalidate(
-      "lines",
-      "A Paystack refund idempotency key cannot appear in more than one line."
-    );
-  }
-
-  if (hasDuplicateValues(retryIdempotencyKeys)) {
-    this.invalidate("lines", "A Retry Refund idempotency key cannot appear in more than one line.");
-  }
-
-  if (hasDuplicateValues(fallbackIdempotencyKeys)) {
-    this.invalidate(
-      "lines",
-      "A fallback Transfer idempotency key cannot appear in more than one line."
-    );
-  }
-
-  if (hasDuplicateValues(fallbackTransferCodes)) {
-    this.invalidate("lines", "A Paystack Transfer code cannot appear in more than one line.");
-  }
-
-  if (walletLineCount > 1) {
-    this.invalidate(
-      "lines",
-      "An employer refund batch may contain only one aggregated wallet refund line."
-    );
-  }
-
-  /* ─────────────────────────────── COUNTS ─────────────────────────────── */
-
-  const uniqueShiftIds = [...new Set(allShiftIds)];
-
-  if (this.lineCount !== lines.length) {
-    this.invalidate("lineCount", "lineCount must match the number of refund lines.");
-  }
-
-  if (this.shiftCount !== uniqueShiftIds.length) {
-    this.invalidate("shiftCount", "shiftCount must match the number of unique included Shifts.");
-  }
-
-  if (this.occurrenceCount !== allOccurrenceIds.length) {
-    this.invalidate(
-      "occurrenceCount",
-      "occurrenceCount must match the number of included ShiftOccurrences."
-    );
-  }
-
-  if (this.refundCount !== allRefundIds.length) {
-    this.invalidate(
-      "refundCount",
-      "refundCount must match the number of included EmployerRefund obligations."
-    );
-  }
-
-  if (allOccurrenceIds.length !== allRefundIds.length) {
-    this.invalidate(
-      "refundCount",
-      "Each included occurrence must have exactly one included EmployerRefund."
-    );
-  }
-
-  /* ─────────────────────────────── TOTALS ─────────────────────────────── */
-
-  const calculatedTotalAmount = sumSafeIntegerValues(lineAmounts);
-
-  const calculatedCompletedAmount = sumSafeIntegerValues(completedLineAmounts);
-
-  const calculatedFailedAmount = sumSafeIntegerValues(failedLineAmounts);
-
-  if (calculatedTotalAmount === null) {
-    this.invalidate("totalAmount", "Refund lines contain an invalid amount.");
-  } else if (Number(this.totalAmount) !== calculatedTotalAmount) {
-    this.invalidate("totalAmount", "totalAmount must equal the sum of all refund lines.");
-  }
-
-  if (calculatedCompletedAmount === null) {
-    this.invalidate("completedAmount", "Completed refund lines contain an invalid amount.");
-  } else if (Number(this.completedAmount) !== calculatedCompletedAmount) {
-    this.invalidate(
-      "completedAmount",
-      "completedAmount must equal the sum of completed refund lines."
-    );
-  }
-
-  if (calculatedFailedAmount === null) {
-    this.invalidate("failedAmount", "Failed refund lines contain an invalid amount.");
-  } else if (Number(this.failedAmount) !== calculatedFailedAmount) {
-    this.invalidate("failedAmount", "failedAmount must equal the sum of failed refund lines.");
-  }
-
-  if (
-    Number(this.completedAmount || 0) + Number(this.failedAmount || 0) >
-    Number(this.totalAmount || 0)
-  ) {
-    this.invalidate(
-      "completedAmount",
-      "completedAmount and failedAmount cannot exceed totalAmount."
-    );
-  }
-
-  /* ─────────────────────────────── INITIATOR ─────────────────────────────── */
-
-  if (this.initiatedBy === "system" && this.initiatedByUser) {
-    this.invalidate(
-      "initiatedByUser",
-      "A system-initiated refund batch cannot contain initiatedByUser."
-    );
-  }
-
-  if (this.initiatedBy === "admin" && !this.initiatedByUser) {
-    this.invalidate("initiatedByUser", "An admin-initiated refund batch requires initiatedByUser.");
-  }
-
-  /* ─────────────────────────────── PROCESSING LOCK ─────────────────────────────── */
-
-  const lockValues = [this.processingToken, this.lockedAt, this.lockExpiresAt];
-
-  const hasAnyLock = hasAny(lockValues);
-
-  const hasCompleteLock = hasAll(lockValues);
-
-  if (hasAnyLock && !hasCompleteLock) {
-    this.invalidate(
-      "processingToken",
-      "The refund-run lock requires processingToken, lockedAt and lockExpiresAt together."
-    );
-  }
-
-  if (this.lockedAt && this.lockExpiresAt && this.lockExpiresAt <= this.lockedAt) {
-    this.invalidate("lockExpiresAt", "lockExpiresAt must be later than lockedAt.");
-  }
-
-  if (hasCompleteLock && this.status !== "processing") {
-    this.invalidate("status", "An active refund-run lock requires processing status.");
-  }
-
-  /* ─────────────────────────────── BATCH ATTEMPT AUDIT ─────────────────────────────── */
-
-  if (Number(this.attemptCount || 0) === 0 && this.lastAttemptAt) {
-    this.invalidate(
-      "lastAttemptAt",
-      "lastAttemptAt requires at least one batch-processing attempt."
-    );
-  }
-
-  if (Number(this.attemptCount || 0) > 0 && !this.lastAttemptAt) {
-    this.invalidate("lastAttemptAt", "A batch with processing attempts requires lastAttemptAt.");
-  }
-
-  if (
-    this.processingStartedAt &&
-    this.lastAttemptAt &&
-    this.processingStartedAt > this.lastAttemptAt
-  ) {
-    this.invalidate(
-      "processingStartedAt",
-      "processingStartedAt cannot be later than lastAttemptAt."
-    );
-  }
-
-  if (Boolean(this.lastFailedAt) !== Boolean(this.lastFailureReason)) {
-    this.invalidate(
-      "lastFailureReason",
-      "lastFailedAt and lastFailureReason must be recorded together."
-    );
-  }
-
-  /* ─────────────────────────────── LINE STATUS SUMMARY ─────────────────────────────── */
-
-  const queuedLineCount = lineStatuses.filter((status) => status === "queued").length;
-
-  const processingLineCount = lineStatuses.filter((status) => status === "processing").length;
-
-  const pendingProviderLineCount = lineStatuses.filter(
-    (status) => status === "pending_provider"
-  ).length;
-
-  const awaitingActionLineCount = lineStatuses.filter(
-    (status) => status === "awaiting_action"
-  ).length;
-
-  const completedLineCount = lineStatuses.filter((status) => status === "completed").length;
-
-  const failedLineCount = lineStatuses.filter((status) => status === "failed").length;
-
-  const cancelledLineCount = lineStatuses.filter((status) => status === "cancelled").length;
-
-  const allLinesQueued = lines.length > 0 && queuedLineCount === lines.length;
-
-  const allLinesCompleted = lines.length > 0 && completedLineCount === lines.length;
-
-  const allLinesCancelled = lines.length > 0 && cancelledLineCount === lines.length;
-
-  const allLinesTerminal =
-    lines.length > 0 &&
-    lineStatuses.every((status) => TERMINAL_REFUND_LINE_STATUSES.includes(status));
-
-  /* ─────────────────────────────── SCHEDULED ─────────────────────────────── */
-
-  if (this.status === "scheduled") {
-    if (!allLinesQueued) {
-      this.invalidate("status", "A scheduled refund batch requires every line to remain queued.");
-    }
-
-    if (
-      Number(this.attemptCount || 0) !== 0 ||
-      this.lastAttemptAt ||
-      this.processingStartedAt ||
-      this.awaitingProviderAt ||
-      this.awaitingActionAt ||
-      this.partiallyCompletedAt ||
-      this.completedAt ||
-      this.lastFailedAt ||
-      this.lastFailureReason ||
-      hasAnyLock
-    ) {
-      this.invalidate(
-        "status",
-        "A scheduled refund batch cannot contain processing or outcome audit."
+        "reservationStatus",
+        "A batched employer refund must retain its escrow reservation."
       );
     }
   }
@@ -2919,281 +519,259 @@ employerRefundBatchSchema.pre("validate", function validateEmployerRefundBatch()
   /* ─────────────────────────────── PROCESSING ─────────────────────────────── */
 
   if (this.status === "processing") {
-    if (
-      !this.processingStartedAt ||
-      Number(this.attemptCount || 0) < 1 ||
-      !this.lastAttemptAt ||
-      !hasCompleteLock
-    ) {
+    if (!this.batch || !this.batchLineId || !this.batchedAt) {
       this.invalidate(
         "status",
-        "A processing refund batch requires processing audit and a complete processing lock."
+        "A processing employer refund requires its exact batch and execution-line ownership."
       );
     }
 
-    if (queuedLineCount + processingLineCount < 1) {
+    if (!this.executionMethod || !this.executionStartedAt) {
       this.invalidate(
-        "status",
-        "A processing refund batch requires at least one queued or processing line."
+        "executionMethod",
+        "A processing employer refund requires executionMethod and executionStartedAt."
       );
     }
 
-    if (this.completedAt || this.cancelledAt) {
+    if (refundedAmount > 0 || this.completedTransaction || this.refundedAt) {
       this.invalidate(
         "status",
-        "A processing refund batch cannot contain completed or cancelled outcome audit."
+        "A processing employer refund cannot contain completed-refund audit."
+      );
+    }
+
+    if (hasVoidAudit) {
+      this.invalidate("voidedAt", "A processing employer refund cannot contain void audit.");
+    }
+
+    if (this.reservationStatus !== "reserved" || this.reservationReleasedAt) {
+      this.invalidate(
+        "reservationStatus",
+        "A processing employer refund must retain its escrow reservation until completion."
       );
     }
   }
 
-  /* ─────────────────────────────── AWAITING PROVIDER ─────────────────────────────── */
+  /* ─────────────────────────────── REFUNDED ─────────────────────────────── */
 
-  if (this.status === "awaiting_provider") {
-    if (pendingProviderLineCount < 1) {
-      this.invalidate("status", "awaiting_provider requires at least one provider-pending line.");
-    }
-
-    if (queuedLineCount > 0 || processingLineCount > 0 || awaitingActionLineCount > 0) {
+  if (this.status === "refunded") {
+    if (!this.batch || !this.batchLineId || !this.batchedAt) {
       this.invalidate(
         "status",
-        "awaiting_provider cannot retain queued, processing or action-required lines."
+        "A refunded employer refund must retain its exact batch and execution-line audit."
       );
     }
 
-    if (!this.awaitingProviderAt) {
-      this.invalidate("awaitingProviderAt", "awaiting_provider requires awaitingProviderAt.");
-    }
-
-    if (hasAnyLock) {
+    if (!this.executionMethod || !this.executionStartedAt) {
       this.invalidate(
-        "processingToken",
-        "A provider-pending batch cannot retain its processing lock."
+        "executionMethod",
+        "A refunded employer refund requires executionMethod and executionStartedAt."
       );
     }
 
-    if (this.completedAt || this.cancelledAt) {
+    if (!hasArrayValues(executionTransactions)) {
       this.invalidate(
-        "status",
-        "A provider-pending batch cannot contain final completion or cancellation audit."
+        "executionTransactions",
+        "A refunded employer refund requires at least one execution Transaction."
+      );
+    }
+
+    if (!this.completedTransaction || !this.refundedAt) {
+      this.invalidate(
+        "completedTransaction",
+        "A refunded employer refund requires completedTransaction and refundedAt."
+      );
+    }
+
+    if (refundedAmount !== Number(this.amount)) {
+      this.invalidate(
+        "refundedAmount",
+        "A refunded employer refund requires refundedAmount to equal the full obligation amount."
+      );
+    }
+
+    if (hasVoidAudit) {
+      this.invalidate("voidedAt", "A refunded employer refund cannot contain void audit.");
+    }
+
+    if (this.reservationStatus !== "released" || !this.reservationReleasedAt) {
+      this.invalidate(
+        "reservationStatus",
+        "A refunded obligation must release its escrow reservation."
       );
     }
   }
 
-  /* ─────────────────────────────── AWAITING ACTION ─────────────────────────────── */
+  /* ─────────────────────────────── VOIDED ─────────────────────────────── */
 
-  if (this.status === "awaiting_action") {
-    if (awaitingActionLineCount < 1) {
-      this.invalidate("status", "awaiting_action requires at least one action-required line.");
+  if (this.status === "voided") {
+    if (!this.voidedAt || !this.voidReason) {
+      this.invalidate("voidedAt", "A voided employer refund requires voidedAt and voidReason.");
     }
 
-    if (queuedLineCount > 0 || processingLineCount > 0 || pendingProviderLineCount > 0) {
+    if (this.holdReason || this.claim || this.dispute || this.heldAt) {
       this.invalidate(
         "status",
-        "awaiting_action cannot retain queued, processing or provider-pending lines."
+        "A voided employer refund cannot retain an active hold or current case link."
       );
     }
 
-    if (!this.awaitingActionAt) {
-      this.invalidate("awaitingActionAt", "awaiting_action requires awaitingActionAt.");
-    }
-
-    if (hasAnyLock) {
+    if (this.eligibleAt || this.scheduledProcessingAt) {
       this.invalidate(
-        "processingToken",
-        "An action-required batch cannot retain its processing lock."
+        "eligibleAt",
+        "A voided employer refund cannot retain active eligibility or scheduling audit."
       );
     }
 
-    if (this.completedAt || this.cancelledAt) {
+    if (hasBatchAudit || hasExecutionAudit || refundedAmount !== 0) {
       this.invalidate(
         "status",
-        "An action-required batch cannot contain final completion or cancellation audit."
+        "An employer refund may only be voided before batching or execution."
       );
     }
+
+    if (this.reservationStatus !== "released" || !this.reservationReleasedAt) {
+      this.invalidate(
+        "reservationStatus",
+        "A voided obligation must release its escrow reservation."
+      );
+    }
+  } else if (hasVoidAudit) {
+    this.invalidate("voidedAt", "Void audit details require status voided.");
   }
 
-  /* ─────────────────────────────── PARTIALLY COMPLETED ─────────────────────────────── */
+  /* ─────────────────────────────── RESERVATION ─────────────────────────────── */
 
-  if (this.status === "partially_completed") {
-    if (!allLinesTerminal || completedLineCount < 1 || completedLineCount === lines.length) {
-      this.invalidate(
-        "status",
-        "partially_completed requires terminal lines with at least one completed and one failed or cancelled line."
-      );
-    }
-
-    if (failedLineCount + cancelledLineCount < 1) {
-      this.invalidate(
-        "status",
-        "partially_completed requires at least one failed or cancelled line."
-      );
-    }
-
-    if (!this.partiallyCompletedAt) {
-      this.invalidate("partiallyCompletedAt", "partially_completed requires partiallyCompletedAt.");
-    }
-
-    if (this.completedAt || this.cancelledAt || hasAnyLock) {
-      this.invalidate(
-        "status",
-        "A partially completed batch cannot retain completion, cancellation or lock details."
-      );
-    }
-  } else if (this.partiallyCompletedAt) {
+  if (
+    this.reservationReleasedAt &&
+    this.reservedAt &&
+    this.reservationReleasedAt < this.reservedAt
+  ) {
     this.invalidate(
-      "partiallyCompletedAt",
-      "partiallyCompletedAt requires partially_completed status."
+      "reservationReleasedAt",
+      "reservationReleasedAt cannot be earlier than reservedAt."
     );
   }
 
-  /* ─────────────────────────────── COMPLETED ─────────────────────────────── */
-
-  if (this.status === "completed") {
-    if (!allLinesCompleted) {
-      this.invalidate("status", "A completed refund batch requires every line to be completed.");
-    }
-
-    if (!this.completedAt) {
-      this.invalidate("completedAt", "A completed refund batch requires completedAt.");
-    }
-
-    if (
-      Number(this.completedAmount) !== Number(this.totalAmount) ||
-      Number(this.failedAmount) !== 0
-    ) {
-      this.invalidate(
-        "completedAmount",
-        "A completed refund batch requires full completedAmount and zero failedAmount."
-      );
-    }
-
-    if (hasAnyLock || this.cancelledAt) {
-      this.invalidate(
-        "status",
-        "A completed refund batch cannot retain lock or cancellation details."
-      );
-    }
-  } else if (this.completedAt) {
-    this.invalidate("completedAt", "completedAt may only be set when the batch is completed.");
-  }
-
-  /* ─────────────────────────────── FAILED ─────────────────────────────── */
-
-  if (this.status === "failed") {
-    if (!allLinesTerminal || failedLineCount < 1 || completedLineCount > 0) {
-      this.invalidate(
-        "status",
-        "A failed refund batch requires terminal lines, at least one failed line and no completed lines."
-      );
-    }
-
-    if (!this.lastFailedAt || !this.lastFailureReason) {
-      this.invalidate(
-        "lastFailureReason",
-        "A failed refund batch requires lastFailedAt and lastFailureReason."
-      );
-    }
-
-    if (hasAnyLock || this.completedAt || this.cancelledAt) {
-      this.invalidate(
-        "status",
-        "A failed refund batch cannot retain lock, completion or cancellation details."
-      );
-    }
-  }
-
-  /* ─────────────────────────────── CANCELLED ─────────────────────────────── */
-
-  const hasCancellationAudit = hasAny([
-    this.cancelledAt,
-    this.cancelledBy,
-    this.cancelledByUser,
-    this.cancellationReason,
-  ]);
-
-  if (this.status === "cancelled") {
-    if (!allLinesCancelled) {
-      this.invalidate("status", "A cancelled refund batch requires every line to be cancelled.");
-    }
-
-    if (!this.cancelledAt || !this.cancelledBy || !this.cancellationReason) {
-      this.invalidate(
-        "status",
-        "A cancelled refund batch requires cancelledAt, cancelledBy and cancellationReason."
-      );
-    }
-
-    if (this.cancelledBy === "admin" && !this.cancelledByUser) {
-      this.invalidate("cancelledByUser", "Admin cancellation requires cancelledByUser.");
-    }
-
-    if (this.cancelledBy === "system" && this.cancelledByUser) {
-      this.invalidate("cancelledByUser", "System cancellation cannot contain cancelledByUser.");
-    }
-
-    if (
-      Number(this.attemptCount || 0) > 0 ||
-      this.processingStartedAt ||
-      this.completedAt ||
-      hasAnyLock
-    ) {
-      this.invalidate("status", "A refund batch may only be cancelled before processing starts.");
-    }
-  } else if (hasCancellationAudit) {
-    this.invalidate("cancelledAt", "Batch cancellation audit requires cancelled status.");
-  }
-
-  /* ─────────────────────────────── BATCH TIMESTAMP ORDERING ─────────────────────────────── */
-
-  if (
-    this.awaitingProviderAt &&
-    this.processingStartedAt &&
-    this.awaitingProviderAt < this.processingStartedAt
-  ) {
+  if (this.reservationStatus === "reserved" && this.reservationReleasedAt) {
     this.invalidate(
-      "awaitingProviderAt",
-      "awaitingProviderAt cannot be earlier than processingStartedAt."
+      "reservationReleasedAt",
+      "A reserved obligation cannot contain reservationReleasedAt."
+    );
+  }
+
+  if (this.reservationStatus === "released" && !this.reservationReleasedAt) {
+    this.invalidate(
+      "reservationReleasedAt",
+      "A released reservation requires reservationReleasedAt."
     );
   }
 
   if (
-    this.awaitingActionAt &&
-    this.processingStartedAt &&
-    this.awaitingActionAt < this.processingStartedAt
+    !TERMINAL_EMPLOYER_REFUND_STATUSES.includes(this.status) &&
+    this.reservationStatus !== "reserved"
   ) {
     this.invalidate(
-      "awaitingActionAt",
-      "awaitingActionAt cannot be earlier than processingStartedAt."
+      "reservationStatus",
+      "An open employer refund obligation must remain reserved."
+    );
+  }
+
+  /* ─────────────────────────────── DATE ORDERING ─────────────────────────────── */
+
+  if (this.reservedAt && this.lastEvaluatedAt && this.reservedAt > this.lastEvaluatedAt) {
+    this.invalidate("reservedAt", "reservedAt cannot be later than lastEvaluatedAt.");
+  }
+
+  if (this.eligibleAt && this.lastEvaluatedAt && this.eligibleAt > this.lastEvaluatedAt) {
+    this.invalidate("eligibleAt", "eligibleAt cannot be later than lastEvaluatedAt.");
+  }
+
+  if (
+    this.scheduledProcessingAt &&
+    this.eligibleAt &&
+    this.scheduledProcessingAt < this.eligibleAt
+  ) {
+    this.invalidate(
+      "scheduledProcessingAt",
+      "scheduledProcessingAt cannot be earlier than eligibleAt."
+    );
+  }
+
+  if (this.batchedAt && this.eligibleAt && this.batchedAt < this.eligibleAt) {
+    this.invalidate("batchedAt", "batchedAt cannot be earlier than eligibleAt.");
+  }
+
+  if (this.executionStartedAt && this.batchedAt && this.executionStartedAt < this.batchedAt) {
+    this.invalidate("executionStartedAt", "executionStartedAt cannot be earlier than batchedAt.");
+  }
+
+  if (this.refundedAt && this.executionStartedAt && this.refundedAt < this.executionStartedAt) {
+    this.invalidate("refundedAt", "refundedAt cannot be earlier than executionStartedAt.");
+  }
+
+  /* ─────────────────────────────── EXECUTION METHOD COMPATIBILITY ─────────────────────────────── */
+
+  if (
+    this.fundingMethod === "wallet_balance" &&
+    this.executionMethod &&
+    this.executionMethod !== "wallet_balance"
+  ) {
+    this.invalidate(
+      "executionMethod",
+      "A wallet-funded employer refund can only execute through wallet_balance."
     );
   }
 
   if (
-    this.partiallyCompletedAt &&
-    this.processingStartedAt &&
-    this.partiallyCompletedAt < this.processingStartedAt
+    this.fundingMethod === "paystack_checkout" &&
+    this.executionMethod &&
+    !["paystack_refund", "wallet_balance"].includes(this.executionMethod)
   ) {
     this.invalidate(
-      "partiallyCompletedAt",
-      "partiallyCompletedAt cannot be earlier than processingStartedAt."
+      "executionMethod",
+      "A Paystack-funded employer refund may complete only through paystack_refund or wallet_balance."
     );
   }
 
-  if (this.completedAt && this.processingStartedAt && this.completedAt < this.processingStartedAt) {
-    this.invalidate("completedAt", "completedAt cannot be earlier than processingStartedAt.");
+  if (this.executionMethod === "paystack_refund" && this.fundingMethod !== "paystack_checkout") {
+    this.invalidate(
+      "executionMethod",
+      "paystack_refund execution requires Paystack Checkout funding."
+    );
   }
 
+  /* ─────────────────────────────── EXECUTION TRANSACTION UNIQUENESS ─────────────────────────────── */
+
+  const transactionIds = executionTransactions.map((transactionId) => String(transactionId));
+
+  if (new Set(transactionIds).size !== transactionIds.length) {
+    this.invalidate(
+      "executionTransactions",
+      "executionTransactions cannot contain duplicate Transaction references."
+    );
+  }
+
+  if (this.completedTransaction && !transactionIds.includes(String(this.completedTransaction))) {
+    this.invalidate(
+      "completedTransaction",
+      "completedTransaction must also be included in executionTransactions."
+    );
+  }
+
+  /* ─────────────────────────────── COMPLETED DETAILS ─────────────────────────────── */
+
   if (
-    this.lastFailedAt &&
-    this.processingStartedAt &&
-    this.lastFailedAt < this.processingStartedAt
+    this.status !== "refunded" &&
+    (refundedAmount > 0 || this.completedTransaction || this.refundedAt)
   ) {
-    this.invalidate("lastFailedAt", "lastFailedAt cannot be earlier than processingStartedAt.");
+    this.invalidate("status", "Completed refund details require refunded status.");
   }
 });
 
 /* ─────────────────────────────── INDEXES ─────────────────────────────── */
 
-employerRefundBatchSchema.index(
+employerRefundSchema.index(
   {
     referenceCode: 1,
   },
@@ -3202,7 +780,7 @@ employerRefundBatchSchema.index(
   }
 );
 
-employerRefundBatchSchema.index(
+employerRefundSchema.index(
   {
     idempotencyKey: 1,
   },
@@ -3211,255 +789,73 @@ employerRefundBatchSchema.index(
   }
 );
 
-/**
- * Exactly one weekly refund batch per employer/country/currency/cycle.
- */
-employerRefundBatchSchema.index(
+// One authoritative refund obligation per occurrence; voided records may be reactivated.
+employerRefundSchema.index(
   {
-    business: 1,
-    countryCode: 1,
-    currency: 1,
-    cycleKey: 1,
+    occurrence: 1,
   },
   {
     unique: true,
   }
 );
 
-employerRefundBatchSchema.index(
-  {
-    processingToken: 1,
-  },
-  {
-    unique: true,
-
-    partialFilterExpression: {
-      processingToken: {
-        $type: "string",
-      },
-    },
-  }
-);
-
-/**
- * Every embedded execution line has a globally unique deterministic
- * idempotency key.
- */
-employerRefundBatchSchema.index(
-  {
-    "lines.idempotencyKey": 1,
-  },
-  {
-    unique: true,
-  }
-);
-
-employerRefundBatchSchema.index(
-  {
-    "lines.paystackRefund.idempotencyKey": 1,
-  },
-  {
-    unique: true,
-
-    partialFilterExpression: {
-      "lines.paystackRefund.idempotencyKey": {
-        $type: "string",
-      },
-    },
-  }
-);
-
-employerRefundBatchSchema.index(
-  {
-    "lines.retry.idempotencyKey": 1,
-  },
-  {
-    unique: true,
-
-    partialFilterExpression: {
-      "lines.retry.idempotencyKey": {
-        $type: "string",
-      },
-    },
-  }
-);
-
-employerRefundBatchSchema.index(
-  {
-    "lines.fallbackTransfer.idempotencyKey": 1,
-  },
-  {
-    unique: true,
-
-    partialFilterExpression: {
-      "lines.fallbackTransfer.idempotencyKey": {
-        $type: "string",
-      },
-    },
-  }
-);
-
-employerRefundBatchSchema.index(
-  {
-    "lines.paystackRefund.refundId": 1,
-  },
-  {
-    unique: true,
-
-    partialFilterExpression: {
-      "lines.paystackRefund.refundId": {
-        $type: "string",
-      },
-    },
-  }
-);
-
-employerRefundBatchSchema.index(
-  {
-    "lines.paystackRefund.reference": 1,
-  },
-  {
-    unique: true,
-
-    partialFilterExpression: {
-      "lines.paystackRefund.reference": {
-        $type: "string",
-      },
-    },
-  }
-);
-
-employerRefundBatchSchema.index(
-  {
-    "lines.fallbackTransfer.paystackTransferCode": 1,
-  },
-  {
-    unique: true,
-
-    partialFilterExpression: {
-      "lines.fallbackTransfer.paystackTransferCode": {
-        $type: "string",
-      },
-    },
-  }
-);
-
-/**
- * One EmployerRefund may belong to only one EmployerRefundBatch anywhere in
- * the database.
- *
- * The pre-validation hook prevents duplication within one batch, while this
- * unique multikey index protects against two competing batch builders.
- *
- * This remains intentionally unchanged until employerRefundBatchService is
- * checked. If pre-execution revalidation returns an allocation to a future
- * weekly batch while retaining historical allocations here, this uniqueness
- * rule will need to change with that service contract.
- */
-employerRefundBatchSchema.index(
-  {
-    "lines.allocations.employerRefund": 1,
-  },
-  {
-    unique: true,
-  }
-);
-
-/**
- * EmployerRefund already has a one-to-one occurrence identity, but this
- * additional execution-level uniqueness prevents the same occurrence from
- * being accidentally represented in two batch allocations.
- *
- * As above, the service-level revalidation/rebatch contract determines whether
- * this should remain permanent uniqueness or become active-reservation
- * uniqueness instead.
- */
-employerRefundBatchSchema.index(
-  {
-    "lines.allocations.occurrence": 1,
-  },
-  {
-    unique: true,
-  }
-);
-
-employerRefundBatchSchema.index({
+employerRefundSchema.index({
+  shift: 1,
   status: 1,
-  scheduledFor: 1,
 });
 
-employerRefundBatchSchema.index({
-  business: 1,
-  refundDate: -1,
-});
-
-employerRefundBatchSchema.index({
+employerRefundSchema.index({
   business: 1,
   status: 1,
-  scheduledFor: 1,
+  scheduledProcessingAt: 1,
 });
 
-employerRefundBatchSchema.index({
-  countryCode: 1,
-  currency: 1,
+employerRefundSchema.index({
   status: 1,
-  scheduledFor: 1,
+  scheduledProcessingAt: 1,
+  lastEvaluatedAt: 1,
 });
 
-employerRefundBatchSchema.index({
-  lockExpiresAt: 1,
+employerRefundSchema.index({
+  batch: 1,
+  batchLineId: 1,
 });
 
-employerRefundBatchSchema.index({
-  professionalSettlementCycleKey: 1,
+employerRefundSchema.index({
+  originalFundingTransaction: 1,
   status: 1,
 });
 
-employerRefundBatchSchema.index({
-  "lines.allocations.shift": 1,
+employerRefundSchema.index({
+  originalPaystackReference: 1,
+  status: 1,
 });
 
-employerRefundBatchSchema.index({
-  "lines.allocations.originalFundingTransaction": 1,
+employerRefundSchema.index({
+  fundingMethod: 1,
+  status: 1,
+  scheduledProcessingAt: 1,
 });
 
-employerRefundBatchSchema.index({
-  "lines.status": 1,
-  scheduledFor: 1,
+employerRefundSchema.index({
+  reservationStatus: 1,
+  status: 1,
 });
 
-employerRefundBatchSchema.index({
-  "lines.originalPaystackReference": 1,
+employerRefundSchema.index({
+  claim: 1,
 });
 
-employerRefundBatchSchema.index({
-  "lines.paystackRefund.status": 1,
-  "lines.paystackRefund.lastSyncedAt": 1,
+employerRefundSchema.index({
+  dispute: 1,
 });
 
-employerRefundBatchSchema.index({
-  "lines.bankConsent.status": 1,
-  "lines.bankConsent.requestedAt": 1,
+employerRefundSchema.index({
+  completedTransaction: 1,
 });
 
-employerRefundBatchSchema.index({
-  "lines.retry.status": 1,
-  "lines.retry.queuedAt": 1,
+employerRefundSchema.index({
+  executionTransactions: 1,
 });
 
-employerRefundBatchSchema.index({
-  "lines.fallbackTransfer.status": 1,
-  "lines.fallbackTransfer.adminReviewStartedAt": 1,
-});
-
-employerRefundBatchSchema.index({
-  employerWallet: 1,
-  refundDate: -1,
-});
-
-employerRefundBatchSchema.index({
-  escrowWallet: 1,
-  refundDate: -1,
-});
-
-module.exports = mongoose.model("EmployerRefundBatch", employerRefundBatchSchema);
+module.exports = mongoose.model("EmployerRefund", employerRefundSchema);

@@ -113,9 +113,17 @@ const CHALLENGE_WINDOW_HOLD_REASON = "challenge_window_open";
  * Once an EmployerRefund has entered batched, processing or refunded state,
  * this service does not rewrite its amount or execution state.
  *
- * If later revalidation shows a blocker or a changed amount, the service
- * returns executionLocked / revalidationRequired / reconciliationRequired
- * information to the batch/reconciliation layer.
+ * If later authoritative refund truth conflicts with an execution-locked
+ * obligation, this service does not perform financial/provider reconciliation.
+ * It returns executionLocked / revalidationRequired / reconciliationRequired
+ * signals to EmployerRefundBatchService.
+ *
+ * revalidationRequired means the refund is only batched and can still be
+ * detached/revalidated before crossing a financial boundary.
+ *
+ * reconciliationRequired means the refund is already processing/refunded and
+ * current authoritative entitlement conflicts with that execution history. It
+ * is a financial-conflict signal, not routine Paystack provider polling.
  *
  * FUNDING DESTINATION
  *
@@ -127,8 +135,9 @@ const CHALLENGE_WINDOW_HOLD_REASON = "challenge_window_open";
  *
  * Mixed funding is not supported.
  *
- * This service establishes and maintains the obligation only.
- * EmployerRefundBatch owns financial execution.
+ * This service establishes and maintains the obligation only. It does not
+ * submit, retry or poll provider refunds. EmployerRefundBatchService owns final
+ * pre-execution revalidation, financial execution and provider reconciliation.
  */
 class ShiftRefundService {
   /* ─────────────────────────────── CORE ─────────────────────────────── */
@@ -1560,6 +1569,26 @@ class ShiftRefundService {
     return EXECUTION_REFUND_STATUSES.includes(employerRefund?.status);
   }
 
+  static getExecutionBoundaryFlags({ employerRefund, authoritativeConflict = false }) {
+    const status = String(employerRefund?.status || "")
+      .trim()
+      .toLowerCase();
+
+    const executionLocked = ShiftRefundService.isExecutionLocked(employerRefund);
+
+    return {
+      executionLocked,
+
+      revalidationRequired: Boolean(
+        executionLocked && authoritativeConflict && status === "batched"
+      ),
+
+      reconciliationRequired: Boolean(
+        executionLocked && authoritativeConflict && ["processing", "refunded"].includes(status)
+      ),
+    };
+  }
+
   /* ─────────────────────────────── STATE HELPERS ─────────────────────────────── */
 
   static applyCommonMirror({ occurrence, employerRefund, reason, amount, currentTime }) {
@@ -1753,6 +1782,15 @@ class ShiftRefundService {
 
     const reasonMatches = expectedReason ? employerRefund.reason === expectedReason : true;
 
+    const authoritativeConflict = Boolean(
+      requestedHold?.holdReason || !amountMatches || !reasonMatches
+    );
+
+    const boundaryFlags = ShiftRefundService.getExecutionBoundaryFlags({
+      employerRefund,
+      authoritativeConflict,
+    });
+
     return {
       shift,
 
@@ -1766,17 +1804,11 @@ class ShiftRefundService {
 
       mutable: false,
 
-      executionLocked: true,
+      executionLocked: boundaryFlags.executionLocked,
 
-      revalidationRequired: Boolean(
-        employerRefund.status === "batched" &&
-        (requestedHold?.holdReason || !amountMatches || !reasonMatches)
-      ),
+      revalidationRequired: boundaryFlags.revalidationRequired,
 
-      reconciliationRequired: Boolean(
-        ["processing", "refunded"].includes(employerRefund.status) &&
-        (requestedHold?.holdReason || !amountMatches || !reasonMatches)
-      ),
+      reconciliationRequired: boundaryFlags.reconciliationRequired,
 
       expectedRefundAmount,
 
@@ -2219,6 +2251,11 @@ class ShiftRefundService {
          * Do not rewrite the existing execution record here.
          */
         if (ShiftRefundService.isExecutionLocked(employerRefund)) {
+          const boundaryFlags = ShiftRefundService.getExecutionBoundaryFlags({
+            employerRefund,
+            authoritativeConflict: true,
+          });
+
           return {
             shift: resolvedShift,
 
@@ -2230,11 +2267,7 @@ class ShiftRefundService {
 
             idempotent: false,
 
-            executionLocked: true,
-
-            revalidationRequired: employerRefund.status === "batched",
-
-            reconciliationRequired: ["processing", "refunded"].includes(employerRefund.status),
+            ...boundaryFlags,
 
             requiredHoldReason: requestedHold.holdReason,
 
@@ -2372,6 +2405,11 @@ class ShiftRefundService {
         });
 
         if (ShiftRefundService.isExecutionLocked(employerRefund)) {
+          const boundaryFlags = ShiftRefundService.getExecutionBoundaryFlags({
+            employerRefund,
+            authoritativeConflict: false,
+          });
+
           return {
             shift,
 
@@ -2383,11 +2421,7 @@ class ShiftRefundService {
 
             idempotent: false,
 
-            executionLocked: true,
-
-            revalidationRequired: false,
-
-            reconciliationRequired: false,
+            ...boundaryFlags,
 
             actor,
           };
@@ -2808,6 +2842,11 @@ class ShiftRefundService {
          * layer must now reconcile what happened financially.
          */
         if (ShiftRefundService.isExecutionLocked(employerRefund)) {
+          const boundaryFlags = ShiftRefundService.getExecutionBoundaryFlags({
+            employerRefund,
+            authoritativeConflict: true,
+          });
+
           return {
             shift: resolvedShift,
 
@@ -2819,11 +2858,7 @@ class ShiftRefundService {
 
             idempotent: false,
 
-            executionLocked: true,
-
-            revalidationRequired: employerRefund.status === "batched",
-
-            reconciliationRequired: ["processing", "refunded"].includes(employerRefund.status),
+            ...boundaryFlags,
 
             expectedRefundAmount: 0,
 

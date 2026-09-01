@@ -2728,6 +2728,7 @@ class ShiftOccurrenceClaimService {
       };
     });
   }
+
   /* ─────────────────────────────── EMPLOYER NON-RESPONSE ─────────────────────────────── */
 
   static async escalateEmployerNonResponseToAdmin(

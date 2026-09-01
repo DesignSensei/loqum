@@ -23,6 +23,8 @@ function buildManageShiftsRedirect({
   referenceCode = null,
   errorCode = null,
   alreadyFunded = false,
+  returnedToEmployerWallet = false,
+  returnReason = null,
 }) {
   const params = new URLSearchParams();
 
@@ -38,6 +40,14 @@ function buildManageShiftsRedirect({
 
   if (alreadyFunded) {
     params.set("alreadyFunded", "true");
+  }
+
+  if (returnedToEmployerWallet) {
+    params.set("returnedToWallet", "true");
+  }
+
+  if (returnReason) {
+    params.set("returnReason", returnReason);
   }
 
   return `${EMPLOYER_SHIFTS_URL}?${params.toString()}`;
@@ -75,19 +85,12 @@ exports.handleShiftCheckoutCallback = async (req, res) => {
 
   try {
     /*
-     * The callback query is not trusted as proof of payment.
+     * The callback query isn't trusted as proof of payment.
      *
-     * finalizePaystackShiftFunding() calls Paystack's verification
-     * endpoint from the server and confirms:
-     *
-     * - transaction status
-     * - reference
-     * - amount
-     * - currency
-     * - customer
-     * - linked shift
-     *
-     * It then credits escrow and publishes the shift idempotently.
+     * finalizePaystackShiftFunding() verifies the payment
+     * directly with Paystack, records successful money in
+     * escrow, then funds the Shift or returns the payment
+     * according to the authoritative Shift state.
      */
     const result = await ShiftFundingService.finalizePaystackShiftFunding({
       reference,
@@ -100,11 +103,20 @@ exports.handleShiftCheckoutCallback = async (req, res) => {
     return res.redirect(
       303,
       buildManageShiftsRedirect({
-        paymentStatus: "success",
+        paymentStatus:
+          result.fundingApplied === true
+            ? "success"
+            : result.returnedToEmployerWallet === true
+              ? "returned"
+              : "failed",
 
         referenceCode: result.shift.referenceCode,
 
         alreadyFunded: result.alreadyFunded === true,
+
+        returnedToEmployerWallet: result.returnedToEmployerWallet === true,
+
+        returnReason: result.returnReason || null,
       })
     );
   } catch (error) {

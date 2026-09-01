@@ -1200,7 +1200,21 @@ class PaystackService {
     };
   }
 
-  static async retryRefundWithCustomerDetails({ refundId, currency, accountNumber, bankId }) {
+  static async retryRefundWithCustomerDetails({
+    refundId,
+    currency,
+    accountNumber,
+    bankId,
+
+    /*
+     * Loqum trace key only.
+     *
+     * Paystack's documented Retry Refund request does not expose an
+     * idempotency-key field. Keep this value only in Loqum's execution audit;
+     * do not send it to Paystack.
+     */
+    idempotencyKey = null,
+  }) {
     const normalizedRefundId = PaystackService.normalizeRefundId(refundId);
 
     const normalizedCurrency = PaystackService.normalizeCurrency(currency);
@@ -1208,6 +1222,8 @@ class PaystackService {
     const normalizedAccountNumber = PaystackService.normalizeBankAccountNumber(accountNumber);
 
     const normalizedBankId = PaystackService.normalizeBankId(bankId);
+
+    const normalizedTraceKey = PaystackService.normalizeTraceKey(idempotencyKey);
 
     const response = await PaystackService.request({
       method: "post",
@@ -1243,7 +1259,13 @@ class PaystackService {
       });
     }
 
-    return refund;
+    return {
+      ...refund,
+
+      trace: {
+        idempotencyKey: normalizedTraceKey,
+      },
+    };
   }
 
   static async findRefundByTraceKey({

@@ -16,8 +16,11 @@ const { runWithOptionalTransaction } = require("./helpers/transactionHelper");
 
 const {
   OVERTIME_SOURCES,
-  OVERTIME_STATUSES,
+  OVERTIME_REJECTION_BASES,
+  OVERTIME_ADMIN_REVIEW_REASONS,
   OVERTIME_ADMIN_DECISIONS,
+  OCCURRENCE_EVIDENCE_TYPES,
+  OCCURRENCE_EVIDENCE_SUBMITTER_ROLES,
 } = require("../constants/shiftLifecycle");
 
 const money = require("../utils/money");
@@ -27,15 +30,16 @@ const SHIFT_OVERTIME_SERVICE_ERROR_NAME = "ShiftOvertimeServiceError";
 
 const MILLISECONDS_PER_HOUR = 60 * 60 * 1000;
 
-const DEFAULT_OVERTIME_APPEAL_HOURS = 24;
-
 const DEFAULT_EXPIRY_BATCH_LIMIT = 100;
 const MAX_EXPIRY_BATCH_LIMIT = 500;
 
-const MAX_MANUAL_REQUEST_REASON_LENGTH = 300;
-const MAX_REJECTION_REASON_LENGTH = 500;
-const MAX_APPEAL_REASON_LENGTH = 1000;
+const MAX_OVERTIME_REQUEST_STATEMENT_LENGTH = 1000;
+const MAX_OVERTIME_REJECTION_REASON_LENGTH = 1000;
 const MAX_ADMIN_DECISION_REASON_LENGTH = 1000;
+
+const MAX_OVERTIME_EVIDENCE_ITEMS = 10;
+const MAX_OVERTIME_EVIDENCE_REFERENCE_LENGTH = 1000;
+const MAX_OVERTIME_EVIDENCE_DESCRIPTION_LENGTH = 500;
 
 const OVERTIME_REQUEST_ALLOWED_OCCURRENCE_STATUSES = Object.freeze([
   "pending_settlement",
@@ -53,15 +57,13 @@ const OVERTIME_EXECUTION_STARTED_STATUSES = Object.freeze(["release_pending", "r
  *
  * - creation of one OT request;
  * - late-checkout OT request creation;
- * - manual OT request creation within the original 24-hour review window;
+ * - manual OT request creation within the original occurrence review window;
+ * - professional OT request statements and optional supporting evidence;
  * - employer approval;
- * - employer rejection;
+ * - structured employer rejection and optional supporting evidence;
  * - employer-response expiry;
- * - professional appeal of employer rejection;
- * - professional appeal expiry; and
- * - final admin approval/rejection after:
- *     - employer non-response; or
- *     - professional appeal.
+ * - direct OT escalation to admin after employer rejection or non-response; and
+ * - final admin approval/rejection.
  *
  * It does NOT own:
  *
@@ -78,33 +80,40 @@ const OVERTIME_EXECUTION_STARTED_STATUSES = Object.freeze(["release_pending", "r
  *
  * The OT request lives directly on ShiftOccurrence.overtime.
  *
- * Employer rejection does not create ShiftOccurrenceClaim.
+ * The professional's original OT request is already the professional's
+ * contested position. Employer rejection therefore routes directly to admin
+ * review without requiring another professional response step.
  *
- * Instead:
+ * Employer decision:
+ *
+ * employer approves
+ * → OT becomes finally approved
  *
  * employer rejects
- * → professional receives one OT appeal opportunity
- * → appeal submitted
- * → admin decides finally
+ * → OT becomes disputed
+ * → admin review begins immediately
  *
- * Employer non-response:
- *
- * employer response deadline expires
+ * employer does not respond by the deadline
  * → employer decision authority is lost
- * → admin decides OT directly
+ * → OT becomes disputed
+ * → admin review begins
  *
  * FINAL APPROVAL
  *
- * Approval always approves the submitted requestedMinutes.
+ * Employer approval accepts the professional's requestedMinutes exactly.
  *
- * There is no employer "partial approval" or later employer revision.
+ * Admin approval may establish a lower evidence-supported approvedMinutes, but
+ * may never exceed:
+ *
+ * - the professional's requestedMinutes; or
+ * - authoritative observed post-schedule attendance.
  *
  * Final approved professional OT pay is:
  *
- *   requestedMinutes × snapshotted hourlyRate
+ *   approvedMinutes × snapshotted hourlyRate
  *
- * using integer minor-unit money, BigInt arithmetic and deterministic
- * half-up rounding through utils/money.js.
+ * using integer minor-unit money, BigInt arithmetic and deterministic half-up
+ * rounding through utils/money.js.
  *
  * ShiftPlatformFeeService then earns the corresponding OT fee.
  *
@@ -117,22 +126,36 @@ const OVERTIME_EXECUTION_STARTED_STATUSES = Object.freeze(["release_pending", "r
  * Those authorities are staged on the same ShiftOccurrence document and saved
  * once inside the same Mongo transaction.
  *
- * SHARED 24-HOUR WINDOW
+ * SHARED REVIEW WINDOW
  *
- * A manual OT request may still be created after the professional has submitted
- * an ordinary claim, provided:
+ * A manual OT request may still be created after the professional has
+ * submitted an ordinary claim, provided:
  *
- * - no OT request already exists; and
+ * - no OT request already exists;
+ * - "overtime" remains an available challengeable settlement component; and
  * - the original occurrence challengeDeadlineAt has not expired.
  *
- * Ordinary claim submission therefore does not destroy the remaining manual OT
- * request opportunity.
+ * Once OT is requested, the overtime review selection is consumed. BASE may
+ * remain independently challengeable until the shared challenge deadline
+ * expires.
  *
- * Once OT is requested, the overtime review selection is consumed. The
- * occurrence may continue to retain a BASE ordinary challenge opportunity
- * until the shared challenge deadline expires.
+ * EVIDENCE
+ *
+ * File upload is optional. A factual position is not.
+ *
+ * Professional request:
+ * - requestStatement is required;
+ * - requestEvidence is optional.
+ *
+ * Employer rejection:
+ * - rejectionBasis is required;
+ * - rejectionReason is required;
+ * - rejectionEvidence is optional;
+ * - when no supporting documentary evidence exists, the employer must
+ *   explicitly record rejectionNoSupportingEvidence = true.
+ *
+ * Admin may attach adminEvidence during final adjudication.
  */
-
 class ShiftOvertimeService {
   /* ─────────────────────────────── ERRORS / TRANSACTIONS ─────────────────────────────── */
 
@@ -268,6 +291,125 @@ class ShiftOvertimeService {
     return decision;
   }
 
+  static normalizeRejectionBasis(value) {
+    const basis = String(value || "")
+      .trim()
+      .toLowerCase();
+
+    if (!OVERTIME_REJECTION_BASES.includes(basis)) {
+      throw ShiftOvertimeService.createError({
+        message: "Overtime rejection basis is invalid.",
+        code: "INVALID_OVERTIME_REJECTION_BASIS",
+        details: {
+          supportedRejectionBases: OVERTIME_REJECTION_BASES,
+        },
+      });
+    }
+
+    return basis;
+  }
+
+  static normalizeEvidence(
+    evidence = [],
+    { submittedByRole, submittedByUser, recordedAt = new Date() } = {}
+  ) {
+    if (!Array.isArray(evidence)) {
+      throw ShiftOvertimeService.createError({
+        message: "Overtime evidence must be an array.",
+        code: "INVALID_OVERTIME_EVIDENCE",
+      });
+    }
+
+    if (evidence.length > MAX_OVERTIME_EVIDENCE_ITEMS) {
+      throw ShiftOvertimeService.createError({
+        message: `Overtime evidence cannot contain more than ${MAX_OVERTIME_EVIDENCE_ITEMS} items.`,
+        code: "TOO_MANY_OVERTIME_EVIDENCE_ITEMS",
+      });
+    }
+
+    if (evidence.length === 0) {
+      return [];
+    }
+
+    const normalizedRole = String(submittedByRole || "")
+      .trim()
+      .toLowerCase();
+
+    if (!OCCURRENCE_EVIDENCE_SUBMITTER_ROLES.includes(normalizedRole)) {
+      throw ShiftOvertimeService.createError({
+        message: "A valid overtime evidence submitter role is required.",
+        code: "INVALID_OVERTIME_EVIDENCE_SUBMITTER_ROLE",
+      });
+    }
+
+    const normalizedSubmittedByUser = ShiftOvertimeService.normalizeObjectId(
+      submittedByUser,
+      "evidence submitting user ID"
+    );
+
+    const normalizedRecordedAt = ShiftOvertimeService.normalizeDate(
+      recordedAt,
+      "overtime evidence recorded time"
+    );
+
+    return evidence.map((item, index) => {
+      const type = String(item?.type || "")
+        .trim()
+        .toLowerCase();
+
+      if (!OCCURRENCE_EVIDENCE_TYPES.includes(type)) {
+        throw ShiftOvertimeService.createError({
+          message: `Overtime evidence item ${index + 1} has an unsupported evidence type.`,
+          code: "INVALID_OVERTIME_EVIDENCE_TYPE",
+          details: {
+            evidenceIndex: index,
+            evidenceType: type || null,
+            supportedTypes: OCCURRENCE_EVIDENCE_TYPES,
+          },
+        });
+      }
+
+      const reference = ShiftOvertimeService.normalizeRequiredText(
+        item?.reference,
+        `Overtime evidence item ${index + 1} reference`,
+        {
+          maxLength: MAX_OVERTIME_EVIDENCE_REFERENCE_LENGTH,
+        }
+      );
+
+      const description = ShiftOvertimeService.normalizeOptionalText(
+        item?.description,
+        `Overtime evidence item ${index + 1} description`,
+        MAX_OVERTIME_EVIDENCE_DESCRIPTION_LENGTH
+      );
+
+      return {
+        type,
+        reference,
+        description,
+        submittedByRole: normalizedRole,
+        submittedByUser: normalizedSubmittedByUser,
+        recordedAt: normalizedRecordedAt,
+      };
+    });
+  }
+
+  static getEvidenceSignature(evidence = []) {
+    const items = Array.isArray(evidence) ? evidence : [];
+
+    return JSON.stringify(
+      items.map((item) => ({
+        type: String(item?.type || "")
+          .trim()
+          .toLowerCase(),
+
+        reference: String(item?.reference || "").trim(),
+
+        description: item?.description ? String(item.description).trim() : null,
+      }))
+    );
+  }
+
   static normalizeExpiryBatchLimit(value) {
     const limit = Number(value || DEFAULT_EXPIRY_BATCH_LIMIT);
 
@@ -318,10 +460,6 @@ class ShiftOvertimeService {
     }
 
     return hours;
-  }
-
-  static getProfessionalAppealHours() {
-    return DEFAULT_OVERTIME_APPEAL_HOURS;
   }
 
   /* ─────────────────────────────── LOADERS / ACTORS ─────────────────────────────── */
@@ -555,10 +693,22 @@ class ShiftOvertimeService {
       });
     }
 
+    const challengeableComponents = Array.isArray(occurrence.challengeableSettlementComponents)
+      ? occurrence.challengeableSettlementComponents.map(String)
+      : [];
+
+    if (!challengeableComponents.includes("overtime")) {
+      throw ShiftOvertimeService.createError({
+        message: "The overtime review selection is no longer available for this occurrence.",
+        code: "OVERTIME_REVIEW_SELECTION_NOT_AVAILABLE",
+        statusCode: 409,
+      });
+    }
+
     return true;
   }
 
-  static getObservedOvertimeMinutes(occurrence) {
+  static getObservedPostScheduleAttendanceMinutes(occurrence) {
     let attendanceEnd = occurrence.checkedOutAt || null;
 
     if (
@@ -584,21 +734,40 @@ class ShiftOvertimeService {
     return Math.floor((attendanceEnd.getTime() - occurrence.endTime.getTime()) / (60 * 1000));
   }
 
-  static assertApprovedRequestIsSupportedByAttendance(occurrence) {
+  static assertApprovedMinutesAreSupportedByAttendance({ occurrence, approvedMinutes }) {
+    const finalApprovedMinutes = ShiftOvertimeService.normalizePositiveMinutes(
+      approvedMinutes,
+      "approved overtime minutes"
+    );
+
     const requestedMinutes = ShiftOvertimeService.normalizePositiveMinutes(
       occurrence.overtime?.requestedMinutes,
       "requested overtime minutes"
     );
 
-    const observedMinutes = ShiftOvertimeService.getObservedOvertimeMinutes(occurrence);
-
-    if (requestedMinutes > observedMinutes) {
+    if (finalApprovedMinutes > requestedMinutes) {
       throw ShiftOvertimeService.createError({
-        message: "The requested overtime exceeds the currently authoritative attendance record.",
+        message: "Approved overtime cannot exceed the professional's requested overtime minutes.",
+        code: "OVERTIME_APPROVAL_EXCEEDS_REQUEST",
+        statusCode: 409,
+        details: {
+          requestedMinutes,
+          approvedMinutes: finalApprovedMinutes,
+        },
+      });
+    }
+
+    const observedMinutes =
+      ShiftOvertimeService.getObservedPostScheduleAttendanceMinutes(occurrence);
+
+    if (finalApprovedMinutes > observedMinutes) {
+      throw ShiftOvertimeService.createError({
+        message: "Approved overtime exceeds the currently authoritative attendance record.",
         code: "OVERTIME_EXCEEDS_AUTHORITATIVE_ATTENDANCE",
         statusCode: 409,
         details: {
           requestedMinutes,
+          approvedMinutes: finalApprovedMinutes,
           observedMinutes,
         },
       });
@@ -606,6 +775,7 @@ class ShiftOvertimeService {
 
     return {
       requestedMinutes,
+      approvedMinutes: finalApprovedMinutes,
       observedMinutes,
     };
   }
@@ -622,7 +792,7 @@ class ShiftOvertimeService {
     return occurrence;
   }
 
-  static calculateApprovedProfessionalPay(occurrence) {
+  static calculateApprovedProfessionalPay({ occurrence, approvedMinutes }) {
     let hourlyRate;
 
     try {
@@ -639,9 +809,9 @@ class ShiftOvertimeService {
       });
     }
 
-    const requestedMinutes = ShiftOvertimeService.normalizePositiveMinutes(
-      occurrence.overtime?.requestedMinutes,
-      "requested overtime minutes"
+    const finalApprovedMinutes = ShiftOvertimeService.normalizePositiveMinutes(
+      approvedMinutes,
+      "approved overtime minutes"
     );
 
     let professionalPay;
@@ -649,9 +819,7 @@ class ShiftOvertimeService {
     try {
       professionalPay = money.calculateMinorPayFromMinutes({
         hourlyRateMinor: hourlyRate,
-
-        minutes: requestedMinutes,
-
+        minutes: finalApprovedMinutes,
         fieldName: "Overtime professional pay",
       });
     } catch (error) {
@@ -685,10 +853,7 @@ class ShiftOvertimeService {
 
     const overtime = occurrence.overtime || {};
 
-    if (
-      overtime.status === "pending" ||
-      (overtime.status === "rejected" && overtime.appealStatus === "available")
-    ) {
+    if (overtime.status === "pending") {
       return "awaiting_overtime_review";
     }
 
@@ -765,14 +930,59 @@ class ShiftOvertimeService {
     return true;
   }
 
+  static stageAdminReview({ occurrence, reason, startedAt }) {
+    const normalizedReason = String(reason || "")
+      .trim()
+      .toLowerCase();
+
+    if (!OVERTIME_ADMIN_REVIEW_REASONS.includes(normalizedReason)) {
+      throw ShiftOvertimeService.createError({
+        message: "Overtime admin review reason is invalid.",
+        code: "INVALID_OVERTIME_ADMIN_REVIEW_REASON",
+        statusCode: 500,
+        details: {
+          supportedReasons: OVERTIME_ADMIN_REVIEW_REASONS,
+        },
+      });
+    }
+
+    const normalizedStartedAt = ShiftOvertimeService.normalizeDate(
+      startedAt,
+      "overtime admin review start time"
+    );
+
+    occurrence.set("overtime.status", "disputed");
+
+    occurrence.set("overtime.decisionSource", null);
+
+    occurrence.set("overtime.adminReviewReason", normalizedReason);
+
+    occurrence.set("overtime.adminReviewStartedAt", normalizedStartedAt);
+
+    occurrence.set("overtime.adminEvidence", []);
+
+    occurrence.set("overtime.adminDecision", null);
+
+    occurrence.set("overtime.adminDecidedAt", null);
+
+    occurrence.set("overtime.adminDecidedBy", null);
+
+    occurrence.set("overtime.adminDecisionReason", null);
+
+    occurrence.settlementStatus = "disputed";
+
+    return occurrence;
+  }
+
   /* ─────────────────────────────── REQUEST CREATION ─────────────────────────────── */
 
   static async stageOvertimeRequest({
     occurrence,
     professionalUserId,
-    requestedMinutes = null,
+    requestedMinutes,
     source,
-    reason = null,
+    requestStatement,
+    requestEvidence = [],
     requestedAt = new Date(),
     settings,
     session,
@@ -792,7 +1002,20 @@ class ShiftOvertimeService {
 
     const normalizedSource = ShiftOvertimeService.normalizeSource(source);
 
-    await ShiftOvertimeService.assertProfessionalOwnsOccurrence({
+    const finalRequestedMinutes = ShiftOvertimeService.normalizePositiveMinutes(
+      requestedMinutes,
+      "requested overtime minutes"
+    );
+
+    const finalRequestStatement = ShiftOvertimeService.normalizeRequiredText(
+      requestStatement,
+      "Overtime request statement",
+      {
+        maxLength: MAX_OVERTIME_REQUEST_STATEMENT_LENGTH,
+      }
+    );
+
+    const { userId } = await ShiftOvertimeService.assertProfessionalOwnsOccurrence({
       occurrence,
       professionalUserId,
       session,
@@ -802,8 +1025,11 @@ class ShiftOvertimeService {
 
     ShiftOvertimeService.assertNoExistingOvertimeRequest(occurrence);
 
-    let finalRequestedMinutes;
-    let finalReason = null;
+    const normalizedRequestEvidence = ShiftOvertimeService.normalizeEvidence(requestEvidence, {
+      submittedByRole: "professional",
+      submittedByUser: userId,
+      recordedAt: normalizedRequestedAt,
+    });
 
     if (normalizedSource === "late_checkout_prompt") {
       if (occurrence.lateCheckout?.occurred !== true) {
@@ -814,41 +1040,31 @@ class ShiftOvertimeService {
         });
       }
 
-      finalRequestedMinutes = ShiftOvertimeService.normalizePositiveMinutes(
+      const observedLateMinutes = ShiftOvertimeService.normalizePositiveMinutes(
         occurrence.lateCheckout.minutesLate,
-        "late-checkout overtime minutes"
+        "late-checkout minutes"
       );
 
-      if (
-        requestedMinutes !== null &&
-        requestedMinutes !== undefined &&
-        Number(requestedMinutes) !== finalRequestedMinutes
-      ) {
+      if (finalRequestedMinutes > observedLateMinutes) {
         throw ShiftOvertimeService.createError({
-          message: "Late-checkout overtime minutes must match the recorded late-checkout minutes.",
-          code: "LATE_CHECKOUT_OVERTIME_MINUTES_MISMATCH",
+          message:
+            "Late-checkout overtime minutes cannot exceed the recorded post-schedule attendance minutes.",
+          code: "LATE_CHECKOUT_OVERTIME_EXCEEDS_ATTENDANCE",
           statusCode: 409,
+          details: {
+            requestedMinutes: finalRequestedMinutes,
+            observedLateMinutes,
+          },
         });
       }
 
       occurrence.lateCheckout.selectedOption = "overtime_requested";
 
       occurrence.lateCheckout.reason = null;
-
-      finalReason = null;
     } else {
       ShiftOvertimeService.assertManualRequestWindowOpen({
         occurrence,
         requestedAt: normalizedRequestedAt,
-      });
-
-      finalRequestedMinutes = ShiftOvertimeService.normalizePositiveMinutes(
-        requestedMinutes,
-        "requested overtime minutes"
-      );
-
-      finalReason = ShiftOvertimeService.normalizeRequiredText(reason, "Overtime request reason", {
-        maxLength: MAX_MANUAL_REQUEST_REASON_LENGTH,
       });
     }
 
@@ -860,18 +1076,19 @@ class ShiftOvertimeService {
 
     occurrence.set("overtime.requested", true);
 
-    occurrence.set(
-      "overtime.requestedBy",
-      ShiftOvertimeService.normalizeObjectId(professionalUserId, "professional user ID")
-    );
+    occurrence.set("overtime.requestedBy", userId);
 
     occurrence.set("overtime.requestedAt", normalizedRequestedAt);
 
     occurrence.set("overtime.source", normalizedSource);
 
-    occurrence.set("overtime.reason", finalReason);
+    occurrence.set("overtime.requestStatement", finalRequestStatement);
+
+    occurrence.set("overtime.requestEvidence", normalizedRequestEvidence);
 
     occurrence.set("overtime.requestedMinutes", finalRequestedMinutes);
+
+    occurrence.set("overtime.approvedMinutes", null);
 
     occurrence.set("overtime.status", "pending");
 
@@ -891,17 +1108,21 @@ class ShiftOvertimeService {
 
     occurrence.set("overtime.rejectedBy", null);
 
+    occurrence.set("overtime.rejectionBasis", null);
+
     occurrence.set("overtime.rejectionReason", null);
 
-    occurrence.set("overtime.appealStatus", "not_available");
+    occurrence.set("overtime.employerProposedMinutes", null);
 
-    occurrence.set("overtime.appealDeadlineAt", null);
+    occurrence.set("overtime.rejectionEvidence", []);
 
-    occurrence.set("overtime.appealedAt", null);
+    occurrence.set("overtime.rejectionNoSupportingEvidence", false);
 
-    occurrence.set("overtime.appealedBy", null);
+    occurrence.set("overtime.adminReviewReason", null);
 
-    occurrence.set("overtime.appealReason", null);
+    occurrence.set("overtime.adminReviewStartedAt", null);
+
+    occurrence.set("overtime.adminEvidence", []);
 
     occurrence.set("overtime.adminDecision", null);
 
@@ -920,6 +1141,8 @@ class ShiftOvertimeService {
     return {
       occurrence,
       requestedMinutes: finalRequestedMinutes,
+      requestStatement: finalRequestStatement,
+      requestEvidence: normalizedRequestEvidence,
       requestedAt: normalizedRequestedAt,
       employerResponseDeadlineAt,
       source: normalizedSource,
@@ -930,9 +1153,10 @@ class ShiftOvertimeService {
     {
       occurrenceId,
       professionalUserId,
-      requestedMinutes = null,
+      requestedMinutes,
       source,
-      reason = null,
+      requestStatement,
+      requestEvidence = [],
       requestedAt = new Date(),
     },
     options = {}
@@ -947,21 +1171,38 @@ class ShiftOvertimeService {
 
       const normalizedSource = ShiftOvertimeService.normalizeSource(source);
 
+      const normalizedUserId = ShiftOvertimeService.normalizeObjectId(
+        professionalUserId,
+        "professional user ID"
+      );
+
+      const normalizedRequestedMinutes = ShiftOvertimeService.normalizePositiveMinutes(
+        requestedMinutes,
+        "requested overtime minutes"
+      );
+
+      const normalizedRequestStatement = ShiftOvertimeService.normalizeRequiredText(
+        requestStatement,
+        "Overtime request statement",
+        {
+          maxLength: MAX_OVERTIME_REQUEST_STATEMENT_LENGTH,
+        }
+      );
+
+      const normalizedRequestEvidence = ShiftOvertimeService.normalizeEvidence(requestEvidence, {
+        submittedByRole: "professional",
+        submittedByUser: normalizedUserId,
+        recordedAt: normalizedRequestedAt,
+      });
+
       if (occurrence.overtime?.requested === true) {
-        const normalizedUserId = ShiftOvertimeService.normalizeObjectId(
-          professionalUserId,
-          "professional user ID"
-        );
-
-        const requestedMinutesMatch =
-          requestedMinutes === null ||
-          requestedMinutes === undefined ||
-          Number(requestedMinutes) === Number(occurrence.overtime.requestedMinutes);
-
         const matches =
           String(occurrence.overtime.requestedBy) === String(normalizedUserId) &&
           occurrence.overtime.source === normalizedSource &&
-          requestedMinutesMatch;
+          Number(occurrence.overtime.requestedMinutes) === normalizedRequestedMinutes &&
+          occurrence.overtime.requestStatement === normalizedRequestStatement &&
+          ShiftOvertimeService.getEvidenceSignature(occurrence.overtime.requestEvidence) ===
+            ShiftOvertimeService.getEvidenceSignature(normalizedRequestEvidence);
 
         if (!matches) {
           throw ShiftOvertimeService.createError({
@@ -981,10 +1222,11 @@ class ShiftOvertimeService {
 
       await ShiftOvertimeService.stageOvertimeRequest({
         occurrence,
-        professionalUserId,
-        requestedMinutes,
+        professionalUserId: normalizedUserId,
+        requestedMinutes: normalizedRequestedMinutes,
         source: normalizedSource,
-        reason,
+        requestStatement: normalizedRequestStatement,
+        requestEvidence: normalizedRequestEvidence,
         requestedAt: normalizedRequestedAt,
         settings,
         session,
@@ -1039,65 +1281,172 @@ class ShiftOvertimeService {
     return true;
   }
 
-  static stageEmployerRejection({ occurrence, employerUserId, rejectedAt, rejectionReason }) {
-    const reason = ShiftOvertimeService.normalizeRequiredText(
+  static stageEmployerRejection({
+    occurrence,
+    employerUserId,
+    rejectedAt,
+    rejectionBasis,
+    rejectionReason,
+    employerProposedMinutes = null,
+    rejectionEvidence = [],
+    rejectionNoSupportingEvidence = false,
+  }) {
+    const normalizedBasis = ShiftOvertimeService.normalizeRejectionBasis(rejectionBasis);
+
+    const normalizedReason = ShiftOvertimeService.normalizeRequiredText(
       rejectionReason,
       "Overtime rejection reason",
       {
-        maxLength: MAX_REJECTION_REASON_LENGTH,
+        maxLength: MAX_OVERTIME_REJECTION_REASON_LENGTH,
       }
     );
 
-    const appealHours = ShiftOvertimeService.getProfessionalAppealHours();
+    let normalizedEmployerProposedMinutes = null;
 
-    occurrence.set("overtime.status", "rejected");
+    if (normalizedBasis === "minutes_incorrect") {
+      normalizedEmployerProposedMinutes = ShiftOvertimeService.normalizePositiveMinutes(
+        employerProposedMinutes,
+        "employer proposed overtime minutes"
+      );
+
+      const requestedMinutes = ShiftOvertimeService.normalizePositiveMinutes(
+        occurrence.overtime?.requestedMinutes,
+        "requested overtime minutes"
+      );
+
+      if (normalizedEmployerProposedMinutes >= requestedMinutes) {
+        throw ShiftOvertimeService.createError({
+          message:
+            "Employer proposed overtime minutes must be lower than the professional's requested minutes when the rejection basis is minutes_incorrect.",
+          code: "INVALID_EMPLOYER_PROPOSED_OVERTIME_MINUTES",
+          statusCode: 409,
+          details: {
+            requestedMinutes,
+            employerProposedMinutes: normalizedEmployerProposedMinutes,
+          },
+        });
+      }
+    } else if (
+      employerProposedMinutes !== null &&
+      employerProposedMinutes !== undefined &&
+      employerProposedMinutes !== ""
+    ) {
+      throw ShiftOvertimeService.createError({
+        message:
+          "Employer proposed overtime minutes may only be supplied when the rejection basis is minutes_incorrect.",
+        code: "EMPLOYER_PROPOSED_MINUTES_NOT_ALLOWED",
+        statusCode: 409,
+      });
+    }
+
+    const normalizedEvidence = ShiftOvertimeService.normalizeEvidence(rejectionEvidence, {
+      submittedByRole: "employer",
+      submittedByUser: employerUserId,
+      recordedAt: rejectedAt,
+    });
+
+    if (normalizedEvidence.length === 0 && rejectionNoSupportingEvidence !== true) {
+      throw ShiftOvertimeService.createError({
+        message:
+          "Employer overtime rejection without documentary evidence requires an explicit no-supporting-evidence declaration.",
+        code: "OVERTIME_REJECTION_EVIDENCE_DECLARATION_REQUIRED",
+        statusCode: 409,
+      });
+    }
+
+    if (normalizedEvidence.length > 0 && rejectionNoSupportingEvidence === true) {
+      throw ShiftOvertimeService.createError({
+        message:
+          "The employer cannot declare no supporting evidence when rejection evidence is supplied.",
+        code: "OVERTIME_REJECTION_EVIDENCE_DECLARATION_CONFLICT",
+        statusCode: 409,
+      });
+    }
 
     occurrence.set("overtime.decisionSource", null);
 
     occurrence.set("overtime.employerRespondedAt", rejectedAt);
 
+    occurrence.set("overtime.employerResponseOverdueAt", null);
+
     occurrence.set("overtime.rejectedAt", rejectedAt);
 
     occurrence.set("overtime.rejectedBy", employerUserId);
 
-    occurrence.set("overtime.rejectionReason", reason);
+    occurrence.set("overtime.rejectionBasis", normalizedBasis);
 
-    occurrence.set("overtime.appealStatus", "available");
+    occurrence.set("overtime.rejectionReason", normalizedReason);
 
-    occurrence.set(
-      "overtime.appealDeadlineAt",
-      new Date(rejectedAt.getTime() + appealHours * MILLISECONDS_PER_HOUR)
-    );
+    occurrence.set("overtime.employerProposedMinutes", normalizedEmployerProposedMinutes);
 
-    occurrence.set("overtime.appealedAt", null);
+    occurrence.set("overtime.rejectionEvidence", normalizedEvidence);
 
-    occurrence.set("overtime.appealedBy", null);
+    occurrence.set("overtime.rejectionNoSupportingEvidence", normalizedEvidence.length === 0);
 
-    occurrence.set("overtime.appealReason", null);
+    occurrence.set("overtime.approvedMinutes", null);
 
-    occurrence.set("overtime.adminDecision", null);
+    occurrence.set("overtime.approvedAt", null);
 
-    occurrence.set("overtime.adminDecidedAt", null);
-
-    occurrence.set("overtime.adminDecidedBy", null);
-
-    occurrence.set("overtime.adminDecisionReason", null);
+    occurrence.set("overtime.approvedBy", null);
 
     ShiftOvertimeService.assertNoFinalOvertimeFinancialState(occurrence);
 
-    ShiftOvertimeService.synchronizeNonFundingSettlementStatus(occurrence);
+    ShiftOvertimeService.stageAdminReview({
+      occurrence,
+      reason: "employer_rejection",
+      startedAt: rejectedAt,
+    });
 
     return occurrence;
   }
 
-  static async stageFinalApproval({ occurrence, approvedBy, approvedAt, decisionSource, session }) {
-    ShiftOvertimeService.assertApprovedRequestIsSupportedByAttendance(occurrence);
+  static async stageFinalApproval({
+    occurrence,
+    approvedBy,
+    approvedAt,
+    approvedMinutes,
+    decisionSource,
+    session,
+  }) {
+    const normalizedApprovedMinutes = ShiftOvertimeService.normalizePositiveMinutes(
+      approvedMinutes,
+      "approved overtime minutes"
+    );
 
-    const professionalPay = ShiftOvertimeService.calculateApprovedProfessionalPay(occurrence);
+    const { requestedMinutes } = ShiftOvertimeService.assertApprovedMinutesAreSupportedByAttendance(
+      {
+        occurrence,
+        approvedMinutes: normalizedApprovedMinutes,
+      }
+    );
+
+    if (decisionSource === "employer" && normalizedApprovedMinutes !== requestedMinutes) {
+      throw ShiftOvertimeService.createError({
+        message:
+          "Employer approval must accept the professional's requested overtime minutes exactly.",
+        code: "EMPLOYER_OVERTIME_PARTIAL_APPROVAL_NOT_ALLOWED",
+        statusCode: 409,
+      });
+    }
+
+    if (!["employer", "admin"].includes(decisionSource)) {
+      throw ShiftOvertimeService.createError({
+        message: "Final overtime decision source is invalid.",
+        code: "INVALID_OVERTIME_DECISION_SOURCE",
+        statusCode: 500,
+      });
+    }
+
+    const professionalPay = ShiftOvertimeService.calculateApprovedProfessionalPay({
+      occurrence,
+      approvedMinutes: normalizedApprovedMinutes,
+    });
 
     occurrence.set("overtime.status", "approved");
 
     occurrence.set("overtime.decisionSource", decisionSource);
+
+    occurrence.set("overtime.approvedMinutes", normalizedApprovedMinutes);
 
     occurrence.set("overtime.approvedAt", approvedAt);
 
@@ -1118,6 +1467,7 @@ class ShiftOvertimeService {
 
     return {
       occurrence,
+      approvedMinutes: normalizedApprovedMinutes,
       professionalPay,
       platformFee: Number(occurrence.overtimePlatformFee || 0),
       feeResult,
@@ -1166,6 +1516,11 @@ class ShiftOvertimeService {
         decidedAt: normalizedDecidedAt,
       });
 
+      const requestedMinutes = ShiftOvertimeService.normalizePositiveMinutes(
+        occurrence.overtime?.requestedMinutes,
+        "requested overtime minutes"
+      );
+
       occurrence.set("overtime.employerRespondedAt", normalizedDecidedAt);
 
       occurrence.set("overtime.employerResponseOverdueAt", null);
@@ -1174,16 +1529,35 @@ class ShiftOvertimeService {
 
       occurrence.set("overtime.rejectedBy", null);
 
+      occurrence.set("overtime.rejectionBasis", null);
+
       occurrence.set("overtime.rejectionReason", null);
 
-      occurrence.set("overtime.appealStatus", "not_available");
+      occurrence.set("overtime.employerProposedMinutes", null);
 
-      occurrence.set("overtime.appealDeadlineAt", null);
+      occurrence.set("overtime.rejectionEvidence", []);
+
+      occurrence.set("overtime.rejectionNoSupportingEvidence", false);
+
+      occurrence.set("overtime.adminReviewReason", null);
+
+      occurrence.set("overtime.adminReviewStartedAt", null);
+
+      occurrence.set("overtime.adminEvidence", []);
+
+      occurrence.set("overtime.adminDecision", null);
+
+      occurrence.set("overtime.adminDecidedAt", null);
+
+      occurrence.set("overtime.adminDecidedBy", null);
+
+      occurrence.set("overtime.adminDecisionReason", null);
 
       await ShiftOvertimeService.stageFinalApproval({
         occurrence,
         approvedBy: employerUser,
         approvedAt: normalizedDecidedAt,
+        approvedMinutes: requestedMinutes,
         decisionSource: "employer",
         session,
       });
@@ -1207,7 +1581,11 @@ class ShiftOvertimeService {
       employerProfileId,
       employerUserId,
       employerContext = null,
+      rejectionBasis,
       rejectionReason,
+      employerProposedMinutes = null,
+      rejectionEvidence = [],
+      rejectionNoSupportingEvidence = false,
       decidedAt = new Date(),
     },
     options = {}
@@ -1228,20 +1606,87 @@ class ShiftOvertimeService {
         session,
       });
 
+      const normalizedBasis = ShiftOvertimeService.normalizeRejectionBasis(rejectionBasis);
+
       const normalizedReason = ShiftOvertimeService.normalizeRequiredText(
         rejectionReason,
         "Overtime rejection reason",
         {
-          maxLength: MAX_REJECTION_REASON_LENGTH,
+          maxLength: MAX_OVERTIME_REJECTION_REASON_LENGTH,
         }
       );
 
+      let normalizedEmployerProposedMinutes = null;
+
+      if (normalizedBasis === "minutes_incorrect") {
+        normalizedEmployerProposedMinutes = ShiftOvertimeService.normalizePositiveMinutes(
+          employerProposedMinutes,
+          "employer proposed overtime minutes"
+        );
+
+        const requested = ShiftOvertimeService.normalizePositiveMinutes(
+          occurrence.overtime?.requestedMinutes,
+          "requested overtime minutes"
+        );
+
+        if (normalizedEmployerProposedMinutes >= requested) {
+          throw ShiftOvertimeService.createError({
+            message:
+              "Employer proposed overtime minutes must be lower than the professional's requested minutes.",
+            code: "INVALID_EMPLOYER_PROPOSED_OVERTIME_MINUTES",
+            statusCode: 409,
+          });
+        }
+      } else if (
+        employerProposedMinutes !== null &&
+        employerProposedMinutes !== undefined &&
+        employerProposedMinutes !== ""
+      ) {
+        throw ShiftOvertimeService.createError({
+          message:
+            "Employer proposed overtime minutes may only be supplied when the rejection basis is minutes_incorrect.",
+          code: "EMPLOYER_PROPOSED_MINUTES_NOT_ALLOWED",
+          statusCode: 409,
+        });
+      }
+
+      const normalizedEvidence = ShiftOvertimeService.normalizeEvidence(rejectionEvidence, {
+        submittedByRole: "employer",
+        submittedByUser: employerUser,
+        recordedAt: normalizedDecidedAt,
+      });
+
+      if (normalizedEvidence.length === 0 && rejectionNoSupportingEvidence !== true) {
+        throw ShiftOvertimeService.createError({
+          message:
+            "Employer overtime rejection without documentary evidence requires an explicit no-supporting-evidence declaration.",
+          code: "OVERTIME_REJECTION_EVIDENCE_DECLARATION_REQUIRED",
+          statusCode: 409,
+        });
+      }
+
+      if (normalizedEvidence.length > 0 && rejectionNoSupportingEvidence === true) {
+        throw ShiftOvertimeService.createError({
+          message:
+            "The employer cannot declare no supporting evidence when rejection evidence is supplied.",
+          code: "OVERTIME_REJECTION_EVIDENCE_DECLARATION_CONFLICT",
+          statusCode: 409,
+        });
+      }
+
       if (
-        occurrence.overtime?.status === "rejected" &&
+        occurrence.overtime?.status === "disputed" &&
+        occurrence.overtime?.adminReviewReason === "employer_rejection" &&
         occurrence.overtime?.rejectedAt &&
         occurrence.overtime?.rejectedBy &&
         String(occurrence.overtime.rejectedBy) === String(employerUser) &&
-        occurrence.overtime?.rejectionReason === normalizedReason
+        occurrence.overtime?.rejectionBasis === normalizedBasis &&
+        occurrence.overtime?.rejectionReason === normalizedReason &&
+        Number(occurrence.overtime?.employerProposedMinutes || 0) ===
+          Number(normalizedEmployerProposedMinutes || 0) &&
+        occurrence.overtime?.rejectionNoSupportingEvidence === (normalizedEvidence.length === 0) &&
+        ShiftOvertimeService.getEvidenceSignature(occurrence.overtime?.rejectionEvidence) ===
+          ShiftOvertimeService.getEvidenceSignature(normalizedEvidence)
       ) {
         return {
           occurrence,
@@ -1258,14 +1703,20 @@ class ShiftOvertimeService {
         occurrence,
         employerUserId: employerUser,
         rejectedAt: normalizedDecidedAt,
+        rejectionBasis: normalizedBasis,
         rejectionReason: normalizedReason,
+        employerProposedMinutes: normalizedEmployerProposedMinutes,
+        rejectionEvidence: normalizedEvidence,
+        rejectionNoSupportingEvidence: normalizedEvidence.length === 0,
       });
 
       await occurrence.save({
         session,
       });
 
-      logger.info(`Employer rejected overtime for occurrence ${occurrence.referenceCode}.`);
+      logger.info(
+        `Employer rejected overtime for occurrence ${occurrence.referenceCode}; admin review opened.`
+      );
 
       return {
         occurrence,
@@ -1284,6 +1735,20 @@ class ShiftOvertimeService {
 
       const overtime = occurrence.overtime || {};
 
+      if (
+        overtime.requested === true &&
+        overtime.status === "disputed" &&
+        overtime.adminReviewReason === "employer_non_response" &&
+        overtime.employerResponseOverdueAt &&
+        !overtime.employerRespondedAt
+      ) {
+        return {
+          occurrence,
+          expired: true,
+          idempotent: true,
+        };
+      }
+
       if (overtime.requested !== true || overtime.status !== "pending") {
         return {
           occurrence,
@@ -1296,14 +1761,6 @@ class ShiftOvertimeService {
         return {
           occurrence,
           expired: false,
-          idempotent: true,
-        };
-      }
-
-      if (overtime.employerResponseOverdueAt) {
-        return {
-          occurrence,
-          expired: true,
           idempotent: true,
         };
       }
@@ -1324,17 +1781,25 @@ class ShiftOvertimeService {
         };
       }
 
+      ShiftOvertimeService.assertNoFinalOvertimeFinancialState(occurrence);
+
       occurrence.set("overtime.employerResponseOverdueAt", now);
 
       occurrence.set("overtime.decisionSource", null);
 
-      ShiftOvertimeService.synchronizeNonFundingSettlementStatus(occurrence);
+      ShiftOvertimeService.stageAdminReview({
+        occurrence,
+        reason: "employer_non_response",
+        startedAt: now,
+      });
 
       await occurrence.save({
         session,
       });
 
-      logger.info(`Employer overtime response expired for occurrence ${occurrence.referenceCode}.`);
+      logger.info(
+        `Employer overtime response expired for occurrence ${occurrence.referenceCode}; admin review opened.`
+      );
 
       return {
         occurrence,
@@ -1397,242 +1862,21 @@ class ShiftOvertimeService {
     };
   }
 
-  /* ─────────────────────────────── PROFESSIONAL APPEAL ─────────────────────────────── */
-
-  static async appealEmployerRejection(
-    { occurrenceId, professionalUserId, appealReason, appealedAt = new Date() },
-    options = {}
-  ) {
-    const normalizedAppealedAt = ShiftOvertimeService.normalizeDate(
-      appealedAt,
-      "overtime appeal time"
-    );
-
-    const normalizedAppealReason = ShiftOvertimeService.normalizeRequiredText(
-      appealReason,
-      "Overtime appeal reason",
-      {
-        maxLength: MAX_APPEAL_REASON_LENGTH,
-      }
-    );
-
-    return ShiftOvertimeService.transaction(options, async (session) => {
-      const occurrence = await ShiftOvertimeService.getOccurrence(occurrenceId, session);
-
-      const { userId } = await ShiftOvertimeService.assertProfessionalOwnsOccurrence({
-        occurrence,
-        professionalUserId,
-        session,
-      });
-
-      const overtime = occurrence.overtime || {};
-
-      if (
-        overtime.status === "disputed" &&
-        overtime.appealStatus === "submitted" &&
-        String(overtime.appealedBy) === String(userId) &&
-        overtime.appealReason === normalizedAppealReason
-      ) {
-        return {
-          occurrence,
-          idempotent: true,
-        };
-      }
-
-      if (
-        overtime.requested !== true ||
-        overtime.status !== "rejected" ||
-        overtime.appealStatus !== "available"
-      ) {
-        throw ShiftOvertimeService.createError({
-          message: "This overtime request is not available for appeal.",
-          code: "OVERTIME_APPEAL_NOT_AVAILABLE",
-          statusCode: 409,
-        });
-      }
-
-      if (
-        !overtime.rejectedAt ||
-        !overtime.rejectedBy ||
-        !overtime.rejectionReason ||
-        !overtime.appealDeadlineAt
-      ) {
-        throw ShiftOvertimeService.createError({
-          message: "Employer-rejected overtime has an incomplete appeal audit.",
-          code: "OVERTIME_REJECTION_AUDIT_INCOMPLETE",
-          statusCode: 500,
-        });
-      }
-
-      if (normalizedAppealedAt >= overtime.appealDeadlineAt) {
-        throw ShiftOvertimeService.createError({
-          message: "The overtime appeal window has expired.",
-          code: "OVERTIME_APPEAL_WINDOW_EXPIRED",
-          statusCode: 409,
-          details: {
-            appealDeadlineAt: overtime.appealDeadlineAt,
-          },
-        });
-      }
-
-      ShiftOvertimeService.assertNoFinalOvertimeFinancialState(occurrence);
-
-      occurrence.set("overtime.status", "disputed");
-
-      occurrence.set("overtime.appealStatus", "submitted");
-
-      occurrence.set("overtime.appealedAt", normalizedAppealedAt);
-
-      occurrence.set("overtime.appealedBy", userId);
-
-      occurrence.set("overtime.appealReason", normalizedAppealReason);
-
-      occurrence.set("overtime.decisionSource", null);
-
-      occurrence.settlementStatus = "disputed";
-
-      await occurrence.save({
-        session,
-      });
-
-      logger.info(
-        `Professional appealed overtime rejection for occurrence ${occurrence.referenceCode}.`
-      );
-
-      return {
-        occurrence,
-        idempotent: false,
-      };
-    });
-  }
-
-  /* ─────────────────────────────── APPEAL EXPIRY ─────────────────────────────── */
-
-  static async expireProfessionalAppeal({ occurrenceId, currentTime = new Date() }, options = {}) {
-    const now = ShiftOvertimeService.normalizeDate(currentTime, "current time");
-
-    return ShiftOvertimeService.transaction(options, async (session) => {
-      const occurrence = await ShiftOvertimeService.getOccurrence(occurrenceId, session);
-
-      const overtime = occurrence.overtime || {};
-
-      if (overtime.status !== "rejected" || overtime.appealStatus !== "available") {
-        return {
-          occurrence,
-          expired: false,
-          idempotent: true,
-        };
-      }
-
-      if (!overtime.appealDeadlineAt) {
-        throw ShiftOvertimeService.createError({
-          message: "Employer-rejected overtime is missing appealDeadlineAt.",
-          code: "OVERTIME_APPEAL_DEADLINE_MISSING",
-          statusCode: 500,
-        });
-      }
-
-      if (now < overtime.appealDeadlineAt) {
-        return {
-          occurrence,
-          expired: false,
-          idempotent: true,
-        };
-      }
-
-      ShiftOvertimeService.assertNoFinalOvertimeFinancialState(occurrence);
-
-      occurrence.set("overtime.appealStatus", "expired");
-
-      occurrence.set("overtime.decisionSource", "employer");
-
-      ShiftOvertimeService.synchronizeNonFundingSettlementStatus(occurrence);
-
-      await occurrence.save({
-        session,
-      });
-
-      logger.info(`Overtime appeal expired for occurrence ${occurrence.referenceCode}.`);
-
-      return {
-        occurrence,
-        expired: true,
-        idempotent: false,
-      };
-    });
-  }
-
-  static async processProfessionalAppealExpiries(
-    { currentTime = new Date(), limit = DEFAULT_EXPIRY_BATCH_LIMIT } = {},
-    options = {}
-  ) {
-    const now = ShiftOvertimeService.normalizeDate(currentTime, "current time");
-
-    const normalizedLimit = ShiftOvertimeService.normalizeExpiryBatchLimit(limit);
-
-    const query = ShiftOccurrence.find({
-      "overtime.requested": true,
-      "overtime.status": "rejected",
-      "overtime.appealStatus": "available",
-      "overtime.appealDeadlineAt": {
-        $lte: now,
-      },
-    })
-      .select("_id")
-      .sort({
-        "overtime.appealDeadlineAt": 1,
-      })
-      .limit(normalizedLimit);
-
-    if (options.session) {
-      query.session(options.session);
-    }
-
-    const candidates = await query;
-
-    const results = [];
-
-    for (const candidate of candidates) {
-      const result = await ShiftOvertimeService.expireProfessionalAppeal(
-        {
-          occurrenceId: candidate._id,
-          currentTime: now,
-        },
-        options
-      );
-
-      results.push({
-        occurrenceId: String(candidate._id),
-        expired: result.expired,
-        idempotent: result.idempotent,
-      });
-    }
-
-    return {
-      processed: results.length,
-      results,
-    };
-  }
-
   /* ─────────────────────────────── ADMIN FINAL DECISION ─────────────────────────────── */
 
   static assertAdminDecisionAvailable(occurrence) {
     const overtime = occurrence.overtime || {};
 
-    const afterEmployerNonResponse =
-      overtime.requested === true &&
-      overtime.status === "pending" &&
-      Boolean(overtime.employerResponseOverdueAt) &&
-      !overtime.employerRespondedAt;
-
-    const afterProfessionalAppeal =
+    const adminReviewAvailable =
       overtime.requested === true &&
       overtime.status === "disputed" &&
-      overtime.appealStatus === "submitted" &&
-      Boolean(overtime.appealedAt) &&
-      Boolean(overtime.appealedBy);
+      OVERTIME_ADMIN_REVIEW_REASONS.includes(String(overtime.adminReviewReason || "")) &&
+      Boolean(overtime.adminReviewStartedAt) &&
+      !overtime.adminDecision &&
+      !overtime.adminDecidedAt &&
+      !overtime.adminDecidedBy;
 
-    if (!afterEmployerNonResponse && !afterProfessionalAppeal) {
+    if (!adminReviewAvailable) {
       throw ShiftOvertimeService.createError({
         message: "Admin cannot decide this overtime request in its current state.",
         code: "OVERTIME_ADMIN_DECISION_NOT_AVAILABLE",
@@ -1640,14 +1884,48 @@ class ShiftOvertimeService {
       });
     }
 
+    if (
+      overtime.adminReviewReason === "employer_rejection" &&
+      (!overtime.employerRespondedAt ||
+        !overtime.rejectedAt ||
+        !overtime.rejectedBy ||
+        !overtime.rejectionBasis ||
+        !overtime.rejectionReason)
+    ) {
+      throw ShiftOvertimeService.createError({
+        message: "Employer-rejected overtime has an incomplete rejection audit.",
+        code: "OVERTIME_REJECTION_AUDIT_INCOMPLETE",
+        statusCode: 500,
+      });
+    }
+
+    if (
+      overtime.adminReviewReason === "employer_non_response" &&
+      (!overtime.employerResponseOverdueAt || overtime.employerRespondedAt)
+    ) {
+      throw ShiftOvertimeService.createError({
+        message: "Employer-non-response overtime has an incomplete expiry audit.",
+        code: "OVERTIME_NON_RESPONSE_AUDIT_INCOMPLETE",
+        statusCode: 500,
+      });
+    }
+
     return {
-      afterEmployerNonResponse,
-      afterProfessionalAppeal,
+      adminReviewReason: overtime.adminReviewReason,
+      adminReviewStartedAt: overtime.adminReviewStartedAt,
     };
   }
 
   static async decideOvertimeByAdmin(
-    { occurrenceId, adminUserId, decision, decisionReason, decidedAt = new Date() },
+    {
+      occurrenceId,
+      adminUserId,
+      decision,
+      decisionReason,
+      approvedMinutes = null,
+      adminEvidence = [],
+      decidedAt = new Date(),
+    },
     options = {}
   ) {
     const normalizedAdminUserId = ShiftOvertimeService.normalizeAdminUserId(adminUserId);
@@ -1667,6 +1945,31 @@ class ShiftOvertimeService {
       "admin overtime decision time"
     );
 
+    let normalizedApprovedMinutes = null;
+
+    if (normalizedDecision === "approved") {
+      normalizedApprovedMinutes = ShiftOvertimeService.normalizePositiveMinutes(
+        approvedMinutes,
+        "approved overtime minutes"
+      );
+    } else if (
+      approvedMinutes !== null &&
+      approvedMinutes !== undefined &&
+      approvedMinutes !== ""
+    ) {
+      throw ShiftOvertimeService.createError({
+        message: "approvedMinutes may only be supplied for an approved admin decision.",
+        code: "OVERTIME_APPROVED_MINUTES_NOT_ALLOWED",
+        statusCode: 409,
+      });
+    }
+
+    const normalizedAdminEvidence = ShiftOvertimeService.normalizeEvidence(adminEvidence, {
+      submittedByRole: "admin",
+      submittedByUser: normalizedAdminUserId,
+      recordedAt: normalizedDecidedAt,
+    });
+
     return ShiftOvertimeService.transaction(options, async (session) => {
       const occurrence = await ShiftOvertimeService.getOccurrence(occurrenceId, session);
 
@@ -1676,17 +1979,34 @@ class ShiftOvertimeService {
         overtime.decisionSource === "admin" &&
         overtime.adminDecision === normalizedDecision &&
         String(overtime.adminDecidedBy || "") === String(normalizedAdminUserId) &&
-        overtime.adminDecisionReason === normalizedDecisionReason
+        overtime.adminDecisionReason === normalizedDecisionReason &&
+        Number(overtime.approvedMinutes || 0) === Number(normalizedApprovedMinutes || 0) &&
+        ShiftOvertimeService.getEvidenceSignature(overtime.adminEvidence) ===
+          ShiftOvertimeService.getEvidenceSignature(normalizedAdminEvidence)
       ) {
         return {
           occurrence,
+          decisionPath: overtime.adminReviewReason || null,
           idempotent: true,
         };
       }
 
       const decisionPath = ShiftOvertimeService.assertAdminDecisionAvailable(occurrence);
 
+      if (normalizedDecidedAt < decisionPath.adminReviewStartedAt) {
+        throw ShiftOvertimeService.createError({
+          message: "Admin overtime decision cannot predate admin review.",
+          code: "OVERTIME_ADMIN_DECISION_TOO_EARLY",
+          statusCode: 409,
+          details: {
+            adminReviewStartedAt: decisionPath.adminReviewStartedAt,
+          },
+        });
+      }
+
       ShiftOvertimeService.assertNoFinalOvertimeFinancialState(occurrence);
+
+      occurrence.set("overtime.adminEvidence", normalizedAdminEvidence);
 
       occurrence.set("overtime.adminDecision", normalizedDecision);
 
@@ -1698,24 +2018,19 @@ class ShiftOvertimeService {
 
       occurrence.set("overtime.decisionSource", "admin");
 
-      if (decisionPath.afterProfessionalAppeal) {
-        occurrence.set("overtime.appealStatus", "resolved");
-      } else {
-        occurrence.set("overtime.appealStatus", "not_available");
-
-        occurrence.set("overtime.appealDeadlineAt", null);
-      }
-
       if (normalizedDecision === "approved") {
         await ShiftOvertimeService.stageFinalApproval({
           occurrence,
           approvedBy: normalizedAdminUserId,
           approvedAt: normalizedDecidedAt,
+          approvedMinutes: normalizedApprovedMinutes,
           decisionSource: "admin",
           session,
         });
       } else {
         occurrence.set("overtime.status", "rejected");
+
+        occurrence.set("overtime.approvedMinutes", null);
 
         occurrence.set("overtime.approvedAt", null);
 
@@ -1734,11 +2049,7 @@ class ShiftOvertimeService {
 
       return {
         occurrence,
-
-        decisionPath: decisionPath.afterProfessionalAppeal
-          ? "professional_appeal"
-          : "employer_non_response",
-
+        decisionPath: decisionPath.adminReviewReason,
         idempotent: false,
       };
     });
@@ -1756,8 +2067,13 @@ class ShiftOvertimeService {
 
     const overtime = occurrence.overtime || {};
 
+    const challengeableComponents = Array.isArray(occurrence.challengeableSettlementComponents)
+      ? occurrence.challengeableSettlementComponents.map(String)
+      : [];
+
     const requestWindowOpen = Boolean(
       !overtime.requested &&
+      challengeableComponents.includes("overtime") &&
       occurrence.challengeWindowOpenedAt &&
       occurrence.challengeDeadlineAt &&
       !occurrence.challengeWindowClosedAt &&
@@ -1773,18 +2089,13 @@ class ShiftOvertimeService {
       now < overtime.employerResponseDeadlineAt
     );
 
-    const professionalCanAppeal = Boolean(
-      overtime.status === "rejected" &&
-      overtime.appealStatus === "available" &&
-      overtime.appealDeadlineAt &&
-      now < overtime.appealDeadlineAt
-    );
-
     const adminCanDecide = Boolean(
-      (overtime.status === "pending" &&
-        overtime.employerResponseOverdueAt &&
-        !overtime.employerRespondedAt) ||
-      (overtime.status === "disputed" && overtime.appealStatus === "submitted")
+      overtime.requested === true &&
+      overtime.status === "disputed" &&
+      OVERTIME_ADMIN_REVIEW_REASONS.includes(String(overtime.adminReviewReason || "")) &&
+      overtime.adminReviewStartedAt &&
+      !overtime.adminDecision &&
+      !overtime.adminDecidedAt
     );
 
     return {
@@ -1798,7 +2109,13 @@ class ShiftOvertimeService {
 
       source: overtime.source || null,
 
+      requestedBy: overtime.requestedBy || null,
+
       requestedMinutes: overtime.requestedMinutes || null,
+
+      requestStatement: overtime.requestStatement || null,
+
+      requestEvidence: Array.isArray(overtime.requestEvidence) ? overtime.requestEvidence : [],
 
       requestedAt: overtime.requestedAt || null,
 
@@ -1814,23 +2131,43 @@ class ShiftOvertimeService {
 
       employerCanRespond,
 
+      rejectedAt: overtime.rejectedAt || null,
+
+      rejectedBy: overtime.rejectedBy || null,
+
+      rejectionBasis: overtime.rejectionBasis || null,
+
       rejectionReason: overtime.rejectionReason || null,
 
-      appealStatus: overtime.appealStatus || "not_available",
+      employerProposedMinutes: overtime.employerProposedMinutes || null,
 
-      appealDeadlineAt: overtime.appealDeadlineAt || null,
+      rejectionEvidence: Array.isArray(overtime.rejectionEvidence)
+        ? overtime.rejectionEvidence
+        : [],
 
-      appealedAt: overtime.appealedAt || null,
+      rejectionNoSupportingEvidence: overtime.rejectionNoSupportingEvidence === true,
 
-      professionalCanAppeal,
+      adminReviewReason: overtime.adminReviewReason || null,
+
+      adminReviewStartedAt: overtime.adminReviewStartedAt || null,
+
+      adminEvidence: Array.isArray(overtime.adminEvidence) ? overtime.adminEvidence : [],
 
       adminDecision: overtime.adminDecision || null,
 
       adminDecidedAt: overtime.adminDecidedAt || null,
 
+      adminDecidedBy: overtime.adminDecidedBy || null,
+
+      adminDecisionReason: overtime.adminDecisionReason || null,
+
       adminCanDecide,
 
+      approvedMinutes: overtime.approvedMinutes || null,
+
       approvedAt: overtime.approvedAt || null,
+
+      approvedBy: overtime.approvedBy || null,
 
       professionalPay: Number(occurrence.overtimeProfessionalPay || 0),
 

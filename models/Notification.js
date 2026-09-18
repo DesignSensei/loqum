@@ -2,6 +2,13 @@
 
 const mongoose = require("mongoose");
 
+const {
+  NOTIFICATION_CATEGORIES,
+  NOTIFICATION_STATUSES,
+  NOTIFICATION_TYPES,
+  NOTIFICATION_TYPES_BY_CATEGORY,
+} = require("../constants/notification");
+
 const notificationSchema = new mongoose.Schema(
   {
     recipientUser: {
@@ -28,40 +35,14 @@ const notificationSchema = new mongoose.Schema(
     category: {
       type: String,
       required: true,
-      enum: ["finance", "shift", "team", "account", "system"],
+      enum: NOTIFICATION_CATEGORIES,
       index: true,
     },
 
     type: {
       type: String,
       required: true,
-      enum: [
-        // Finance
-        "wallet_funded",
-        "withdrawal_submitted",
-        "withdrawal_completed",
-        "withdrawal_reversed",
-
-        // Shift
-        "shift_created",
-        "shift_approved",
-        "shift_cancelled",
-        "shift_filled",
-        "payment_required",
-
-        // Team
-        "team_invite_received",
-        "team_invite_accepted",
-        "team_member_removed",
-        "team_role_changed",
-
-        // Account
-        "account_updated",
-        "security_alert",
-
-        // System
-        "system_message",
-      ],
+      enum: NOTIFICATION_TYPES,
       index: true,
     },
 
@@ -87,7 +68,7 @@ const notificationSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["unread", "read", "archived"],
+      enum: NOTIFICATION_STATUSES,
       default: "unread",
       index: true,
     },
@@ -115,6 +96,30 @@ const notificationSchema = new mongoose.Schema(
       default: null,
     },
 
+    relatedOccurrence: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ShiftOccurrence",
+      default: null,
+    },
+
+    relatedClaim: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ShiftOccurrenceClaim",
+      default: null,
+    },
+
+    relatedDispute: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ShiftOccurrenceDispute",
+      default: null,
+    },
+
+    relatedEmployerRefund: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "EmployerRefund",
+      default: null,
+    },
+
     relatedInvite: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Invite",
@@ -123,7 +128,7 @@ const notificationSchema = new mongoose.Schema(
 
     metadata: {
       type: mongoose.Schema.Types.Mixed,
-      default: {},
+      default: () => ({}),
     },
   },
   {
@@ -155,7 +160,32 @@ notificationSchema.index({
   createdAt: -1,
 });
 
-notificationSchema.pre("validate", function validateNotificationOwnership() {
+notificationSchema.index({
+  relatedShift: 1,
+  createdAt: -1,
+});
+
+notificationSchema.index({
+  relatedOccurrence: 1,
+  createdAt: -1,
+});
+
+notificationSchema.index({
+  relatedClaim: 1,
+  createdAt: -1,
+});
+
+notificationSchema.index({
+  relatedDispute: 1,
+  createdAt: -1,
+});
+
+notificationSchema.index({
+  relatedEmployerRefund: 1,
+  createdAt: -1,
+});
+
+notificationSchema.pre("validate", function validateNotificationContract() {
   const hasEmployer = Boolean(this.employer);
   const hasProfessional = Boolean(this.professional);
 
@@ -164,6 +194,27 @@ notificationSchema.pre("validate", function validateNotificationOwnership() {
       "professional",
       "A notification cannot belong to both an employer and a professional."
     );
+  }
+
+  const allowedTypes = NOTIFICATION_TYPES_BY_CATEGORY[this.category];
+
+  if (
+    this.category &&
+    this.type &&
+    (!Array.isArray(allowedTypes) || !allowedTypes.includes(this.type))
+  ) {
+    this.invalidate(
+      "type",
+      `Notification type ${this.type} does not belong to category ${this.category}.`
+    );
+  }
+
+  if (this.status === "unread" && this.readAt) {
+    this.invalidate("readAt", "An unread notification cannot have a read timestamp.");
+  }
+
+  if (this.status === "read" && !this.readAt) {
+    this.invalidate("readAt", "A read notification requires a read timestamp.");
   }
 });
 

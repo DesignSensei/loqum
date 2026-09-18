@@ -1,0 +1,50 @@
+<!-- views/partials/cases/employer-actions.ejs -->
+
+<%# ─────────────────────────────── EMPLOYER CLAIM REVIEW ─────────────────────────────── %> <% if
+(issue.actions.review?.available) { %>
+
+<form
+  action="<%= issue.actions.review.url %>"
+  method="post"
+  data-case-action-form
+  class="border-top pt-4"
+>
+  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+  <div class="row g-3">
+    <div class="col-md-4">
+      <label class="form-label fw-bold"> Decision </label>
+
+      <select class="form-select" name="decision" required>
+        <option value="">Choose a decision</option>
+
+        <% issue.actions.review.decisions.forEach((decision) => { %>
+
+        <option value="<%= decision.value %>"><%= decision.label %></option>
+
+        <% }); %>
+      </select>
+    </div>
+
+    <div class="col-md-8">
+      <label class="form-label fw-bold"> Reason </label>
+
+      <textarea
+        class="form-control"
+        name="reason"
+        rows="2"
+        minlength="10"
+        maxlength="1500"
+        required
+      ></textarea>
+    </div>
+  </div>
+
+  <button type="submit" class="btn btn-sm btn-primary mt-3">
+    <%= issue.actions.review.submitLabel %>
+  </button>
+
+  <div class="mt-3 d-none" data-case-action-message></div>
+</form>
+
+<% } %>

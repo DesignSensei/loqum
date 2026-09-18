@@ -1,0 +1,145 @@
+<!-- views/partials/cases/case-card.ejs -->
+
+<%# ─────────────────────────────── CASE CARD ─────────────────────────────── %>
+
+<div class="card card-flush border border-gray-300">
+  <%# Case identity, status, reference and submitted date. %> <%- include("case-header", { caseItem
+  }) %>
+
+  <div class="card-body pt-3">
+    <%# ─────────────────────────────── CASE CONTEXT ─────────────────────────────── %>
+
+    <div class="row g-4 mb-5">
+      <div class="col-md-6 col-xl-3">
+        <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Shift</div>
+
+        <% if (caseItem.shift.detailsUrl) { %>
+
+        <a href="<%= caseItem.shift.detailsUrl %>" class="fw-bold text-gray-800 text-hover-primary">
+          <%= caseItem.shift.roleTitle %>
+        </a>
+
+        <% } else { %>
+
+        <div class="fw-bold text-gray-800"><%= caseItem.shift.roleTitle %></div>
+
+        <% } %> <% if (caseItem.shift.referenceCode) { %>
+
+        <div class="text-gray-500 fs-7"><%= caseItem.shift.referenceCode %></div>
+
+        <% } %>
+      </div>
+
+      <div class="col-md-6 col-xl-3">
+        <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Occurrence</div>
+
+        <div class="fw-bold text-gray-800"><%= caseItem.occurrence.referenceCode %></div>
+
+        <% if (caseItem.occurrence.startTime) { %>
+
+        <div class="text-gray-500 fs-7"><%= caseItem.occurrence.startTime.label %></div>
+
+        <% } else if (caseItem.occurrence.occurrenceDate) { %>
+
+        <div class="text-gray-500 fs-7"><%= caseItem.occurrence.occurrenceDate.label %></div>
+
+        <% } %>
+      </div>
+
+      <% if (caseItem.professional) { %>
+
+      <div class="col-md-6 col-xl-3">
+        <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Professional</div>
+
+        <div class="fw-bold text-gray-800"><%= caseItem.professional.name %></div>
+
+        <% if (caseItem.professional.type) { %>
+
+        <div class="text-gray-500 fs-7"><%= caseItem.professional.type.label %></div>
+
+        <% } %>
+      </div>
+
+      <% } %>
+
+      <div class="col-md-6 col-xl-3">
+        <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Business</div>
+
+        <div class="fw-bold text-gray-800"><%= caseItem.business.name %></div>
+      </div>
+
+      <div class="col-md-6 col-xl-3">
+        <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Branch</div>
+
+        <div class="fw-bold text-gray-800"><%= caseItem.branch.name %></div>
+
+        <% if (caseItem.branch.address) { %>
+
+        <div class="text-gray-500 fs-7"><%= caseItem.branch.address %></div>
+
+        <% } %>
+      </div>
+    </div>
+
+    <%# ─────────────────────────────── CASE ISSUES ─────────────────────────────── %>
+
+    <div class="d-flex flex-column gap-3">
+      <% caseItem.issues.forEach((issue) => { %> <%- include("issue-card", { issue, csrfToken }) %>
+      <% }); %>
+    </div>
+
+    <%# ─────────────────────────────── CASE WITHDRAWAL ACTION ─────────────────────────────── %> <%
+    if (caseItem.actions.withdraw.available) { %>
+
+    <form
+      action="<%= caseItem.actions.withdraw.url %>"
+      method="post"
+      data-case-action-form
+      class="border-top mt-5 pt-4"
+    >
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+      <div class="row g-3 align-items-end">
+        <div class="col-md-9">
+          <label class="form-label fw-bold"> <%= caseItem.actions.withdraw.reasonLabel %> </label>
+
+          <input
+            class="form-control"
+            name="reason"
+            minlength="<%= caseItem.actions.withdraw.reasonMinLength %>"
+            maxlength="<%= caseItem.actions.withdraw.reasonMaxLength %>"
+            placeholder="<%= caseItem.actions.withdraw.reasonPlaceholder %>"
+            required
+          />
+        </div>
+
+        <div class="col-md-3">
+          <button type="submit" class="btn btn-sm btn-light-danger w-100">
+            <%= caseItem.actions.withdraw.label %>
+          </button>
+        </div>
+      </div>
+
+      <div class="mt-3 d-none" data-case-action-message></div>
+    </form>
+
+    <% } %> <%# ─────────────────────────────── WITHDRAWAL HISTORY ───────────────────────────────
+    %> <% if (caseItem.withdrawal.withdrawnAt) { %>
+
+    <div class="border-top mt-5 pt-4">
+      <div class="text-gray-600 fs-7">
+        Withdrawn
+
+        <strong> <%= caseItem.withdrawal.withdrawnAt.label %> </strong>
+      </div>
+
+      <% if (caseItem.withdrawal.reason) { %>
+
+      <div class="text-gray-700 mt-1"><%= caseItem.withdrawal.reason %></div>
+
+      <% } %>
+    </div>
+
+    <% } %>
+  </div>
+</div>

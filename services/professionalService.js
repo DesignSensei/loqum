@@ -1,6 +1,6 @@
 // services/professionalService.js
 
-const Shift = require("../models/Shift");
+const ShiftOccurrence = require("../models/ShiftOccurrence");
 const ShiftApplication = require("../models/ShiftApplication");
 const Wallet = require("../models/Wallet");
 const BankAccount = require("../models/BankAccount");
@@ -12,6 +12,8 @@ const {
   badgeClass,
   formatStatus,
 } = require("../utils/statusHelper");
+
+const money = require("../utils/money");
 
 class ProfessionalService {
   /**
@@ -65,6 +67,7 @@ class ProfessionalService {
 
     const walletStatus = wallet?.status || "not_started";
     const walletBalance = wallet?.availableBalance ?? 0;
+    const now = new Date();
 
     const [
       applicationsSubmittedCount,
@@ -82,13 +85,14 @@ class ProfessionalService {
         status: "pending",
       }),
 
-      Shift.countDocuments({
+      ShiftOccurrence.countDocuments({
         assignedProfessional: professionalId,
-        status: { $in: ["assigned", "confirmed", "in_progress"] },
-        startTime: { $gte: new Date() },
+        assignmentStatus: "assigned",
+        status: "scheduled",
+        startTime: { $gte: now },
       }),
 
-      Shift.countDocuments({
+      ShiftOccurrence.countDocuments({
         assignedProfessional: professionalId,
         status: "completed",
       }),
@@ -134,7 +138,7 @@ class ProfessionalService {
         roleTitle: shift.roleTitle || "-",
         branchName: shift.branch?.name || "-",
         startDateLabel: this.formatDate(shift.startTime),
-        hourlyRateFormatted: this.formatMoney(shift.hourlyRate ?? 0),
+        hourlyRateFormatted: this.formatMinorUnitMoney(shift.hourlyRate ?? 0),
 
         applicationStatus,
         applicationStatusLabel: formatStatus(applicationStatus),
@@ -270,7 +274,7 @@ class ProfessionalService {
       walletBadgeClass: badgeClass[walletItem.status] || "badge-light-warning",
       walletBadgeLabel: formatStatus(walletItem.status),
 
-      walletBalanceFormatted: this.formatMoney(walletBalance),
+      walletBalanceFormatted: this.formatMinorUnitMoney(walletBalance),
       walletCtaLabel: walletBalance > 0 ? "View Wallet" : "Wallet",
       walletCtaBadgeClass: walletBalance > 0 ? "badge-light-success" : "badge-light-warning",
 
@@ -317,8 +321,11 @@ class ProfessionalService {
     });
   }
 
-  static formatMoney(value) {
-    return Number(value || 0).toLocaleString();
+  static formatMinorUnitMoney(value) {
+    return money.fromMinorUnit(value || 0).toLocaleString("en-NG", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    });
   }
 }
 

@@ -86,11 +86,21 @@ const normalizeIdStrings = (values) =>
 
 const hasDuplicateValues = (values) => new Set(values).size !== values.length;
 
+const validEntries = (document, values, path) => {
+  if (!Array.isArray(values)) return [];
+
+  const entries = values.filter((value) => value && typeof value === "object");
+  if (entries.length !== values.length) {
+    document.invalidate(path, `${path} cannot contain null or malformed entries.`);
+  }
+  return entries;
+};
+
 const sumSafeIntegerValues = (values) => {
   let total = 0;
 
   for (const value of values) {
-    const normalizedValue = Number(value);
+    const normalizedValue = value;
 
     if (!Number.isSafeInteger(normalizedValue) || normalizedValue < 0) {
       return null;
@@ -727,6 +737,32 @@ const employerRefundBatchSchema = new mongoose.Schema(
       },
     },
 
+    // Derived from line audit during document validation. Never accept these
+    // lists from clients; they reserve only actual provider identifiers.
+    paystackRefundIdempotencyKeys: {
+      type: [String],
+      default: undefined,
+      select: false,
+    },
+
+    paystackRetryIdempotencyKeys: {
+      type: [String],
+      default: undefined,
+      select: false,
+    },
+
+    paystackRefundIds: {
+      type: [String],
+      default: undefined,
+      select: false,
+    },
+
+    paystackRefundReferences: {
+      type: [String],
+      default: undefined,
+      select: false,
+    },
+
     lineCount: {
       type: Number,
       required: true,
@@ -893,7 +929,7 @@ const employerRefundBatchSchema = new mongoose.Schema(
 );
 
 employerRefundLineSchema.pre("validate", function validateEmployerRefundLine() {
-  const allocations = Array.isArray(this.allocations) ? this.allocations : [];
+  const allocations = validEntries(this, this.allocations, "allocations");
 
   const executionTransactions = Array.isArray(this.executionTransactions)
     ? this.executionTransactions
@@ -984,7 +1020,7 @@ employerRefundLineSchema.pre("validate", function validateEmployerRefundLine() {
 
   if (calculatedTotalAmount === null) {
     this.invalidate("totalAmount", "Refund allocations contain an invalid amount.");
-  } else if (Number(this.totalAmount) !== calculatedTotalAmount) {
+  } else if (this.totalAmount !== calculatedTotalAmount) {
     this.invalidate("totalAmount", "totalAmount must equal the sum of all refund allocations.");
   }
 
@@ -1713,6 +1749,28 @@ employerRefundLineSchema.pre("validate", function validateEmployerRefundLine() {
     }
   }
 
+  if (this.status === "completed") {
+    const movementCompletedAt =
+      this.finalExecutionMethod === "wallet_balance"
+        ? walletMovement.completedAt
+        : paystackRefund.processedAt;
+
+    if (movementCompletedAt && this.completedAt && this.completedAt < movementCompletedAt) {
+      this.invalidate("completedAt", "Line completion cannot precede the recorded money movement.");
+    }
+
+    if (
+      movementCompletedAt &&
+      this.executionEligibilityCheckedAt &&
+      movementCompletedAt < this.executionEligibilityCheckedAt
+    ) {
+      this.invalidate(
+        "executionEligibilityCheckedAt",
+        "The final eligibility check must precede money movement."
+      );
+    }
+  }
+
   if (this.status === "failed") {
     if (
       !this.processingStartedAt ||
@@ -1832,7 +1890,7 @@ employerRefundLineSchema.pre("validate", function validateEmployerRefundLine() {
 });
 
 employerRefundBatchSchema.pre("validate", function validateEmployerRefundBatch() {
-  const lines = Array.isArray(this.lines) ? this.lines : [];
+  const lines = validEntries(this, this.lines, "lines");
 
   const lineReferences = [];
   const lineIdempotencyKeys = [];
@@ -1851,7 +1909,7 @@ employerRefundBatchSchema.pre("validate", function validateEmployerRefundBatch()
   let walletLineCount = 0;
 
   for (const line of lines) {
-    const allocations = Array.isArray(line.allocations) ? line.allocations : [];
+    const allocations = validEntries(this, line.allocations, "lines.allocations");
 
     lineReferences.push(String(line.lineReference || ""));
     lineIdempotencyKeys.push(String(line.idempotencyKey || ""));
@@ -1896,6 +1954,50 @@ employerRefundBatchSchema.pre("validate", function validateEmployerRefundBatch()
     }
   }
 
+  this.paystackRefundIdempotencyKeys = paystackRefundIdempotencyKeys.length
+    ? [...new Set(paystackRefundIdempotencyKeys)]
+    : undefined;
+  this.paystackRetryIdempotencyKeys = retryIdempotencyKeys.length
+    ? [...new Set(retryIdempotencyKeys)]
+    : undefined;
+  this.paystackRefundIds = paystackRefundIds.length ? [...new Set(paystackRefundIds)] : undefined;
+  this.paystackRefundReferences = paystackRefundReferences.length
+    ? [...new Set(paystackRefundReferences)]
+    : undefined;
+
+  if (
+    this.employerWallet &&
+    this.escrowWallet &&
+    String(this.employerWallet) === String(this.escrowWallet)
+  ) {
+    this.invalidate("employerWallet", "Employer and escrow wallets must be different records.");
+  }
+
+  if (
+    isValidLocalDateString(this.refundDate) &&
+    isValidTimeZone(this.timeZone) &&
+    this.scheduledFor instanceof Date &&
+    !Number.isNaN(this.scheduledFor.getTime())
+  ) {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: this.timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      })
+        .formatToParts(this.scheduledFor)
+        .map(({ type, value }) => [type, value])
+    );
+
+    if (`${parts.year}-${parts.month}-${parts.day}` !== this.refundDate) {
+      this.invalidate(
+        "scheduledFor",
+        "scheduledFor must fall on refundDate in the batch timezone."
+      );
+    }
+  }
+
   if (this.refundDate && getLocalDateWeekday(this.refundDate) !== MONDAY_WEEKDAY) {
     this.invalidate("refundDate", "refundDate must be a Monday.");
   }
@@ -1926,7 +2028,7 @@ employerRefundBatchSchema.pre("validate", function validateEmployerRefundBatch()
   const shiftLineOwnership = new Map();
 
   for (const line of lines) {
-    const allocations = Array.isArray(line.allocations) ? line.allocations : [];
+    const allocations = validEntries(this, line.allocations, "lines.allocations");
 
     for (const allocation of allocations) {
       const shiftId = String(allocation.shift);
@@ -1948,7 +2050,7 @@ employerRefundBatchSchema.pre("validate", function validateEmployerRefundBatch()
   const fundingTransactionLineOwnership = new Map();
 
   for (const line of lines) {
-    const allocations = Array.isArray(line.allocations) ? line.allocations : [];
+    const allocations = validEntries(this, line.allocations, "lines.allocations");
 
     for (const allocation of allocations) {
       const transactionId = String(allocation.originalFundingTransaction);
@@ -2030,13 +2132,13 @@ employerRefundBatchSchema.pre("validate", function validateEmployerRefundBatch()
 
   if (calculatedTotalAmount === null) {
     this.invalidate("totalAmount", "Refund lines contain an invalid amount.");
-  } else if (Number(this.totalAmount) !== calculatedTotalAmount) {
+  } else if (this.totalAmount !== calculatedTotalAmount) {
     this.invalidate("totalAmount", "totalAmount must equal the sum of all refund lines.");
   }
 
   if (calculatedCompletedAmount === null) {
     this.invalidate("completedAmount", "Completed refund lines contain an invalid amount.");
-  } else if (Number(this.completedAmount) !== calculatedCompletedAmount) {
+  } else if (this.completedAmount !== calculatedCompletedAmount) {
     this.invalidate(
       "completedAmount",
       "completedAmount must equal the sum of completed refund lines."
@@ -2045,7 +2147,7 @@ employerRefundBatchSchema.pre("validate", function validateEmployerRefundBatch()
 
   if (calculatedFailedAmount === null) {
     this.invalidate("failedAmount", "Failed refund lines contain an invalid amount.");
-  } else if (Number(this.failedAmount) !== calculatedFailedAmount) {
+  } else if (this.failedAmount !== calculatedFailedAmount) {
     this.invalidate("failedAmount", "failedAmount must equal the sum of failed refund lines.");
   }
 
@@ -2291,10 +2393,7 @@ employerRefundBatchSchema.pre("validate", function validateEmployerRefundBatch()
       this.invalidate("completedAt", "A completed refund batch requires completedAt.");
     }
 
-    if (
-      Number(this.completedAmount) !== Number(this.totalAmount) ||
-      Number(this.failedAmount) !== 0
-    ) {
+    if (this.completedAmount !== this.totalAmount || this.failedAmount !== 0) {
       this.invalidate(
         "completedAmount",
         "A completed refund batch requires full completedAmount and zero failedAmount."
@@ -2481,60 +2580,18 @@ employerRefundBatchSchema.index(
 );
 
 employerRefundBatchSchema.index(
-  {
-    "lines.paystackRefund.idempotencyKey": 1,
-  },
-  {
-    unique: true,
-    partialFilterExpression: {
-      "lines.paystackRefund.idempotencyKey": {
-        $type: "string",
-      },
-    },
-  }
+  { paystackRefundIdempotencyKeys: 1 },
+  { unique: true, sparse: true }
 );
 
 employerRefundBatchSchema.index(
-  {
-    "lines.retry.idempotencyKey": 1,
-  },
-  {
-    unique: true,
-    partialFilterExpression: {
-      "lines.retry.idempotencyKey": {
-        $type: "string",
-      },
-    },
-  }
+  { paystackRetryIdempotencyKeys: 1 },
+  { unique: true, sparse: true }
 );
 
-employerRefundBatchSchema.index(
-  {
-    "lines.paystackRefund.refundId": 1,
-  },
-  {
-    unique: true,
-    partialFilterExpression: {
-      "lines.paystackRefund.refundId": {
-        $type: "string",
-      },
-    },
-  }
-);
+employerRefundBatchSchema.index({ paystackRefundIds: 1 }, { unique: true, sparse: true });
 
-employerRefundBatchSchema.index(
-  {
-    "lines.paystackRefund.reference": 1,
-  },
-  {
-    unique: true,
-    partialFilterExpression: {
-      "lines.paystackRefund.reference": {
-        $type: "string",
-      },
-    },
-  }
-);
+employerRefundBatchSchema.index({ paystackRefundReferences: 1 }, { unique: true, sparse: true });
 
 // Historical cancelled allocations remain indexed but non-unique so they can be rebatched.
 employerRefundBatchSchema.index({

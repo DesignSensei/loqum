@@ -176,6 +176,17 @@ class ShiftOvertimeService {
   }
 
   static async transaction(options = {}, callback) {
+    if (
+      options.session &&
+      (typeof options.session.inTransaction !== "function" || !options.session.inTransaction())
+    ) {
+      throw ShiftOvertimeService.createError({
+        message: "A supplied overtime session must have an active transaction.",
+        code: "ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
     return runWithOptionalTransaction(options, callback);
   }
 
@@ -195,7 +206,11 @@ class ShiftOvertimeService {
   }
 
   static normalizeDate(value, fieldName = "date") {
-    const date = value instanceof Date ? new Date(value.getTime()) : new Date(value || Date.now());
+    const supported =
+      value instanceof Date ||
+      typeof value === "number" ||
+      (typeof value === "string" && value.trim() !== "");
+    const date = supported ? new Date(value) : new Date(NaN);
 
     if (Number.isNaN(date.getTime())) {
       throw ShiftOvertimeService.createError({
@@ -223,7 +238,8 @@ class ShiftOvertimeService {
   }
 
   static normalizePositiveMinutes(value, fieldName = "overtime minutes") {
-    const minutes = Number(value);
+    const minutes =
+      typeof value === "string" && /^\d+$/.test(value.trim()) ? Number(value.trim()) : value;
 
     if (!Number.isSafeInteger(minutes) || minutes <= 0 || minutes > 24 * 60) {
       throw ShiftOvertimeService.createError({
@@ -449,7 +465,7 @@ class ShiftOvertimeService {
   }
 
   static getEmployerResponseHours(settings) {
-    const hours = Number(settings?.overtimeResponseHours);
+    const hours = settings?.overtimeResponseHours;
 
     if (!Number.isSafeInteger(hours) || hours <= 0) {
       throw ShiftOvertimeService.createError({
@@ -531,17 +547,28 @@ class ShiftOvertimeService {
 
   static async assertEmployerCanDecide({
     occurrence,
+    shiftId,
     employerProfileId,
     employerUserId,
     employerContext = null,
     session,
   }) {
+    const normalizedShiftId = ShiftOvertimeService.normalizeObjectId(shiftId, "Shift ID");
+
     const employerProfile = ShiftOvertimeService.normalizeObjectId(
       employerProfileId,
       "employer profile ID"
     );
 
     const employerUser = ShiftOvertimeService.normalizeObjectId(employerUserId, "employer user ID");
+
+    if (String(occurrence.shift) !== String(normalizedShiftId)) {
+      throw ShiftOvertimeService.createError({
+        message: "The selected occurrence does not belong to this Shift.",
+        code: "SHIFT_OCCURRENCE_NOT_FOUND",
+        statusCode: 404,
+      });
+    }
 
     if (String(occurrence.business) !== String(employerProfile)) {
       throw ShiftOvertimeService.createError({
@@ -551,19 +578,17 @@ class ShiftOvertimeService {
       });
     }
 
-    const canManageAllBranches =
-      employerContext?.isPrimaryEmployer === true || employerContext?.isBusinessAdmin === true;
-
-    const isBranchManager = employerContext?.isBranchManager === true;
-
     if (employerContext) {
-      if (!canManageAllBranches && !isBranchManager) {
+      if (employerContext.canManagePostShiftWorkflows !== true) {
         throw ShiftOvertimeService.createError({
           message: "You do not have permission to decide overtime.",
           code: "OVERTIME_DECISION_NOT_ALLOWED",
           statusCode: 403,
         });
       }
+
+      const canManageAllBranches =
+        employerContext.isPrimaryEmployer === true || employerContext.isBusinessAdmin === true;
 
       if (!canManageAllBranches) {
         const assignedBranchIds = (employerContext.assignedBranchIds || [])
@@ -674,7 +699,24 @@ class ShiftOvertimeService {
       });
     }
 
-    if (occurrence.challengeWindowClosedAt || requestedAt >= occurrence.challengeDeadlineAt) {
+    const openedAt = ShiftOvertimeService.normalizeDate(
+      occurrence.challengeWindowOpenedAt,
+      "review window opening time"
+    );
+    const deadline = ShiftOvertimeService.normalizeDate(
+      occurrence.challengeDeadlineAt,
+      "review deadline"
+    );
+
+    if (deadline <= openedAt) {
+      throw ShiftOvertimeService.createError({
+        message: "The overtime review window has inconsistent dates.",
+        code: "INVALID_OVERTIME_REVIEW_WINDOW",
+        statusCode: 500,
+      });
+    }
+
+    if (occurrence.challengeWindowClosedAt || requestedAt >= deadline) {
       throw ShiftOvertimeService.createError({
         message: "The time for reporting new overtime has expired.",
         code: "OVERTIME_REQUEST_WINDOW_EXPIRED",
@@ -685,7 +727,7 @@ class ShiftOvertimeService {
       });
     }
 
-    if (requestedAt < occurrence.challengeWindowOpenedAt) {
+    if (requestedAt < openedAt) {
       throw ShiftOvertimeService.createError({
         message: "Overtime cannot be reported before the post-shift review window opens.",
         code: "OVERTIME_REQUEST_TOO_EARLY",
@@ -717,9 +759,7 @@ class ShiftOvertimeService {
       occurrence.attendanceOverride.approvedEndTime
     ) {
       attendanceEnd = occurrence.attendanceOverride.approvedEndTime;
-    }
-
-    if (
+    } else if (
       occurrence.checkoutFallback?.required === true &&
       occurrence.checkoutFallback?.resolvedAt &&
       occurrence.checkoutFallback?.approvedEndTime
@@ -727,11 +767,17 @@ class ShiftOvertimeService {
       attendanceEnd = occurrence.checkoutFallback.approvedEndTime;
     }
 
-    if (!attendanceEnd || !occurrence.endTime || attendanceEnd <= occurrence.endTime) {
+    if (!attendanceEnd) {
       return 0;
     }
 
-    return Math.floor((attendanceEnd.getTime() - occurrence.endTime.getTime()) / (60 * 1000));
+    const actualEnd = ShiftOvertimeService.normalizeDate(attendanceEnd, "attendance end time");
+    const scheduledEnd = ShiftOvertimeService.normalizeDate(
+      occurrence.endTime,
+      "scheduled end time"
+    );
+
+    return Math.max(0, Math.floor((actualEnd.getTime() - scheduledEnd.getTime()) / (60 * 1000)));
   }
 
   static assertApprovedMinutesAreSupportedByAttendance({ occurrence, approvedMinutes }) {
@@ -793,6 +839,8 @@ class ShiftOvertimeService {
   }
 
   static calculateApprovedProfessionalPay({ occurrence, approvedMinutes }) {
+    ShiftOvertimeService.assertMinorAmount(occurrence.hourlyRate, "hourlyRate");
+
     let hourlyRate;
 
     try {
@@ -873,9 +921,15 @@ class ShiftOvertimeService {
       return "approved_for_release";
     }
 
-    const basePay = Number(occurrence.baseProfessionalPay || 0);
+    const basePay = ShiftOvertimeService.assertMinorAmount(
+      occurrence.baseProfessionalPay,
+      "baseProfessionalPay"
+    );
 
-    const overtimePay = Number(occurrence.overtimeProfessionalPay || 0);
+    const overtimePay = ShiftOvertimeService.assertMinorAmount(
+      occurrence.overtimeProfessionalPay,
+      "overtimeProfessionalPay"
+    );
 
     const baseReleased = basePay <= 0 || baseStatus === "released";
 
@@ -903,11 +957,26 @@ class ShiftOvertimeService {
   }
 
   static assertNoFinalOvertimeFinancialState(occurrence) {
+    for (const [fieldName, amount] of [
+      ["overtimeProfessionalPay", occurrence.overtimeProfessionalPay],
+      ["overtimePlatformFee", occurrence.overtimePlatformFee],
+      ["overtime.topUpAmount", occurrence.overtime?.topUpAmount],
+      ["topUpRequired", occurrence.topUpRequired],
+    ]) {
+      ShiftOvertimeService.assertMinorAmount(amount, fieldName);
+    }
+
     const hasFinalFinancialState =
-      Number(occurrence.overtimeProfessionalPay || 0) > 0 ||
-      Number(occurrence.overtimePlatformFee || 0) > 0 ||
-      Number(occurrence.overtime?.topUpAmount || 0) > 0 ||
-      Number(occurrence.topUpRequired || 0) > 0 ||
+      ShiftOvertimeService.assertMinorAmount(
+        occurrence.overtimeProfessionalPay,
+        "overtimeProfessionalPay"
+      ) > 0 ||
+      ShiftOvertimeService.assertMinorAmount(
+        occurrence.overtimePlatformFee,
+        "overtimePlatformFee"
+      ) > 0 ||
+      ShiftOvertimeService.assertMinorAmount(occurrence.overtime?.topUpAmount, "topUpAmount") > 0 ||
+      ShiftOvertimeService.assertMinorAmount(occurrence.topUpRequired, "topUpRequired") > 0 ||
       occurrence.overtime?.topUpDeadlineAt ||
       occurrence.overtime?.topUpOverdueAt ||
       occurrence.overtime?.restrictionTriggeredAt ||
@@ -917,7 +986,15 @@ class ShiftOvertimeService {
       occurrence.overtimePlatformFeeAudit?.earnedAt ||
       occurrence.overtimePlatformFeeAudit?.outstandingAt ||
       occurrence.overtimePlatformFeeAudit?.collectedAt ||
-      occurrence.overtimePlatformFeeAudit?.collectionTransaction;
+      occurrence.overtimePlatformFeeAudit?.collectionTransaction ||
+      (occurrence.overtimeSettlement?.status &&
+        occurrence.overtimeSettlement.status !== "not_due") ||
+      occurrence.overtimeSettlement?.approvedForReleaseAt ||
+      occurrence.overtimeSettlement?.settlementBatch ||
+      occurrence.overtimeSettlement?.scheduledPayoutAt ||
+      occurrence.overtimeSettlement?.releasePendingAt ||
+      occurrence.overtimeSettlement?.releasedAt ||
+      occurrence.overtimeSettlement?.payoutTransaction;
 
     if (hasFinalFinancialState) {
       throw ShiftOvertimeService.createError({
@@ -928,6 +1005,18 @@ class ShiftOvertimeService {
     }
 
     return true;
+  }
+
+  static assertMinorAmount(amount, fieldName) {
+    if (!Number.isSafeInteger(amount) || amount < 0) {
+      throw ShiftOvertimeService.createError({
+        message: `${fieldName} must be a non-negative safe integer amount.`,
+        code: "INVALID_OVERTIME_FINANCIAL_AMOUNT",
+        statusCode: 500,
+      });
+    }
+
+    return amount;
   }
 
   static stageAdminReview({ occurrence, reason, startedAt }) {
@@ -1062,6 +1151,22 @@ class ShiftOvertimeService {
 
       occurrence.lateCheckout.reason = null;
     } else {
+      const observedPostScheduleMinutes =
+        ShiftOvertimeService.getObservedPostScheduleAttendanceMinutes(occurrence);
+
+      if (finalRequestedMinutes > observedPostScheduleMinutes) {
+        throw ShiftOvertimeService.createError({
+          message:
+            "Requested overtime minutes cannot exceed the currently authoritative post-schedule attendance.",
+          code: "OVERTIME_REQUEST_EXCEEDS_AUTHORITATIVE_ATTENDANCE",
+          statusCode: 409,
+          details: {
+            requestedMinutes: finalRequestedMinutes,
+            observedMinutes: observedPostScheduleMinutes,
+          },
+        });
+      }
+
       ShiftOvertimeService.assertManualRequestWindowOpen({
         occurrence,
         requestedAt: normalizedRequestedAt,
@@ -1073,6 +1178,8 @@ class ShiftOvertimeService {
     const employerResponseDeadlineAt = new Date(
       normalizedRequestedAt.getTime() + employerResponseHours * MILLISECONDS_PER_HOUR
     );
+
+    ShiftOvertimeService.normalizeDate(employerResponseDeadlineAt, "employer response deadline");
 
     occurrence.set("overtime.requested", true);
 
@@ -1195,6 +1302,12 @@ class ShiftOvertimeService {
         recordedAt: normalizedRequestedAt,
       });
 
+      await ShiftOvertimeService.assertProfessionalOwnsOccurrence({
+        occurrence,
+        professionalUserId: normalizedUserId,
+        session,
+      });
+
       if (occurrence.overtime?.requested === true) {
         const matches =
           String(occurrence.overtime.requestedBy) === String(normalizedUserId) &&
@@ -1219,6 +1332,13 @@ class ShiftOvertimeService {
       }
 
       const settings = await ShiftOvertimeService.getPlatformSettings(session);
+
+      // This separate endpoint must not reopen an expired window by selecting
+      // late_checkout_prompt. Inline checkout staging has its own timing boundary.
+      ShiftOvertimeService.assertManualRequestWindowOpen({
+        occurrence,
+        requestedAt: normalizedRequestedAt,
+      });
 
       await ShiftOvertimeService.stageOvertimeRequest({
         occurrence,
@@ -1249,6 +1369,23 @@ class ShiftOvertimeService {
 
   static assertEmployerDecisionAvailable({ occurrence, decidedAt }) {
     const overtime = occurrence.overtime || {};
+
+    const requestedAt = ShiftOvertimeService.normalizeDate(
+      overtime.requestedAt,
+      "overtime request time"
+    );
+    const deadline = ShiftOvertimeService.normalizeDate(
+      overtime.employerResponseDeadlineAt,
+      "employer response deadline"
+    );
+
+    if (deadline <= requestedAt || decidedAt < requestedAt) {
+      throw ShiftOvertimeService.createError({
+        message: "Overtime decision timing is inconsistent with the request and response window.",
+        code: "INVALID_OVERTIME_DECISION_TIMING",
+        statusCode: 409,
+      });
+    }
 
     if (overtime.requested !== true || overtime.status !== "pending") {
       throw ShiftOvertimeService.createError({
@@ -1408,6 +1545,8 @@ class ShiftOvertimeService {
     decisionSource,
     session,
   }) {
+    ShiftOvertimeService.assertNoFinalOvertimeFinancialState(occurrence);
+
     const normalizedApprovedMinutes = ShiftOvertimeService.normalizePositiveMinutes(
       approvedMinutes,
       "approved overtime minutes"
@@ -1469,7 +1608,10 @@ class ShiftOvertimeService {
       occurrence,
       approvedMinutes: normalizedApprovedMinutes,
       professionalPay,
-      platformFee: Number(occurrence.overtimePlatformFee || 0),
+      platformFee: ShiftOvertimeService.assertMinorAmount(
+        occurrence.overtimePlatformFee,
+        "overtimePlatformFee"
+      ),
       feeResult,
       fundingResult,
     };
@@ -1477,6 +1619,7 @@ class ShiftOvertimeService {
 
   static async approveOvertimeByEmployer(
     {
+      shiftId,
       occurrenceId,
       employerProfileId,
       employerUserId,
@@ -1495,6 +1638,7 @@ class ShiftOvertimeService {
 
       const { employerUser } = await ShiftOvertimeService.assertEmployerCanDecide({
         occurrence,
+        shiftId,
         employerProfileId,
         employerUserId,
         employerContext,
@@ -1577,6 +1721,7 @@ class ShiftOvertimeService {
 
   static async rejectOvertimeByEmployer(
     {
+      shiftId,
       occurrenceId,
       employerProfileId,
       employerUserId,
@@ -1600,6 +1745,7 @@ class ShiftOvertimeService {
 
       const { employerUser } = await ShiftOvertimeService.assertEmployerCanDecide({
         occurrence,
+        shiftId,
         employerProfileId,
         employerUserId,
         employerContext,
@@ -1773,7 +1919,24 @@ class ShiftOvertimeService {
         });
       }
 
-      if (now < overtime.employerResponseDeadlineAt) {
+      const deadline = ShiftOvertimeService.normalizeDate(
+        overtime.employerResponseDeadlineAt,
+        "employer response deadline"
+      );
+      const requestedAt = ShiftOvertimeService.normalizeDate(
+        overtime.requestedAt,
+        "overtime request time"
+      );
+
+      if (deadline <= requestedAt) {
+        throw ShiftOvertimeService.createError({
+          message: "The overtime response deadline must follow the request.",
+          code: "INVALID_OVERTIME_DECISION_TIMING",
+          statusCode: 500,
+        });
+      }
+
+      if (now < deadline) {
         return {
           occurrence,
           expired: false,
@@ -2073,10 +2236,18 @@ class ShiftOvertimeService {
 
     const requestWindowOpen = Boolean(
       !overtime.requested &&
+      OVERTIME_REQUEST_ALLOWED_OCCURRENCE_STATUSES.includes(occurrence.status) &&
+      occurrence.assignmentStatus === "assigned" &&
+      occurrence.assignedProfessional &&
+      occurrence.assignment &&
+      occurrence.assignedAt &&
+      occurrence.activeWorkCancellation?.occurred !== true &&
+      !OVERTIME_EXECUTION_STARTED_STATUSES.includes(occurrence.overtimeSettlement?.status) &&
       challengeableComponents.includes("overtime") &&
       occurrence.challengeWindowOpenedAt &&
       occurrence.challengeDeadlineAt &&
       !occurrence.challengeWindowClosedAt &&
+      now >= occurrence.challengeWindowOpenedAt &&
       now < occurrence.challengeDeadlineAt
     );
 
@@ -2085,6 +2256,8 @@ class ShiftOvertimeService {
       overtime.status === "pending" &&
       !overtime.employerRespondedAt &&
       !overtime.employerResponseOverdueAt &&
+      overtime.requestedAt &&
+      now >= overtime.requestedAt &&
       overtime.employerResponseDeadlineAt &&
       now < overtime.employerResponseDeadlineAt
     );
@@ -2094,8 +2267,10 @@ class ShiftOvertimeService {
       overtime.status === "disputed" &&
       OVERTIME_ADMIN_REVIEW_REASONS.includes(String(overtime.adminReviewReason || "")) &&
       overtime.adminReviewStartedAt &&
+      now >= overtime.adminReviewStartedAt &&
       !overtime.adminDecision &&
-      !overtime.adminDecidedAt
+      !overtime.adminDecidedAt &&
+      !overtime.adminDecidedBy
     );
 
     return {
@@ -2169,13 +2344,22 @@ class ShiftOvertimeService {
 
       approvedBy: overtime.approvedBy || null,
 
-      professionalPay: Number(occurrence.overtimeProfessionalPay || 0),
+      professionalPay: ShiftOvertimeService.assertMinorAmount(
+        occurrence.overtimeProfessionalPay,
+        "overtimeProfessionalPay"
+      ),
 
-      platformFee: Number(occurrence.overtimePlatformFee || 0),
+      platformFee: ShiftOvertimeService.assertMinorAmount(
+        occurrence.overtimePlatformFee,
+        "overtimePlatformFee"
+      ),
 
-      topUpRequired: Number(occurrence.topUpRequired || 0),
+      topUpRequired: ShiftOvertimeService.assertMinorAmount(
+        occurrence.topUpRequired,
+        "topUpRequired"
+      ),
 
-      topUpAmount: Number(overtime.topUpAmount || 0),
+      topUpAmount: ShiftOvertimeService.assertMinorAmount(overtime.topUpAmount, "topUpAmount"),
 
       topUpDeadlineAt: overtime.topUpDeadlineAt || null,
 

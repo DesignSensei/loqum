@@ -1,6 +1,7 @@
 // controllers/adminShiftClaimController.js
 
 const ShiftOccurrenceResolutionService = require("../services/shiftOccurrenceResolutionService");
+const ShiftCasePageService = require("../services/shiftCasePageService");
 
 const logger = require("../utils/logger");
 
@@ -90,8 +91,8 @@ function buildClaimIssueResponse(issue) {
 
     type: issue.type,
 
-    affectedSettlementComponents: Array.isArray(issue.affectedSettlementComponents)
-      ? [...issue.affectedSettlementComponents]
+    challengedSettlementComponents: Array.isArray(issue.challengedSettlementComponents)
+      ? [...issue.challengedSettlementComponents]
       : [],
 
     details: issue.details || null,
@@ -113,30 +114,6 @@ function buildClaimIssueResponse(issue) {
     employerCounterPosition: issue.employerCounterPosition || null,
 
     employerEvidence: Array.isArray(issue.employerEvidence) ? [...issue.employerEvidence] : [],
-
-    appealStatus: issue.appealStatus || "not_available",
-
-    appealDeadlineAt: issue.appealDeadlineAt || null,
-
-    appealedAt: issue.appealedAt || null,
-
-    appealedBy: issue.appealedBy ? String(issue.appealedBy) : null,
-
-    appealStatement: issue.appealStatement || null,
-
-    appealEvidence: Array.isArray(issue.appealEvidence) ? [...issue.appealEvidence] : [],
-
-    rebuttalStatus: issue.rebuttalStatus || "not_available",
-
-    rebuttalDeadlineAt: issue.rebuttalDeadlineAt || null,
-
-    rebuttedAt: issue.rebuttedAt || null,
-
-    rebuttedBy: issue.rebuttedBy ? String(issue.rebuttedBy) : null,
-
-    rebuttalStatement: issue.rebuttalStatement || null,
-
-    rebuttalEvidence: Array.isArray(issue.rebuttalEvidence) ? [...issue.rebuttalEvidence] : [],
 
     escalatedAt: issue.escalatedAt || null,
 
@@ -190,6 +167,8 @@ function buildClaimResponse(claim) {
       ? [...claim.submittedIssueTypes]
       : [],
 
+    challengedSettlementComponents: getClaimChallengedSettlementComponents(claim),
+
     issues: Array.isArray(claim.issues) ? claim.issues.map(buildClaimIssueResponse) : [],
 
     status: claim.status,
@@ -212,6 +191,36 @@ function buildClaimResponse(claim) {
 
     withdrawalReason: claim.withdrawalReason || null,
   };
+}
+
+function getClaimChallengedSettlementComponents(claim) {
+  if (!claim || !Array.isArray(claim.issues)) {
+    return [];
+  }
+
+  return [
+    ...new Set(
+      claim.issues.flatMap((issue) =>
+        Array.isArray(issue.challengedSettlementComponents)
+          ? issue.challengedSettlementComponents
+          : []
+      )
+    ),
+  ];
+}
+
+function getDisputeAffectedSettlementComponents(dispute) {
+  if (!dispute || !Array.isArray(dispute.issues)) {
+    return [];
+  }
+
+  return [
+    ...new Set(
+      dispute.issues.flatMap((issue) =>
+        Array.isArray(issue.affectedSettlementComponents) ? issue.affectedSettlementComponents : []
+      )
+    ),
+  ];
 }
 
 /* ─────────────────────────────── DISPUTE RESPONSES ─────────────────────────────── */
@@ -300,9 +309,7 @@ function buildDisputeResponse(dispute) {
       ? [...dispute.submittedIssueTypes]
       : [],
 
-    affectedSettlementComponents: Array.isArray(dispute.affectedSettlementComponents)
-      ? [...dispute.affectedSettlementComponents]
-      : [],
+    affectedSettlementComponents: getDisputeAffectedSettlementComponents(dispute),
 
     issues: Array.isArray(dispute.issues) ? dispute.issues.map(buildDisputeIssueResponse) : [],
 
@@ -339,6 +346,8 @@ function buildOccurrenceResponse(occurrence) {
     id: String(occurrence._id),
 
     referenceCode: occurrence.referenceCode,
+
+    slotNumber: Number(occurrence.slotNumber || 0),
 
     sequenceNumber: Number(occurrence.sequenceNumber || 0),
 
@@ -427,6 +436,8 @@ function buildRefundReevaluationResponse(refundResult) {
 
     executionLocked: refundResult.executionLocked === true,
 
+    revalidationRequired: refundResult.revalidationRequired === true,
+
     reconciliationRequired: refundResult.reconciliationRequired === true,
   };
 }
@@ -455,18 +466,45 @@ function buildClaimResolutionMessage(decision) {
 function buildDisputeResolutionMessage(decision) {
   switch (decision) {
     case "approved":
-      return "The employer dispute issue was approved.";
+      return "The employer dispute issue was upheld and the final authoritative outcome was recorded.";
 
     case "rejected":
-      return "The employer dispute issue was rejected.";
-
-    case "adjusted":
-      return "The employer dispute issue was resolved with an adjusted outcome.";
+      return "The employer dispute issue was rejected and the current Loqum record was maintained.";
 
     default:
       return "The employer dispute issue has been resolved.";
   }
 }
+
+/* ─────────────────────────────── CASES PAGE ─────────────────────────────── */
+
+exports.getCases = async (req, res, next) => {
+  try {
+    const casesView = await ShiftCasePageService.getAdminCasesPageData({
+      type: req.query.type,
+      status: req.query.status,
+      page: req.query.page,
+    });
+
+    setNoStoreHeaders(res);
+
+    return res.render("admin/cases/index", {
+      layout: "layouts/app-layout",
+      title: casesView.pageTitle,
+      breadcrumbs: [
+        { label: "Home", url: "/admin/dashboard" },
+        { label: casesView.pageTitle, url: null },
+      ],
+      csrfToken: req.csrfToken(),
+      casesView,
+      scripts: '<script src="/js/cases.js"></script>',
+    });
+  } catch (error) {
+    logger.error("Admin cases page error:", error);
+
+    return next(error);
+  }
+};
 
 /* ─────────────────────────────── RESOLVE CLAIM ISSUE ─────────────────────────────── */
 
@@ -551,9 +589,9 @@ exports.resolveClaim = async (req, res) => {
 /**
  * Admin resolves one issue in an employer standalone dispute.
  *
- * Approval accepts the employer dispute position, rejection keeps the
- * professional/current authoritative position, and adjusted establishes
- * evidence-supported final facts through the resolution service.
+ * Approval means the employer established that current Loqum authority
+ * requires correction. adminOutcome records the final evidence-supported
+ * authoritative fact/value. Rejection maintains current Loqum authority.
  */
 exports.resolveDispute = async (req, res) => {
   try {
@@ -621,6 +659,82 @@ exports.resolveDispute = async (req, res) => {
       fallbackMessage: "The employer dispute issue could not be resolved.",
 
       fallbackCode: "OCCURRENCE_DISPUTE_ISSUE_ADMIN_RESOLUTION_FAILED",
+    });
+  }
+};
+
+exports.previewClaimResolution = async (req, res) => {
+  try {
+    const result = await ShiftOccurrenceResolutionService.previewClaimIssueResolution({
+      claimId: req.params.claimId,
+
+      issueId: req.params.issueId,
+
+      adminUserId: getAdminUserId(req),
+
+      decision: req.body.decision,
+
+      adminOutcome: req.body.adminOutcome === undefined ? null : req.body.adminOutcome,
+
+      currentTime: new Date(),
+    });
+
+    setNoStoreHeaders(res);
+
+    return res.status(200).json({
+      success: true,
+
+      preview: result,
+    });
+  } catch (error) {
+    return handleJsonError({
+      res,
+
+      error,
+
+      logContext: "Admin professional claim issue resolution preview",
+
+      fallbackMessage: "The claim issue preview could not be generated.",
+
+      fallbackCode: "OCCURRENCE_CLAIM_ISSUE_ADMIN_PREVIEW_FAILED",
+    });
+  }
+};
+
+exports.previewDisputeResolution = async (req, res) => {
+  try {
+    const result = await ShiftOccurrenceResolutionService.previewDisputeIssueResolution({
+      disputeId: req.params.disputeId,
+
+      issueId: req.params.issueId,
+
+      adminUserId: getAdminUserId(req),
+
+      decision: req.body.decision,
+
+      adminOutcome: req.body.adminOutcome === undefined ? null : req.body.adminOutcome,
+
+      currentTime: new Date(),
+    });
+
+    setNoStoreHeaders(res);
+
+    return res.status(200).json({
+      success: true,
+
+      preview: result,
+    });
+  } catch (error) {
+    return handleJsonError({
+      res,
+
+      error,
+
+      logContext: "Admin employer dispute issue resolution preview",
+
+      fallbackMessage: "The employer dispute preview could not be generated.",
+
+      fallbackCode: "OCCURRENCE_DISPUTE_ISSUE_ADMIN_PREVIEW_FAILED",
     });
   }
 };

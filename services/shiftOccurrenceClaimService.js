@@ -5,11 +5,13 @@ const mongoose = require("mongoose");
 const Shift = require("../models/Shift");
 const ShiftOccurrence = require("../models/ShiftOccurrence");
 const ShiftOccurrenceClaim = require("../models/ShiftOccurrenceClaim");
+const ShiftOccurrenceDispute = require("../models/ShiftOccurrenceDispute");
 const PlatformSettings = require("../models/PlatformSettings");
 const ProfessionalProfile = require("../models/ProfessionalProfile");
 
 const ShiftOccurrenceResolutionService = require("./shiftOccurrenceResolutionService");
 const ShiftSettlementService = require("./shiftSettlementService");
+const ShiftRefundService = require("./shiftRefundService");
 
 const {
   runWithOptionalTransaction: runServiceTransaction,
@@ -51,20 +53,17 @@ const PAYOUT_EXECUTION_STATUSES = Object.freeze([
 ]);
 
 /**
- * The claim snapshot is evidential context only.
- *
- * It deliberately excludes:
- *
- * - settlement amount authority;
- * - platform-fee authority;
- * - refund authority;
- * - overtime decision/funding authority;
- * - challenge-window authority; and
- * - active claim/dispute pointers.
- *
- * Claim submission no longer restores this snapshot on withdrawal or
- * rejection. Final occurrence changes belong to
- * ShiftOccurrenceResolutionService.
+ * Professional claim issue -> employer dispute issue representing the same
+ * broad ordinary controversy.
+ */
+const EMPLOYER_DISPUTE_OVERLAP_MAP = Object.freeze({
+  attendance_correction: "attendance_correction",
+  payment_calculation: "payment_calculation",
+  employer_fault: "other_financial_fact",
+});
+
+/**
+ * Evidential snapshot only. It owns no financial or lifecycle authority.
  */
 const SNAPSHOT_FIELDS = Object.freeze([
   "status",
@@ -82,85 +81,22 @@ const SNAPSHOT_FIELDS = Object.freeze([
 ]);
 
 /**
- * PROFESSIONAL CLAIM CASE AUTHORITY
+ * One professional claim may contain multiple immutable ordinary BASE issues.
  *
- * One ShiftOccurrenceClaim exists per occurrence.
+ * Case status is active/resolved/withdrawn.
+ * Individual issues own their workflow state.
  *
- * That one case may contain one or more immutable ordinary issues:
+ * A professional claim and employer dispute may coexist only for genuinely
+ * different controversies. Sharing the BASE component does not itself make
+ * them duplicates.
  *
- * - attendance_correction
- * - payment_calculation
- * - employer_fault
+ * Overtime remains exclusively in the OT lifecycle.
  *
- * The issue set is immutable after submission.
- *
- * Each issue independently owns:
- *
- * - professional position;
- * - professional statement;
- * - professional evidence;
- * - affected settlement-component scope;
- * - employer decision;
- * - employer counter-position;
- * - employer evidence;
- * - professional appeal;
- * - admin escalation; and
- * - final resolution status.
- *
- * CLAIM / DISPUTE COEXISTENCE
- *
- * activeClaim and activeDispute may coexist when their unresolved settlement
- * component scopes do not overlap.
- *
- * Professional claim submission therefore:
- *
- * - rejects overlap with an already-active employer dispute;
- * - sets activeClaim;
- * - does NOT clear a disjoint activeDispute;
- * - does NOT close the shared 24-hour window; and
- * - does NOT clear challengeableSettlementComponents.
- *
- * PROFESSIONAL CLAIM FINALITY
- *
- * Resolving one issue does not resolve the whole case.
- *
- * activeClaim remains until every issue is final.
- *
- * When every issue is resolved:
- *
- * - claim.status becomes resolved;
- * - claim.resolvedAt is recorded; and
- * - occurrence.activeClaim is cleared.
- *
- * The shared occurrence challenge window remains independently governed by
- * challengeDeadlineAt.
- *
- * OVERTIME
- *
- * There is no overtime claim type here.
- *
- * An attendance_correction may factually affect the overtime component where
- * the corrected checkout crosses or changes post-scheduled-end attendance.
- *
- * That does not create or adjudicate an overtime request.
- *
- * OT request, employer OT decision, OT appeal, admin OT decision and OT funding
- * all remain in the dedicated overtime services.
- *
- * MONEY AUTHORITY
- *
- * This service does not:
- *
- * - calculate final professional entitlement from disputed facts;
- * - earn or collect platform fees;
- * - execute or hold refunds directly;
- * - execute payouts; or
- * - reconcile the parent Shift.
- *
- * Final issue outcomes are handed to ShiftOccurrenceResolutionService.
+ * Final authoritative issue outcomes belong to
+ * ShiftOccurrenceResolutionService.
  */
 class ShiftOccurrenceClaimService {
-  /* ─────────────────────────────── CORE HELPERS ─────────────────────────────── */
+  /* ------------------------------- CORE HELPERS ------------------------------- */
 
   static createError({ message, code, statusCode = 400, details = null }) {
     const error = new Error(message);
@@ -177,6 +113,17 @@ class ShiftOccurrenceClaimService {
   }
 
   static async runWithOptionalTransaction(options = {}, callback) {
+    if (
+      options.session &&
+      (typeof options.session.inTransaction !== "function" || !options.session.inTransaction())
+    ) {
+      throw this.createError({
+        message: "A supplied claim-processing session must have an active transaction.",
+        code: "ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
     return runServiceTransaction(options, callback);
   }
 
@@ -288,7 +235,7 @@ class ShiftOccurrenceClaimService {
   }
 
   static normalizePositiveSetting(value, fieldName) {
-    const number = Number(value);
+    const number = value;
 
     if (!Number.isSafeInteger(number) || number <= 0) {
       throw this.createError({
@@ -368,7 +315,7 @@ class ShiftOccurrenceClaimService {
     return value;
   }
 
-  /* ─────────────────────────────── SETTINGS / LOADERS ─────────────────────────────── */
+  /* ------------------------------- SETTINGS / LOADERS ------------------------------- */
 
   static async getPlatformSettings(session = null) {
     const query = PlatformSettings.findOne({
@@ -410,7 +357,8 @@ class ShiftOccurrenceClaimService {
       occurrenceQuery.session(session);
     }
 
-    const [shift, occurrence] = await Promise.all([shiftQuery, occurrenceQuery]);
+    const shift = await shiftQuery;
+    const occurrence = await occurrenceQuery;
 
     if (!shift) {
       throw this.createError({
@@ -454,6 +402,18 @@ class ShiftOccurrenceClaimService {
     }
 
     return claim;
+  }
+
+  static async getEmployerDisputeForOccurrence(occurrenceId, session = null) {
+    const query = ShiftOccurrenceDispute.findOne({
+      occurrence: this.normalizeObjectId(occurrenceId, "occurrence ID"),
+    });
+
+    if (session) {
+      query.session(session);
+    }
+
+    return query;
   }
 
   static getClaimIssue(claim, issueId) {
@@ -535,18 +495,16 @@ class ShiftOccurrenceClaimService {
       });
     }
 
-    const canManageAllBranches =
-      employerContext?.isPrimaryEmployer === true || employerContext?.isBusinessAdmin === true;
-
-    const isBranchManager = employerContext?.isBranchManager === true;
-
-    if (!canManageAllBranches && !isBranchManager) {
+    if (employerContext?.canManageClaims !== true) {
       throw this.createError({
         message: "You do not have permission to review occurrence claims.",
         code: "CLAIM_REVIEW_NOT_ALLOWED",
         statusCode: 403,
       });
     }
+
+    const canManageAllBranches =
+      employerContext?.isPrimaryEmployer === true || employerContext?.isBusinessAdmin === true;
 
     if (!canManageAllBranches) {
       const assignedBranchIds = (employerContext?.assignedBranchIds || [])
@@ -565,7 +523,7 @@ class ShiftOccurrenceClaimService {
     return true;
   }
 
-  /* ─────────────────────────────── EVIDENCE ─────────────────────────────── */
+  /* ------------------------------- EVIDENCE ------------------------------- */
 
   static normalizeEvidence(
     evidence = [],
@@ -653,7 +611,7 @@ class ShiftOccurrenceClaimService {
     });
   }
 
-  /* ─────────────────────────────── COMPONENT SCOPE ─────────────────────────────── */
+  /* ------------------------------- COMPONENT SCOPE ------------------------------- */
 
   static normalizeSettlementComponents(components, { allowEmpty = false } = {}) {
     if (!Array.isArray(components)) {
@@ -707,11 +665,11 @@ class ShiftOccurrenceClaimService {
     );
   }
 
-  static getAggregateAffectedSettlementComponents(issues) {
+  static getAggregateChallengedSettlementComponents(issues) {
     const aggregate = new Set();
 
     for (const issue of issues) {
-      for (const component of issue.affectedSettlementComponents || []) {
+      for (const component of issue.challengedSettlementComponents || []) {
         aggregate.add(component);
       }
     }
@@ -719,7 +677,7 @@ class ShiftOccurrenceClaimService {
     return SETTLEMENT_BATCH_COMPONENTS.filter((component) => aggregate.has(component));
   }
 
-  static getUnresolvedAffectedSettlementComponents(claim) {
+  static getUnresolvedChallengedSettlementComponents(claim) {
     const aggregate = new Set();
 
     for (const issue of claim.issues || []) {
@@ -727,7 +685,7 @@ class ShiftOccurrenceClaimService {
         continue;
       }
 
-      for (const component of issue.affectedSettlementComponents || []) {
+      for (const component of issue.challengedSettlementComponents || []) {
         aggregate.add(String(component));
       }
     }
@@ -735,44 +693,42 @@ class ShiftOccurrenceClaimService {
     return SETTLEMENT_BATCH_COMPONENTS.filter((component) => aggregate.has(component));
   }
 
-  static async assertNoActiveDisputeScopeOverlap({
-    occurrence,
-    affectedSettlementComponents,
-    session,
-  }) {
-    if (!occurrence.activeDispute) {
+  static assertNoDuplicateEmployerDisputeControversy({ dispute, claimIssues }) {
+    if (!dispute || dispute.status === "withdrawn") {
       return true;
     }
 
-    const affected = this.normalizeSettlementComponents(affectedSettlementComponents);
+    const disputeIssues = Array.isArray(dispute.issues) ? dispute.issues : [];
 
-    const challengeContext = await ShiftSettlementService.getActiveChallengeContext({
-      occurrence,
-      session,
-    });
+    const overlaps = [];
 
-    const disputeComponents = this.normalizeSettlementComponents(
-      challengeContext?.dispute?.affectedSettlementComponents || [],
-      {
-        allowEmpty: true,
+    for (const claimIssue of claimIssues) {
+      const correspondingDisputeType = EMPLOYER_DISPUTE_OVERLAP_MAP[claimIssue.type];
+
+      const matchingDisputeIssue = disputeIssues.find(
+        (disputeIssue) => disputeIssue?.type === correspondingDisputeType
+      );
+
+      if (matchingDisputeIssue) {
+        overlaps.push({
+          claimIssueType: claimIssue.type,
+          disputeIssueType: matchingDisputeIssue.type,
+          disputeIssueId: String(matchingDisputeIssue._id),
+          disputeIssueStatus: matchingDisputeIssue.status,
+        });
       }
-    );
+    }
 
-    const overlappingComponents = affected.filter((component) =>
-      disputeComponents.includes(component)
-    );
-
-    if (overlappingComponents.length > 0) {
+    if (overlaps.length > 0) {
       throw this.createError({
         message:
-          "A professional claim cannot overlap an unresolved employer dispute on the same settlement component.",
-        code: "CLAIM_DISPUTE_SETTLEMENT_SCOPE_OVERLAP",
+          "One or more professional claim issues already belong to the existing employer dispute and cannot be recreated as a separate professional claim controversy.",
+        code: "CLAIM_DUPLICATES_EMPLOYER_DISPUTE_CONTROVERSY",
         statusCode: 409,
         details: {
-          activeDisputeId: String(occurrence.activeDispute),
-          claimComponents: affected,
-          disputeComponents,
-          overlappingComponents,
+          disputeId: String(dispute._id),
+          disputeStatus: dispute.status,
+          overlappingIssues: overlaps,
         },
       });
     }
@@ -780,7 +736,7 @@ class ShiftOccurrenceClaimService {
     return true;
   }
 
-  /* ─────────────────────────────── ISSUE NORMALIZATION ─────────────────────────────── */
+  /* ------------------------------- ISSUE NORMALIZATION ------------------------------- */
 
   static normalizeIssueType(value) {
     const type = String(value || "")
@@ -860,19 +816,26 @@ class ShiftOccurrenceClaimService {
       ? this.normalizeDate(source.correctedCheckOutAt, "corrected checkout time")
       : null;
 
-    const currentCheckInAt = this.getEffectiveAttendanceStart(occurrence)
-      ? this.normalizeDate(this.getEffectiveAttendanceStart(occurrence), "recorded check-in time", {
+    const currentStartValue = this.getEffectiveAttendanceStart(occurrence);
+
+    const currentEndValue = this.getEffectiveAttendanceEnd(occurrence);
+
+    const currentCheckInAt = currentStartValue
+      ? this.normalizeDate(currentStartValue, "recorded check-in time", {
           statusCode: 500,
         })
       : null;
 
-    const currentCheckOutAt = this.getEffectiveAttendanceEnd(occurrence)
-      ? this.normalizeDate(this.getEffectiveAttendanceEnd(occurrence), "recorded checkout time", {
+    const currentCheckOutAt = currentEndValue
+      ? this.normalizeDate(currentEndValue, "recorded checkout time", {
           statusCode: 500,
         })
       : null;
 
-    if (occurrence.status === "no_show" && (!correctedCheckInAt || !correctedCheckOutAt)) {
+    if (
+      occurrence.attendanceStatus === "no_show" &&
+      (!correctedCheckInAt || !correctedCheckOutAt)
+    ) {
       throw this.createError({
         message:
           "A no-show attendance correction requires both the actual start and end times worked.",
@@ -921,43 +884,30 @@ class ShiftOccurrenceClaimService {
       });
     }
 
-    const affectedComponents = new Set();
+    let baseAffected = checkInActuallyChanges;
 
-    if (checkInActuallyChanges) {
-      affectedComponents.add("base");
-    }
-
+    /**
+     * A checkout correction belongs here only when the factual difference
+     * intersects scheduled work. Post-scheduled-end-only disputes belong to OT.
+     */
     if (checkOutActuallyChanges) {
-      /**
-       * A checkout correction can affect:
-       *
-       * - BASE if either side of the factual difference falls inside
-       *   scheduled time; and
-       * - OT if either side extends beyond scheduled end.
-       *
-       * This is factual scope only.
-       *
-       * The generic claim does not create or decide overtime.
-       */
       if (
         !currentCheckOutAt ||
         currentCheckOutAt < scheduledEndAt ||
         correctedCheckOutAt < scheduledEndAt
       ) {
-        affectedComponents.add("base");
-      }
-
-      if (
-        (currentCheckOutAt && currentCheckOutAt > scheduledEndAt) ||
-        correctedCheckOutAt > scheduledEndAt
-      ) {
-        affectedComponents.add("overtime");
+        baseAffected = true;
       }
     }
 
-    const affectedSettlementComponents = this.normalizeSettlementComponents([
-      ...affectedComponents,
-    ]);
+    if (!baseAffected) {
+      throw this.createError({
+        message:
+          "This attendance disagreement affects only post-scheduled-end time and must use the overtime workflow.",
+        code: "ATTENDANCE_CORRECTION_DOES_NOT_AFFECT_BASE",
+        statusCode: 409,
+      });
+    }
 
     return {
       details: {
@@ -965,10 +915,11 @@ class ShiftOccurrenceClaimService {
           correctedCheckInAt,
           correctedCheckOutAt,
         },
+
         expectedBaseProfessionalPay: null,
       },
 
-      affectedSettlementComponents,
+      challengedSettlementComponents: ["base"],
     };
   }
 
@@ -994,7 +945,7 @@ class ShiftOccurrenceClaimService {
         expectedBaseProfessionalPay,
       },
 
-      affectedSettlementComponents: ["base"],
+      challengedSettlementComponents: ["base"],
     };
   }
 
@@ -1006,7 +957,7 @@ class ShiftOccurrenceClaimService {
       });
     }
 
-    if (input.affectedSettlementComponents !== undefined) {
+    if (input.challengedSettlementComponents !== undefined) {
       throw this.createError({
         message: "Settlement-component scope is derived by Loqum and cannot be submitted directly.",
         code: "CLIENT_SETTLEMENT_COMPONENT_SCOPE_NOT_ALLOWED",
@@ -1045,7 +996,7 @@ class ShiftOccurrenceClaimService {
     return {
       type,
 
-      affectedSettlementComponents: normalizedDetails.affectedSettlementComponents,
+      challengedSettlementComponents: normalizedDetails.challengedSettlementComponents,
 
       details: normalizedDetails.details,
 
@@ -1061,20 +1012,6 @@ class ShiftOccurrenceClaimService {
       employerDecidedBy: null,
       employerCounterPosition: null,
       employerEvidence: [],
-
-      appealStatus: "not_available",
-      appealDeadlineAt: null,
-      appealedAt: null,
-      appealedBy: null,
-      appealStatement: null,
-      appealEvidence: [],
-
-      rebuttalStatus: "not_available",
-      rebuttalDeadlineAt: null,
-      rebuttedAt: null,
-      rebuttedBy: null,
-      rebuttalStatement: null,
-      rebuttalEvidence: [],
 
       escalatedAt: null,
       escalationReason: null,
@@ -1130,7 +1067,7 @@ class ShiftOccurrenceClaimService {
     );
   }
 
-  /* ─────────────────────────────── CLAIMABILITY ─────────────────────────────── */
+  /* ------------------------------- CLAIMABILITY ------------------------------- */
 
   static hasReviewableProfessionalAmount(value) {
     try {
@@ -1162,65 +1099,49 @@ class ShiftOccurrenceClaimService {
     );
   }
 
-  static assertAffectedSettlementComponentsChallengeable({
+  static assertChallengedSettlementComponentsChallengeable({
     occurrence,
-    affectedSettlementComponents,
+    challengedSettlementComponents,
   }) {
-    const affected = this.normalizeSettlementComponents(affectedSettlementComponents);
+    const affected = this.normalizeSettlementComponents(challengedSettlementComponents);
+
+    if (affected.length !== 1 || affected[0] !== "base") {
+      throw this.createError({
+        message: "Ordinary professional claim issues must affect only regular Shift pay.",
+        code: "INVALID_ORDINARY_CLAIM_COMPONENT_SCOPE",
+        statusCode: 500,
+      });
+    }
 
     const available = this.getChallengeableSettlementComponents(occurrence);
 
-    for (const component of affected) {
-      if (!available.includes(component)) {
-        throw this.createError({
-          message:
-            component === "base"
-              ? "Regular Shift pay is no longer available for ordinary challenge."
-              : "Overtime is no longer available to this ordinary factual challenge.",
-          code:
-            component === "base"
-              ? "BASE_COMPONENT_NOT_CHALLENGEABLE"
-              : "OVERTIME_COMPONENT_NOT_CHALLENGEABLE",
-          statusCode: 409,
-          details: {
-            requestedComponent: component,
-            challengeableSettlementComponents: available,
-          },
-        });
-      }
+    if (!available.includes("base")) {
+      throw this.createError({
+        message: "Regular Shift pay is no longer available for ordinary challenge.",
+        code: "BASE_COMPONENT_NOT_CHALLENGEABLE",
+        statusCode: 409,
+        details: {
+          challengeableSettlementComponents: available,
+        },
+      });
+    }
 
-      const auditPath = component === "base" ? "baseSettlement" : "overtimeSettlement";
+    const baseSettlementStatus = occurrence.baseSettlement?.status || "not_due";
 
-      const componentStatus = occurrence[auditPath]?.status || "not_due";
-
-      if (PAYOUT_EXECUTION_STATUSES.includes(componentStatus)) {
-        throw this.createError({
-          message:
-            component === "base"
-              ? "Regular Shift pay has already become payout-final."
-              : "Overtime pay has already become payout-final.",
-          code:
-            component === "base"
-              ? "BASE_SETTLEMENT_RELEASE_ALREADY_STARTED"
-              : "OVERTIME_SETTLEMENT_RELEASE_ALREADY_STARTED",
-          statusCode: 409,
-        });
-      }
-
-      if (component === "overtime" && occurrence.overtime?.status === "approved") {
-        throw this.createError({
-          message:
-            "Final approved overtime cannot be reopened through the ordinary claim workflow.",
-          code: "APPROVED_OVERTIME_ALREADY_FINAL",
-          statusCode: 409,
-        });
-      }
+    if (PAYOUT_EXECUTION_STATUSES.includes(baseSettlementStatus)) {
+      throw this.createError({
+        message: "Regular Shift pay has already become payout-final.",
+        code: "BASE_SETTLEMENT_RELEASE_ALREADY_STARTED",
+        statusCode: 409,
+      });
     }
 
     return true;
   }
 
   static assertOccurrenceIsClaimable({ shift, occurrence, issues }) {
+    this.assertBaseExecutionNotStarted(occurrence);
+
     if (!shift.publishedAt || shift.paymentStatus === "unpaid" || Number(shift.fundedAmount) <= 0) {
       throw this.createError({
         message: "An unfunded occurrence cannot receive a professional claim.",
@@ -1254,9 +1175,9 @@ class ShiftOccurrenceClaimService {
     }
 
     for (const issue of issues) {
-      this.assertAffectedSettlementComponentsChallengeable({
+      this.assertChallengedSettlementComponentsChallengeable({
         occurrence,
-        affectedSettlementComponents: issue.affectedSettlementComponents,
+        challengedSettlementComponents: issue.challengedSettlementComponents,
       });
 
       if (issue.type === "attendance_correction") {
@@ -1296,12 +1217,184 @@ class ShiftOccurrenceClaimService {
     return true;
   }
 
-  /* ─────────────────────────────── SHARED WINDOW VALIDATION ─────────────────────────────── */
+  /* ------------------------------- SHARED WINDOW VALIDATION ------------------------------- */
 
-  static getOpenOccurrenceClaimWindow({ occurrence, currentTime, affectedSettlementComponents }) {
+  static assertBaseExecutionNotStarted(occurrence) {
+    if (
+      PAYOUT_EXECUTION_STATUSES.includes(occurrence.baseSettlement?.status) ||
+      occurrence.baseSettlement?.settlementBatch ||
+      occurrence.baseSettlement?.payoutTransaction ||
+      ["eligible", "batched", "processing", "refunded"].includes(occurrence.refundStatus) ||
+      occurrence.refundBatch ||
+      occurrence.refundedAt ||
+      (occurrence.refundedAmount != null && occurrence.refundedAmount !== 0)
+    ) {
+      throw this.createError({
+        message: "BASE payout or refund processing has progressed beyond claim activation.",
+        code: "BASE_FINANCIAL_EXECUTION_CONFLICT",
+        statusCode: 409,
+      });
+    }
+  }
+
+  static async reevaluateClaimRefund({ occurrence, currentTime, session }) {
+    return ShiftRefundService.reevaluateOccurrenceRefund(
+      {
+        shiftId: occurrence.shift,
+        occurrence,
+        reason: occurrence.refundReason || null,
+        zeroAmountVoidReason: "The authoritative BASE outcome leaves no employer refund balance.",
+        currentTime,
+        initiatedBy: { role: "system", userId: null },
+      },
+      { session }
+    );
+  }
+
+  /**
+   * Stage the shared BASE window on a loaded occurrence. Do not save here:
+   * attendance/settlement callers save the complete outcome in their transaction.
+   * An existing window, including a closed one, is never reopened or extended.
+   */
+  static async establishOccurrenceClaimEligibility({
+    occurrence,
+    openedAt = new Date(),
+    components = ["base"],
+    session,
+  }) {
+    if (!occurrence || typeof occurrence.set !== "function") {
+      throw this.createError({
+        message: "A loaded occurrence is required.",
+        code: "OCCURRENCE_DOCUMENT_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
+    if (!session || typeof session.inTransaction !== "function" || !session.inTransaction()) {
+      throw this.createError({
+        message: "Eligibility must be staged inside an active transaction.",
+        code: "ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
+    const normalizedComponents = this.normalizeSettlementComponents(components);
+
+    if (normalizedComponents.length !== 1 || normalizedComponents[0] !== "base") {
+      throw this.createError({
+        message: "Ordinary eligibility is BASE-only.",
+        code: "INVALID_ORDINARY_CLAIM_COMPONENT_SCOPE",
+        statusCode: 400,
+      });
+    }
+
+    const now = this.normalizeCurrentTime(openedAt);
+
+    const hasOpening = Boolean(occurrence.challengeWindowOpenedAt);
+    const hasDeadline = Boolean(occurrence.challengeDeadlineAt);
+
+    if (hasOpening || hasDeadline || occurrence.challengeWindowClosedAt) {
+      const storedOpening = hasOpening
+        ? this.normalizeDate(occurrence.challengeWindowOpenedAt, "stored challenge opening", {
+            statusCode: 500,
+          })
+        : null;
+
+      const storedDeadline = hasDeadline
+        ? this.normalizeDate(occurrence.challengeDeadlineAt, "stored challenge deadline", {
+            statusCode: 500,
+          })
+        : null;
+
+      if (!storedOpening || !storedDeadline || storedDeadline <= storedOpening) {
+        throw this.createError({
+          message: "The stored challenge-window audit is incomplete or invalid.",
+          code: "INVALID_OCCURRENCE_CHALLENGE_WINDOW_AUDIT",
+          statusCode: 500,
+        });
+      }
+
+      return {
+        occurrence,
+        established: false,
+        idempotent: true,
+        challengeWindowOpenedAt: occurrence.challengeWindowOpenedAt,
+        challengeDeadlineAt: occurrence.challengeDeadlineAt,
+      };
+    }
+
+    if (
+      occurrence.assignmentStatus !== "assigned" ||
+      !occurrence.assignment ||
+      !occurrence.assignedProfessional ||
+      !occurrence.assignedAt ||
+      !["pending_settlement", "completed", "cancelled", "no_show", "disputed"].includes(
+        occurrence.status
+      ) ||
+      occurrence.activeClaim ||
+      occurrence.activeDispute ||
+      (occurrence.checkoutFallback?.required && !occurrence.checkoutFallback?.resolvedAt)
+    ) {
+      throw this.createError({
+        message: "No assigned, contestable outcome is available.",
+        code: "OCCURRENCE_CHALLENGE_NOT_AVAILABLE",
+        statusCode: 409,
+      });
+    }
+
+    this.assertBaseExecutionNotStarted(occurrence);
+
+    const shift = await Shift.findById(occurrence.shift).session(session);
+
+    if (
+      !shift ||
+      !shift.publishedAt ||
+      !Number.isSafeInteger(shift.fundedAmount) ||
+      shift.fundedAmount <= 0 ||
+      shift.paymentStatus === "unpaid"
+    ) {
+      throw this.createError({
+        message: "Protected Shift funding is required.",
+        code: "UNFUNDED_OCCURRENCE_NOT_CLAIMABLE",
+        statusCode: 409,
+      });
+    }
+
+    const settings = await this.getPlatformSettings(session);
+
+    const hours = this.normalizePositiveSetting(
+      settings.occurrenceClaimWindowHours,
+      "occurrenceClaimWindowHours"
+    );
+
+    const deadline = this.addHours(now, hours);
+
+    if (!Number.isFinite(deadline.getTime()) || deadline <= now) {
+      throw this.createError({
+        message: "The configured challenge deadline is invalid.",
+        code: "INVALID_OCCURRENCE_CHALLENGE_WINDOW_AUDIT",
+        statusCode: 500,
+      });
+    }
+
+    occurrence.set("challengeWindowOpenedAt", now);
+    occurrence.set("challengeDeadlineAt", deadline);
+    occurrence.set("challengeWindowClosedAt", null);
+    occurrence.set("challengeableSettlementComponents", ["base"]);
+
+    return {
+      occurrence,
+      established: true,
+      idempotent: false,
+      challengeWindowOpenedAt: now,
+      challengeDeadlineAt: deadline,
+    };
+  }
+
+  static getOpenOccurrenceClaimWindow({ occurrence, currentTime, challengedSettlementComponents }) {
     const now = this.normalizeCurrentTime(currentTime);
 
-    const affected = this.normalizeSettlementComponents(affectedSettlementComponents);
+    const affected = this.normalizeSettlementComponents(challengedSettlementComponents);
 
     if (!occurrence.challengeWindowOpenedAt || !occurrence.challengeDeadlineAt) {
       throw this.createError({
@@ -1333,11 +1426,9 @@ class ShiftOccurrenceClaimService {
     }
 
     /**
-     * activeDispute is not automatically prohibited here.
+     * activeDispute is not automatically prohibited.
      *
-     * Employer and professional original cases may coexist only when their
-     * unresolved settlement-component scopes do not overlap. Submission
-     * validates that component boundary separately.
+     * Submission separately rejects only duplicate ordinary controversies.
      */
     if (occurrence.activeClaim) {
       throw this.createError({
@@ -1398,11 +1489,11 @@ class ShiftOccurrenceClaimService {
     return {
       challengeWindowOpenedAt: openedAt,
       challengeDeadlineAt: deadlineAt,
-      affectedSettlementComponents: affected,
+      challengedSettlementComponents: affected,
     };
   }
 
-  /* ─────────────────────────────── SNAPSHOT ─────────────────────────────── */
+  /* ------------------------------- SNAPSHOT ------------------------------- */
 
   static buildLifecycleSnapshot(occurrence) {
     return SNAPSHOT_FIELDS.reduce((snapshot, field) => {
@@ -1412,7 +1503,7 @@ class ShiftOccurrenceClaimService {
     }, {});
   }
 
-  /* ─────────────────────────────── IDEMPOTENCY ─────────────────────────────── */
+  /* ------------------------------- IDEMPOTENCY ------------------------------- */
 
   static getComparableDate(value) {
     if (!value) {
@@ -1432,8 +1523,8 @@ class ShiftOccurrenceClaimService {
     return {
       type: String(issue?.type || ""),
 
-      affectedSettlementComponents: this.normalizeSettlementComponents(
-        Array.from(issue?.affectedSettlementComponents || [])
+      challengedSettlementComponents: this.normalizeSettlementComponents(
+        Array.from(issue?.challengedSettlementComponents || [])
       ),
 
       details: {
@@ -1524,25 +1615,22 @@ class ShiftOccurrenceClaimService {
     return claim;
   }
 
-  /* ─────────────────────────────── ACTIVE CLAIM POINTER ─────────────────────────────── */
+  /* ------------------------------- ACTIVE CLAIM POINTER ------------------------------- */
 
   static async activateClaimCase({
     occurrence,
     claim,
     currentTime,
-    affectedSettlementComponents,
+    challengedSettlementComponents,
     session,
   }) {
-    const affected = this.normalizeSettlementComponents(affectedSettlementComponents);
+    const affected = this.normalizeSettlementComponents(challengedSettlementComponents);
+
+    this.assertBaseExecutionNotStarted(occurrence);
 
     /**
-     * Atomic professional-side original-case claim.
-     *
-     * activeDispute is intentionally absent from the filter.
-     *
-     * A professional claim and employer dispute may coexist after the
-     * submission path has established that their settlement-component scopes
-     * are disjoint.
+     * Pin activeDispute so a concurrent dispute cannot appear after the
+     * duplicate-controversy check and before claim activation.
      *
      * The shared ordinary window and its component list remain untouched.
      */
@@ -1592,13 +1680,21 @@ class ShiftOccurrenceClaimService {
 
     occurrence.settlementStatus = "disputed";
 
+    ShiftSettlementService.resetComponentSettlement({
+      occurrence,
+      component: "base",
+    });
+
+    await this.reevaluateClaimRefund({
+      occurrence,
+      currentTime,
+      session,
+    });
+
     return occurrence;
   }
 
   static assertClaimIsActiveOnOccurrence({ claim, occurrence }) {
-    /**
-     * activeDispute may coexist and is not an error.
-     */
     if (!occurrence.activeClaim || !this.sameId(occurrence.activeClaim, claim._id)) {
       throw this.createError({
         message: "This professional claim is no longer active on the occurrence.",
@@ -1618,17 +1714,10 @@ class ShiftOccurrenceClaimService {
 
     occurrence.activeClaim = null;
 
-    /**
-     * Do not:
-     *
-     * - clear activeDispute;
-     * - close the shared window; or
-     * - clear challengeableSettlementComponents.
-     */
     return occurrence;
   }
 
-  /* ─────────────────────────────── EMPLOYER COUNTER-POSITION ─────────────────────────────── */
+  /* ------------------------------- EMPLOYER COUNTER-POSITION ------------------------------- */
 
   static normalizeEmployerCounterPosition({ issue, occurrence, counterPosition }) {
     if (counterPosition === null || counterPosition === undefined) {
@@ -1734,7 +1823,7 @@ class ShiftOccurrenceClaimService {
     };
   }
 
-  /* ─────────────────────────────── CASE FINALITY ─────────────────────────────── */
+  /* ------------------------------- CASE FINALITY ------------------------------- */
 
   static synchronizeClaimCaseFinality({ claim, occurrence, currentTime }) {
     const unresolvedIssues = Array.from(claim.issues || []).filter(
@@ -1748,8 +1837,8 @@ class ShiftOccurrenceClaimService {
       return {
         caseResolved: false,
         unresolvedIssueCount: unresolvedIssues.length,
-        unresolvedAffectedSettlementComponents:
-          this.getUnresolvedAffectedSettlementComponents(claim),
+        unresolvedChallengedSettlementComponents:
+          this.getUnresolvedChallengedSettlementComponents(claim),
       };
     }
 
@@ -1774,7 +1863,7 @@ class ShiftOccurrenceClaimService {
     return {
       caseResolved: true,
       unresolvedIssueCount: 0,
-      unresolvedAffectedSettlementComponents: [],
+      unresolvedChallengedSettlementComponents: [],
     };
   }
 
@@ -1795,13 +1884,19 @@ class ShiftOccurrenceClaimService {
       challengeContext,
     });
 
+    await this.reevaluateClaimRefund({
+      occurrence,
+      currentTime,
+      session,
+    });
+
     return {
       occurrence,
       challengeContext,
     };
   }
 
-  /* ─────────────────────────────── FINAL ISSUE OUTCOME HANDOFF ─────────────────────────────── */
+  /* ------------------------------- FINAL ISSUE OUTCOME HANDOFF ------------------------------- */
 
   static async applyProfessionalClaimIssueOutcome({
     claim,
@@ -1813,22 +1908,7 @@ class ShiftOccurrenceClaimService {
     currentTime,
     session,
   }) {
-    /**
-     * #12 CONTRACT
-     *
-     * ShiftOccurrenceResolutionService will implement this exact method.
-     *
-     * It owns:
-     *
-     * - applying final attendance facts;
-     * - recalculating affected BASE entitlement;
-     * - preserving OT-domain authority;
-     * - resetting affected payout readiness where required; and
-     * - preventing expansion beyond this issue's immutable component scope.
-     *
-     * This claim service owns only the case workflow around that outcome.
-     */
-    return ShiftOccurrenceResolutionService.applyProfessionalClaimIssueOutcome(
+    return ShiftOccurrenceResolutionService.applyEmployerClaimIssueOutcome(
       {
         claim,
         issue,
@@ -1848,7 +1928,7 @@ class ShiftOccurrenceClaimService {
     );
   }
 
-  /* ─────────────────────────────── SUBMISSION ─────────────────────────────── */
+  /* ------------------------------- SUBMISSION ------------------------------- */
 
   static async submitClaim(
     {
@@ -1877,6 +1957,13 @@ class ShiftOccurrenceClaimService {
       });
     }
 
+    if (cleanIdempotencyKey.length > 200) {
+      throw this.createError({
+        message: "Claim idempotency key cannot exceed 200 characters.",
+        code: "CLAIM_IDEMPOTENCY_KEY_TOO_LONG",
+      });
+    }
+
     return this.runWithOptionalTransaction(options, async (session) => {
       const { shift, occurrence } = await this.getOccurrenceContext({
         shiftId,
@@ -1902,8 +1989,8 @@ class ShiftOccurrenceClaimService {
         currentTime: now,
       });
 
-      const aggregateAffectedSettlementComponents =
-        this.getAggregateAffectedSettlementComponents(normalizedIssues);
+      const aggregateChallengedSettlementComponents =
+        this.getAggregateChallengedSettlementComponents(normalizedIssues);
 
       const existingIdempotentClaim = await ShiftOccurrenceClaim.findOne({
         idempotencyKey: cleanIdempotencyKey,
@@ -1929,8 +2016,6 @@ class ShiftOccurrenceClaimService {
 
       /**
        * One original professional claim case per occurrence.
-       *
-       * Withdrawal does not recreate another professional claim right.
        */
       const existingClaim = await ShiftOccurrenceClaim.findOne({
         occurrence: occurrence._id,
@@ -1957,13 +2042,14 @@ class ShiftOccurrenceClaimService {
       const { challengeWindowOpenedAt, challengeDeadlineAt } = this.getOpenOccurrenceClaimWindow({
         occurrence,
         currentTime: now,
-        affectedSettlementComponents: aggregateAffectedSettlementComponents,
+        challengedSettlementComponents: aggregateChallengedSettlementComponents,
       });
 
-      await this.assertNoActiveDisputeScopeOverlap({
-        occurrence,
-        affectedSettlementComponents: aggregateAffectedSettlementComponents,
-        session,
+      const employerDispute = await this.getEmployerDisputeForOccurrence(occurrence._id, session);
+
+      this.assertNoDuplicateEmployerDisputeControversy({
+        dispute: employerDispute,
+        claimIssues: normalizedIssues,
       });
 
       const settings = await this.getPlatformSettings(session);
@@ -2016,7 +2102,7 @@ class ShiftOccurrenceClaimService {
 
             status: "active",
 
-            employerRefund: aggregateAffectedSettlementComponents.includes("base")
+            employerRefund: aggregateChallengedSettlementComponents.includes("base")
               ? occurrence.employerRefund || null
               : null,
 
@@ -2036,7 +2122,7 @@ class ShiftOccurrenceClaimService {
         occurrence,
         claim,
         currentTime: now,
-        affectedSettlementComponents: aggregateAffectedSettlementComponents,
+        challengedSettlementComponents: aggregateChallengedSettlementComponents,
         session,
       });
 
@@ -2062,14 +2148,14 @@ class ShiftOccurrenceClaimService {
 
         submittedIssueTypes,
 
-        affectedSettlementComponents: aggregateAffectedSettlementComponents,
+        challengedSettlementComponents: aggregateChallengedSettlementComponents,
 
         employerResponseDeadlineAt,
       };
     });
   }
 
-  /* ─────────────────────────────── EMPLOYER ISSUE REVIEW ─────────────────────────────── */
+  /* ------------------------------- EMPLOYER ISSUE REVIEW ------------------------------- */
 
   static normalizeEmployerDecision(value) {
     const decision = String(value || "")
@@ -2223,24 +2309,10 @@ class ShiftOccurrenceClaimService {
         recordedAt: now,
       });
 
-      if (normalizedDecision === "rejected" && normalizedCounterPosition) {
-        if (!Array.isArray(issue.evidence) || issue.evidence.length === 0) {
-          throw this.createError({
-            message:
-              "An adverse employer counter-position requires the professional's original claim issue to contain supporting evidence.",
-            code: "COUNTER_POSITION_REQUIRES_PROFESSIONAL_EVIDENCE",
-            statusCode: 409,
-          });
-        }
-
-        if (normalizedEvidence.length === 0) {
-          throw this.createError({
-            message: "An employer counter-position requires supporting employer evidence.",
-            code: "EMPLOYER_COUNTER_POSITION_EVIDENCE_REQUIRED",
-          });
-        }
-      }
-
+      /**
+       * The employer's written reason and structured counter-position are
+       * evidence. Supporting uploads remain optional.
+       */
       issue.employerDecision = normalizedDecision;
 
       issue.employerDecisionReason = cleanReason;
@@ -2253,119 +2325,29 @@ class ShiftOccurrenceClaimService {
 
       issue.employerEvidence = normalizedEvidence;
 
-      if (normalizedDecision === "rejected" && !normalizedCounterPosition) {
-        const settings = await this.getPlatformSettings(session);
-
-        const appealHours = this.normalizePositiveSetting(
-          settings.professionalAppealWindowHours,
-          "professionalAppealWindowHours"
-        );
-
-        issue.status = "awaiting_professional_appeal";
-
-        issue.appealStatus = "available";
-
-        issue.appealDeadlineAt = this.addHours(now, appealHours);
-
-        issue.appealedAt = null;
-        issue.appealedBy = null;
-        issue.appealStatement = null;
-        issue.appealEvidence = [];
-
-        issue.escalatedAt = null;
-        issue.escalationReason = null;
-        issue.escalatedBy = null;
+      if (normalizedDecision === "rejected") {
+        issue.status = "awaiting_admin_review";
+        issue.escalatedAt = now;
+        issue.escalationReason = "employer_disagreement";
+        issue.escalatedBy = employerUser;
         issue.escalationNotes = null;
-
         issue.resolvedAt = null;
 
-        await claim.save({
-          session,
-        });
+        await claim.save({ session });
 
         return {
           claim,
           issue,
           occurrence,
           shift,
-
           resolved: false,
-
           issueResolved: false,
           caseResolved: false,
-
-          appealAvailable: true,
-
-          appealDeadlineAt: issue.appealDeadlineAt,
-
+          adminReviewRequired: true,
           employerCounterPosition: normalizedCounterPosition,
         };
       }
 
-      if (normalizedDecision === "rejected" && normalizedCounterPosition) {
-        const settings = await this.getPlatformSettings(session);
-
-        const rebuttalHours = this.normalizePositiveSetting(
-          settings.professionalRebuttalWindowHours,
-          "professionalRebuttalWindowHours"
-        );
-
-        issue.status = "awaiting_professional_rebuttal";
-
-        issue.rebuttalStatus = "available";
-
-        issue.rebuttalDeadlineAt = this.addHours(now, rebuttalHours);
-
-        issue.rebuttedAt = null;
-        issue.rebuttedBy = null;
-        issue.rebuttalStatement = null;
-        issue.rebuttalEvidence = [];
-
-        issue.appealStatus = "not_available";
-        issue.appealDeadlineAt = null;
-
-        issue.appealedAt = null;
-        issue.appealedBy = null;
-        issue.appealStatement = null;
-        issue.appealEvidence = [];
-
-        issue.escalatedAt = null;
-        issue.escalationReason = null;
-        issue.escalatedBy = null;
-        issue.escalationNotes = null;
-
-        issue.resolvedAt = null;
-
-        await claim.save({
-          session,
-        });
-
-        return {
-          claim,
-          issue,
-          occurrence,
-          shift,
-
-          resolved: false,
-
-          issueResolved: false,
-          caseResolved: false,
-
-          rebuttalAvailable: true,
-
-          rebuttalDeadlineAt: issue.rebuttalDeadlineAt,
-
-          employerCounterPosition: normalizedCounterPosition,
-        };
-      }
-
-      /**
-       * Employer approval accepts the professional's submitted issue
-       * position.
-       *
-       * The resolution service converts that accepted position into final
-       * authoritative occurrence facts and BASE entitlement.
-       */
       const resolutionResult = await this.applyProfessionalClaimIssueOutcome({
         claim,
         issue,
@@ -2383,8 +2365,6 @@ class ShiftOccurrenceClaimService {
       });
 
       issue.status = "resolved";
-      issue.appealStatus = "not_available";
-      issue.appealDeadlineAt = null;
       issue.resolvedAt = now;
 
       const caseFinality = this.synchronizeClaimCaseFinality({
@@ -2393,10 +2373,6 @@ class ShiftOccurrenceClaimService {
         currentTime: now,
       });
 
-      /**
-       * Persist issue/case finality before settlement derives live unresolved
-       * claim scope from the database.
-       */
       await claim.save({
         session,
       });
@@ -2426,310 +2402,12 @@ class ShiftOccurrenceClaimService {
         issueResolved: true,
         caseResolved: caseFinality.caseResolved,
 
-        appealAvailable: false,
-
         resolutionResult,
 
         settlementSummary,
       };
     });
   }
-  /* ─────────────────────────────── PROFESSIONAL ISSUE APPEAL ─────────────────────────────── */
-
-  static async submitAppeal(
-    {
-      claimId,
-      issueId,
-
-      professionalId,
-      submittedByUserId,
-
-      statement,
-      evidence = [],
-
-      currentTime = new Date(),
-    },
-    options = {}
-  ) {
-    const now = this.normalizeCurrentTime(currentTime);
-
-    return this.runWithOptionalTransaction(options, async (session) => {
-      const claim = await this.getClaim(claimId, session);
-
-      if (claim.status !== "active") {
-        throw this.createError({
-          message: "This professional claim case is no longer active.",
-          code: "CLAIM_CASE_NOT_ACTIVE",
-          statusCode: 409,
-        });
-      }
-
-      const issue = this.getClaimIssue(claim, issueId);
-
-      if (issue.status !== "awaiting_professional_appeal" || issue.appealStatus !== "available") {
-        throw this.createError({
-          message: "No professional appeal is available for this claim issue.",
-          code: "CLAIM_ISSUE_APPEAL_NOT_AVAILABLE",
-          statusCode: 409,
-        });
-      }
-
-      const { professional, user: submittedByUser } = await this.assertUserOwnsProfessionalProfile({
-        professionalId,
-        userId: submittedByUserId,
-        session,
-      });
-
-      if (String(claim.professional) !== String(professional)) {
-        throw this.createError({
-          message: "The professional cannot appeal this claim issue.",
-          code: "PROFESSIONAL_CANNOT_APPEAL_CLAIM_ISSUE",
-          statusCode: 403,
-        });
-      }
-
-      if (!issue.appealDeadlineAt) {
-        throw this.createError({
-          message: "The claim issue is missing its appeal deadline.",
-          code: "CLAIM_ISSUE_APPEAL_DEADLINE_MISSING",
-          statusCode: 500,
-        });
-      }
-
-      const appealDeadlineAt = this.normalizeDate(issue.appealDeadlineAt, "appeal deadline", {
-        statusCode: 500,
-      });
-
-      if (now >= appealDeadlineAt) {
-        throw this.createError({
-          message: "The appeal window for this claim issue has closed.",
-          code: "CLAIM_ISSUE_APPEAL_WINDOW_CLOSED",
-          statusCode: 409,
-          details: {
-            appealDeadlineAt,
-          },
-        });
-      }
-
-      const { occurrence } = await this.getOccurrenceContext({
-        shiftId: claim.shift,
-        occurrenceId: claim.occurrence,
-        session,
-      });
-
-      this.assertClaimIsActiveOnOccurrence({
-        claim,
-        occurrence,
-      });
-
-      issue.status = "awaiting_admin_review";
-
-      issue.appealStatus = "submitted";
-
-      issue.appealedAt = now;
-      issue.appealedBy = submittedByUser;
-
-      issue.appealStatement = this.normalizeText(
-        statement,
-        "Appeal statement",
-        MIN_STATEMENT_LENGTH,
-        MAX_STATEMENT_LENGTH
-      );
-
-      issue.appealEvidence = this.normalizeEvidence(evidence, {
-        submittedByRole: "professional",
-        submittedByUser,
-        recordedAt: now,
-      });
-
-      issue.escalatedAt = now;
-      issue.escalationReason = "professional_appeal";
-      issue.escalatedBy = submittedByUser;
-      issue.escalationNotes = null;
-
-      await claim.save({
-        session,
-      });
-
-      logger.info(
-        `Professional appealed ${issue.type} issue ${issue._id} on claim ${claim.referenceCode}`
-      );
-
-      return {
-        claim,
-        issue,
-
-        submitted: true,
-
-        issueStatus: issue.status,
-
-        finalAdminReviewRequired: true,
-      };
-    });
-  }
-
-  /* ─────────────────────────────── PROFESSIONAL ISSUE REBUTTAL ─────────────────────────────── */
-
-  static async submitRebuttal(
-    {
-      claimId,
-      issueId,
-
-      professionalId,
-      submittedByUserId,
-
-      statement,
-      evidence = [],
-
-      currentTime = new Date(),
-    },
-    options = {}
-  ) {
-    const now = this.normalizeCurrentTime(currentTime);
-
-    return this.runWithOptionalTransaction(options, async (session) => {
-      const claim = await this.getClaim(claimId, session);
-
-      if (claim.status !== "active") {
-        throw this.createError({
-          message: "This professional claim case is no longer active.",
-          code: "CLAIM_CASE_NOT_ACTIVE",
-          statusCode: 409,
-        });
-      }
-
-      const issue = this.getClaimIssue(claim, issueId);
-
-      if (
-        issue.status !== "awaiting_professional_rebuttal" ||
-        issue.rebuttalStatus !== "available"
-      ) {
-        throw this.createError({
-          message: "No professional rebuttal is available for this claim issue.",
-          code: "CLAIM_ISSUE_REBUTTAL_NOT_AVAILABLE",
-          statusCode: 409,
-        });
-      }
-
-      if (issue.employerDecision !== "rejected" || !issue.employerCounterPosition) {
-        throw this.createError({
-          message:
-            "A professional rebuttal requires a rejected claim issue with an employer counter-position.",
-          code: "CLAIM_ISSUE_REBUTTAL_CONTEXT_INVALID",
-          statusCode: 409,
-        });
-      }
-
-      const { professional, user: submittedByUser } = await this.assertUserOwnsProfessionalProfile({
-        professionalId,
-        userId: submittedByUserId,
-        session,
-      });
-
-      if (String(claim.professional) !== String(professional)) {
-        throw this.createError({
-          message: "The professional cannot rebut this claim issue.",
-          code: "PROFESSIONAL_CANNOT_REBUT_CLAIM_ISSUE",
-          statusCode: 403,
-        });
-      }
-
-      if (!issue.rebuttalDeadlineAt) {
-        throw this.createError({
-          message: "The claim issue is missing its rebuttal deadline.",
-          code: "CLAIM_ISSUE_REBUTTAL_DEADLINE_MISSING",
-          statusCode: 500,
-        });
-      }
-
-      const rebuttalDeadlineAt = this.normalizeDate(issue.rebuttalDeadlineAt, "rebuttal deadline", {
-        statusCode: 500,
-      });
-
-      if (now >= rebuttalDeadlineAt) {
-        throw this.createError({
-          message: "The rebuttal window for this claim issue has closed.",
-          code: "CLAIM_ISSUE_REBUTTAL_WINDOW_CLOSED",
-          statusCode: 409,
-          details: {
-            rebuttalDeadlineAt,
-          },
-        });
-      }
-
-      const cleanStatement = this.normalizeText(
-        statement,
-        "Rebuttal statement",
-        MIN_STATEMENT_LENGTH,
-        MAX_STATEMENT_LENGTH
-      );
-
-      const normalizedEvidence = this.normalizeEvidence(evidence, {
-        submittedByRole: "professional",
-        submittedByUser,
-        recordedAt: now,
-      });
-
-      const { shift, occurrence } = await this.getOccurrenceContext({
-        shiftId: claim.shift,
-        occurrenceId: claim.occurrence,
-        session,
-      });
-
-      this.assertClaimIsActiveOnOccurrence({
-        claim,
-        occurrence,
-      });
-
-      issue.status = "awaiting_admin_review";
-
-      issue.rebuttalStatus = "submitted";
-
-      issue.rebuttedAt = now;
-      issue.rebuttedBy = submittedByUser;
-
-      issue.rebuttalStatement = cleanStatement;
-      issue.rebuttalEvidence = normalizedEvidence;
-
-      issue.appealStatus = "not_available";
-      issue.appealDeadlineAt = null;
-
-      issue.appealedAt = null;
-      issue.appealedBy = null;
-      issue.appealStatement = null;
-      issue.appealEvidence = [];
-
-      issue.escalatedAt = now;
-      issue.escalationReason = "employer_counter_position";
-      issue.escalatedBy = submittedByUser;
-      issue.escalationNotes = null;
-
-      await claim.save({
-        session,
-      });
-
-      logger.info(
-        `Professional rebutted ${issue.type} issue ${issue._id} on claim ${claim.referenceCode}`
-      );
-
-      return {
-        claim,
-        issue,
-        occurrence,
-        shift,
-
-        submitted: true,
-
-        issueStatus: issue.status,
-
-        rebuttalStatus: issue.rebuttalStatus,
-
-        finalAdminReviewRequired: true,
-      };
-    });
-  }
-
-  /* ─────────────────────────────── EMPLOYER NON-RESPONSE ─────────────────────────────── */
 
   static async escalateEmployerNonResponseToAdmin(
     { claimId, currentTime = new Date() },
@@ -2814,9 +2492,6 @@ class ShiftOccurrenceClaimService {
         issue.escalatedBy = null;
         issue.escalationNotes = null;
 
-        issue.appealStatus = "not_available";
-        issue.appealDeadlineAt = null;
-
         escalatedIssueIds.push(String(issue._id));
       }
 
@@ -2840,398 +2515,6 @@ class ShiftOccurrenceClaimService {
     });
   }
 
-  /* ─────────────────────────────── APPEAL EXPIRY ─────────────────────────────── */
-
-  static async expireAppealWindow(
-    { claimId, issueId = null, currentTime = new Date() },
-    options = {}
-  ) {
-    const now = this.normalizeCurrentTime(currentTime);
-
-    return this.runWithOptionalTransaction(options, async (session) => {
-      const claim = await this.getClaim(claimId, session);
-
-      if (claim.status !== "active") {
-        return {
-          claim,
-
-          resolved: claim.status === "resolved",
-
-          caseResolved: claim.status === "resolved",
-
-          idempotent: true,
-
-          expiredIssueIds: [],
-        };
-      }
-
-      const { shift, occurrence } = await this.getOccurrenceContext({
-        shiftId: claim.shift,
-        occurrenceId: claim.occurrence,
-        session,
-      });
-
-      this.assertClaimIsActiveOnOccurrence({
-        claim,
-        occurrence,
-      });
-
-      let targetIssues;
-
-      if (issueId) {
-        targetIssues = [this.getClaimIssue(claim, issueId)];
-      } else {
-        targetIssues = Array.from(claim.issues || []).filter(
-          (issue) =>
-            issue.status === "awaiting_professional_appeal" &&
-            issue.appealStatus === "available" &&
-            issue.appealDeadlineAt &&
-            now >= new Date(issue.appealDeadlineAt)
-        );
-      }
-
-      if (targetIssues.length === 0) {
-        return {
-          claim,
-          occurrence,
-          shift,
-
-          resolved: false,
-          caseResolved: false,
-
-          idempotent: true,
-
-          expiredIssueIds: [],
-        };
-      }
-
-      const expiredIssueIds = [];
-      const resolutionResults = [];
-
-      for (const issue of targetIssues) {
-        if (issue.status === "resolved" || issue.appealStatus === "expired") {
-          continue;
-        }
-
-        if (issue.status !== "awaiting_professional_appeal" || issue.appealStatus !== "available") {
-          throw this.createError({
-            message: "This claim issue does not have an appeal window available for expiry.",
-            code: "CLAIM_ISSUE_APPEAL_NOT_EXPIRABLE",
-            statusCode: 409,
-            details: {
-              issueId: String(issue._id),
-              issueStatus: issue.status,
-              appealStatus: issue.appealStatus,
-            },
-          });
-        }
-
-        if (!issue.appealDeadlineAt) {
-          throw this.createError({
-            message: "The claim issue is missing its appeal deadline.",
-            code: "CLAIM_ISSUE_APPEAL_DEADLINE_MISSING",
-            statusCode: 500,
-          });
-        }
-
-        const deadlineAt = this.normalizeDate(issue.appealDeadlineAt, "appeal deadline", {
-          statusCode: 500,
-        });
-
-        if (now < deadlineAt) {
-          throw this.createError({
-            message: "The appeal window for this claim issue has not expired.",
-            code: "CLAIM_ISSUE_APPEAL_WINDOW_NOT_EXPIRED",
-            statusCode: 409,
-            details: {
-              issueId: String(issue._id),
-              appealDeadlineAt: deadlineAt,
-            },
-          });
-        }
-
-        /**
-         * This path applies only to a simple employer rejection with no
-         * counter-position.
-         *
-         * Because the professional did not use the issue-specific appeal right,
-         * the employer rejection becomes final for this ordinary claim issue and
-         * the existing authoritative Loqum record remains unchanged.
-         *
-         * Employer counter-positions use the separate rebuttal lifecycle and always
-         * proceed to admin adjudication.
-         */
-        const resolutionResult = await this.applyProfessionalClaimIssueOutcome({
-          claim,
-          issue,
-          occurrence,
-
-          decision: "rejected",
-
-          finalizationReason: "professional_appeal_expired",
-
-          resolvedByUser: issue.employerDecidedBy,
-
-          currentTime: now,
-
-          session,
-        });
-
-        issue.appealStatus = "expired";
-
-        issue.status = "resolved";
-
-        issue.resolvedAt = now;
-
-        expiredIssueIds.push(String(issue._id));
-
-        resolutionResults.push({
-          issueId: String(issue._id),
-          resolutionResult,
-        });
-      }
-
-      if (expiredIssueIds.length === 0) {
-        return {
-          claim,
-          occurrence,
-          shift,
-
-          resolved: false,
-          caseResolved: false,
-
-          idempotent: true,
-
-          expiredIssueIds: [],
-        };
-      }
-
-      const caseFinality = this.synchronizeClaimCaseFinality({
-        claim,
-        occurrence,
-        currentTime: now,
-      });
-
-      await claim.save({
-        session,
-      });
-
-      const settlementSummary = await this.synchronizeOccurrenceSettlementSummary({
-        occurrence,
-        currentTime: now,
-        session,
-      });
-
-      await occurrence.save({
-        session,
-      });
-
-      return {
-        claim,
-        occurrence,
-        shift,
-
-        resolved: caseFinality.caseResolved,
-
-        caseResolved: caseFinality.caseResolved,
-
-        idempotent: false,
-
-        expiredIssueIds,
-
-        resolutionResults,
-
-        settlementSummary,
-      };
-    });
-  }
-
-  /* ─────────────────────────────── REBUTTAL EXPIRY ─────────────────────────────── */
-
-  static async expireRebuttalWindow(
-    { claimId, issueId = null, currentTime = new Date() },
-    options = {}
-  ) {
-    const now = this.normalizeCurrentTime(currentTime);
-
-    return this.runWithOptionalTransaction(options, async (session) => {
-      const claim = await this.getClaim(claimId, session);
-
-      if (claim.status !== "active") {
-        return {
-          claim,
-
-          escalated: false,
-          idempotent: true,
-
-          expiredIssueIds: [],
-        };
-      }
-
-      const { shift, occurrence } = await this.getOccurrenceContext({
-        shiftId: claim.shift,
-        occurrenceId: claim.occurrence,
-        session,
-      });
-
-      this.assertClaimIsActiveOnOccurrence({
-        claim,
-        occurrence,
-      });
-
-      let targetIssues;
-
-      if (issueId) {
-        targetIssues = [this.getClaimIssue(claim, issueId)];
-      } else {
-        targetIssues = Array.from(claim.issues || []).filter(
-          (issue) =>
-            issue.status === "awaiting_professional_rebuttal" &&
-            issue.rebuttalStatus === "available" &&
-            issue.rebuttalDeadlineAt &&
-            now >= new Date(issue.rebuttalDeadlineAt)
-        );
-      }
-
-      if (targetIssues.length === 0) {
-        return {
-          claim,
-          occurrence,
-          shift,
-
-          escalated: false,
-          idempotent: true,
-
-          expiredIssueIds: [],
-        };
-      }
-
-      const expiredIssueIds = [];
-
-      for (const issue of targetIssues) {
-        if (
-          issue.rebuttalStatus === "expired" ||
-          issue.rebuttalStatus === "resolved" ||
-          issue.status === "resolved"
-        ) {
-          continue;
-        }
-
-        if (
-          issue.status !== "awaiting_professional_rebuttal" ||
-          issue.rebuttalStatus !== "available"
-        ) {
-          throw this.createError({
-            message: "This claim issue does not have a rebuttal window available for expiry.",
-            code: "CLAIM_ISSUE_REBUTTAL_NOT_EXPIRABLE",
-            statusCode: 409,
-            details: {
-              issueId: String(issue._id),
-              issueStatus: issue.status,
-              rebuttalStatus: issue.rebuttalStatus,
-            },
-          });
-        }
-
-        if (issue.employerDecision !== "rejected" || !issue.employerCounterPosition) {
-          throw this.createError({
-            message:
-              "The claim issue does not contain the employer counter-position required for rebuttal expiry.",
-            code: "CLAIM_ISSUE_REBUTTAL_CONTEXT_INVALID",
-            statusCode: 500,
-            details: {
-              issueId: String(issue._id),
-            },
-          });
-        }
-
-        if (!issue.rebuttalDeadlineAt) {
-          throw this.createError({
-            message: "The claim issue is missing its rebuttal deadline.",
-            code: "CLAIM_ISSUE_REBUTTAL_DEADLINE_MISSING",
-            statusCode: 500,
-          });
-        }
-
-        const deadlineAt = this.normalizeDate(issue.rebuttalDeadlineAt, "rebuttal deadline", {
-          statusCode: 500,
-        });
-
-        if (now < deadlineAt) {
-          throw this.createError({
-            message: "The rebuttal window for this claim issue has not expired.",
-            code: "CLAIM_ISSUE_REBUTTAL_WINDOW_NOT_EXPIRED",
-            statusCode: 409,
-            details: {
-              issueId: String(issue._id),
-              rebuttalDeadlineAt: deadlineAt,
-            },
-          });
-        }
-
-        /**
-         * Professional silence does not accept or make the employer's
-         * counter-position authoritative.
-         *
-         * Once the rebuttal opportunity expires unused, the issue moves to
-         * admin adjudication with:
-         *
-         * - the professional's original position and evidence;
-         * - the employer's counter-position and evidence; and
-         * - authoritative Loqum/system records.
-         *
-         * No professional claim outcome is applied here.
-         */
-        issue.rebuttalStatus = "expired";
-
-        issue.status = "awaiting_admin_review";
-
-        issue.escalatedAt = now;
-        issue.escalationReason = "employer_counter_position";
-        issue.escalatedBy = null;
-        issue.escalationNotes = null;
-
-        expiredIssueIds.push(String(issue._id));
-      }
-
-      if (expiredIssueIds.length === 0) {
-        return {
-          claim,
-          occurrence,
-          shift,
-
-          escalated: false,
-          idempotent: true,
-
-          expiredIssueIds: [],
-        };
-      }
-
-      await claim.save({
-        session,
-      });
-
-      logger.info(
-        `${expiredIssueIds.length} professional rebuttal window(s) expired and escalated on claim ${claim.referenceCode}`
-      );
-
-      return {
-        claim,
-        occurrence,
-        shift,
-
-        escalated: true,
-        idempotent: false,
-
-        expiredIssueIds,
-
-        finalAdminReviewRequired: true,
-      };
-    });
-  }
-
-  /* ─────────────────────────────── WITHDRAWAL ─────────────────────────────── */
-
   static assertClaimWithdrawable(claim) {
     if (claim.status !== "active") {
       throw this.createError({
@@ -3246,7 +2529,10 @@ class ShiftOccurrenceClaimService {
         issue.status !== "awaiting_employer_review" ||
         Boolean(issue.employerDecision) ||
         Boolean(issue.employerDecidedAt) ||
-        issue.appealStatus !== "not_available" ||
+        Boolean(issue.employerDecidedBy) ||
+        Boolean(issue.employerDecisionReason) ||
+        Boolean(issue.employerCounterPosition) ||
+        (Array.isArray(issue.employerEvidence) && issue.employerEvidence.length > 0) ||
         Boolean(issue.escalatedAt) ||
         Boolean(issue.adminDecision) ||
         Boolean(issue.resolvedAt)
@@ -3321,14 +2607,6 @@ class ShiftOccurrenceClaimService {
         occurrence,
       });
 
-      /**
-       * Claim submission did not overwrite authoritative occurrence facts.
-       *
-       * Therefore withdrawal does not restore a settlement/refund/OT
-       * snapshot.
-       *
-       * It only removes the active professional case.
-       */
       this.clearActiveClaim({
         claim,
         occurrence,
@@ -3342,13 +2620,6 @@ class ShiftOccurrenceClaimService {
 
       claim.resolvedAt = null;
 
-      /**
-       * Do not close the shared challenge window.
-       *
-       * The professional has consumed the one original claim case because
-       * the case document now permanently exists, but the employer may still
-       * use an unused dispute right before challengeDeadlineAt.
-       */
       const settlementSummary = await this.synchronizeOccurrenceSettlementSummary({
         occurrence,
         currentTime: now,
@@ -3377,7 +2648,7 @@ class ShiftOccurrenceClaimService {
     });
   }
 
-  /* ─────────────────────────────── BATCH: EMPLOYER NON-RESPONSE ─────────────────────────────── */
+  /* ------------------------------- BATCH: EMPLOYER NON-RESPONSE ------------------------------- */
 
   static async processOverdueEmployerReviews({
     currentTime = new Date(),
@@ -3456,185 +2727,6 @@ class ShiftOccurrenceClaimService {
 
       escalatedIssueCount: results.reduce(
         (total, item) => total + (item.escalatedIssueIds || []).length,
-        0
-      ),
-
-      failedCount: results.filter((item) => item.error).length,
-
-      results,
-    };
-  }
-
-  /* ─────────────────────────────── BATCH: APPEAL EXPIRY ─────────────────────────────── */
-
-  static async processExpiredAppealWindows({
-    currentTime = new Date(),
-    limit = MAX_BATCH_SIZE,
-  } = {}) {
-    const now = this.normalizeCurrentTime(currentTime);
-
-    const normalizedLimit = this.normalizeBatchLimit(limit);
-
-    const claims = await ShiftOccurrenceClaim.find({
-      status: "active",
-
-      issues: {
-        $elemMatch: {
-          status: "awaiting_professional_appeal",
-
-          appealStatus: "available",
-
-          appealDeadlineAt: {
-            $ne: null,
-            $lte: now,
-          },
-        },
-      },
-    })
-      .select("_id")
-      .sort({
-        "issues.appealDeadlineAt": 1,
-      })
-      .limit(normalizedLimit)
-      .lean();
-
-    const results = [];
-
-    for (const claim of claims) {
-      try {
-        const result = await this.expireAppealWindow({
-          claimId: claim._id,
-          currentTime: now,
-        });
-
-        results.push({
-          claimId: String(claim._id),
-
-          resolved: result.resolved,
-
-          caseResolved: result.caseResolved,
-
-          expiredIssueIds: result.expiredIssueIds || [],
-
-          error: null,
-        });
-      } catch (error) {
-        logger.error(
-          `Unable to expire claim issue appeals for claim ${claim._id}: ${error.message}`
-        );
-
-        results.push({
-          claimId: String(claim._id),
-
-          resolved: false,
-          caseResolved: false,
-
-          expiredIssueIds: [],
-
-          error: {
-            message: error.message,
-
-            code: error.code || "CLAIM_APPEAL_EXPIRY_FAILED",
-          },
-        });
-      }
-    }
-
-    return {
-      inspectedCount: claims.length,
-
-      resolvedClaimCount: results.filter((item) => item.caseResolved).length,
-
-      expiredIssueCount: results.reduce(
-        (total, item) => total + (item.expiredIssueIds || []).length,
-        0
-      ),
-
-      failedCount: results.filter((item) => item.error).length,
-
-      results,
-    };
-  }
-
-  /* ─────────────────────────────── BATCH: REBUTTAL EXPIRY ─────────────────────────────── */
-
-  static async processExpiredRebuttalWindows({
-    currentTime = new Date(),
-    limit = MAX_BATCH_SIZE,
-  } = {}) {
-    const now = this.normalizeCurrentTime(currentTime);
-
-    const normalizedLimit = this.normalizeBatchLimit(limit);
-
-    const claims = await ShiftOccurrenceClaim.find({
-      status: "active",
-
-      issues: {
-        $elemMatch: {
-          status: "awaiting_professional_rebuttal",
-
-          rebuttalStatus: "available",
-
-          rebuttalDeadlineAt: {
-            $ne: null,
-            $lte: now,
-          },
-        },
-      },
-    })
-      .select("_id")
-      .sort({
-        "issues.rebuttalDeadlineAt": 1,
-      })
-      .limit(normalizedLimit)
-      .lean();
-
-    const results = [];
-
-    for (const claim of claims) {
-      try {
-        const result = await this.expireRebuttalWindow({
-          claimId: claim._id,
-          currentTime: now,
-        });
-
-        results.push({
-          claimId: String(claim._id),
-
-          escalated: result.escalated,
-
-          expiredIssueIds: result.expiredIssueIds || [],
-
-          error: null,
-        });
-      } catch (error) {
-        logger.error(
-          `Unable to expire claim issue rebuttals for claim ${claim._id}: ${error.message}`
-        );
-
-        results.push({
-          claimId: String(claim._id),
-
-          escalated: false,
-
-          expiredIssueIds: [],
-
-          error: {
-            message: error.message,
-
-            code: error.code || "CLAIM_REBUTTAL_EXPIRY_FAILED",
-          },
-        });
-      }
-    }
-
-    return {
-      inspectedCount: claims.length,
-
-      escalatedClaimCount: results.filter((item) => item.escalated).length,
-
-      expiredIssueCount: results.reduce(
-        (total, item) => total + (item.expiredIssueIds || []).length,
         0
       ),
 

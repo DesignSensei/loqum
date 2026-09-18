@@ -52,7 +52,8 @@ const isSupportedFinancialRate = (value) => {
  *
  * - Employers pay approved professional pay plus the employer-side platform fee.
  * - Professionals pay no commission at launch.
- * - Pricing and the resolved platformFeeRate are snapshotted when a Shift is posted.
+ * - Platform fee configuration is resolved when a Shift is posted and the
+ *   authoritative Shift pricing snapshots are stored on the Shift.
  * - Financial percentage rates that create money must be exactly representable
  *   at FINANCIAL_RATE_SCALE before they may enter active settings.
  * - Shifts remain pending_funding and unpublished until the full engagement
@@ -116,9 +117,10 @@ const isSupportedFinancialRate = (value) => {
  * components. They use the same payout calendar but may enter different weekly
  * batches when they become release-ready at different times.
  *
- * An active occurrence claim or dispute blocks only the settlement component(s)
- * financially affected by that challenge. An undisputed component may continue
- * through the normal payout schedule.
+ * An active ordinary occurrence claim or employer dispute blocks only the BASE
+ * settlement component affected by that unresolved challenge. Overtime remains
+ * governed by its dedicated overtime lifecycle and may continue independently
+ * when its own release conditions are satisfied.
  *
  * UNFILLED OCCURRENCES:
  *
@@ -140,32 +142,35 @@ const isSupportedFinancialRate = (value) => {
  * OCCURRENCE CHALLENGES:
  *
  * occurrenceClaimWindowHours retains its existing field name for compatibility,
- * but controls the shared occurrence challenge window.
+ * but controls the shared ordinary occurrence challenge window.
  *
  * During that window:
  *
  * - the assigned professional may submit one original ShiftOccurrenceClaim; and
  * - the employer may submit one original ShiftOccurrenceDispute when the
- *   submitted cases concern genuinely different issues/components.
+ *   submitted cases concern genuinely different ordinary controversies.
  *
  * Claim or dispute submission does not close the shared challenge clock early.
  * The original time opportunity remains governed by challengeDeadlineAt.
  *
- * At or after challengeDeadlineAt, no new original occurrence challenge may be
- * created.
+ * At or after challengeDeadlineAt, no new original ordinary occurrence
+ * challenge may be created.
  *
- * The shared challenge window applies only to assigned and contestable outcomes,
- * such as:
+ * The shared ordinary challenge window applies only to assigned and contestable
+ * BASE-side outcomes, such as:
  *
  * - confirmed no-show;
  * - missed check-in or disputed attendance;
  * - employer cancellation;
  * - active-work cancellation;
- * - disputed worked hours;
- * - overtime facts; and
- * - payment calculation.
+ * - disputed scheduled worked hours;
+ * - employer fault or another ordinary financial fact; and
+ * - BASE payment calculation.
  *
- * It does not apply to:
+ * Overtime does not use the ordinary claim/dispute path. Overtime has its own
+ * request, employer review, admin review and funding lifecycle.
+ *
+ * The ordinary challenge window does not apply to:
  *
  * - expired-unfilled occurrences;
  * - unassigned cancellations; or
@@ -179,7 +184,7 @@ const isSupportedFinancialRate = (value) => {
  * determined that the occurrence was a no-show.
  *
  * It cannot create professional payment, does not require employer approval,
- * does not require admin adjudication and does not independently hold an
+ * does not require admin adjudication and does not independently block an
  * employer refund.
  *
  * If the professional says they actually worked and the attendance record is
@@ -194,20 +199,15 @@ const isSupportedFinancialRate = (value) => {
  * employerClaimResponseHours controls the employer's response period after an
  * accepted ShiftOccurrenceClaim is submitted.
  *
- * Employer non-response escalates the professional claim for admin review. It
- * does not automatically reject the professional's claim.
+ * Employer approval resolves the applicable professional claim issue through
+ * the claim resolution flow.
  *
- * professionalAppealWindowHours controls the professional's single appeal
- * period after the employer rejects an occurrence claim issue without
- * introducing an adverse counter-position.
+ * Employer rejection records the employer's disagreement and routes the
+ * unresolved issue directly to admin review.
  *
- * professionalRebuttalWindowHours controls the professional's optional
- * rebuttal period after the employer rejects an occurrence claim issue and
- * introduces a different factual or financial position.
+ * Employer non-response also routes unresolved employer-review issues to admin
+ * review. It does not automatically approve or reject the professional's claim.
  *
- * If the professional does not rebut before that deadline, the issue still
- * proceeds to admin adjudication. Professional silence does not make the
- * employer's counter-position authoritative.
  *
  * EMPLOYER DISPUTE REVIEW:
  *
@@ -223,6 +223,8 @@ const isSupportedFinancialRate = (value) => {
  * If the professional does not respond before the deadline, the dispute still
  * proceeds to admin review with the employer's submitted evidence and the
  * authoritative system records.
+ *
+ * Professional silence does not make the employer's position authoritative.
  *
  * The resulting exact deadlines are stored on ShiftOccurrenceClaim or
  * ShiftOccurrenceDispute so later changes to PlatformSettings do not alter an
@@ -242,16 +244,16 @@ const isSupportedFinancialRate = (value) => {
  * Professional-initiated release or departure does not automatically trigger
  * employer-cancellation compensation.
  *
- * Where employer fault or another financial fact is challenged, the affected
- * settlement and refund may be held pending the applicable claim or dispute
- * resolution.
+ * Where employer fault or another ordinary financial fact is challenged, BASE
+ * settlement advancement and related employer-refund execution remain subject
+ * to the applicable unresolved claim or dispute.
  *
  * CREDITS:
  *
  * Credits remain disabled until deliberately activated.
  */
 
-/* ─────────────────────────────── PROTECTED SHIFT LIMITS ─────────────────────────────── */
+/* ------------------------------- PROTECTED SHIFT LIMITS ------------------------------- */
 
 const protectedShiftFacilityPolicySchema = new mongoose.Schema(
   {
@@ -320,7 +322,7 @@ const protectedShiftLimitsSchema = new mongoose.Schema(
   }
 );
 
-/* ─────────────────────────────── COUNTRY SETTINGS ─────────────────────────────── */
+/* ------------------------------- COUNTRY SETTINGS ------------------------------- */
 
 const countrySettingSchema = new mongoose.Schema(
   {
@@ -378,7 +380,7 @@ const countrySettingSchema = new mongoose.Schema(
   }
 );
 
-/* ─────────────────────────────── CANCELLATION POLICY ─────────────────────────────── */
+/* ------------------------------- CANCELLATION POLICY ------------------------------- */
 
 const shiftCancellationPolicySchema = new mongoose.Schema(
   {
@@ -424,7 +426,7 @@ const shiftCancellationPolicySchema = new mongoose.Schema(
   }
 );
 
-/* ─────────────────────────────── PLATFORM SETTINGS ─────────────────────────────── */
+/* ------------------------------- PLATFORM SETTINGS ------------------------------- */
 
 const platformSettingsSchema = new mongoose.Schema(
   {
@@ -528,8 +530,11 @@ const platformSettingsSchema = new mongoose.Schema(
     // Time given to the employer to approve or reject a professional's
     // overtime request.
     //
-    // Employer non-response does not approve or reject overtime.
-    // Once this deadline expires, the overtime request requires admin review.
+    // Employer rejection does not finalize an adverse overtime outcome.
+    // It routes unresolved overtime to admin review.
+    //
+    // Employer non-response likewise does not approve or reject overtime.
+    // Once this deadline expires, unresolved overtime requires admin review.
 
     overtimeTopUpDeadlineHours: requiredPositiveSafeIntegerField({
       label: "overtimeTopUpDeadlineHours",
@@ -692,18 +697,20 @@ const platformSettingsSchema = new mongoose.Schema(
       defaultValue: 24,
     }),
     // Retains its existing field name for compatibility, but controls the
-    // shared original occurrence challenge window.
+    // shared original ordinary occurrence challenge window.
     //
     // During this window:
     //
     // - the professional may submit one original ShiftOccurrenceClaim; and
     // - the employer may submit one original ShiftOccurrenceDispute when the
-    //   two cases concern genuinely different issues/components.
+    //   two cases concern genuinely different ordinary controversies.
     //
     // Submitting either case does not close the shared clock early.
     //
-    // New original challenge submissions must be made before the occurrence's
-    // challengeDeadlineAt.
+    // New original ordinary challenge submissions must be made before the
+    // occurrence's challengeDeadlineAt.
+    //
+    // Overtime does not use this ordinary claim/dispute path.
     //
     // This does not apply to expired-unfilled occurrences, unassigned
     // cancellations or unfunded occurrences.
@@ -713,10 +720,15 @@ const platformSettingsSchema = new mongoose.Schema(
       defaultValue: 24,
     }),
     // Controls how long the employer has to respond to a professional-originated
-    // financial occurrence claim.
+    // ordinary occurrence claim.
     //
-    // Employer non-response escalates the claim to admin review.
+    // Employer approval resolves the applicable issue through the claim flow.
+    //
+    // Employer rejection routes the unresolved issue directly to admin review.
+    //
+    // Employer non-response also routes unresolved issues to admin review.
     // It does not approve or reject the professional's claim.
+    //
 
     professionalDisputeResponseHours: requiredPositiveSafeIntegerField({
       label: "professionalDisputeResponseHours",
@@ -728,33 +740,6 @@ const platformSettingsSchema = new mongoose.Schema(
     // Professional non-response does not mean the employer wins.
     // Once the deadline expires, the dispute proceeds to admin review using the
     // evidence already available.
-
-    professionalAppealWindowHours: requiredPositiveSafeIntegerField({
-      label: "professionalAppealWindowHours",
-      defaultValue: 12,
-    }),
-    // Controls the professional's single appeal period after the employer
-    // rejects an occurrence claim.
-    //
-    // The exact appealDeadlineAt is stored on ShiftOccurrenceClaim.
-    //
-    // No second appeal is available after the final admin decision.
-
-    professionalRebuttalWindowHours: requiredPositiveSafeIntegerField({
-      label: "professionalRebuttalWindowHours",
-      defaultValue: 12,
-    }),
-    // Controls the professional's single rebuttal period after the employer
-    // rejects a claim issue and submits an adverse counter-position.
-    //
-    // The professional may submit a rebuttal before the exact
-    // rebuttalDeadlineAt stored on ShiftOccurrenceClaim.
-    //
-    // If the professional does not rebut before the deadline, the rebuttal
-    // expires and the issue still proceeds to admin adjudication.
-    //
-    // Professional silence does not make the employer's counter-position
-    // authoritative.
 
     // --- LOCATION RULES ---
 
@@ -843,7 +828,7 @@ const platformSettingsSchema = new mongoose.Schema(
   }
 );
 
-/* ─────────────────────────────── INSTANCE METHODS ─────────────────────────────── */
+/* ------------------------------- INSTANCE METHODS ------------------------------- */
 
 platformSettingsSchema.methods.getActiveCountrySetting = function getActiveCountrySetting(
   countryCode
@@ -888,7 +873,7 @@ platformSettingsSchema.methods.getProtectedShiftLimits = function getProtectedSh
   return limits;
 };
 
-/* ─────────────────────────────── CROSS-FIELD VALIDATION ─────────────────────────────── */
+/* ------------------------------- CROSS-FIELD VALIDATION ------------------------------- */
 
 platformSettingsSchema.pre("validate", function validatePlatformSettings() {
   const countrySettings = Array.isArray(this.countrySettings) ? this.countrySettings : [];
@@ -1010,7 +995,7 @@ platformSettingsSchema.pre("validate", function validatePlatformSettings() {
   }
 });
 
-/* ─────────────────────────────── INDEXES ─────────────────────────────── */
+/* ------------------------------- INDEXES ------------------------------- */
 
 platformSettingsSchema.index(
   {

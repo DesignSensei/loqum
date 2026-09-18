@@ -35,6 +35,8 @@ router.use(
 
 router.get("/dashboard", professionalController.getDashboard);
 
+router.get("/cases", professionalShiftClaimController.getCases);
+
 /* ─────────────────────────────── SHIFT ATTENDANCE ─────────────────────────────── */
 
 router.post(
@@ -64,8 +66,10 @@ router.post(
 /* ─────────────────────────────── SHIFT CLAIMS ─────────────────────────────── */
 
 /**
- * One claim case may contain multiple financial issues.
- * Settlement-component scope is derived by the claim service.
+ * One claim case may contain multiple ordinary BASE-side financial/factual
+ * issues. Settlement-component scope is derived by the claim service.
+ *
+ * Employer rejection routes the unresolved issue to admin review.
  */
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/claims",
@@ -73,21 +77,19 @@ router.post(
 );
 
 /**
- * Appeal and rebuttal operate on one issue within the claim case.
- */
-router.post(
-  "/claims/:claimId/issues/:issueId/appeal",
-  professionalShiftClaimController.submitAppeal
-);
-
-router.post(
-  "/claims/:claimId/issues/:issueId/rebuttal",
-  professionalShiftClaimController.submitRebuttal
-);
-
-/**
  * Withdrawal applies to the claim case and consumes the original claim right.
  */
 router.post("/claims/:claimId/withdraw", professionalShiftClaimController.withdrawClaim);
+
+/* ─────────────────────────────── EMPLOYER DISPUTE RESPONSES ─────────────────────────────── */
+
+/**
+ * This is the professional response stage for an employer-originated dispute.
+ * It is separate from the professional claim lifecycle.
+ */
+router.post(
+  "/disputes/:disputeId/issues/:issueId/respond",
+  professionalShiftClaimController.respondToDispute
+);
 
 module.exports = router;

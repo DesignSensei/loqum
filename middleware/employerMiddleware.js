@@ -175,17 +175,37 @@ async function buildEmployerContext({
   const canManagePostShiftWorkflows = isPrimaryEmployer || isBusinessAdmin || isBranchManager;
 
   /*
-   * Actual financial actions remain limited to the
-   * primary employer and business administrators.
+   * Wallet visibility and wallet administration are separate capabilities.
+   *
+   * Branch managers need read-only visibility into the employer wallet so
+   * they can understand the funding position when posting and funding Shifts
+   * for their assigned branches.
+   *
+   * They may not manage the wallet itself, withdraw funds, add or remove
+   * payment configuration, or perform broader business-level financial
+   * administration merely because they can fund Shifts.
    */
+  const canViewWallet = isPrimaryEmployer || isBusinessAdmin || isBranchManager;
+
+  const canManageWallet = isPrimaryEmployer || isBusinessAdmin;
+
   const canManageFinancialObligations = isPrimaryEmployer || isBusinessAdmin;
+
+  /*
+   * Shift funding is a resource-scoped operational capability.
+   *
+   * Branch managers may fund Shifts only within their assigned branches.
+   * The relevant Shift funding service remains responsible for enforcing
+   * business and branch ownership for the specific Shift being funded.
+   */
+  const canFundShifts = isPrimaryEmployer || isBusinessAdmin || isBranchManager;
 
   /*
    * Employer refunds can contain sensitive financial
    * information and consent-controlled fallback actions.
    *
-   * Branch managers/staff should not gain wallet-level
-   * refund authority merely because they manage Shifts.
+   * Branch managers/staff should not gain refund-management
+   * authority merely because they manage Shifts.
    */
   const canViewRefunds = isPrimaryEmployer || isBusinessAdmin;
 
@@ -238,11 +258,13 @@ async function buildEmployerContext({
 
     /* ───────── WALLET / FINANCIAL ───────── */
 
-    canViewWallet: isPrimaryEmployer || isBusinessAdmin,
+    canViewWallet,
 
-    canManageWallet: isPrimaryEmployer || isBusinessAdmin,
+    canManageWallet,
 
     canManageFinancialObligations,
+
+    canFundShifts,
 
     /* ───────── SHIFTS ───────── */
 
@@ -623,6 +645,57 @@ exports.canPostShifts = async (req, res, next) => {
       }
 
       throw error;
+    }
+
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+};
+
+/* ─────────────────────────────── SHIFT FUNDING GUARD ─────────────────────────────── */
+
+exports.canFundShifts = (req, res, next) => {
+  try {
+    if (req.employerContext?.canFundShifts !== true) {
+      return res.status(403).json({
+        success: false,
+        message: "You do not have permission to fund Shifts.",
+      });
+    }
+
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+};
+
+/* ─────────────────────────────── WALLET VIEW GUARD ─────────────────────────────── */
+
+exports.canViewWallet = (req, res, next) => {
+  try {
+    if (req.employerContext?.canViewWallet !== true) {
+      return res.status(403).json({
+        success: false,
+        message: "You do not have permission to view the employer wallet.",
+      });
+    }
+
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+};
+
+/* ─────────────────────────────── WALLET MANAGEMENT GUARD ─────────────────────────────── */
+
+exports.canManageWallet = (req, res, next) => {
+  try {
+    if (req.employerContext?.canManageWallet !== true) {
+      return res.status(403).json({
+        success: false,
+        message: "You do not have permission to manage the employer wallet.",
+      });
     }
 
     return next();

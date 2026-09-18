@@ -315,11 +315,9 @@ const employerRefundSchema = new mongoose.Schema(
 /* ─────────────────────────────── VALIDATION ─────────────────────────────── */
 
 employerRefundSchema.pre("validate", function validateEmployerRefund() {
-  if (!this.reservedAt && this.lastEvaluatedAt) {
-    this.reservedAt = this.lastEvaluatedAt;
-  }
-
-  const refundedAmount = Number(this.refundedAmount || 0);
+  // Reservation time must be supplied by the operation that reserved funds.
+  // A later evaluation timestamp is not evidence of when reservation occurred.
+  const refundedAmount = this.refundedAmount;
 
   const executionTransactions = Array.isArray(this.executionTransactions)
     ? this.executionTransactions
@@ -365,7 +363,7 @@ employerRefundSchema.pre("validate", function validateEmployerRefund() {
     );
   }
 
-  if (refundedAmount > Number(this.amount || 0)) {
+  if (refundedAmount > this.amount) {
     this.invalidate("refundedAmount", "refundedAmount cannot exceed amount.");
   }
 
@@ -426,10 +424,12 @@ employerRefundSchema.pre("validate", function validateEmployerRefund() {
   /* ─────────────────────────────── HELD ─────────────────────────────── */
 
   if (this.status === "held") {
-    if (this.eligibleAt || this.scheduledProcessingAt) {
+    // eligibleAt may retain historical eligibility after a new hold is applied.
+    // held status and an absent schedule prevent execution during that hold.
+    if (this.scheduledProcessingAt) {
       this.invalidate(
-        "eligibleAt",
-        "A held employer refund cannot contain eligibility or scheduled-processing audit."
+        "scheduledProcessingAt",
+        "A held employer refund cannot have active scheduled processing."
       );
     }
 
@@ -518,6 +518,15 @@ employerRefundSchema.pre("validate", function validateEmployerRefund() {
 
   /* ─────────────────────────────── PROCESSING ─────────────────────────────── */
 
+  if (REFUND_PROCESSING_STATUSES.includes(this.status)) {
+    if (!this.eligibleAt || !this.scheduledProcessingAt) {
+      this.invalidate(
+        "eligibleAt",
+        "Processing and refunded obligations must retain eligibility and scheduling audit."
+      );
+    }
+  }
+
   if (this.status === "processing") {
     if (!this.batch || !this.batchLineId || !this.batchedAt) {
       this.invalidate(
@@ -583,7 +592,7 @@ employerRefundSchema.pre("validate", function validateEmployerRefund() {
       );
     }
 
-    if (refundedAmount !== Number(this.amount)) {
+    if (refundedAmount !== this.amount) {
       this.invalidate(
         "refundedAmount",
         "A refunded employer refund requires refundedAmount to equal the full obligation amount."
@@ -678,6 +687,20 @@ employerRefundSchema.pre("validate", function validateEmployerRefund() {
   }
 
   /* ─────────────────────────────── DATE ORDERING ─────────────────────────────── */
+
+  if (this.heldAt && this.lastEvaluatedAt && this.heldAt > this.lastEvaluatedAt) {
+    this.invalidate("heldAt", "heldAt cannot be later than lastEvaluatedAt.");
+  }
+
+  const terminalAt =
+    this.status === "refunded" ? this.refundedAt : this.status === "voided" ? this.voidedAt : null;
+
+  if (terminalAt && this.reservationReleasedAt && this.reservationReleasedAt < terminalAt) {
+    this.invalidate(
+      "reservationReleasedAt",
+      "The reservation cannot be recorded as released before refund completion or voiding."
+    );
+  }
 
   if (this.reservedAt && this.lastEvaluatedAt && this.reservedAt > this.lastEvaluatedAt) {
     this.invalidate("reservedAt", "reservedAt cannot be later than lastEvaluatedAt.");

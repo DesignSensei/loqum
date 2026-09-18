@@ -25,8 +25,9 @@
  *
  * Settlement blocking is determined from:
  *
- * - the occurrence's remaining ordinary challenge opportunity; and
- * - affectedSettlementComponents on unresolved claim/dispute issues.
+ * - the occurrence's remaining ordinary challenge opportunity;
+ * - challengedSettlementComponents on unresolved professional claim issues; and
+ * - affectedSettlementComponents on unresolved employer dispute issues.
  *
  * There is no case-level settlement-component scope authority.
  *
@@ -35,14 +36,17 @@
  *
  * OVERTIME
  *
- * Overtime has its own dedicated request, employer review, appeal, admin
+ * Overtime has its own dedicated request, employer review, admin review,
  * decision and funding lifecycle.
+ *
+ * Employer rejection or non-response routes unresolved overtime to admin
+ * review.
  *
  * Ordinary claim/dispute vocabulary must not recreate an overtime challenge
  * path.
  */
 
-/* ─────────────────────────────── BATCH STATUSES ─────────────────────────────── */
+/* ------------------------------- BATCH STATUSES ------------------------------- */
 
 /**
  * Professional payout batch lifecycle.
@@ -59,14 +63,14 @@
  * failed
  * -> the latest execution attempt failed.
  *
- *    The same batch retains its releaseKeys and may be retried.
- *    Therefore failed is not a terminal batch state.
+ * The same batch retains its releaseKeys and may be retried.
+ * Therefore failed is not a terminal batch state.
  *
  * cancelled
  * -> the batch was intentionally abandoned before successful payout.
  *
- *    Its occurrence-component releaseKeys are surrendered so those
- *    obligations may be batched again.
+ * Its occurrence-component releaseKeys are surrendered so those
+ * obligations may be batched again.
  */
 exports.SETTLEMENT_BATCH_STATUSES = Object.freeze([
   "scheduled",
@@ -95,11 +99,11 @@ exports.RETRYABLE_SETTLEMENT_BATCH_STATUSES = Object.freeze(["scheduled", "faile
  */
 exports.TERMINAL_SETTLEMENT_BATCH_STATUSES = Object.freeze(["released", "cancelled"]);
 
-/* ─────────────────────────────── BATCH INITIATORS ─────────────────────────────── */
+/* ------------------------------- BATCH INITIATORS ------------------------------- */
 
 exports.SETTLEMENT_BATCH_INITIATOR_ROLES = Object.freeze(["system", "admin"]);
 
-/* ─────────────────────────────── PAYOUT POLICY DEFAULTS ─────────────────────────────── */
+/* ------------------------------- PAYOUT POLICY DEFAULTS ------------------------------- */
 
 /**
  * JavaScript weekday numbering:
@@ -111,7 +115,7 @@ exports.SETTLEMENT_BATCH_INITIATOR_ROLES = Object.freeze(["system", "admin"]);
  */
 exports.DEFAULT_SETTLEMENT_PAYOUT_WEEKDAY = 1;
 
-/* ─────────────────────────────── FIELD LIMITS ─────────────────────────────── */
+/* ------------------------------- FIELD LIMITS ------------------------------- */
 
 exports.MAX_SETTLEMENT_TIME_ZONE_LENGTH = 100;
 
@@ -119,20 +123,20 @@ exports.MAX_SETTLEMENT_BATCH_FAILURE_REASON_LENGTH = 500;
 
 exports.MAX_SETTLEMENT_BATCH_CANCELLATION_REASON_LENGTH = 500;
 
-/* ─────────────────────────────── COMPONENT STATUSES ─────────────────────────────── */
+/* ------------------------------- COMPONENT STATUSES ------------------------------- */
 
 /**
  * Authoritative professional payout lifecycle for one occurrence component.
  *
  * not_due
  * -> no professional payout obligation is currently established for the
- *    component.
+ * component.
  *
  * approved_for_release
  * -> professional pay has been finalized and all current release conditions
- *    have been satisfied.
+ * have been satisfied.
  *
- *    The component may enter its scheduled payout batch.
+ * The component may enter its scheduled payout batch.
  *
  * release_pending
  * -> the component has been reserved into a ShiftSettlementBatch.
@@ -164,7 +168,7 @@ exports.ESTABLISHED_SETTLEMENT_COMPONENT_STATUSES = Object.freeze([
   "released",
 ]);
 
-/* ─────────────────────────────── SETTLEMENT COMPONENTS ─────────────────────────────── */
+/* ------------------------------- SETTLEMENT COMPONENTS ------------------------------- */
 
 /**
  * Independently releasable professional-pay components of one
@@ -174,7 +178,7 @@ exports.ESTABLISHED_SETTLEMENT_COMPONENT_STATUSES = Object.freeze([
  */
 exports.SETTLEMENT_BATCH_COMPONENTS = Object.freeze(["base", "overtime"]);
 
-/* ─────────────────────────────── EARNING TYPES ─────────────────────────────── */
+/* ------------------------------- EARNING TYPES ------------------------------- */
 
 /**
  * Earning type explains why professional pay exists inside a component.

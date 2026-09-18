@@ -19,6 +19,7 @@ const {
   ADMIN_EMPLOYER_OCCURRENCE_DISPUTE_DECISIONS,
   OCCURRENCE_EVIDENCE_TYPES,
   OCCURRENCE_EVIDENCE_SUBMITTER_ROLES,
+  EMPLOYER_FINANCIAL_CLAIM_DECISIONS,
 } = require("../constants/shiftLifecycle");
 
 const { SETTLEMENT_BATCH_COMPONENTS } = require("../constants/shiftSettlement");
@@ -36,93 +37,20 @@ const MAX_EVIDENCE_DESCRIPTION_LENGTH = 500;
 const COMPONENT_EXECUTION_STARTED_STATUSES = Object.freeze(["release_pending", "released"]);
 
 /**
- * GENERIC OCCURRENCE FINAL RESOLUTION AUTHORITY
+ * Final authority for ordinary professional-claim and employer-dispute issues.
  *
- * This service owns:
+ * This service applies final BASE attendance/pay outcomes, resets BASE payout
+ * readiness when authority changes, and hands settlement/refund/reconciliation
+ * back to their owning services.
  *
- * - final resolution of individual professional-claim issues;
- * - final resolution of individual employer-dispute issues;
- * - conversion of accepted party positions into authoritative occurrence facts;
- * - admin-established evidence-supported final facts/values;
- * - BASE recalculation after authoritative attendance changes;
- * - BASE amount replacement where a final adjudicated amount is explicit;
- * - settlement-component audit reset when authoritative BASE changes;
- * - case-level finality after all individual issues are resolved;
- * - clearing activeClaim only when the professional claim case is final;
- * - clearing activeDispute only when the employer dispute case is final;
- * - handing newly final payout components back to ShiftSettlementService;
- * - delegating BASE refund reevaluation to ShiftRefundService; and
- * - delegating parent aggregation to ShiftOccurrenceReconciliationService.
+ * Ordinary claims/disputes are BASE-only. Overtime remains entirely in the OT
+ * lifecycle, although final attendance facts may remain relevant OT evidence.
  *
- * This service does NOT own:
+ * activeClaim and activeDispute may coexist for genuinely different issues.
+ * Each pointer clears only when its own case is fully resolved.
  *
- * - OT request creation;
- * - OT employer approval/rejection;
- * - OT appeal;
- * - OT admin adjudication;
- * - OT pricing;
- * - OT top-up establishment;
- * - OT funding verification;
- * - OT delinquency;
- * - platform-fee earning or collection;
- * - employer refund eligibility or execution;
- * - professional payout execution; or
- * - parent Shift reconciliation logic.
- *
- * It only orchestrates those downstream authorities after final issue
- * resolution so that occurrence, refund and parent summaries remain aligned.
- *
- * CLAIM / DISPUTE COEXISTENCE
- *
- * activeClaim and activeDispute may coexist.
- *
- * Resolving one claim issue never clears activeDispute.
- *
- * Resolving one dispute issue never clears activeClaim.
- *
- * Each pointer is cleared only when its own entire case becomes final.
- *
- * MIXED OUTCOMES
- *
- * Settlement-component authority is issue-level.
- *
- * Professional claim scope is stored only on:
- *
- * issues[].affectedSettlementComponents
- *
- * Live component finality is derived from unresolved issue scopes.
- *
- * Therefore:
- *
- * - one BASE issue may resolve;
- * - another OT-relevant ordinary factual issue may remain active;
- * - BASE may then become independently release-ready if the shared ordinary
- *   challenge window is also final and no other active case affects BASE.
- *
- * SNAPSHOTS
- *
- * lifecycleSnapshot is evidential context only.
- *
- * This service does not restore broad financial snapshots.
- *
- * Final authoritative facts are applied deliberately and narrowly.
- *
- * ATTENDANCE
- *
- * Raw checkedInAt / checkedOutAt timestamps are preserved.
- *
- * Corrected authoritative attendance is stored through attendanceOverride.
- *
- * BASE calculation then consumes the effective attendance through
- * ShiftSettlementService.
- *
- * OVERTIME
- *
- * An attendance correction may establish a final attendance fact that is
- * relevant evidence for the OT domain.
- *
- * This service does not convert that fact into an OT approval/rejection or
- * change an existing OT obligation.
+ * lifecycleSnapshot is evidential context only and is never restored as
+ * financial authority.
  */
 class ShiftOccurrenceResolutionService {
   /* ─────────────────────────────── ERRORS / TRANSACTIONS ─────────────────────────────── */
@@ -142,6 +70,17 @@ class ShiftOccurrenceResolutionService {
   }
 
   static async runWithOptionalTransaction(options = {}, callback) {
+    if (
+      options.session &&
+      (typeof options.session.inTransaction !== "function" || !options.session.inTransaction())
+    ) {
+      throw this.createError({
+        message: "A supplied resolution session must have an active transaction.",
+        code: "ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
     return runServiceTransaction(options, callback);
   }
 
@@ -384,12 +323,80 @@ class ShiftOccurrenceResolutionService {
     });
   }
 
+  static buildAdminDecisionSignature({ decision, reason, outcome, evidence }) {
+    const dateValue = (value) => (value ? new Date(value).toISOString() : null);
+
+    return JSON.stringify({
+      decision,
+      reason,
+      outcome:
+        outcome == null
+          ? null
+          : {
+              finalCheckInAt: dateValue(outcome.finalCheckInAt),
+              finalCheckOutAt: dateValue(outcome.finalCheckOutAt),
+              finalBaseProfessionalPay: outcome.finalBaseProfessionalPay ?? null,
+              adjustedOutcome: outcome.adjustedOutcome ?? null,
+              finalOutcome: outcome.finalOutcome ?? null,
+            },
+      evidence: Array.from(evidence || []).map((item) => ({
+        type: item.type,
+        reference: item.reference,
+        description: item.description ?? null,
+      })),
+    });
+  }
+
+  static assertMatchingAdminReplay({ issue, adminUser, decision, reason, outcome, evidence }) {
+    const requested = this.buildAdminDecisionSignature({ decision, reason, outcome, evidence });
+    const stored = this.buildAdminDecisionSignature({
+      decision: issue.adminDecision,
+      reason: issue.adminDecisionReason,
+      outcome: issue.adminOutcome,
+      evidence: issue.adminEvidence,
+    });
+
+    if (!this.sameId(issue.adminDecidedBy, adminUser) || requested !== stored) {
+      throw this.createError({
+        message: "This issue is already resolved with a different admin decision payload.",
+        code: "ADMIN_RESOLUTION_REPLAY_MISMATCH",
+        statusCode: 409,
+      });
+    }
+  }
+
   /* ─────────────────────────────── COMPONENT SCOPE ─────────────────────────────── */
 
   static getIssueAffectedSettlementComponents(issue) {
-    const source = Array.isArray(issue?.affectedSettlementComponents)
-      ? issue.affectedSettlementComponents
-      : [];
+    const claimScope = issue?.challengedSettlementComponents;
+    const disputeScope = issue?.affectedSettlementComponents;
+    const hasClaimScope = claimScope !== undefined && claimScope !== null;
+    const hasDisputeScope = disputeScope !== undefined && disputeScope !== null;
+
+    if (
+      (hasClaimScope && !Array.isArray(claimScope)) ||
+      (hasDisputeScope && !Array.isArray(disputeScope))
+    ) {
+      throw this.createError({
+        message: "Issue settlement scope must be an array.",
+        code: "INVALID_ISSUE_SETTLEMENT_COMPONENT_SCOPE",
+        statusCode: 500,
+      });
+    }
+
+    if (hasClaimScope && hasDisputeScope) {
+      const validBaseScope = (scope) => scope.length === 1 && scope[0] === "base";
+
+      if (!validBaseScope(claimScope) || !validBaseScope(disputeScope)) {
+        throw this.createError({
+          message: "The issue contains conflicting settlement scope fields.",
+          code: "CONFLICTING_ISSUE_SETTLEMENT_COMPONENT_SCOPE",
+          statusCode: 500,
+        });
+      }
+    }
+
+    const source = hasClaimScope ? claimScope : hasDisputeScope ? disputeScope : [];
 
     const normalized = source.map((value) =>
       String(value || "")
@@ -400,7 +407,6 @@ class ShiftOccurrenceResolutionService {
     const unique = [...new Set(normalized)];
 
     if (
-      unique.length === 0 ||
       unique.length !== normalized.length ||
       unique.some((component) => !SETTLEMENT_BATCH_COMPONENTS.includes(component))
     ) {
@@ -414,39 +420,33 @@ class ShiftOccurrenceResolutionService {
       });
     }
 
-    return SETTLEMENT_BATCH_COMPONENTS.filter((component) => unique.includes(component));
+    /**
+     * Ordinary professional claims and employer disputes are BASE-only.
+     */
+    if (unique.length !== 1 || unique[0] !== "base") {
+      throw this.createError({
+        message: "Ordinary occurrence claim/dispute issues must affect only the base component.",
+        code: "INVALID_ORDINARY_ISSUE_SETTLEMENT_COMPONENT_SCOPE",
+        statusCode: 500,
+        details: {
+          affectedSettlementComponents: normalized,
+        },
+      });
+    }
+
+    return ["base"];
   }
 
   static assertIssueComponentsMutable({ issue, occurrence }) {
     const components = this.getIssueAffectedSettlementComponents(issue);
 
-    for (const component of components) {
-      const status = ShiftSettlementService.getComponentStatus(occurrence, component);
+    const status = ShiftSettlementService.getComponentStatus(occurrence, "base");
 
-      if (COMPONENT_EXECUTION_STARTED_STATUSES.includes(status)) {
-        throw this.createError({
-          message:
-            component === "base"
-              ? "Regular Shift pay has already entered payout execution and cannot be changed by issue resolution."
-              : "Overtime pay has already entered payout execution and cannot be changed by ordinary issue resolution.",
-          code:
-            component === "base"
-              ? "BASE_SETTLEMENT_ALREADY_IN_EXECUTION"
-              : "OVERTIME_SETTLEMENT_ALREADY_IN_EXECUTION",
-          statusCode: 409,
-        });
-      }
-    }
-
-    /**
-     * Generic claim/dispute resolution may establish attendance facts relevant
-     * to overtime evidence, but it must not reopen already-final OT.
-     */
-    if (components.includes("overtime") && occurrence.overtime?.status === "approved") {
+    if (COMPONENT_EXECUTION_STARTED_STATUSES.includes(status)) {
       throw this.createError({
         message:
-          "Approved overtime is final and cannot be reopened through ordinary claim/dispute resolution.",
-        code: "FINAL_OVERTIME_ALREADY_ESTABLISHED",
+          "Regular Shift pay has already entered payout execution and cannot be changed by issue resolution.",
+        code: "BASE_SETTLEMENT_ALREADY_IN_EXECUTION",
         statusCode: 409,
       });
     }
@@ -605,9 +605,6 @@ class ShiftOccurrenceResolutionService {
   static normalizeClaimAdminOutcome({ issue, decision, adminOutcome }) {
     /**
      * approve_employer selects the employer's already-recorded counter-position.
-     *
-     * It is invalid where no such position exists, regardless of whether the
-     * caller supplied an adminOutcome object.
      */
     if (decision === "approve_employer" && !this.getEmployerCounterPosition(issue)) {
       throw this.createError({
@@ -618,13 +615,7 @@ class ShiftOccurrenceResolutionService {
     }
 
     /**
-     * The three selection decisions choose an existing position:
-     *
-     * - approve_professional -> professional position
-     * - approve_employer     -> employer counter-position
-     * - maintain_current     -> current Loqum authority
-     *
-     * Only adjusted may introduce replacement authoritative facts or values.
+     * Only adjusted introduces replacement authoritative facts or values.
      */
     if (decision !== "adjusted") {
       if (adminOutcome !== null && adminOutcome !== undefined) {
@@ -732,27 +723,38 @@ class ShiftOccurrenceResolutionService {
 
   static normalizeDisputeAdminOutcome({ issue, decision, adminOutcome }) {
     /**
-     * approved accepts the employer's submitted position.
-     *
      * rejected leaves current Loqum authority unchanged.
      *
-     * Only adjusted may introduce a different admin-established position.
+     * approved means the employer established that current authority requires
+     * correction. Admin records the final evidence-supported authority.
      */
-    if (decision !== "adjusted") {
+    if (decision === "rejected") {
       if (adminOutcome !== null && adminOutcome !== undefined) {
         throw this.createError({
-          message: "Only an adjusted employer-dispute decision may contain a final admin outcome.",
-          code: "DISPUTE_ADMIN_OUTCOME_NOT_ALLOWED",
+          message:
+            "A rejected employer-dispute decision cannot contain a replacement admin outcome.",
+          code: "REJECTED_DISPUTE_ADMIN_OUTCOME_NOT_ALLOWED",
         });
       }
 
       return null;
     }
 
+    if (decision !== "approved") {
+      throw this.createError({
+        message: "Unsupported employer-dispute admin decision.",
+        code: "UNSUPPORTED_EMPLOYER_DISPUTE_ADMIN_DECISION",
+        statusCode: 500,
+        details: {
+          decision,
+        },
+      });
+    }
+
     if (!adminOutcome || typeof adminOutcome !== "object" || Array.isArray(adminOutcome)) {
       throw this.createError({
-        message: "An adjusted employer-dispute decision requires a final admin outcome.",
-        code: "ADJUSTED_DISPUTE_ADMIN_OUTCOME_REQUIRED",
+        message: "An approved employer-dispute decision requires a final admin outcome.",
+        code: "APPROVED_DISPUTE_ADMIN_OUTCOME_REQUIRED",
       });
     }
 
@@ -808,8 +810,8 @@ class ShiftOccurrenceResolutionService {
       if (!finalCheckInAt && !finalCheckOutAt) {
         throw this.createError({
           message:
-            "An adjusted attendance_correction dispute requires final authoritative check-in, checkout, or both.",
-          code: "ADJUSTED_DISPUTE_ATTENDANCE_OUTCOME_REQUIRED",
+            "An approved attendance_correction dispute requires final authoritative check-in, checkout, or both.",
+          code: "APPROVED_DISPUTE_ATTENDANCE_OUTCOME_REQUIRED",
         });
       }
     }
@@ -817,8 +819,8 @@ class ShiftOccurrenceResolutionService {
     if (issue.type === "payment_calculation" && finalBaseProfessionalPay === null) {
       throw this.createError({
         message:
-          "An adjusted payment_calculation dispute requires the final authoritative BASE professional-pay amount.",
-        code: "ADJUSTED_DISPUTE_FINAL_BASE_PAY_REQUIRED",
+          "An approved payment_calculation dispute requires the final authoritative BASE professional-pay amount.",
+        code: "APPROVED_DISPUTE_FINAL_BASE_PAY_REQUIRED",
       });
     }
 
@@ -829,19 +831,8 @@ class ShiftOccurrenceResolutionService {
     ) {
       throw this.createError({
         message:
-          "An adjusted other_financial_fact dispute requires a final BASE amount or recorded final outcome.",
-        code: "ADJUSTED_DISPUTE_FINAL_FINANCIAL_FACT_REQUIRED",
-      });
-    }
-
-    const hasOutcome = Boolean(
-      finalCheckInAt || finalCheckOutAt || finalBaseProfessionalPay !== null || finalOutcome
-    );
-
-    if (!hasOutcome) {
-      throw this.createError({
-        message: "An adjusted employer-dispute decision requires a recorded final outcome.",
-        code: "EMPTY_ADJUSTED_DISPUTE_ADMIN_OUTCOME",
+          "An approved other_financial_fact dispute requires a final BASE amount or recorded final outcome.",
+        code: "APPROVED_DISPUTE_FINAL_FINANCIAL_FACT_REQUIRED",
       });
     }
 
@@ -882,6 +873,14 @@ class ShiftOccurrenceResolutionService {
     return {
       ...value,
     };
+  }
+
+  static cloneOccurrenceForPreview(occurrence) {
+    return new ShiftOccurrence(
+      occurrence.toObject({
+        depopulate: true,
+      })
+    );
   }
 
   static applyAttendancePosition({
@@ -1012,7 +1011,7 @@ class ShiftOccurrenceResolutionService {
     });
 
     /**
-     * Raw checkedInAt / checkedOutAt are deliberately preserved.
+     * Raw checkedInAt / checkedOutAt are preserved.
      */
     occurrence.status = "pending_settlement";
 
@@ -1028,6 +1027,48 @@ class ShiftOccurrenceResolutionService {
 
   /* ─────────────────────────────── BASE AUTHORITY ─────────────────────────────── */
 
+  static buildResolutionPreview({
+    occurrence,
+    baseProfessionalPayBefore,
+    baseProfessionalPayAfter,
+    attendanceChanged = false,
+  }) {
+    return {
+      current: {
+        baseProfessionalPay: baseProfessionalPayBefore,
+
+        basePlatformFee: Number(occurrence.basePlatformFee || 0),
+      },
+
+      proposed: {
+        baseProfessionalPay: baseProfessionalPayAfter,
+
+        basePlatformFee: Number(occurrence.basePlatformFee || 0),
+      },
+
+      impact: {
+        professionalPayoutChange: baseProfessionalPayAfter - baseProfessionalPayBefore,
+
+        employerRefundChange: null,
+
+        employerRefundRequiresReevaluation:
+          baseProfessionalPayBefore !== baseProfessionalPayAfter || attendanceChanged,
+      },
+
+      refundRequiresReevaluation:
+        baseProfessionalPayBefore !== baseProfessionalPayAfter || attendanceChanged,
+
+      attendanceChanged,
+
+      basePlatformFeeUnchanged: true,
+
+      settlementImpact: {
+        requiresSettlementRecheck:
+          baseProfessionalPayBefore !== baseProfessionalPayAfter || attendanceChanged,
+      },
+    };
+  }
+
   static resetBaseSettlementForResolution(occurrence) {
     ShiftSettlementService.resetComponentSettlement({
       occurrence,
@@ -1040,8 +1081,6 @@ class ShiftOccurrenceResolutionService {
   static recalculateBaseFromAttendance(occurrence) {
     /**
      * Specialized cancellation outcomes already own their BASE amount.
-     *
-     * Attendance recalculation is for worked BASE time.
      */
     if (
       occurrence.activeWorkCancellation?.occurred === true ||
@@ -1067,11 +1106,7 @@ class ShiftOccurrenceResolutionService {
     const finalAmount = this.normalizeNonNegativeAmount(amount, "final BASE professional pay");
 
     /**
-     * baseProfessionalPay is always the authoritative BASE entitlement used by
-     * settlement and refund logic.
-     *
-     * Specialized cancellation structures retain their matching audit copy,
-     * but they never replace baseProfessionalPay as the occurrence authority.
+     * baseProfessionalPay remains authoritative BASE entitlement.
      */
     if (occurrence.activeWorkCancellation?.occurred === true) {
       occurrence.activeWorkCancellation.professionalPay = finalAmount;
@@ -1124,7 +1159,7 @@ class ShiftOccurrenceResolutionService {
     return hasPosition ? position : null;
   }
 
-  static async applyClaimIssueFinalPosition({
+  static async applyClaimIssueOutcome({
     issue,
     occurrence,
     decision,
@@ -1140,41 +1175,16 @@ class ShiftOccurrenceResolutionService {
 
     const affectsBase = affectedComponents.includes("base");
 
-    /**
-     * ATTENDANCE
-     *
-     * Employer-level:
-     *
-     * approved
-     * -> accept the professional attendance position.
-     *
-     * rejected
-     * -> simple rejection finalization leaves current authority unchanged.
-     *
-     * Admin-level:
-     *
-     * approve_professional
-     * -> professional position.
-     *
-     * approve_employer
-     * -> employer counter-position.
-     *
-     * maintain_current
-     * -> current Loqum authority.
-     *
-     * adjusted
-     * -> admin-established attendance facts.
-     */
     if (issue.type === "attendance_correction") {
       let position = null;
 
-      if (decision === "approved" || decision === "approve_professional") {
+      if (decision === "approve_professional") {
         position = issue.details?.attendanceCorrection || null;
       } else if (decision === "approve_employer") {
         position = this.getEmployerCounterPosition(issue);
       } else if (decision === "adjusted") {
         position = adminOutcome;
-      } else if (decision === "rejected" || decision === "maintain_current") {
+      } else if (decision === "maintain_current") {
         position = null;
       }
 
@@ -1206,16 +1216,9 @@ class ShiftOccurrenceResolutionService {
     }
 
     /**
-     * SIMPLE EMPLOYER REJECTION / MAINTAIN CURRENT
-     *
-     * A simple employer rejection that reaches finality because the
-     * professional did not appeal has no employer counter-position.
-     *
-     * No occurrence authority changes.
-     *
-     * maintain_current has the same occurrence consequence at admin level.
+     * Existing Loqum authority remains unchanged.
      */
-    if (decision === "rejected" || decision === "maintain_current") {
+    if (decision === "maintain_current") {
       return {
         occurrence,
 
@@ -1226,19 +1229,16 @@ class ShiftOccurrenceResolutionService {
     }
 
     /**
-     * PROFESSIONAL POSITION ACCEPTED
-     *
-     * The professional's expectedBaseProfessionalPay is an estimate/evidence,
-     * not direct financial authority.
-     *
-     * For non-attendance BASE issues, accepting the professional position
-     * therefore causes BASE to be recalculated from the authoritative
-     * occurrence facts rather than blindly assigning the submitted estimate.
+     * Professional position accepted.
      */
-    if ((decision === "approved" || decision === "approve_professional") && affectsBase) {
-      this.applyBaseRecalculation({
-        occurrence,
-      });
+    if (decision === "approve_professional" && affectsBase) {
+      const expectedAmount = issue.details?.expectedBaseProfessionalPay;
+
+      if (expectedAmount !== null && expectedAmount !== undefined) {
+        this.applyBaseAmountResolution({ occurrence, amount: expectedAmount });
+      } else {
+        this.applyBaseRecalculation({ occurrence });
+      }
 
       return {
         occurrence,
@@ -1250,16 +1250,7 @@ class ShiftOccurrenceResolutionService {
     }
 
     /**
-     * EMPLOYER COUNTER-POSITION ACCEPTED
-     *
-     * approve_employer is only reachable after normalization has established
-     * that a real employer counter-position exists.
-     *
-     * Where the counter-position contains an explicit BASE amount, that amount
-     * becomes authoritative.
-     *
-     * A non-monetary factual counter-position may be recorded as the accepted
-     * conclusion without requiring a separate occurrence amount mutation.
+     * Employer counter-position accepted.
      */
     if (decision === "approve_employer") {
       const counterPosition = this.getEmployerCounterPosition(issue);
@@ -1294,11 +1285,37 @@ class ShiftOccurrenceResolutionService {
     }
 
     /**
-     * ADMIN-ADJUSTED POSITION
-     *
-     * Structured replacement authority belongs only to adjusted.
+     * Admin establishes a new evidence-supported authority.
      */
     if (decision === "adjusted") {
+      if (issue.type === "attendance_correction" && adminOutcome) {
+        const attendanceResult = this.applyAttendancePosition({
+          occurrence,
+
+          position: adminOutcome,
+
+          reviewedByUser: resolvedByUser,
+
+          currentTime,
+
+          authorityRole,
+        });
+
+        if (affectsBase && attendanceResult.baseAffected) {
+          this.applyBaseRecalculation({
+            occurrence,
+          });
+        }
+
+        return {
+          occurrence,
+
+          attendanceChanged: attendanceResult.changed,
+
+          baseChanged: affectsBase && attendanceResult.baseAffected,
+        };
+      }
+
       if (
         affectsBase &&
         adminOutcome?.finalBaseProfessionalPay !== null &&
@@ -1319,10 +1336,6 @@ class ShiftOccurrenceResolutionService {
         };
       }
 
-      /**
-       * adjustedOutcome may document an evidence-supported factual conclusion
-       * that has no separate structured occurrence field.
-       */
       return {
         occurrence,
 
@@ -1338,25 +1351,18 @@ class ShiftOccurrenceResolutionService {
       statusCode: 500,
       details: {
         decision,
+
         issueType: issue.type,
       },
     });
   }
 
   /**
-   * CONTRACT USED BY shiftOccurrenceClaimService.js
+   * Applies an employer response outcome to a professional claim issue.
    *
-   * This method applies the financial/factual consequence only.
-   *
-   * The claim service owns:
-   *
-   * - issue.status;
-   * - appeal status;
-   * - case status;
-   * - activeClaim clearing; and
-   * - case persistence.
+   * Claim workflow/finality remains owned by shiftOccurrenceClaimService.js.
    */
-  static async applyProfessionalClaimIssueOutcome(
+  static async applyEmployerClaimIssueOutcome(
     {
       claim,
       issue,
@@ -1379,17 +1385,29 @@ class ShiftOccurrenceResolutionService {
 
     const normalizedDecision = this.normalizeDecision(
       decision,
-      ["approved", "rejected"],
+      EMPLOYER_FINANCIAL_CLAIM_DECISIONS,
       "professional claim issue outcome"
     );
 
     const resolvingUser = this.normalizeObjectId(resolvedByUser, "resolving user ID");
 
-    return this.applyClaimIssueFinalPosition({
+    /**
+     * Employer approval accepts the professional's claim position and may
+     * resolve the issue through the claim workflow.
+     *
+     * Employer rejection does not establish replacement authority. The
+     * current occurrence authority is preserved while the unresolved issue
+     * proceeds to admin review.
+     */
+    const resolutionDecision =
+      normalizedDecision === "approved" ? "approve_professional" : "maintain_current";
+
+    return this.applyClaimIssueOutcome({
       issue,
+
       occurrence,
 
-      decision: normalizedDecision,
+      decision: resolutionDecision,
 
       adminOutcome: null,
 
@@ -1403,12 +1421,12 @@ class ShiftOccurrenceResolutionService {
 
   /* ─────────────────────────────── EMPLOYER DISPUTE OUTCOME APPLICATION ─────────────────────────────── */
 
-  static async applyDisputeIssueFinalPosition({
+  static async applyDisputeIssueOutcome({
     issue,
     occurrence,
     decision,
     adminOutcome,
-    adminUser,
+    resolvedByUser,
     currentTime,
   }) {
     const affectedComponents = this.assertIssueComponentsMutable({
@@ -1419,44 +1437,51 @@ class ShiftOccurrenceResolutionService {
     const affectsBase = affectedComponents.includes("base");
 
     /**
-     * REJECTED
-     *
-     * Current authoritative Loqum occurrence facts remain unchanged.
+     * Rejection leaves current Loqum authority unchanged.
      */
     if (decision === "rejected") {
       return {
         occurrence,
-
         attendanceChanged: false,
-
         baseChanged: false,
       };
     }
 
+    if (decision !== "approved" || !adminOutcome) {
+      throw this.createError({
+        message: "An approved employer dispute requires the final admin outcome.",
+        code: "APPROVED_DISPUTE_FINAL_OUTCOME_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
     /**
-     * ATTENDANCE
-     *
-     * approved -> accept employer's submitted attendance correction.
-     *
-     * adjusted -> apply admin-established attendance facts.
+     * Final authority comes from admin's
+     * evidence-supported outcome, not automatically from the employer proposal.
      */
     if (issue.type === "attendance_correction") {
-      const position =
-        decision === "approved" ? issue.details?.attendanceCorrection || null : adminOutcome;
-
       const attendanceResult = this.applyAttendancePosition({
         occurrence,
 
-        position,
+        position: adminOutcome,
 
-        reviewedByUser: adminUser,
+        reviewedByUser: resolvedByUser,
 
         currentTime,
 
         authorityRole: "admin",
       });
 
-      if (affectsBase && attendanceResult.baseAffected) {
+      if (!attendanceResult.baseAffected) {
+        throw this.createError({
+          message:
+            "An approved attendance_correction dispute must establish a BASE-affecting attendance correction. Otherwise the dispute should be rejected.",
+          code: "APPROVED_DISPUTE_ATTENDANCE_HAS_NO_BASE_CORRECTION",
+          statusCode: 409,
+        });
+      }
+
+      if (affectsBase) {
         this.applyBaseRecalculation({
           occurrence,
         });
@@ -1464,36 +1489,39 @@ class ShiftOccurrenceResolutionService {
 
       return {
         occurrence,
-
-        attendanceChanged: attendanceResult.changed,
-
-        baseChanged: affectsBase && attendanceResult.baseAffected,
+        attendanceChanged: true,
+        baseChanged: true,
       };
     }
 
-    /**
-     * PAYMENT CALCULATION
-     *
-     * approved -> employer's submitted amount becomes authoritative.
-     *
-     * adjusted -> admin's different final amount becomes authoritative.
-     */
     if (issue.type === "payment_calculation") {
-      const amount =
-        decision === "approved"
-          ? issue.details?.proposedBaseProfessionalPay
-          : adminOutcome?.finalBaseProfessionalPay;
-
-      if (amount === null || amount === undefined) {
+      if (
+        adminOutcome.finalBaseProfessionalPay === null ||
+        adminOutcome.finalBaseProfessionalPay === undefined
+      ) {
         throw this.createError({
           message:
-            decision === "approved"
-              ? "An approved payment_calculation dispute requires the employer's submitted BASE professional-pay amount."
-              : "An adjusted payment_calculation dispute requires the admin-established final BASE professional-pay amount.",
-          code:
-            decision === "approved"
-              ? "DISPUTE_EMPLOYER_BASE_PAY_REQUIRED"
-              : "DISPUTE_FINAL_BASE_PAY_REQUIRED",
+            "An approved payment_calculation dispute requires the admin-established final BASE professional-pay amount.",
+          code: "DISPUTE_FINAL_BASE_PAY_REQUIRED",
+          statusCode: 409,
+        });
+      }
+
+      const currentBaseProfessionalPay = Number(occurrence.baseProfessionalPay);
+
+      if (!Number.isSafeInteger(currentBaseProfessionalPay) || currentBaseProfessionalPay < 0) {
+        throw this.createError({
+          message: "The current authoritative BASE professional-pay amount is invalid.",
+          code: "INVALID_CURRENT_BASE_PROFESSIONAL_PAY",
+          statusCode: 500,
+        });
+      }
+
+      if (adminOutcome.finalBaseProfessionalPay === currentBaseProfessionalPay) {
+        throw this.createError({
+          message:
+            "An approved payment_calculation dispute must establish a different final BASE amount. If current Loqum authority is correct, reject the dispute.",
+          code: "APPROVED_DISPUTE_BASE_PAY_UNCHANGED",
           statusCode: 409,
         });
       }
@@ -1501,56 +1529,37 @@ class ShiftOccurrenceResolutionService {
       this.applyBaseAmountResolution({
         occurrence,
 
-        amount,
+        amount: adminOutcome.finalBaseProfessionalPay,
       });
 
       return {
         occurrence,
-
         attendanceChanged: false,
-
         baseChanged: true,
       };
     }
 
-    /**
-     * OTHER FINANCIAL FACT
-     *
-     * approved accepts the employer's submitted position.
-     *
-     * adjusted accepts the admin-established different position.
-     *
-     * Either position may include an explicit BASE amount. If it does not,
-     * the factual conclusion remains in the case audit without inventing a
-     * separate occurrence monetary mutation.
-     */
     if (issue.type === "other_financial_fact") {
-      const amount =
-        decision === "approved"
-          ? issue.details?.proposedBaseProfessionalPay
-          : adminOutcome?.finalBaseProfessionalPay;
-
-      if (amount !== null && amount !== undefined) {
+      if (
+        adminOutcome.finalBaseProfessionalPay !== null &&
+        adminOutcome.finalBaseProfessionalPay !== undefined
+      ) {
         this.applyBaseAmountResolution({
           occurrence,
 
-          amount,
+          amount: adminOutcome.finalBaseProfessionalPay,
         });
 
         return {
           occurrence,
-
           attendanceChanged: false,
-
           baseChanged: true,
         };
       }
 
       return {
         occurrence,
-
         attendanceChanged: false,
-
         baseChanged: false,
       };
     }
@@ -1766,7 +1775,7 @@ class ShiftOccurrenceResolutionService {
 
         readyAt: now,
 
-        releaseSource: "dispute_resolution",
+        releaseSource: "admin_resolution",
 
         releasedByUserId: resolvedByUser,
 
@@ -1794,9 +1803,8 @@ class ShiftOccurrenceResolutionService {
       challengeContext,
     });
 
-    await occurrence.save({
-      session,
-    });
+    // The caller reevaluates refund holds before saving the complete occurrence.
+    // Saving here could persist a cleared case pointer with a stale refund hold.
 
     return {
       occurrence,
@@ -1851,6 +1859,95 @@ class ShiftOccurrenceResolutionService {
 
   /* ─────────────────────────────── CLAIM ADMIN RESOLUTION ─────────────────────────────── */
 
+  static async previewClaimIssueResolution({
+    claimId,
+    issueId,
+    decision,
+    adminOutcome,
+    adminUserId,
+    currentTime,
+  }) {
+    const claim = await this.getClaim(claimId);
+
+    const issue = this.getClaimIssue(claim, issueId);
+
+    if (claim.status === "withdrawn") {
+      throw this.createError({
+        message: "A withdrawn professional claim cannot receive an admin decision preview.",
+        code: "WITHDRAWN_CLAIM_NOT_PREVIEWABLE",
+        statusCode: 409,
+      });
+    }
+
+    if (issue.status !== "awaiting_admin_review") {
+      throw this.createError({
+        message: "This professional claim issue is not awaiting admin review.",
+        code: "CLAIM_ISSUE_NOT_AWAITING_ADMIN_REVIEW",
+        statusCode: 409,
+        details: {
+          issueStatus: issue.status,
+        },
+      });
+    }
+
+    const occurrence = await this.getOccurrenceForCase({
+      caseDocument: claim,
+    });
+
+    this.assertClaimIsActiveOnOccurrence({
+      claim,
+      occurrence,
+    });
+
+    const normalizedDecision = this.normalizeDecision(
+      decision,
+      ADMIN_FINANCIAL_CLAIM_DECISIONS,
+      "admin claim decision"
+    );
+
+    const normalizedOutcome = this.normalizeClaimAdminOutcome({
+      issue,
+
+      decision: normalizedDecision,
+
+      adminOutcome,
+    });
+
+    const now = this.normalizeCurrentTime(currentTime);
+
+    const adminUser = this.normalizeObjectId(adminUserId, "admin user ID");
+
+    const before = Number(occurrence.baseProfessionalPay || 0);
+
+    const previewOccurrence = this.cloneOccurrenceForPreview(occurrence);
+
+    const result = await this.applyClaimIssueOutcome({
+      issue,
+
+      occurrence: previewOccurrence,
+
+      decision: normalizedDecision,
+
+      adminOutcome: normalizedOutcome,
+
+      resolvedByUser: adminUser,
+
+      currentTime: now,
+
+      authorityRole: "admin",
+    });
+
+    return this.buildResolutionPreview({
+      occurrence,
+
+      baseProfessionalPayBefore: before,
+
+      baseProfessionalPayAfter: Number(previewOccurrence.baseProfessionalPay || 0),
+
+      attendanceChanged: result.attendanceChanged,
+    });
+  }
+
   static async resolveClaimIssueByAdmin(
     {
       claimId,
@@ -1887,14 +1984,31 @@ class ShiftOccurrenceResolutionService {
 
       const issue = this.getClaimIssue(claim, issueId);
 
+      const normalizedAdminOutcome = this.normalizeClaimAdminOutcome({
+        issue,
+        decision: normalizedDecision,
+        adminOutcome,
+      });
+
+      const normalizedEvidence = this.normalizeEvidence(evidence, {
+        submittedByUser: adminUser,
+
+        recordedAt: now,
+      });
+
       /**
        * Idempotent replay of the same completed admin decision.
        */
-      if (
-        issue.status === "resolved" &&
-        issue.adminDecision === normalizedDecision &&
-        this.sameId(issue.adminDecidedBy, adminUser)
-      ) {
+      if (issue.status === "resolved") {
+        this.assertMatchingAdminReplay({
+          issue,
+          adminUser,
+          decision: normalizedDecision,
+          reason: cleanReason,
+          outcome: normalizedAdminOutcome,
+          evidence: normalizedEvidence,
+        });
+
         const occurrence = await this.getOccurrenceForCase({
           caseDocument: claim,
           session,
@@ -1940,19 +2054,7 @@ class ShiftOccurrenceResolutionService {
         occurrence,
       });
 
-      const normalizedAdminOutcome = this.normalizeClaimAdminOutcome({
-        issue,
-        decision: normalizedDecision,
-        adminOutcome,
-      });
-
-      const normalizedEvidence = this.normalizeEvidence(evidence, {
-        submittedByUser: adminUser,
-
-        recordedAt: now,
-      });
-
-      const outcomeResult = await this.applyClaimIssueFinalPosition({
+      const outcomeResult = await this.applyClaimIssueOutcome({
         issue,
         occurrence,
 
@@ -1979,17 +2081,6 @@ class ShiftOccurrenceResolutionService {
 
       issue.adminEvidence = normalizedEvidence;
 
-      if (issue.escalationReason === "professional_appeal") {
-        issue.appealStatus = "resolved";
-      }
-
-      if (
-        issue.escalationReason === "employer_counter_position" &&
-        issue.rebuttalStatus === "submitted"
-      ) {
-        issue.rebuttalStatus = "resolved";
-      }
-
       issue.status = "resolved";
 
       issue.resolvedAt = now;
@@ -2002,10 +2093,7 @@ class ShiftOccurrenceResolutionService {
       });
 
       /**
-       * Save the case before asking ShiftSettlementService for live challenge
-       * scope.
-       *
-       * Live scope is derived from unresolved issues in the database.
+       * Persist case finality before settlement reloads live issue scope.
        */
       await claim.save({
         session,
@@ -2036,6 +2124,8 @@ class ShiftOccurrenceResolutionService {
             session,
           })
         : null;
+
+      await continuation.occurrence.save({ session });
 
       const parentReconciliation = await this.reconcileParentAfterIssueResolution({
         occurrence: continuation.occurrence,
@@ -2105,6 +2195,93 @@ class ShiftOccurrenceResolutionService {
 
   /* ─────────────────────────────── DISPUTE ADMIN RESOLUTION ─────────────────────────────── */
 
+  static async previewDisputeIssueResolution({
+    disputeId,
+    issueId,
+    decision,
+    adminOutcome,
+    adminUserId,
+    currentTime,
+  }) {
+    const dispute = await this.getDispute(disputeId);
+
+    const issue = this.getDisputeIssue(dispute, issueId);
+
+    if (dispute.status === "withdrawn") {
+      throw this.createError({
+        message: "A withdrawn employer dispute cannot receive an admin decision preview.",
+        code: "WITHDRAWN_DISPUTE_NOT_PREVIEWABLE",
+        statusCode: 409,
+      });
+    }
+
+    if (issue.status !== "awaiting_admin_review") {
+      throw this.createError({
+        message: "This employer dispute issue is not awaiting admin review.",
+        code: "DISPUTE_ISSUE_NOT_AWAITING_ADMIN_REVIEW",
+        statusCode: 409,
+        details: {
+          issueStatus: issue.status,
+        },
+      });
+    }
+
+    const occurrence = await this.getOccurrenceForCase({
+      caseDocument: dispute,
+    });
+
+    this.assertDisputeIsActiveOnOccurrence({
+      dispute,
+      occurrence,
+    });
+
+    const normalizedDecision = this.normalizeDecision(
+      decision,
+      ADMIN_EMPLOYER_OCCURRENCE_DISPUTE_DECISIONS,
+      "admin employer dispute decision"
+    );
+
+    const normalizedOutcome = this.normalizeDisputeAdminOutcome({
+      issue,
+
+      decision: normalizedDecision,
+
+      adminOutcome,
+    });
+
+    const now = this.normalizeCurrentTime(currentTime);
+
+    const before = Number(occurrence.baseProfessionalPay || 0);
+
+    const previewOccurrence = this.cloneOccurrenceForPreview(occurrence);
+
+    const adminUser = this.normalizeObjectId(adminUserId, "admin user ID");
+
+    const result = await this.applyDisputeIssueOutcome({
+      issue,
+
+      occurrence: previewOccurrence,
+
+      decision: normalizedDecision,
+
+      adminOutcome: normalizedOutcome,
+
+      resolvedByUser: adminUser,
+
+      currentTime: now,
+    });
+
+    return this.buildResolutionPreview({
+      occurrence,
+
+      baseProfessionalPayBefore: before,
+
+      baseProfessionalPayAfter: Number(previewOccurrence.baseProfessionalPay || 0),
+
+      attendanceChanged: result.attendanceChanged,
+    });
+  }
+
   static async resolveDisputeIssueByAdmin(
     {
       disputeId,
@@ -2141,11 +2318,28 @@ class ShiftOccurrenceResolutionService {
 
       const issue = this.getDisputeIssue(dispute, issueId);
 
-      if (
-        issue.status === "resolved" &&
-        issue.adminDecision === normalizedDecision &&
-        this.sameId(issue.adminDecidedBy, adminUser)
-      ) {
+      const normalizedAdminOutcome = this.normalizeDisputeAdminOutcome({
+        issue,
+        decision: normalizedDecision,
+        adminOutcome,
+      });
+
+      const normalizedEvidence = this.normalizeEvidence(evidence, {
+        submittedByUser: adminUser,
+
+        recordedAt: now,
+      });
+
+      if (issue.status === "resolved") {
+        this.assertMatchingAdminReplay({
+          issue,
+          adminUser,
+          decision: normalizedDecision,
+          reason: cleanReason,
+          outcome: normalizedAdminOutcome,
+          evidence: normalizedEvidence,
+        });
+
         const occurrence = await this.getOccurrenceForCase({
           caseDocument: dispute,
           session,
@@ -2191,19 +2385,7 @@ class ShiftOccurrenceResolutionService {
         occurrence,
       });
 
-      const normalizedAdminOutcome = this.normalizeDisputeAdminOutcome({
-        issue,
-        decision: normalizedDecision,
-        adminOutcome,
-      });
-
-      const normalizedEvidence = this.normalizeEvidence(evidence, {
-        submittedByUser: adminUser,
-
-        recordedAt: now,
-      });
-
-      const outcomeResult = await this.applyDisputeIssueFinalPosition({
+      const outcomeResult = await this.applyDisputeIssueOutcome({
         issue,
         occurrence,
 
@@ -2211,7 +2393,7 @@ class ShiftOccurrenceResolutionService {
 
         adminOutcome: normalizedAdminOutcome,
 
-        adminUser,
+        resolvedByUser: adminUser,
 
         currentTime: now,
       });
@@ -2240,9 +2422,7 @@ class ShiftOccurrenceResolutionService {
       });
 
       /**
-       * Save the dispute before settlement asks for live challenge scope.
-       *
-       * Live dispute scope is derived from unresolved issues.
+       * Persist dispute finality before settlement reloads live issue scope.
        */
       await dispute.save({
         session,
@@ -2273,6 +2453,8 @@ class ShiftOccurrenceResolutionService {
             session,
           })
         : null;
+
+      await continuation.occurrence.save({ session });
 
       const parentReconciliation = await this.reconcileParentAfterIssueResolution({
         occurrence: continuation.occurrence,

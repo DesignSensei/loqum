@@ -884,7 +884,30 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
 
   // --- RESOLUTION ---
 
-  if (RESOLVED_ASSIGNMENT_CASE_STATUSES.includes(this.status)) {
+  const statusIsResolved = RESOLVED_ASSIGNMENT_CASE_STATUSES.includes(this.status);
+
+  // Proposed exits belong to exitProposal until a final resolution is recorded.
+  if (!statusIsResolved) {
+    const resolutionFields = ["outcome", "reason", "resolvedAt", "resolvedBy", "resolvedByRole"];
+
+    for (const fieldName of resolutionFields) {
+      if (hasDocumentValue(this.resolution?.[fieldName])) {
+        this.invalidate(
+          `resolution.${fieldName}`,
+          `resolution.${fieldName} can only be recorded on a resolved case.`
+        );
+      }
+    }
+
+    if (hasAnyExitRangeValue(this.resolution?.effectiveExitRange)) {
+      this.invalidate(
+        "resolution.effectiveExitRange",
+        "An effective exit range can only be recorded on a resolved_exit case."
+      );
+    }
+  }
+
+  if (statusIsResolved) {
     if (!this.resolution?.outcome) {
       this.invalidate("resolution.outcome", "resolution.outcome is required for a resolved case.");
     }
@@ -972,18 +995,26 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
     this.invalidate("cancelledAt", "cancelledAt is required when a case is cancelled.");
   }
 
-  const terminalTimestamps = {
-    withdrawn: this.withdrawnAt,
-    dismissed: this.dismissedAt,
-    cancelled: this.cancelledAt,
+  const terminalAuditFieldsByStatus = {
+    withdrawn: ["withdrawnAt", "withdrawnBy", "withdrawalReason"],
+    dismissed: ["dismissedAt", "dismissedBy", "dismissalReason"],
+    cancelled: ["cancelledAt", "cancelledBy", "cancellationReason"],
   };
 
-  for (const [terminalStatus, timestamp] of Object.entries(terminalTimestamps)) {
-    if (this.status !== terminalStatus && timestamp) {
-      this.invalidate(
-        `${terminalStatus}At`,
-        `${terminalStatus}At can only be recorded when status is ${terminalStatus}.`
-      );
+  // Validate actors and reasons even when their timestamps are absent.
+  // System cancellation may omit cancelledBy; cancelledAt is required above.
+  for (const [terminalStatus, fieldNames] of Object.entries(terminalAuditFieldsByStatus)) {
+    if (this.status === terminalStatus) {
+      continue;
+    }
+
+    for (const fieldName of fieldNames) {
+      if (hasDocumentValue(this[fieldName])) {
+        this.invalidate(
+          fieldName,
+          `${fieldName} can only be recorded when status is ${terminalStatus}.`
+        );
+      }
     }
   }
 });

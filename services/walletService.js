@@ -32,7 +32,202 @@ class WalletService {
   /* ---------- Run with existing session or create new transaction ---------- */
 
   static async runWithOptionalTransaction(options = {}, callback) {
-    return runServiceTransaction(options, callback);
+    if (typeof callback !== "function") {
+      throw new TypeError("A transaction callback is required.");
+    }
+
+    if (options.session) {
+      WalletService.assertActiveTransaction(options.session);
+    }
+
+    return runServiceTransaction(options, async (session) => {
+      WalletService.assertActiveTransaction(session);
+      return callback(session);
+    });
+  }
+
+  /* ---------- Validate financial inputs before money-helper arithmetic ---------- */
+
+  static assertActiveTransaction(session) {
+    if (!session || typeof session.inTransaction !== "function" || !session.inTransaction()) {
+      throw new Error("Wallet ledger writes require an active transaction.");
+    }
+  }
+
+  static normalizeSignedMinorUnitAmount(value, label) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+      throw new Error(`${label} must be a safe integer in minor units.`);
+    }
+
+    return money.normalizeSignedMinorUnitAmount(value, label);
+  }
+
+  static normalizeMinorUnitAmount(value, label) {
+    WalletService.normalizeSignedMinorUnitAmount(value, label);
+    return money.normalizeMinorUnitAmount(value, label);
+  }
+
+  static normalizePositiveMinorUnitAmount(value, label) {
+    WalletService.normalizeSignedMinorUnitAmount(value, label);
+    return money.normalizePositiveMinorUnitAmount(value, label);
+  }
+
+  static assertIdempotencyKey(value) {
+    if (typeof value !== "string" || !value.trim() || value !== value.trim()) {
+      throw new Error("Idempotency key must be a non-empty string without outer whitespace.");
+    }
+  }
+
+  static assertTransactionWallet(transaction, wallet) {
+    if (
+      !wallet ||
+      String(transaction.wallet) !== String(wallet._id) ||
+      !wallet.countryCode ||
+      !wallet.currency ||
+      transaction.countryCode !== wallet.countryCode ||
+      transaction.currency !== wallet.currency
+    ) {
+      throw new Error("Transaction wallet, country or currency does not match.");
+    }
+  }
+
+  static assertExternalCredit(transaction) {
+    if (
+      transaction.direction !== "credit" ||
+      transaction.provider !== "paystack" ||
+      !["paystack_checkout", "paystack_dva"].includes(transaction.paymentRail) ||
+      typeof transaction.paystackReference !== "string" ||
+      !transaction.paystackReference.trim()
+    ) {
+      throw new Error("Transaction is not a Paystack external credit instruction.");
+    }
+
+    WalletService.normalizePositiveMinorUnitAmount(transaction.amount, "External credit amount");
+  }
+
+  static assertExternalDebit(transaction) {
+    if (
+      transaction.direction !== "debit" ||
+      transaction.provider !== "paystack" ||
+      transaction.paymentRail !== "paystack_transfer"
+    ) {
+      throw new Error("Transaction is not a Paystack external debit instruction.");
+    }
+
+    WalletService.normalizePositiveMinorUnitAmount(transaction.amount, "External debit amount");
+  }
+
+  static assertTransferCode(transaction, transferCode, required = false) {
+    if (required || transferCode != null) {
+      if (typeof transferCode !== "string" || !transferCode.trim()) {
+        throw new Error("Paystack Transfer code is required.");
+      }
+
+      if (
+        transaction.paystackTransferCode &&
+        transaction.paystackTransferCode !== transferCode.trim()
+      ) {
+        throw new Error("Paystack Transfer code does not match the existing instruction.");
+      }
+    }
+  }
+
+  /* A retry must describe the same financial instruction, not just reuse its key. */
+  static assertExistingInstruction(transaction, payload, direction, provider) {
+    const expected = {
+      wallet: payload.walletId,
+      direction,
+      type: payload.type,
+      purpose: payload.purpose ?? null,
+      paymentRail: payload.paymentRail ?? null,
+      provider,
+    };
+
+    const references = [
+      "shift",
+      "shiftOccurrence",
+      "assignmentCase",
+      "shiftApplication",
+      "settlementBatch",
+      "employerRefundBatch",
+      "employerRefundBatchLineId",
+      "dispute",
+      "bankAccount",
+      "dva",
+      "counterpartyWallet",
+      "relatedTransaction",
+      "paystackReference",
+      "paystackTransferReference",
+    ];
+
+    for (const field of references) {
+      expected[field] = payload[field] ?? null;
+    }
+
+    for (const [field, value] of Object.entries(expected)) {
+      const actual = transaction[field] ?? null;
+      if ((actual == null ? null : String(actual)) !== (value == null ? null : String(value))) {
+        throw new Error(`Existing transaction does not match the requested ${field}.`);
+      }
+    }
+
+    const amount = WalletService.normalizePositiveMinorUnitAmount(
+      payload.amount,
+      "Requested amount"
+    );
+
+    const existingAmount = WalletService.normalizePositiveMinorUnitAmount(
+      transaction.amount,
+      "Recorded amount"
+    );
+
+    if (amount !== existingAmount) {
+      throw new Error("Existing transaction does not match the requested amount.");
+    }
+  }
+
+  static assertExistingImmediateMovement(transaction, payload, direction) {
+    WalletService.assertExistingInstruction(
+      transaction,
+      payload,
+      direction,
+      payload.provider ?? "internal"
+    );
+
+    if (transaction.status !== "completed") {
+      throw new Error("Existing immediate wallet movement is not completed.");
+    }
+
+    const requestedDelta = payload.balanceDelta ?? {
+      availableBalance: direction === "credit" ? payload.amount : -payload.amount,
+      pendingBalance: 0,
+      outstandingBalance: 0,
+    };
+
+    for (const field of ["availableBalance", "pendingBalance", "outstandingBalance"]) {
+      const requested = WalletService.normalizeSignedMinorUnitAmount(
+        requestedDelta[field] ?? 0,
+        field
+      );
+
+      if (transaction.balanceDelta?.[field] !== requested) {
+        throw new Error(`Existing transaction does not match the requested ${field} delta.`);
+      }
+    }
+
+    const providerFee = WalletService.normalizeMinorUnitAmount(
+      payload.providerFee ?? 0,
+      "Provider fee"
+    );
+
+    const netAmount = WalletService.normalizeMinorUnitAmount(
+      payload.netAmount ?? payload.amount,
+      "Net amount"
+    );
+
+    if (transaction.providerFee !== providerFee || transaction.netAmount !== netAmount) {
+      throw new Error("Existing transaction does not match the requested fee or net amount.");
+    }
   }
 
   /* ---------- Get active platform settings ---------- */
@@ -126,14 +321,17 @@ class WalletService {
 
   static getBalanceSnapshot(wallet) {
     return {
-      availableBalance: money.normalizeMinorUnitAmount(
+      availableBalance: WalletService.normalizeMinorUnitAmount(
         wallet.availableBalance ?? 0,
         "Available balance"
       ),
 
-      pendingBalance: money.normalizeMinorUnitAmount(wallet.pendingBalance ?? 0, "Pending balance"),
+      pendingBalance: WalletService.normalizeMinorUnitAmount(
+        wallet.pendingBalance ?? 0,
+        "Pending balance"
+      ),
 
-      outstandingBalance: money.normalizeMinorUnitAmount(
+      outstandingBalance: WalletService.normalizeMinorUnitAmount(
         wallet.outstandingBalance ?? 0,
         "Outstanding balance"
       ),
@@ -159,6 +357,10 @@ class WalletService {
   static assertSameCountryAndCurrency(walletA, walletB) {
     if (!walletA || !walletB) {
       throw new Error("Both wallets are required.");
+    }
+
+    if (!walletA.countryCode || !walletA.currency || !walletB.countryCode || !walletB.currency) {
+      throw new Error("Both wallets must identify their country and currency.");
     }
 
     if (walletA.countryCode !== walletB.countryCode) {
@@ -924,6 +1126,7 @@ class WalletService {
 
     session,
   }) {
+    WalletService.assertActiveTransaction(session);
     WalletService.assertWalletIsActive(wallet);
 
     if (
@@ -949,7 +1152,7 @@ class WalletService {
       throw new Error("Transaction direction must be either credit or debit.");
     }
 
-    const normalizedAmount = money.normalizePositiveMinorUnitAmount(
+    const normalizedAmount = WalletService.normalizePositiveMinorUnitAmount(
       amount,
       "Wallet movement amount"
     );
@@ -957,17 +1160,17 @@ class WalletService {
     const balanceBefore = WalletService.getBalanceSnapshot(wallet);
 
     const delta = {
-      availableBalance: money.normalizeSignedMinorUnitAmount(
+      availableBalance: WalletService.normalizeSignedMinorUnitAmount(
         balanceDelta?.availableBalance ?? 0,
         "Available balance delta"
       ),
 
-      pendingBalance: money.normalizeSignedMinorUnitAmount(
+      pendingBalance: WalletService.normalizeSignedMinorUnitAmount(
         balanceDelta?.pendingBalance ?? 0,
         "Pending balance delta"
       ),
 
-      outstandingBalance: money.normalizeSignedMinorUnitAmount(
+      outstandingBalance: WalletService.normalizeSignedMinorUnitAmount(
         balanceDelta?.outstandingBalance ?? 0,
         "Outstanding balance delta"
       ),
@@ -991,17 +1194,17 @@ class WalletService {
     }
 
     const balanceAfter = {
-      availableBalance: money.normalizeMinorUnitAmount(
+      availableBalance: WalletService.normalizeMinorUnitAmount(
         rawBalanceAfter.availableBalance,
         "Available balance after movement"
       ),
 
-      pendingBalance: money.normalizeMinorUnitAmount(
+      pendingBalance: WalletService.normalizeMinorUnitAmount(
         rawBalanceAfter.pendingBalance,
         "Pending balance after movement"
       ),
 
-      outstandingBalance: money.normalizeMinorUnitAmount(
+      outstandingBalance: WalletService.normalizeMinorUnitAmount(
         rawBalanceAfter.outstandingBalance,
         "Outstanding balance after movement"
       ),
@@ -1014,15 +1217,21 @@ class WalletService {
     wallet.outstandingBalance = balanceAfter.outstandingBalance;
 
     if (direction === "credit") {
-      wallet.lifetimeCredit = money.normalizeMinorUnitAmount(
-        (wallet.lifetimeCredit ?? 0) + normalizedAmount,
+      wallet.lifetimeCredit = WalletService.normalizeMinorUnitAmount(
+        WalletService.normalizeMinorUnitAmount(
+          wallet.lifetimeCredit ?? 0,
+          "Existing lifetime credit"
+        ) + normalizedAmount,
         "Lifetime credit"
       );
     }
 
     if (direction === "debit") {
-      wallet.lifetimeDebit = money.normalizeMinorUnitAmount(
-        (wallet.lifetimeDebit ?? 0) + normalizedAmount,
+      wallet.lifetimeDebit = WalletService.normalizeMinorUnitAmount(
+        WalletService.normalizeMinorUnitAmount(
+          wallet.lifetimeDebit ?? 0,
+          "Existing lifetime debit"
+        ) + normalizedAmount,
         "Lifetime debit"
       );
     }
@@ -1066,12 +1275,12 @@ class WalletService {
 
       currency: wallet.currency,
 
-      providerFee: money.normalizeMinorUnitAmount(providerFee ?? 0, "Provider fee"),
+      providerFee: WalletService.normalizeMinorUnitAmount(providerFee ?? 0, "Provider fee"),
 
       netAmount:
         netAmount === null || netAmount === undefined
           ? normalizedAmount
-          : money.normalizeMinorUnitAmount(netAmount, "Net amount"),
+          : WalletService.normalizeMinorUnitAmount(netAmount, "Net amount"),
 
       balanceBefore,
 
@@ -1167,6 +1376,10 @@ class WalletService {
     options = {}
   ) {
     return WalletService.runWithOptionalTransaction(options, async (session) => {
+      WalletService.assertIdempotencyKey(idempotencyKey);
+
+      WalletService.normalizePositiveMinorUnitAmount(amount, "Pending external credit amount");
+
       if (!idempotencyKey) {
         throw new Error("Idempotency key is required for a pending external credit.");
       }
@@ -1177,7 +1390,43 @@ class WalletService {
       );
 
       if (existingTransaction) {
+        WalletService.assertExistingInstruction(
+          existingTransaction,
+          {
+            walletId,
+            amount,
+            type,
+            purpose,
+
+            paymentRail: String(paymentRail || "")
+              .trim()
+              .toLowerCase(),
+
+            paystackReference,
+
+            shift,
+
+            shiftOccurrence,
+
+            assignmentCase,
+
+            shiftApplication,
+
+            settlementBatch,
+
+            dva,
+          },
+          "credit",
+          String(provider || "")
+            .trim()
+            .toLowerCase()
+        );
+
+        WalletService.assertExternalCredit(existingTransaction);
+
         const existingWallet = await Wallet.findById(existingTransaction.wallet).session(session);
+
+        WalletService.assertTransactionWallet(existingTransaction, existingWallet);
 
         return {
           wallet: existingWallet,
@@ -1196,7 +1445,7 @@ class WalletService {
 
       WalletService.assertWalletIsActive(wallet);
 
-      const normalizedAmount = money.normalizePositiveMinorUnitAmount(
+      const normalizedAmount = WalletService.normalizePositiveMinorUnitAmount(
         amount,
         "Pending external credit amount"
       );
@@ -1252,6 +1501,14 @@ class WalletService {
           throw new Error("DVA reference is required for a Paystack DVA credit.");
         }
       }
+
+      WalletService.assertExternalCredit({
+        direction: "credit",
+        provider: cleanProvider,
+        paymentRail: cleanPaymentRail,
+        paystackReference,
+        amount: normalizedAmount,
+      });
 
       const balanceSnapshot = WalletService.getBalanceSnapshot(wallet);
 
@@ -1356,6 +1613,8 @@ class WalletService {
         throw new Error("Pending external credit transaction not found.");
       }
 
+      WalletService.assertExternalCredit(transaction);
+
       if (transaction.status === "completed") {
         return {
           transaction,
@@ -1421,13 +1680,11 @@ class WalletService {
         throw new Error("Transaction ID or Paystack reference is required.");
       }
 
-      const identifierFilter = transactionId
-        ? {
-            _id: transactionId,
-          }
-        : {
-            paystackReference,
-          };
+      const identifierFilter = {
+        ...(transactionId ? { _id: transactionId } : {}),
+
+        ...(paystackReference ? { paystackReference } : {}),
+      };
 
       /**
        * Claim the pending transaction for processing.
@@ -1438,6 +1695,14 @@ class WalletService {
       const transaction = await Transaction.findOneAndUpdate(
         {
           ...identifierFilter,
+
+          direction: "credit",
+
+          provider: "paystack",
+
+          paymentRail: {
+            $in: ["paystack_checkout", "paystack_dva"],
+          },
 
           status: {
             $in: ["pending", "failed"],
@@ -1462,8 +1727,12 @@ class WalletService {
           throw new Error("Pending external credit transaction not found.");
         }
 
+        WalletService.assertExternalCredit(existingTransaction);
+
         if (existingTransaction.status === "completed") {
           const existingWallet = await Wallet.findById(existingTransaction.wallet).session(session);
+
+          WalletService.assertTransactionWallet(existingTransaction, existingWallet);
 
           return {
             wallet: existingWallet,
@@ -1487,14 +1756,18 @@ class WalletService {
         throw new Error("Transaction wallet not found.");
       }
 
+      WalletService.assertExternalCredit(transaction);
+
+      WalletService.assertTransactionWallet(transaction, wallet);
+
       WalletService.assertWalletIsActive(wallet);
 
-      const normalizedAmount = money.normalizePositiveMinorUnitAmount(
+      const normalizedAmount = WalletService.normalizePositiveMinorUnitAmount(
         transaction.amount,
         "External credit amount"
       );
 
-      const normalizedProviderFee = money.normalizeMinorUnitAmount(
+      const normalizedProviderFee = WalletService.normalizeMinorUnitAmount(
         providerFee ?? 0,
         "Provider fee"
       );
@@ -1506,16 +1779,16 @@ class WalletService {
       const normalizedNetAmount =
         netAmount === null || netAmount === undefined
           ? normalizedAmount - normalizedProviderFee
-          : money.normalizeMinorUnitAmount(netAmount, "External credit net amount");
+          : WalletService.normalizeMinorUnitAmount(netAmount, "External credit net amount");
 
-      if (normalizedNetAmount > normalizedAmount) {
-        throw new Error("Net amount cannot exceed the transaction amount.");
+      if (normalizedNetAmount !== normalizedAmount - normalizedProviderFee) {
+        throw new Error("External credit net amount must equal amount minus provider fee.");
       }
 
       const balanceBefore = WalletService.getBalanceSnapshot(wallet);
 
       const balanceAfter = {
-        availableBalance: money.normalizeMinorUnitAmount(
+        availableBalance: WalletService.normalizeMinorUnitAmount(
           balanceBefore.availableBalance + normalizedAmount,
           "Available balance after external credit"
         ),
@@ -1534,7 +1807,10 @@ class WalletService {
       const hasExternalTopupLimit =
         wallet.maximumExternalTopupBalance !== null &&
         wallet.maximumExternalTopupBalance !== undefined &&
-        Number(wallet.maximumExternalTopupBalance) > 0;
+        WalletService.normalizeMinorUnitAmount(
+          wallet.maximumExternalTopupBalance,
+          "External top-up limit"
+        ) > 0;
 
       if (
         isEmployerExternalTopup &&
@@ -1550,8 +1826,11 @@ class WalletService {
 
       wallet.outstandingBalance = balanceAfter.outstandingBalance;
 
-      wallet.lifetimeCredit = money.normalizeMinorUnitAmount(
-        (wallet.lifetimeCredit ?? 0) + normalizedAmount,
+      wallet.lifetimeCredit = WalletService.normalizeMinorUnitAmount(
+        WalletService.normalizeMinorUnitAmount(
+          wallet.lifetimeCredit ?? 0,
+          "Existing lifetime credit"
+        ) + normalizedAmount,
         "Lifetime credit"
       );
 
@@ -1627,6 +1906,8 @@ class WalletService {
     bankAccount = null,
     employerRefundBatch = null,
     employerRefundBatchLineId = null,
+    providerFee = 0,
+    netAmount = null,
   }) {
     if (!transaction) {
       throw new Error("Existing external debit transaction is required.");
@@ -1646,6 +1927,10 @@ class WalletService {
       paymentRail,
 
       provider,
+
+      providerFee: Number(providerFee),
+
+      netAmount: netAmount === null || netAmount === undefined ? Number(amount) : Number(netAmount),
 
       paystackTransferReference: paystackTransferReference || null,
 
@@ -1672,6 +1957,10 @@ class WalletService {
       paymentRail: transaction.paymentRail,
 
       provider: transaction.provider,
+
+      providerFee: Number(transaction.providerFee),
+
+      netAmount: Number(transaction.netAmount),
 
       paystackTransferReference: transaction.paystackTransferReference || null,
 
@@ -1715,7 +2004,7 @@ class WalletService {
 
       idempotencyKey,
 
-      paystackTransferReference,
+      paystackTransferReference = null,
 
       shift = null,
 
@@ -1732,6 +2021,10 @@ class WalletService {
       employerRefundBatchLineId = null,
 
       bankAccount,
+
+      providerFee = 0,
+
+      netAmount = null,
 
       dispute = null,
 
@@ -1756,6 +2049,8 @@ class WalletService {
     }
 
     return WalletService.runWithOptionalTransaction(options, async (session) => {
+      WalletService.assertIdempotencyKey(idempotencyKey);
+
       if (!idempotencyKey) {
         throw new Error("Idempotency key is required for a pending external debit.");
       }
@@ -1780,20 +2075,39 @@ class WalletService {
         throw new Error("Bank account is required for a Paystack external debit.");
       }
 
-      const normalizedPaystackTransferReference = String(paystackTransferReference || "")
-        .trim()
-        .toLowerCase();
+      const normalizedPaystackTransferReference = paystackTransferReference
+        ? String(paystackTransferReference).trim().toLowerCase()
+        : null;
 
-      if (!normalizedPaystackTransferReference) {
-        throw new Error(
-          "Deterministic Paystack Transfer reference is required for a pending external debit."
-        );
+      if (
+        normalizedPaystackTransferReference &&
+        !/^[a-z0-9_-]{16,50}$/.test(normalizedPaystackTransferReference)
+      ) {
+        throw new Error("Paystack Transfer reference is invalid.");
       }
 
-      const normalizedAmount = money.normalizePositiveMinorUnitAmount(
+      const normalizedAmount = WalletService.normalizePositiveMinorUnitAmount(
         amount,
         "Pending external debit amount"
       );
+
+      const normalizedProviderFee = WalletService.normalizeMinorUnitAmount(
+        providerFee ?? 0,
+        "External debit provider fee"
+      );
+
+      if (normalizedProviderFee > normalizedAmount) {
+        throw new Error("Provider fee cannot exceed the external debit amount.");
+      }
+
+      const normalizedNetAmount =
+        netAmount === null || netAmount === undefined
+          ? normalizedAmount
+          : WalletService.normalizePositiveMinorUnitAmount(netAmount, "External debit net amount");
+
+      if (normalizedNetAmount > normalizedAmount) {
+        throw new Error("Net amount cannot exceed the external debit amount.");
+      }
 
       const existingTransaction = await WalletService.getExistingTransactionByIdempotencyKey(
         idempotencyKey,
@@ -1801,6 +2115,48 @@ class WalletService {
       );
 
       if (existingTransaction) {
+        const expectedPaystackTransferReference =
+          normalizedPaystackTransferReference ||
+          existingTransaction.paystackTransferReference ||
+          null;
+
+        WalletService.assertExistingInstruction(
+          existingTransaction,
+          {
+            walletId,
+
+            amount: normalizedAmount,
+
+            type,
+
+            purpose,
+
+            paymentRail: cleanPaymentRail,
+
+            paystackTransferReference: expectedPaystackTransferReference,
+
+            shift,
+
+            shiftOccurrence,
+
+            assignmentCase,
+
+            shiftApplication,
+
+            settlementBatch,
+
+            employerRefundBatch,
+
+            employerRefundBatchLineId,
+
+            bankAccount,
+
+            dispute,
+          },
+          "debit",
+          cleanProvider
+        );
+
         WalletService.assertExistingExternalDebitTransaction({
           transaction: existingTransaction,
 
@@ -1816,7 +2172,11 @@ class WalletService {
 
           provider: cleanProvider,
 
-          paystackTransferReference: normalizedPaystackTransferReference,
+          providerFee: normalizedProviderFee,
+
+          netAmount: normalizedNetAmount,
+
+          paystackTransferReference: expectedPaystackTransferReference,
 
           bankAccount,
 
@@ -1830,6 +2190,8 @@ class WalletService {
         if (!existingWallet) {
           throw new Error("Existing external debit wallet not found.");
         }
+
+        WalletService.assertTransactionWallet(existingTransaction, existingWallet);
 
         return {
           wallet: existingWallet,
@@ -1868,12 +2230,12 @@ class WalletService {
       }
 
       const balanceAfter = {
-        availableBalance: money.normalizeMinorUnitAmount(
+        availableBalance: WalletService.normalizeMinorUnitAmount(
           balanceBefore.availableBalance - normalizedAmount,
           "Available balance after external debit reservation"
         ),
 
-        pendingBalance: money.normalizeMinorUnitAmount(
+        pendingBalance: WalletService.normalizeMinorUnitAmount(
           balanceBefore.pendingBalance + normalizedAmount,
           "Pending balance after external debit reservation"
         ),
@@ -1887,7 +2249,7 @@ class WalletService {
 
       wallet.outstandingBalance = balanceAfter.outstandingBalance;
 
-      /**
+      /*
        * Reservation only.
        *
        * The value still exists inside the wallet. It is merely unavailable
@@ -1926,11 +2288,11 @@ class WalletService {
 
         currency: wallet.currency,
 
-        providerFee: 0,
+        providerFee: normalizedProviderFee,
 
-        netAmount: normalizedAmount,
+        netAmount: normalizedNetAmount,
 
-        /**
+        /*
          * Reservation:
          *
          * available → pending
@@ -2025,8 +2387,26 @@ class WalletService {
         throw new Error("Pending external debit transaction not found.");
       }
 
+      WalletService.assertExternalDebit(transaction);
+
+      const paystackTransferReference = String(transaction.paystackTransferReference || "")
+        .trim()
+        .toLowerCase();
+
+      if (!paystackTransferReference) {
+        throw new Error(
+          "Deterministic Paystack Transfer reference must be persisted before provider processing."
+        );
+      }
+
+      if (!/^[a-z0-9_-]{16,50}$/.test(paystackTransferReference)) {
+        throw new Error("Persisted Paystack Transfer reference is invalid.");
+      }
+
       if (transaction.status === "completed") {
         const wallet = await Wallet.findById(transaction.wallet).session(session);
+
+        WalletService.assertTransactionWallet(transaction, wallet);
 
         return {
           wallet,
@@ -2041,6 +2421,8 @@ class WalletService {
 
       if (transaction.status === "processing") {
         const wallet = await Wallet.findById(transaction.wallet).session(session);
+
+        WalletService.assertTransactionWallet(transaction, wallet);
 
         return {
           wallet,
@@ -2070,6 +2452,8 @@ class WalletService {
       if (!wallet) {
         throw new Error("Transaction wallet not found.");
       }
+
+      WalletService.assertTransactionWallet(transaction, wallet);
 
       WalletService.assertWalletIsActive(wallet);
 
@@ -2135,8 +2519,12 @@ class WalletService {
         throw new Error("Pending external debit transaction not found.");
       }
 
+      WalletService.assertExternalDebit(transaction);
+
       if (transaction.status === "cancelled") {
         const wallet = await Wallet.findById(transaction.wallet).session(session);
+
+        WalletService.assertTransactionWallet(transaction, wallet);
 
         return {
           wallet,
@@ -2174,9 +2562,11 @@ class WalletService {
         throw new Error("Transaction wallet not found.");
       }
 
+      WalletService.assertTransactionWallet(transaction, wallet);
+
       WalletService.assertWalletIsActive(wallet);
 
-      const normalizedAmount = money.normalizePositiveMinorUnitAmount(
+      const normalizedAmount = WalletService.normalizePositiveMinorUnitAmount(
         transaction.amount,
         "External debit amount"
       );
@@ -2190,12 +2580,12 @@ class WalletService {
       }
 
       const balanceAfter = {
-        availableBalance: money.normalizeMinorUnitAmount(
+        availableBalance: WalletService.normalizeMinorUnitAmount(
           balanceBefore.availableBalance + normalizedAmount,
           "Available balance after external debit cancellation"
         ),
 
-        pendingBalance: money.normalizeMinorUnitAmount(
+        pendingBalance: WalletService.normalizeMinorUnitAmount(
           balanceBefore.pendingBalance - normalizedAmount,
           "Pending balance after external debit cancellation"
         ),
@@ -2269,7 +2659,7 @@ class WalletService {
 
       providerEventId = null,
 
-      providerFee = 0,
+      providerFee = null,
 
       netAmount = null,
 
@@ -2290,8 +2680,14 @@ class WalletService {
         throw new Error("Pending external debit transaction not found.");
       }
 
+      WalletService.assertExternalDebit(transaction);
+
+      WalletService.assertTransferCode(transaction, paystackTransferCode, true);
+
       if (transaction.status === "completed") {
         const wallet = await Wallet.findById(transaction.wallet).session(session);
+
+        WalletService.assertTransactionWallet(transaction, wallet);
 
         return {
           wallet,
@@ -2335,17 +2731,22 @@ class WalletService {
         throw new Error("Transaction wallet not found.");
       }
 
+      WalletService.assertTransactionWallet(transaction, wallet);
+
       WalletService.assertWalletIsActive(wallet);
 
-      const normalizedAmount = money.normalizePositiveMinorUnitAmount(
+      const normalizedAmount = WalletService.normalizePositiveMinorUnitAmount(
         transaction.amount,
         "External debit amount"
       );
 
-      const normalizedProviderFee = money.normalizeMinorUnitAmount(
-        providerFee ?? 0,
-        "Provider fee"
-      );
+      const normalizedProviderFee =
+        providerFee === null || providerFee === undefined
+          ? WalletService.normalizeMinorUnitAmount(
+              transaction.providerFee ?? 0,
+              "Stored external debit provider fee"
+            )
+          : WalletService.normalizeMinorUnitAmount(providerFee, "Provider fee");
 
       if (normalizedProviderFee > normalizedAmount) {
         throw new Error("Provider fee cannot exceed the transaction amount.");
@@ -2353,8 +2754,11 @@ class WalletService {
 
       const normalizedNetAmount =
         netAmount === null || netAmount === undefined
-          ? normalizedAmount - normalizedProviderFee
-          : money.normalizeMinorUnitAmount(netAmount, "External debit net amount");
+          ? WalletService.normalizeMinorUnitAmount(
+              transaction.netAmount ?? normalizedAmount,
+              "Stored external debit net amount"
+            )
+          : WalletService.normalizeMinorUnitAmount(netAmount, "External debit net amount");
 
       if (normalizedNetAmount > normalizedAmount) {
         throw new Error("Net amount cannot exceed the transaction amount.");
@@ -2371,7 +2775,7 @@ class WalletService {
       const balanceAfter = {
         availableBalance: balanceBefore.availableBalance,
 
-        pendingBalance: money.normalizeMinorUnitAmount(
+        pendingBalance: WalletService.normalizeMinorUnitAmount(
           balanceBefore.pendingBalance - normalizedAmount,
           "Pending balance after external debit completion"
         ),
@@ -2385,11 +2789,14 @@ class WalletService {
 
       wallet.outstandingBalance = balanceAfter.outstandingBalance;
 
-      /**
+      /*
        * This is the moment the external debit becomes real.
        */
-      wallet.lifetimeDebit = money.normalizeMinorUnitAmount(
-        (wallet.lifetimeDebit ?? 0) + normalizedAmount,
+      wallet.lifetimeDebit = WalletService.normalizeMinorUnitAmount(
+        WalletService.normalizeMinorUnitAmount(
+          wallet.lifetimeDebit ?? 0,
+          "Existing lifetime debit"
+        ) + normalizedAmount,
         "Lifetime debit"
       );
 
@@ -2403,7 +2810,7 @@ class WalletService {
 
       transaction.balanceAfter = balanceAfter;
 
-      /**
+      /*
        * The reservation already removed amount from availableBalance.
        *
        * Provider success now removes that reserved amount from
@@ -2488,8 +2895,14 @@ class WalletService {
         throw new Error("Pending external debit transaction not found.");
       }
 
+      WalletService.assertExternalDebit(transaction);
+
+      WalletService.assertTransferCode(transaction, paystackTransferCode);
+
       if (transaction.status === "failed") {
         const wallet = await Wallet.findById(transaction.wallet).session(session);
+
+        WalletService.assertTransactionWallet(transaction, wallet);
 
         return {
           wallet,
@@ -2504,6 +2917,8 @@ class WalletService {
 
       if (transaction.status === "completed") {
         const wallet = await Wallet.findById(transaction.wallet).session(session);
+
+        WalletService.assertTransactionWallet(transaction, wallet);
 
         return {
           wallet,
@@ -2544,9 +2959,11 @@ class WalletService {
         throw new Error("Transaction wallet not found.");
       }
 
+      WalletService.assertTransactionWallet(transaction, wallet);
+
       WalletService.assertWalletIsActive(wallet);
 
-      const normalizedAmount = money.normalizePositiveMinorUnitAmount(
+      const normalizedAmount = WalletService.normalizePositiveMinorUnitAmount(
         transaction.amount,
         "External debit amount"
       );
@@ -2560,12 +2977,12 @@ class WalletService {
       }
 
       const balanceAfter = {
-        availableBalance: money.normalizeMinorUnitAmount(
+        availableBalance: WalletService.normalizeMinorUnitAmount(
           balanceBefore.availableBalance + normalizedAmount,
           "Available balance after external debit release"
         ),
 
-        pendingBalance: money.normalizeMinorUnitAmount(
+        pendingBalance: WalletService.normalizeMinorUnitAmount(
           balanceBefore.pendingBalance - normalizedAmount,
           "Pending balance after external debit release"
         ),
@@ -2581,7 +2998,7 @@ class WalletService {
 
       wallet.lastTransactionAt = normalizedCurrentTime;
 
-      /**
+      /*
        * No lifetimeDebit change.
        *
        * Provider failure means the value never left the wallet.
@@ -2594,7 +3011,7 @@ class WalletService {
 
       transaction.balanceAfter = balanceAfter;
 
-      /**
+      /*
        * Release:
        *
        * pending → available
@@ -2655,6 +3072,14 @@ class WalletService {
   /* ---------- Credit one wallet from an external or system source ---------- */
 
   static async creditWallet(payload, options = {}) {
+    if (payload.status != null && payload.status !== "completed") {
+      throw new Error("Immediate wallet credits must be completed movements.");
+    }
+
+    WalletService.assertIdempotencyKey(payload.idempotencyKey);
+
+    WalletService.normalizePositiveMinorUnitAmount(payload.amount, "Wallet movement amount");
+
     return WalletService.runWithOptionalTransaction(options, async (session) => {
       const existingTransaction = await WalletService.getExistingTransactionByIdempotencyKey(
         payload.idempotencyKey,
@@ -2662,7 +3087,11 @@ class WalletService {
       );
 
       if (existingTransaction) {
+        WalletService.assertExistingImmediateMovement(existingTransaction, payload, "credit");
+
         const wallet = await Wallet.findById(existingTransaction.wallet).session(session);
+
+        WalletService.assertTransactionWallet(existingTransaction, wallet);
 
         return {
           wallet,
@@ -2702,6 +3131,10 @@ class WalletService {
   /* ---------- Debit one wallet for immediate non-Transfer movement ---------- */
 
   static async debitWallet(payload, options = {}) {
+    if (payload.status != null && payload.status !== "completed") {
+      throw new Error("Immediate wallet debits must be completed movements.");
+    }
+
     const normalizedPaymentRail = String(payload?.paymentRail || "")
       .trim()
       .toLowerCase();
@@ -2713,6 +3146,10 @@ class WalletService {
       );
     }
 
+    WalletService.assertIdempotencyKey(payload.idempotencyKey);
+
+    WalletService.normalizePositiveMinorUnitAmount(payload.amount, "Wallet movement amount");
+
     return WalletService.runWithOptionalTransaction(options, async (session) => {
       const existingTransaction = await WalletService.getExistingTransactionByIdempotencyKey(
         payload.idempotencyKey,
@@ -2720,7 +3157,11 @@ class WalletService {
       );
 
       if (existingTransaction) {
+        WalletService.assertExistingImmediateMovement(existingTransaction, payload, "debit");
+
         const wallet = await Wallet.findById(existingTransaction.wallet).session(session);
+
+        WalletService.assertTransactionWallet(existingTransaction, wallet);
 
         return {
           wallet,
@@ -2819,6 +3260,10 @@ class WalletService {
         throw new Error("Source and destination wallets must be different.");
       }
 
+      WalletService.assertIdempotencyKey(debitIdempotencyKey);
+
+      WalletService.assertIdempotencyKey(creditIdempotencyKey);
+
       if (!debitIdempotencyKey || !creditIdempotencyKey) {
         throw new Error(
           "Debit and credit idempotency keys are required for an internal wallet transfer."
@@ -2854,13 +3299,14 @@ class WalletService {
         ? String(groupReference).trim().toUpperCase()
         : null;
 
-      const normalizedAmount = money.normalizePositiveMinorUnitAmount(amount, "Transfer amount");
+      const normalizedAmount = WalletService.normalizePositiveMinorUnitAmount(
+        amount,
+        "Transfer amount"
+      );
 
-      const [fromWallet, toWallet] = await Promise.all([
-        Wallet.findById(fromWalletId).session(session),
+      const fromWallet = await Wallet.findById(fromWalletId).session(session);
 
-        Wallet.findById(toWalletId).session(session),
-      ]);
+      const toWallet = await Wallet.findById(toWalletId).session(session);
 
       if (!fromWallet || !toWallet) {
         throw new Error("Both source and destination wallets are required.");
@@ -2873,11 +3319,15 @@ class WalletService {
       WalletService.assertSameCountryAndCurrency(fromWallet, toWallet);
 
       {
-        const [existingDebit, existingCredit] = await Promise.all([
-          WalletService.getExistingTransactionByIdempotencyKey(debitIdempotencyKey, session),
+        const existingDebit = await WalletService.getExistingTransactionByIdempotencyKey(
+          debitIdempotencyKey,
+          session
+        );
 
-          WalletService.getExistingTransactionByIdempotencyKey(creditIdempotencyKey, session),
-        ]);
+        const existingCredit = await WalletService.getExistingTransactionByIdempotencyKey(
+          creditIdempotencyKey,
+          session
+        );
 
         if (existingDebit || existingCredit) {
           if (!existingDebit || !existingCredit) {
@@ -2999,7 +3449,7 @@ class WalletService {
 
       const sharedGroupReference = requestedGroupReference || generateGroupReference();
 
-      /**
+      /*
        * Both ledger entries begin as processing because Transaction
        * validation requires completed internal wallet movements to reference
        * their paired entry.

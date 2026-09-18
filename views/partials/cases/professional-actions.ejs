@@ -1,0 +1,177 @@
+<!-- views/partials/cases/professional-actions.ejs -->
+
+<%# ─────────────────────────────── PROFESSIONAL APPEAL ─────────────────────────────── %>
+
+<% if (issue.actions.appeal?.available) { %>
+
+  <form
+    action="<%= issue.actions.appeal.url %>"
+    method="post"
+    data-case-action-form
+    class="border-top pt-4"
+  >
+
+    <input
+      type="hidden"
+      name="_csrf"
+      value="<%= csrfToken %>"
+    />
+
+    <label class="form-label fw-bold">
+      <%= issue.actions.appeal.statementLabel %>
+    </label>
+
+    <textarea
+      class="form-control mb-3"
+      name="statement"
+      rows="3"
+      minlength="10"
+      maxlength="2000"
+      required
+    ></textarea>
+
+    <button
+      type="submit"
+      class="btn btn-sm btn-primary"
+    >
+      <%= issue.actions.appeal.submitLabel %>
+    </button>
+
+    <div
+      class="mt-3 d-none"
+      data-case-action-message
+    ></div>
+
+  </form>
+
+<% } %>
+
+
+<%# ─────────────────────────────── PROFESSIONAL REBUTTAL ─────────────────────────────── %>
+
+<% if (issue.actions.rebuttal?.available) { %>
+
+  <form
+    action="<%= issue.actions.rebuttal.url %>"
+    method="post"
+    data-case-action-form
+    class="border-top pt-4"
+  >
+
+    <input
+      type="hidden"
+      name="_csrf"
+      value="<%= csrfToken %>"
+    />
+
+    <label class="form-label fw-bold">
+      <%= issue.actions.rebuttal.statementLabel %>
+    </label>
+
+    <textarea
+      class="form-control mb-3"
+      name="statement"
+      rows="3"
+      minlength="10"
+      maxlength="2000"
+      required
+    ></textarea>
+
+    <button
+      type="submit"
+      class="btn btn-sm btn-primary"
+    >
+      <%= issue.actions.rebuttal.submitLabel %>
+    </button>
+
+    <div
+      class="mt-3 d-none"
+      data-case-action-message
+    ></div>
+
+  </form>
+
+<% } %>
+
+
+<%# ─────────────────────────────── PROFESSIONAL RESPONSE TO EMPLOYER DISPUTE ─────────────────────────────── %>
+
+<% if (issue.actions.respondToDispute?.available) { %>
+
+  <form
+    action="<%= issue.actions.respondToDispute.url %>"
+    method="post"
+    data-case-action-form
+    class="border-top pt-4"
+  >
+
+    <input
+      type="hidden"
+      name="_csrf"
+      value="<%= csrfToken %>"
+    />
+
+    <label class="form-label fw-bold">
+      <%= issue.actions.respondToDispute.statementLabel %>
+    </label>
+
+    <textarea
+      class="form-control mb-3"
+      name="statement"
+      rows="3"
+      minlength="10"
+      maxlength="2000"
+      required
+    ></textarea>
+
+
+    <%# Backend decides which counter-position fields belong to this dispute issue. %>
+
+    <% if (issue.actions.respondToDispute.counterPositionFields.length) { %>
+
+      <div class="row g-3 mb-3">
+
+        <% issue.actions.respondToDispute.counterPositionFields.forEach((field) => { %>
+
+          <div class="<%= field.columnClass %>">
+
+            <label class="form-label">
+              <%= field.label %>
+            </label>
+
+            <input
+              class="form-control"
+              type="<%= field.control %>"
+              name="<%= field.inputName %>"
+              <% if (field.min !== undefined) { %>
+                min="<%= field.min %>"
+              <% } %>
+              <% if (field.step !== undefined) { %>
+                step="<%= field.step %>"
+              <% } %>
+            />
+
+          </div>
+
+        <% }); %>
+
+      </div>
+
+    <% } %>
+
+
+    <button
+      type="submit"
+      class="btn btn-sm btn-primary"
+    >
+      <%= issue.actions.respondToDispute.submitLabel %>
+    </button>
+
+    <div
+      class="mt-3 d-none"
+      data-case-action-message
+    ></div>
+
+  </form>
+
+<% } %>

@@ -2,8 +2,6 @@
 
 const mongoose = require("mongoose");
 
-const attendanceLocationSchema = require("./helpers/attendanceLocationSchema");
-
 const {
   minorUnitAmountField,
   nonNegativeIntegerField,
@@ -21,45 +19,169 @@ const {
 
 const {
   calculatePatternScheduledMinutes,
-  requiresParentAttendancePins,
-  hasParentAttendanceCompatibilityData,
   validateMinimumDetails,
 } = require("./helpers/shiftSchemaHelpers");
 
 const {
   MAX_SHIFT_OCCURRENCES,
-  MAX_APPLICATION_ROUNDS,
   MINUTES_PER_DAY,
+  FINANCIAL_RATE_SCALE,
+  PROFESSIONAL_TYPE_OPTIONS,
+} = require("../constants/shiftPosting");
+
+const { MAX_APPLICATION_ROUNDS } = require("../constants/shiftApplication");
+
+const {
   SHIFT_STATUSES,
   SHIFT_PAYMENT_STATUSES,
-  SHIFT_ASSIGNMENT_SUMMARY_REQUIRED_STATUSES,
   SHIFT_PUBLISHED_PAYMENT_STATUSES,
   SHIFT_FINAL_PAYMENT_STATUSES,
   SHIFT_CANCELLABLE_FROM_STATUSES,
-  ATTENDANCE_STATUSES,
-  ATTENDANCE_OVERRIDE_TYPES,
-  ATTENDANCE_OVERRIDE_REASONS,
-  LATE_CHECKOUT_OPTIONS,
-  LATE_CHECKOUT_REASONS,
-  CHECKOUT_FALLBACK_REASONS,
-  MISSED_CHECKIN_REASONS,
-  MISSED_CHECKIN_OUTCOMES,
-  REPLACEMENT_HIRING_STATUSES,
-  ACTIVE_REPLACEMENT_HIRING_STATUSES,
-  REPLACEMENT_HIRING_CONTEXT_STATUSES,
-  REPLACEMENT_REASON_CODES,
-  REPLACEMENT_REASON_CODES_REQUIRING_DETAILS,
   CANCELLATION_ACTORS,
   USER_CANCELLATION_ACTORS,
   SHIFT_CANCELLATION_CODES,
   CANCELLATION_CODE_ACTORS,
   EMPLOYER_CANCELLATION_REASON_CODES,
   CANCELLATION_REASON_CODES_REQUIRING_DETAILS,
+  BASE_PLATFORM_FEE_BENEFIT_SOURCES,
 } = require("../constants/shiftLifecycle");
 
-const { FINANCIAL_RATE_SCALE } = require("../constants/shiftPosting");
-
 const money = require("../utils/money");
+
+/**
+ * Shift is the shared marketplace post, schedule and protected-funding unit.
+ *
+ * occurrenceCount counts scheduled dates for one position (maximum 30).
+ * requiredProfessionals counts positions with that same schedule and rate.
+ * totalOccurrenceCount counts all position/date records, including unfilled ones.
+ *
+ * Positions are numbered 1 through requiredProfessionals. Assignment and
+ * occurrence services must use the same stable slotNumber within this Shift.
+ * Replacements retain the position identity and cover their own sequence range.
+ * They do not increase requiredProfessionals or create additional funded capacity.
+ *
+ * ShiftAssignment owns each professional's assignment. ShiftOccurrence owns
+ * attendance, PINs, overtime, claims/disputes, payout and refund authority.
+ * No individual professional's attendance or assignment is mirrored here.
+ *
+ * Parent summaries are derived by domain services and reconciliation. They do
+ * not authorize acceptance, replacement, adjudication or movement of money.
+ * Acceptance must enforce capacity transactionally against the actual records.
+ *
+ * Employer funding covers all positions before publication. Professional payout
+ * and platform-fee accounting remain separate. No professional commission is
+ * deducted. Refund execution follows the original funding source.
+ */
+
+const ASSIGNMENT_PROGRESS_FIELDS = [
+  "unassigned",
+  "assigned",
+  "replacementRequired",
+  "expiredUnfilled",
+];
+
+const STATUS_PROGRESS_FIELDS = [
+  "scheduled",
+  "inProgress",
+  "pendingSettlement",
+  "completed",
+  "cancelled",
+  "noShow",
+  "disputed",
+  "expiredUnfilled",
+];
+
+const SETTLEMENT_PROGRESS_FIELDS = [
+  "settlementNotDue",
+  "pendingReview",
+  "awaitingOvertimeReview",
+  "awaitingTopup",
+  "approvedForRelease",
+  "releasePending",
+  "released",
+  "failed",
+  "settlementDisputed",
+];
+
+const REFUND_PROGRESS_FIELDS = [
+  "refundNotEligible",
+  "refundHeld",
+  "refundEligible",
+  "refundBatched",
+  "refundProcessing",
+  "refunded",
+];
+
+const PROGRESS_FIELDS = [
+  ...new Set([
+    ...ASSIGNMENT_PROGRESS_FIELDS,
+    ...STATUS_PROGRESS_FIELDS,
+    ...SETTLEMENT_PROGRESS_FIELDS,
+    ...REFUND_PROGRESS_FIELDS,
+    "resolved",
+  ]),
+];
+
+/* ─────────────────────────────── FIELD HELPERS ─────────────────────────────── */
+
+function nullableDateField() {
+  return {
+    type: Date,
+    default: null,
+  };
+}
+
+function referenceField(ref, required = false) {
+  return required
+    ? {
+        type: mongoose.Schema.Types.ObjectId,
+        ref,
+        required: true,
+      }
+    : {
+        type: mongoose.Schema.Types.ObjectId,
+        ref,
+        default: null,
+      };
+}
+
+function integerField(options = {}) {
+  const { min = 0, max, required = true } = options;
+
+  const defaultValue = Object.prototype.hasOwnProperty.call(options, "defaultValue")
+    ? options.defaultValue
+    : 0;
+
+  const field = {
+    type: Number,
+    min,
+    default: defaultValue,
+    required,
+    validate: {
+      validator: Number.isSafeInteger,
+      message: "{PATH} must be a safe whole number.",
+    },
+  };
+
+  if (max !== undefined) {
+    field.max = max;
+  }
+
+  return field;
+}
+
+function nullableSequenceField() {
+  return {
+    type: Number,
+    default: null,
+    min: 1,
+    max: MAX_SHIFT_OCCURRENCES,
+    validate: {
+      validator: isNullableSafeInteger,
+      message: "{PATH} must be a whole-number date sequence when supplied.",
+    },
+  };
+}
 
 function isSupportedFinancialRate(value) {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
@@ -79,246 +201,89 @@ function isSupportedFinancialRate(value) {
   }
 }
 
-/**
- * ENGAGEMENT ARCHITECTURE:
- *
- * Shift is the public marketplace post and hiring unit.
- *
- * scheduleMode "single":
- * - one Shift
- * - one work occurrence
- * - one application process for each active hiring need
- *
- * scheduleMode "multiple":
- * - one Shift
- * - one application process for each active hiring need
- * - between 2 and 30 generated ShiftOccurrence records
- *
- * One current assignment may coexist with one scheduled replacement:
- *
- * - the outgoing professional may remain responsible through a confirmed
- *   final occurrence
- * - replacement recruitment may open for the untouched future tail
- * - an accepted replacement may remain scheduled until their range begins
- *
- * Replacement recruitment is represented by replacementHiring and does not
- * require the whole parent Shift to return to status "open".
- *
- * ShiftOccurrence records hold the authoritative date-specific assignee,
- * attendance, overtime, cancellation, refund and settlement state.
- *
- * They are not separately claimable jobs and parent assignedProfessional
- * must never be used as the sole payout authority.
- *
- * PAYMENT ARCHITECTURE:
- *
- * Loqum uses a Protected Shift payment flow.
- *
- * Employer pays:
- * professional approved pay + Loqum platform fee.
- *
- * The active platform fee is read from PlatformSettings when the
- * engagement is posted.
- *
- * The selected rate is snapshotted into the Shift as platformFeeRate.
- *
- * The professional receives the agreed or approved professional pay.
- * No professional-side commission deduction applies at launch.
- *
- * PROFESSIONAL PAYOUT VS PLATFORM FEE:
- *
- * Professional payout and Loqum platform-fee collection are separate
- * authorities.
- *
- * ShiftSettlementBatch is professional payout only.
- *
- * Loqum platform fees are earned/collected independently at occurrence level.
- * A fee movement must never cause parent paymentStatus to become
- * release_pending, partially_released or released.
- *
- * The parent Shift stores summary totals only. It is not payout or fee-release
- * authority.
- *
- * Each occurrence independently establishes earnings entitlement. Approved
- * occurrence earnings are grouped into the professional's general weekly
- * ShiftSettlementBatch. A batch may contain work from several employers and
- * parent Shift engagements.
- *
- * Funds belonging to untouched future occurrences remain protected in escrow.
- * If an occurrence expires unfilled, is cancelled or has unused scheduled
- * time after final pricing, an occurrence-level EmployerRefund obligation
- * may be established.
- *
- * Wallet-funded protected money returns to the employer wallet.
- * Paystack Checkout-funded protected money returns through Paystack against
- * the original payment. An approved Paystack Transfer may be used only as
- * the fallback when the provider refund cannot be completed.
- *
- * Publication rule:
- *
- * A Shift is not published or opened for applications until the
- * employer funds the full estimated employer charge.
- *
- * A newly created Shift begins as:
- *
- * status: pending_funding
- * paymentStatus: unpaid
- *
- * Once wallet funding succeeds or Paystack confirms payment:
- *
- * - Protected Shift balance is credited
- * - paymentStatus becomes funded
- * - status becomes open
- * - publishedAt is recorded
- *
- * MARKETPLACE AND FILL CUTOFF:
- *
- * The parent Shift does not own one authoritative fill cutoff because every
- * occurrence may have a different fillCutoffAt and unfilledFinalizationAt.
- * Marketplace and finalisation services must query ShiftOccurrence records.
- *
- * A parent may remain open while at least one ordinary unassigned occurrence
- * remains scheduled and fillable. Earlier occurrences may already be
- * expired_unfilled and refunded, so an open parent may legitimately have
- * paymentStatus partially_refunded.
- *
- * FUNDING OPTIONS:
- *
- * 1. Employer Wallet
- *    Employer wallet availableBalance is debited.
- *    Protected Shift balance is credited.
- *
- * 2. Paystack Checkout
- *    Employer pays through Paystack Checkout.
- *    Loqum verifies the payment before crediting Protected Shift funds.
- *
- * DVA:
- *
- * DVA only tops up the employer wallet.
- * It does not directly fund a Shift.
- *
- * ATTENDANCE:
- *
- * Attendance is validated using geofencing.
- *
- * Every ShiftOccurrence owns authoritative attendance, overtime and settlement
- * state. Parent attendance fields exist only as single-Shift display compatibility.
- *
- * Every Shift, including scheduleMode "single", has at least one
- * authoritative ShiftOccurrence. Parent attendance fields remain only as
- * temporary compatibility summaries for single engagements and must remain
- * empty for multiple engagements.
- *
- * CANCELLATION, ACTIVE WORK AND REPLACEMENT:
- *
- * The employer, the system or an administrator may cancel the entire
- * engagement through the parent Shift cancellation workflow.
- *
- * For a multiple engagement, the employer or an administrator may also
- * selectively cancel one untouched future ShiftOccurrence without cancelling
- * the parent engagement. Other scheduled occurrences remain active.
- *
- * A professional does not cancel the employer-owned Shift or occurrence.
- * Professional unavailability is handled through assignment release and
- * replacement hiring unless the employer independently decides that coverage
- * is no longer required for that occurrence.
- *
- * Parent Shift cancellation fields record only cancellation of the entire
- * engagement. Selective occurrence cancellation audit belongs exclusively to
- * the affected ShiftOccurrence.
- *
- * Parent cancellation summaries are operational locators only. Professional
- * cancellation entitlement, platform-fee outcome and employer refund amounts
- * remain occurrence-level authorities and must not be recalculated here.
- */
+function rateField() {
+  return {
+    type: Number,
+    required: true,
+    min: 0,
+    max: 1,
+    validate: {
+      validator: isSupportedFinancialRate,
+      message: "{PATH} must use the supported financial rate precision.",
+    },
+  };
+}
 
-/* ─────────────────────────────── PARENT OCCURRENCE PROGRESS ─────────────────────────────── */
+function safeProduct(left, right, label) {
+  if (!Number.isSafeInteger(left) || left < 0 || !Number.isSafeInteger(right) || right < 0) {
+    throw new Error(`${label} requires non-negative safe integers.`);
+  }
+
+  const result = BigInt(left) * BigInt(right);
+
+  if (result > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`${label} exceeds the supported safe-integer range.`);
+  }
+
+  return Number(result);
+}
+
+function count(summary, field) {
+  return summary?.[field] ?? 0;
+}
+
+function sumCounts(summary, fields) {
+  return fields.reduce((total, field) => total + count(summary, field), 0);
+}
+
+/* ─────────────────────────────── PARENT SUMMARIES ─────────────────────────────── */
 
 const occurrenceProgressSchema = new mongoose.Schema(
   {
-    unassigned: nonNegativeIntegerField(),
+    ...Object.fromEntries(PROGRESS_FIELDS.map((field) => [field, nonNegativeIntegerField()])),
 
-    assigned: nonNegativeIntegerField(),
-
-    replacementRequired: nonNegativeIntegerField(),
-
-    expiredUnfilled: nonNegativeIntegerField(),
-
-    scheduled: nonNegativeIntegerField(),
-
-    inProgress: nonNegativeIntegerField(),
-
-    pendingSettlement: nonNegativeIntegerField(),
-
-    completed: nonNegativeIntegerField(),
-
-    cancelled: nonNegativeIntegerField(),
-
-    noShow: nonNegativeIntegerField(),
-
-    disputed: nonNegativeIntegerField(),
-
-    settlementNotDue: nonNegativeIntegerField(),
-
-    pendingReview: nonNegativeIntegerField(),
-
-    awaitingOvertimeReview: nonNegativeIntegerField(),
-
-    awaitingTopup: nonNegativeIntegerField(),
-
-    approvedForRelease: nonNegativeIntegerField(),
-
-    releasePending: nonNegativeIntegerField(),
-
-    released: nonNegativeIntegerField(),
-
-    failed: nonNegativeIntegerField(),
-
-    settlementDisputed: nonNegativeIntegerField(),
-
-    refundNotEligible: nonNegativeIntegerField(),
-
-    refundHeld: nonNegativeIntegerField(),
-
-    refundEligible: nonNegativeIntegerField(),
-
-    refundBatched: nonNegativeIntegerField(),
-
-    refundProcessing: nonNegativeIntegerField(),
-
-    refunded: nonNegativeIntegerField(),
-
-    resolved: nonNegativeIntegerField(),
-
-    lastReconciledAt: {
-      type: Date,
-      default: null,
-    },
+    lastReconciledAt: nullableDateField(),
   },
   {
     _id: false,
   }
 );
 
-/* ─────────────────────────────── PARENT SETTLEMENT SUMMARY ─────────────────────────────── */
+// Assignment counts include replacement history; they are not position counts.
+const assignmentSummarySchema = new mongoose.Schema(
+  {
+    scheduled: nonNegativeIntegerField(),
 
-/**
- * Parent financial summary only.
- *
- * Professional payout and Loqum platform-fee collection are independent
- * authorities:
- *
- * - approvedProfessionalPay / releasedProfessionalPay summarize the
- *   professional settlement lifecycle.
- *
- * - earnedPlatformFee / collectedPlatformFee summarize Loqum fee state.
- *
- * Platform-fee movement MUST NOT advance the parent professional payout state.
- *
- * committedEmployerCharge is a summary of money that is no longer refundable
- * because it belongs to either an approved professional entitlement or an
- * earned Loqum fee. It is not a settlement instruction.
- */
+    active: nonNegativeIntegerField(),
+
+    ending: nonNegativeIntegerField(),
+
+    ended: nonNegativeIntegerField(),
+
+    cancelled: nonNegativeIntegerField(),
+
+    lastReconciledAt: nullableDateField(),
+  },
+  {
+    _id: false,
+  }
+);
+
+const hiringSummarySchema = new mongoose.Schema(
+  {
+    // Historical initial acceptances; ending an assignment does not decrement it.
+    initialAcceptedCount: nonNegativeIntegerField(),
+
+    // Open replacement opportunities, including isolated occurrence replacement.
+    openReplacementCount: nonNegativeIntegerField(),
+
+    lastReconciledAt: nullableDateField(),
+  },
+  {
+    _id: false,
+  }
+);
+
 const settlementSummarySchema = new mongoose.Schema(
   {
     approvedProfessionalPay: minorUnitAmountField({
@@ -341,73 +306,32 @@ const settlementSummarySchema = new mongoose.Schema(
       defaultValue: 0,
     }),
 
-    lastProfessionalApprovedAt: {
-      type: Date,
-      default: null,
-    },
+    lastProfessionalApprovedAt: nullableDateField(),
 
-    lastProfessionalReleasedAt: {
-      type: Date,
-      default: null,
-    },
+    lastProfessionalReleasedAt: nullableDateField(),
 
-    lastPlatformFeeEarnedAt: {
-      type: Date,
-      default: null,
-    },
+    lastPlatformFeeEarnedAt: nullableDateField(),
 
-    lastPlatformFeeCollectedAt: {
-      type: Date,
-      default: null,
-    },
+    lastPlatformFeeCollectedAt: nullableDateField(),
 
-    lastReconciledAt: {
-      type: Date,
-      default: null,
-    },
+    lastReconciledAt: nullableDateField(),
   },
   {
     _id: false,
   }
 );
 
-/* ─────────────────────────────── CANCELLATION POLICY SNAPSHOT ─────────────────────────────── */
+/* ─────────────────────────────── CANCELLATION SCHEMAS ─────────────────────────────── */
 
 const cancellationPolicySnapshotSchema = new mongoose.Schema(
   {
-    lateCancellationWindowMinutes: {
-      type: Number,
-      min: 0,
-      required: true,
-      validate: {
-        validator: Number.isSafeInteger,
-        message: "cancellationPolicySnapshot.lateCancellationWindowMinutes must be a whole number.",
-      },
-    },
+    lateCancellationWindowMinutes: integerField({
+      defaultValue: undefined,
+    }),
 
-    lateCancellationProfessionalPayRate: {
-      type: Number,
-      min: 0,
-      max: 1,
-      required: true,
-      validate: {
-        validator: isSupportedFinancialRate,
-        message:
-          "cancellationPolicySnapshot.lateCancellationProfessionalPayRate must use the supported financial rate precision.",
-      },
-    },
+    lateCancellationProfessionalPayRate: rateField(),
 
-    activeWorkCancellationMinimumPayRate: {
-      type: Number,
-      min: 0,
-      max: 1,
-      required: true,
-      validate: {
-        validator: isSupportedFinancialRate,
-        message:
-          "cancellationPolicySnapshot.activeWorkCancellationMinimumPayRate must use the supported financial rate precision.",
-      },
-    },
+    activeWorkCancellationMinimumPayRate: rateField(),
 
     lockedAt: {
       type: Date,
@@ -419,53 +343,15 @@ const cancellationPolicySnapshotSchema = new mongoose.Schema(
   }
 );
 
-/* ─────────────────────────────── CANCELLATION SUMMARY ─────────────────────────────── */
-
 const cancellationSummarySchema = new mongoose.Schema(
   {
-    /**
-     * Parent cancellation-range summary only.
-     *
-     * Financial cancellation entitlement, platform-fee earning and employer
-     * refund amounts belong to ShiftOccurrence and their dedicated services.
-     *
-     * The parent stores only enough information to identify the affected
-     * occurrence range and whether occurrence-level compensation exists.
-     */
-    firstAffectedOccurrence: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "ShiftOccurrence",
-      default: null,
-    },
+    // Locator only. Individual outcomes and compensation remain on occurrences.
+    firstAffectedOccurrence: referenceField("ShiftOccurrence"),
 
-    firstAffectedSequenceNumber: {
-      type: Number,
-      default: null,
-      min: 1,
-      max: MAX_SHIFT_OCCURRENCES,
-      validate: {
-        validator: isNullableSafeInteger,
-        message: "cancellationSummary.firstAffectedSequenceNumber must be a whole number.",
-      },
-    },
+    firstAffectedSequenceNumber: nullableSequenceField(),
 
-    cancelledOccurrenceCount: {
-      type: Number,
-      default: 0,
-      min: 0,
-      max: MAX_SHIFT_OCCURRENCES,
-      validate: {
-        validator: Number.isSafeInteger,
-        message: "cancellationSummary.cancelledOccurrenceCount must be a whole number.",
-      },
-    },
+    cancelledOccurrenceCount: nonNegativeIntegerField(),
 
-    /**
-     * Derived parent indicator only.
-     *
-     * When true, the authoritative compensation amount remains on the
-     * affected ShiftOccurrence.
-     */
     compensationApplicable: {
       type: Boolean,
       default: false,
@@ -476,170 +362,34 @@ const cancellationSummarySchema = new mongoose.Schema(
   }
 );
 
-/* ─────────────────────────────── ACTIVE-WORK CANCELLATION SUMMARY ─────────────────────────────── */
-
-const activeWorkCancellationSummarySchema = new mongoose.Schema(
+const activeCancellationOccurrenceSchema = new mongoose.Schema(
   {
-    /**
-     * Parent active-work cancellation locator only.
-     *
-     * The authoritative early-work calculation remains on the affected
-     * ShiftOccurrence.activeWorkCancellation record.
-     *
-     * Parent cancellation actor/reason/time already live on the top-level
-     * Shift cancellation audit, so they are not duplicated here.
-     */
-    occurred: {
-      type: Boolean,
-      default: false,
-    },
+    occurrence: referenceField("ShiftOccurrence", true),
 
-    affectedOccurrence: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "ShiftOccurrence",
-      default: null,
-    },
-
-    affectedSequenceNumber: {
-      type: Number,
-      default: null,
+    sequenceNumber: integerField({
       min: 1,
       max: MAX_SHIFT_OCCURRENCES,
-      validate: {
-        validator: isNullableSafeInteger,
-        message: "activeWorkCancellation.affectedSequenceNumber must be a whole number.",
-      },
-    },
-
-    effectiveAt: {
-      type: Date,
-      default: null,
-    },
+      defaultValue: undefined,
+    }),
   },
   {
     _id: false,
   }
 );
 
-/* ─────────────────────────────── REPLACEMENT HIRING SUMMARY ─────────────────────────────── */
-
-const replacementHiringSchema = new mongoose.Schema(
+const activeWorkCancellationSummarySchema = new mongoose.Schema(
   {
-    status: {
-      type: String,
-      enum: REPLACEMENT_HIRING_STATUSES,
-      default: "closed",
-      required: true,
+    occurred: {
+      type: Boolean,
+      default: false,
     },
 
-    assignmentCase: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "ShiftAssignmentCase",
-      default: null,
+    affectedOccurrences: {
+      type: [activeCancellationOccurrenceSchema],
+      default: [],
     },
 
-    applicationRound: {
-      type: Number,
-      default: null,
-      min: 2,
-      max: MAX_APPLICATION_ROUNDS,
-      validate: {
-        validator: isNullableSafeInteger,
-        message: "replacementHiring.applicationRound must be a whole number.",
-      },
-    },
-
-    replacementForAssignment: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "ShiftAssignment",
-      default: null,
-    },
-
-    startSequenceNumber: {
-      type: Number,
-      default: null,
-      min: 1,
-      max: MAX_SHIFT_OCCURRENCES,
-      validate: {
-        validator: isNullableSafeInteger,
-        message: "replacementHiring.startSequenceNumber must be a whole number.",
-      },
-    },
-
-    endSequenceNumber: {
-      type: Number,
-      default: null,
-      min: 1,
-      max: MAX_SHIFT_OCCURRENCES,
-      validate: {
-        validator: isNullableSafeInteger,
-        message: "replacementHiring.endSequenceNumber must be a whole number.",
-      },
-    },
-
-    occurrenceCount: {
-      type: Number,
-      default: 0,
-      min: 0,
-      max: MAX_SHIFT_OCCURRENCES,
-      validate: {
-        validator: Number.isSafeInteger,
-        message: "replacementHiring.occurrenceCount must be a whole number.",
-      },
-    },
-
-    reasonCode: {
-      type: String,
-      enum: [...REPLACEMENT_REASON_CODES, null],
-      default: null,
-    },
-
-    reasonDetails: {
-      type: String,
-      trim: true,
-      maxlength: 500,
-      default: null,
-    },
-
-    openedAt: {
-      type: Date,
-      default: null,
-    },
-
-    openedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
-
-    filledAt: {
-      type: Date,
-      default: null,
-    },
-
-    filledByAssignment: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "ShiftAssignment",
-      default: null,
-    },
-
-    cancelledAt: {
-      type: Date,
-      default: null,
-    },
-
-    cancelledBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
-
-    cancellationReason: {
-      type: String,
-      trim: true,
-      maxlength: 500,
-      default: null,
-    },
+    effectiveAt: nullableDateField(),
   },
   {
     _id: false,
@@ -650,7 +400,7 @@ const replacementHiringSchema = new mongoose.Schema(
 
 const shiftSchema = new mongoose.Schema(
   {
-    // --- CORE IDENTITY ---
+    // --- IDENTITY AND STAFFING REQUIREMENT ---
 
     referenceCode: {
       type: String,
@@ -659,23 +409,11 @@ const shiftSchema = new mongoose.Schema(
       required: true,
     },
 
-    business: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "EmployerProfile",
-      required: true,
-    },
+    business: referenceField("EmployerProfile", true),
 
-    branch: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Branch",
-      required: true,
-    },
+    branch: referenceField("Branch", true),
 
-    postedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
+    postedBy: referenceField("User", true),
 
     department: {
       type: String,
@@ -692,19 +430,17 @@ const shiftSchema = new mongoose.Schema(
 
     professionalType: {
       type: String,
-      enum: [
-        "pharmacist",
-        "pharmacy_technician",
-        "nurse",
-        "doctor",
-        "lab_scientist",
-        "radiographer",
-        "physiotherapist",
-      ],
+      enum: PROFESSIONAL_TYPE_OPTIONS.map((option) => option.value),
       required: true,
     },
 
-    // --- SCHEDULE ---
+    requiredProfessionals: integerField({
+      min: 1,
+      defaultValue: 1,
+    }),
+
+    // --- SHARED SCHEDULE ---
+    // Schedule quantities describe one position, independently of headcount.
 
     scheduleMode: {
       type: String,
@@ -713,17 +449,11 @@ const shiftSchema = new mongoose.Schema(
       required: true,
     },
 
-    occurrenceCount: {
-      type: Number,
-      default: 1,
+    occurrenceCount: integerField({
       min: 1,
       max: MAX_SHIFT_OCCURRENCES,
-      required: true,
-      validate: {
-        validator: Number.isSafeInteger,
-        message: "occurrenceCount must be a whole number.",
-      },
-    },
+      defaultValue: 1,
+    }),
 
     repeatDays: [
       {
@@ -775,7 +505,7 @@ const shiftSchema = new mongoose.Schema(
       max: MINUTES_PER_DAY - 1,
       validate: {
         validator: isNullableSafeInteger,
-        message: "dailyStartTimeMinutes must be a whole number.",
+        message: "Start minutes must be a whole number.",
       },
     },
 
@@ -786,7 +516,7 @@ const shiftSchema = new mongoose.Schema(
       max: MINUTES_PER_DAY - 1,
       validate: {
         validator: isNullableSafeInteger,
-        message: "dailyEndTimeMinutes must be a whole number.",
+        message: "End minutes must be a whole number.",
       },
     },
 
@@ -795,27 +525,17 @@ const shiftSchema = new mongoose.Schema(
       default: false,
     },
 
-    scheduledMinutesPerOccurrence: {
-      type: Number,
-      required: true,
+    scheduledMinutesPerOccurrence: integerField({
       min: 1,
       max: MINUTES_PER_DAY,
-      validate: {
-        validator: Number.isSafeInteger,
-        message: "scheduledMinutesPerOccurrence must be a whole number.",
-      },
-    },
+      defaultValue: undefined,
+    }),
 
-    totalScheduledMinutes: {
-      type: Number,
-      required: true,
+    totalScheduledMinutes: integerField({
       min: 1,
       max: MAX_SHIFT_OCCURRENCES * MINUTES_PER_DAY,
-      validate: {
-        validator: Number.isSafeInteger,
-        message: "totalScheduledMinutes must be a whole number.",
-      },
-    },
+      defaultValue: undefined,
+    }),
 
     startTime: {
       type: Date,
@@ -833,33 +553,22 @@ const shiftSchema = new mongoose.Schema(
       min: 1 / 60,
     },
 
-    breakDuration: {
-      type: Number,
-      default: 0,
-      min: 0,
+    breakDuration: integerField({
       max: MINUTES_PER_DAY,
-      validate: {
-        validator: Number.isSafeInteger,
-        message: "breakDuration must be a whole number of minutes.",
-      },
-    },
+    }),
 
-    // Single-shift compatibility summaries only.
-    // Multiple engagements use occurrence pricing and settlementSummary.
+    // Derived during document validation; these include every required position.
+    totalOccurrenceCount: integerField({
+      min: 1,
+      defaultValue: undefined,
+    }),
 
-    baseBillableHours: {
-      type: Number,
-      default: null,
-      min: 0,
-    },
+    totalStaffScheduledMinutes: integerField({
+      min: 1,
+      defaultValue: undefined,
+    }),
 
-    billableHours: {
-      type: Number,
-      default: null,
-      min: 0,
-    },
-
-    // --- FINANCIALS ---
+    // --- FINANCIAL SNAPSHOTS AND SUMMARIES ---
 
     countryCode: {
       type: String,
@@ -883,27 +592,37 @@ const shiftSchema = new mongoose.Schema(
 
     hourlyRate: requiredPositiveMinorUnitAmountField(),
 
-    platformFeeRate: {
-      type: Number,
+    // Standard scheduled/base platform-fee rate in force for this Shift.
+    // Preserved even when a subscription benefit reduces the applied BASE rate.
+    standardBasePlatformFeeRate: rateField(),
+
+    // Actual scheduled/base rate granted to this Shift. Estimated platform fees
+    // are calculated from this rate. Once funded, downstream occurrence records
+    // copy this snapshot and later subscription changes must not reprice it.
+    basePlatformFeeRate: rateField(),
+
+    // Overtime does not inherit the subscriber BASE discount at launch.
+    // This is the separately disclosed OT platform-fee rate to copy to each
+    // occurrence for any later approved overtime calculation.
+    overtimePlatformFeeRate: rateField(),
+
+    basePlatformFeeBenefitSource: {
+      type: String,
+      enum: BASE_PLATFORM_FEE_BENEFIT_SOURCES,
+      default: "standard",
       required: true,
-      min: 0,
-      max: 1,
-      validate: {
-        validator: isSupportedFinancialRate,
-        message: "platformFeeRate must use the supported financial rate precision.",
-      },
     },
+
+    // Audit provenance only. The explicit rate snapshots above remain the
+    // financial authority even if the subscription or plan later changes.
+    basePlatformFeeSubscription: referenceField("Subscription"),
 
     pricingLockedAt: {
       type: Date,
       required: true,
     },
 
-    pricingLockedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
+    pricingLockedBy: referenceField("User", true),
 
     cancellationPolicySnapshot: {
       type: cancellationPolicySnapshotSchema,
@@ -936,7 +655,7 @@ const shiftSchema = new mongoose.Schema(
       default: () => ({}),
     },
 
-    // --- PAYMENT STATE ---
+    // --- FUNDING AND PAYMENT STATE ---
 
     paymentStatus: {
       type: String,
@@ -945,82 +664,49 @@ const shiftSchema = new mongoose.Schema(
       required: true,
     },
 
+    // Preserve the existing Shift funding enum; refund records use their own enum.
     fundingMethod: {
       type: String,
       enum: ["wallet", "paystack_checkout", null],
       default: null,
     },
 
-    fundingInitiatedAt: {
-      type: Date,
-      default: null,
-    },
+    fundingInitiatedAt: nullableDateField(),
 
-    fundedAt: {
-      type: Date,
-      default: null,
-    },
+    fundedAt: nullableDateField(),
 
-    publishedAt: {
-      type: Date,
-      default: null,
-    },
+    publishedAt: nullableDateField(),
 
-    /**
-     * Original protected-funding identity only.
-     */
-    fundingTransaction: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Transaction",
-      default: null,
-    },
+    fundingTransaction: referenceField("Transaction"),
 
-    // --- PROFESSIONAL ASSIGNMENT ---
+    // --- HIRING AND ASSIGNMENT SUMMARIES ---
 
-    activeAssignment: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "ShiftAssignment",
-      default: null,
-    },
-
-    assignedProfessional: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "ProfessionalProfile",
-      default: null,
-    },
-
-    assignedAt: {
-      type: Date,
-      default: null,
-    },
-
-    assignedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
-
-    applicationRound: {
-      type: Number,
-      default: 1,
+    // Parent round refers to initial hiring only. Replacement rounds are scoped
+    // to their own assignment/occurrence opportunity, not a global Shift round.
+    applicationRound: integerField({
       min: 1,
       max: MAX_APPLICATION_ROUNDS,
-      validate: {
-        validator: Number.isSafeInteger,
-        message: "applicationRound must be a whole number.",
-      },
-    },
-
-    replacementHiring: {
-      type: replacementHiringSchema,
-      default: () => ({}),
-    },
+      defaultValue: 1,
+    }),
 
     totalApplications: nonNegativeIntegerField(),
 
     currentRoundApplications: nonNegativeIntegerField(),
 
-    // --- ENGAGEMENT STATUS ---
+    hiringSummary: {
+      type: hiringSummarySchema,
+      default: () => ({}),
+    },
+
+    assignmentSummary: {
+      type: assignmentSummarySchema,
+      default: () => ({}),
+    },
+
+    occurrenceProgress: {
+      type: occurrenceProgressSchema,
+      default: () => ({}),
+    },
 
     status: {
       type: String,
@@ -1029,253 +715,7 @@ const shiftSchema = new mongoose.Schema(
       required: true,
     },
 
-    occurrenceProgress: {
-      type: occurrenceProgressSchema,
-      default: () => ({}),
-    },
-
-    // --- ATTENDANCE ---
-
-    attendanceStatus: {
-      type: String,
-      enum: ATTENDANCE_STATUSES,
-      default: "not_started",
-      required: true,
-    },
-
-    checkedInAt: {
-      type: Date,
-      default: null,
-    },
-
-    checkedOutAt: {
-      type: Date,
-      default: null,
-    },
-
-    checkInLocation: {
-      type: attendanceLocationSchema,
-      default: () => ({}),
-    },
-
-    checkOutLocation: {
-      type: attendanceLocationSchema,
-      default: () => ({}),
-    },
-
-    // --- ATTENDANCE PINS ---
-
-    checkInPin: {
-      type: String,
-      required: requiresParentAttendancePins,
-      select: false,
-      match: [/^\d{4}$/, "checkInPin must contain exactly 4 digits."],
-    },
-
-    checkOutPin: {
-      type: String,
-      required: requiresParentAttendancePins,
-      select: false,
-      match: [/^\d{4}$/, "checkOutPin must contain exactly 4 digits."],
-    },
-
-    attendancePinsGeneratedAt: {
-      type: Date,
-      required: requiresParentAttendancePins,
-    },
-
-    checkInPinUsedAt: {
-      type: Date,
-      default: null,
-    },
-
-    checkOutPinUsedAt: {
-      type: Date,
-      default: null,
-    },
-
-    // --- ATTENDANCE REVIEW AND OVERRIDE ---
-
-    attendanceOverride: {
-      used: {
-        type: Boolean,
-        default: false,
-      },
-
-      type: {
-        type: String,
-        enum: [...ATTENDANCE_OVERRIDE_TYPES, null],
-        default: null,
-      },
-
-      reason: {
-        type: String,
-        enum: [...ATTENDANCE_OVERRIDE_REASONS, null],
-        default: null,
-      },
-
-      approvedStartTime: {
-        type: Date,
-        default: null,
-      },
-
-      approvedEndTime: {
-        type: Date,
-        default: null,
-      },
-
-      reviewedAt: {
-        type: Date,
-        default: null,
-      },
-
-      reviewedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-        default: null,
-      },
-
-      notes: {
-        type: String,
-        trim: true,
-        maxlength: 300,
-        default: null,
-      },
-    },
-
-    // --- LATE CHECKOUT ---
-
-    lateCheckout: {
-      occurred: {
-        type: Boolean,
-        default: false,
-      },
-
-      minutesLate: nonNegativeIntegerField(),
-
-      selectedOption: {
-        type: String,
-        enum: [...LATE_CHECKOUT_OPTIONS, null],
-        default: null,
-      },
-
-      reason: {
-        type: String,
-        enum: [...LATE_CHECKOUT_REASONS, null],
-        default: null,
-      },
-
-      notes: {
-        type: String,
-        trim: true,
-        maxlength: 300,
-        default: null,
-      },
-
-      recordedAt: {
-        type: Date,
-        default: null,
-      },
-    },
-
-    // --- CHECKOUT FALLBACK ---
-
-    checkoutFallback: {
-      required: {
-        type: Boolean,
-        default: false,
-      },
-
-      reason: {
-        type: String,
-        enum: [...CHECKOUT_FALLBACK_REASONS, null],
-        default: null,
-      },
-
-      requestedAt: {
-        type: Date,
-        default: null,
-      },
-
-      resolvedAt: {
-        type: Date,
-        default: null,
-      },
-
-      resolvedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-        default: null,
-      },
-
-      approvedEndTime: {
-        type: Date,
-        default: null,
-      },
-
-      notes: {
-        type: String,
-        trim: true,
-        maxlength: 300,
-        default: null,
-      },
-    },
-
-    // --- MISSED CHECK-IN REQUEST ---
-
-    missedCheckInRequest: {
-      claimedStartTime: {
-        type: Date,
-        default: null,
-      },
-
-      submittedAt: {
-        type: Date,
-        default: null,
-      },
-
-      reason: {
-        type: String,
-        enum: [...MISSED_CHECKIN_REASONS, null],
-        default: null,
-      },
-
-      locationAtSubmission: {
-        type: attendanceLocationSchema,
-        default: () => ({}),
-      },
-
-      reviewedAt: {
-        type: Date,
-        default: null,
-      },
-
-      reviewedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-        default: null,
-      },
-
-      outcome: {
-        type: String,
-        enum: [...MISSED_CHECKIN_OUTCOMES, null],
-        default: null,
-      },
-
-      approvedStartTime: {
-        type: Date,
-        default: null,
-      },
-
-      rejectionReason: {
-        type: String,
-        trim: true,
-        maxlength: 300,
-        default: null,
-      },
-    },
-
-    // --- REQUIREMENTS AND SCOPE ---
+    // --- REQUIREMENTS ---
 
     requiredSkills: [
       {
@@ -1297,7 +737,8 @@ const shiftSchema = new mongoose.Schema(
       maxlength: 500,
     },
 
-    // --- CANCELLATION ---
+    // --- WHOLE-ENGAGEMENT CANCELLATION ---
+    // Selective cancellation stays on occurrences.
 
     cancelledFromStatus: {
       type: String,
@@ -1317,11 +758,7 @@ const shiftSchema = new mongoose.Schema(
       default: null,
     },
 
-    cancelledByUser: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
+    cancelledByUser: referenceField("User"),
 
     cancellationReasonCode: {
       type: String,
@@ -1336,10 +773,7 @@ const shiftSchema = new mongoose.Schema(
       default: null,
     },
 
-    cancelledAt: {
-      type: Date,
-      default: null,
-    },
+    cancelledAt: nullableDateField(),
 
     cancellationSummary: {
       type: cancellationSummarySchema,
@@ -1356,998 +790,558 @@ const shiftSchema = new mongoose.Schema(
   }
 );
 
-/* ─────────────────────────────── MODEL VALIDATION ─────────────────────────────── */
+/* ─────────────────────────────── SCHEDULE VALIDATION ─────────────────────────────── */
 
-shiftSchema.pre("validate", function validateShift() {
-  const scheduleMode = this.scheduleMode || "single";
+function validateSchedule(document) {
+  const dates = document.occurrenceCount;
 
-  const occurrenceCount = Number(this.occurrenceCount);
+  const positions = document.requiredProfessionals;
 
-  const repeatDays = Array.isArray(this.repeatDays) ? this.repeatDays : [];
+  const repeatDays = Array.isArray(document.repeatDays) ? document.repeatDays : [];
 
-  const occurrenceProgress = this.occurrenceProgress || {};
-
-  if (this.startTime && this.endTime && this.endTime <= this.startTime) {
-    this.invalidate("endTime", "endTime must be later than startTime.");
+  if (document.startTime && document.endTime && document.endTime <= document.startTime) {
+    document.invalidate("endTime", "endTime must be later than startTime.");
   }
 
-  const uniqueRepeatDays = new Set(repeatDays.map(Number));
-
-  if (uniqueRepeatDays.size !== repeatDays.length) {
-    this.invalidate("repeatDays", "repeatDays cannot contain duplicate weekdays.");
+  if (new Set(repeatDays).size !== repeatDays.length) {
+    document.invalidate("repeatDays", "repeatDays cannot contain duplicate weekdays.");
   }
 
-  /* ─────────────────────────────── SINGLE SHIFT ─────────────────────────────── */
+  let minutes = null;
 
-  if (scheduleMode === "single") {
-    if (occurrenceCount !== 1) {
-      this.invalidate("occurrenceCount", "A single shift must contain exactly one occurrence.");
-    }
-
-    if (repeatDays.length > 0) {
-      this.invalidate("repeatDays", "A single shift cannot contain repeat days.");
-    }
-
-    if (this.startTime && this.endTime) {
-      const actualScheduledMinutes =
-        (this.endTime.getTime() - this.startTime.getTime()) / (60 * 1000);
-
-      if (
-        !Number.isSafeInteger(actualScheduledMinutes) ||
-        actualScheduledMinutes <= 0 ||
-        actualScheduledMinutes > MINUTES_PER_DAY
-      ) {
-        this.invalidate(
-          "endTime",
-          "A single shift must have a whole-minute duration between 1 minute and 24 hours."
-        );
-      } else {
-        if (this.scheduledMinutesPerOccurrence !== actualScheduledMinutes) {
-          this.invalidate(
-            "scheduledMinutesPerOccurrence",
-            "scheduledMinutesPerOccurrence must match the single shift duration."
-          );
-        }
-
-        if (this.totalScheduledMinutes !== actualScheduledMinutes) {
-          this.invalidate(
-            "totalScheduledMinutes",
-            "totalScheduledMinutes must match the single shift duration."
-          );
-        }
-
-        if (
-          Number.isFinite(this.scheduledHours) &&
-          !approximatelyEqual(this.scheduledHours, actualScheduledMinutes / 60)
-        ) {
-          this.invalidate("scheduledHours", "scheduledHours must match the single shift duration.");
-        }
-
-        if (
-          Number.isSafeInteger(this.breakDuration) &&
-          this.breakDuration >= actualScheduledMinutes
-        ) {
-          this.invalidate(
-            "breakDuration",
-            "breakDuration must be shorter than the single shift duration."
-          );
-        }
-      }
-    }
-  }
-
-  /* ─────────────────────────────── MULTIPLE SHIFTS ─────────────────────────────── */
-
-  if (scheduleMode === "multiple") {
-    if (
-      !Number.isSafeInteger(occurrenceCount) ||
-      occurrenceCount < 2 ||
-      occurrenceCount > MAX_SHIFT_OCCURRENCES
-    ) {
-      this.invalidate(
+  if (document.scheduleMode === "single") {
+    if (dates !== 1) {
+      document.invalidate(
         "occurrenceCount",
-        `A multiple-shift engagement must contain between 2 and ${MAX_SHIFT_OCCURRENCES} occurrences.`
+        "A single schedule must contain exactly one work date."
       );
     }
 
-    if (repeatDays.length === 0) {
-      this.invalidate(
-        "repeatDays",
-        "A multiple-shift engagement must include at least one repeat day."
-      );
+    if (repeatDays.length) {
+      document.invalidate("repeatDays", "A single schedule cannot contain repeat days.");
     }
 
-    if (!this.firstOccurrenceDate) {
-      this.invalidate(
-        "firstOccurrenceDate",
-        "firstOccurrenceDate is required for a multiple-shift engagement."
-      );
-    }
-
-    if (!this.lastOccurrenceDate) {
-      this.invalidate(
-        "lastOccurrenceDate",
-        "lastOccurrenceDate is required for a multiple-shift engagement."
-      );
+    if (document.startTime && document.endTime) {
+      minutes = (document.endTime.getTime() - document.startTime.getTime()) / 60000;
     }
 
     if (
-      this.firstOccurrenceDate &&
-      this.lastOccurrenceDate &&
-      this.lastOccurrenceDate < this.firstOccurrenceDate
+      document.firstOccurrenceDate &&
+      document.lastOccurrenceDate &&
+      document.firstOccurrenceDate !== document.lastOccurrenceDate
     ) {
-      this.invalidate(
-        "lastOccurrenceDate",
-        "lastOccurrenceDate cannot be earlier than firstOccurrenceDate."
+      document.invalidate("lastOccurrenceDate", "A single schedule must use one occurrence date.");
+    }
+  } else if (document.scheduleMode === "multiple") {
+    if (!Number.isSafeInteger(dates) || dates < 2 || dates > MAX_SHIFT_OCCURRENCES) {
+      document.invalidate(
+        "occurrenceCount",
+        `A repeated schedule requires 2 to ${MAX_SHIFT_OCCURRENCES} work dates.`
       );
     }
 
-    if (!this.scheduleTimeZone) {
-      this.invalidate(
-        "scheduleTimeZone",
-        "scheduleTimeZone is required for a multiple-shift engagement."
-      );
+    if (!repeatDays.length) {
+      document.invalidate("repeatDays", "A repeated schedule requires at least one repeat day.");
     }
 
-    if (this.checkInPin || this.checkOutPin || this.attendancePinsGeneratedAt) {
-      this.invalidate(
-        "checkInPin",
-        "Multiple-shift engagements must store attendance PINs on ShiftOccurrence records."
-      );
+    for (const field of ["firstOccurrenceDate", "lastOccurrenceDate"]) {
+      if (!document[field]) {
+        document.invalidate(field, `${field} is required for a repeated schedule.`);
+      }
     }
 
-    const patternScheduledMinutes = calculatePatternScheduledMinutes({
-      dailyStartTimeMinutes: this.dailyStartTimeMinutes,
-      dailyEndTimeMinutes: this.dailyEndTimeMinutes,
-      endsNextDay: this.endsNextDay,
+    minutes = calculatePatternScheduledMinutes({
+      dailyStartTimeMinutes: document.dailyStartTimeMinutes,
+      dailyEndTimeMinutes: document.dailyEndTimeMinutes,
+      endsNextDay: document.endsNextDay,
     });
-
-    if (
-      !Number.isSafeInteger(patternScheduledMinutes) ||
-      patternScheduledMinutes <= 0 ||
-      patternScheduledMinutes > MINUTES_PER_DAY
-    ) {
-      this.invalidate(
-        "dailyEndTimeMinutes",
-        "Each repeated occurrence must last between 1 minute and 24 hours."
-      );
-    } else {
-      if (this.scheduledMinutesPerOccurrence !== patternScheduledMinutes) {
-        this.invalidate(
-          "scheduledMinutesPerOccurrence",
-          "scheduledMinutesPerOccurrence must match the repeated daily schedule."
-        );
-      }
-
-      const expectedTotalScheduledMinutes = patternScheduledMinutes * occurrenceCount;
-
-      if (this.totalScheduledMinutes !== expectedTotalScheduledMinutes) {
-        this.invalidate(
-          "totalScheduledMinutes",
-          "totalScheduledMinutes must equal occurrenceCount multiplied by scheduledMinutesPerOccurrence."
-        );
-      }
-
-      if (
-        Number.isFinite(this.scheduledHours) &&
-        !approximatelyEqual(this.scheduledHours, expectedTotalScheduledMinutes / 60)
-      ) {
-        this.invalidate(
-          "scheduledHours",
-          "scheduledHours must equal the total hours across all occurrences."
-        );
-      }
-
-      if (
-        Number.isSafeInteger(this.breakDuration) &&
-        this.breakDuration >= patternScheduledMinutes
-      ) {
-        this.invalidate("breakDuration", "breakDuration must be shorter than each occurrence.");
-      }
-    }
-
-    if (hasParentAttendanceCompatibilityData(this)) {
-      this.invalidate(
-        "attendanceStatus",
-        "Multiple-shift engagements must keep attendance and attendance-review state on ShiftOccurrence records only."
-      );
-    }
-
-    if (hasDocumentValue(this.baseBillableHours) || hasDocumentValue(this.billableHours)) {
-      this.invalidate(
-        "baseBillableHours",
-        "Multiple-shift engagements must keep billable-time state on ShiftOccurrence records."
-      );
-    }
   }
-
-  /* ─────────────────────────────── PRICING LOCK CONSISTENCY ─────────────────────────────── */
 
   if (
-    this.pricingLockedAt &&
-    this.cancellationPolicySnapshot?.lockedAt &&
-    this.pricingLockedAt.getTime() !== this.cancellationPolicySnapshot.lockedAt.getTime()
+    document.firstOccurrenceDate &&
+    document.lastOccurrenceDate &&
+    document.lastOccurrenceDate < document.firstOccurrenceDate
   ) {
-    this.invalidate(
-      "cancellationPolicySnapshot.lockedAt",
-      "The cancellation policy snapshot must be locked at the same time as Shift pricing."
+    document.invalidate(
+      "lastOccurrenceDate",
+      "lastOccurrenceDate cannot precede firstOccurrenceDate."
     );
   }
 
-  /* ─────────────────────────────── PRICING ─────────────────────────────── */
+  if (!Number.isSafeInteger(minutes) || minutes <= 0 || minutes > MINUTES_PER_DAY) {
+    document.invalidate(
+      "scheduledMinutesPerOccurrence",
+      "Each work date must last 1 to 1,440 whole minutes."
+    );
+  } else {
+    if (document.scheduledMinutesPerOccurrence !== minutes) {
+      document.invalidate(
+        "scheduledMinutesPerOccurrence",
+        "Scheduled minutes must match the daily duration."
+      );
+    }
 
-  validateAmountTriple(this, {
+    if (Number.isSafeInteger(dates) && dates >= 1 && dates <= MAX_SHIFT_OCCURRENCES) {
+      const expectedMinutes = minutes * dates;
+
+      if (document.totalScheduledMinutes !== expectedMinutes) {
+        document.invalidate(
+          "totalScheduledMinutes",
+          "totalScheduledMinutes must equal date count times daily minutes for one position."
+        );
+      }
+
+      if (
+        !Number.isFinite(document.scheduledHours) ||
+        !approximatelyEqual(document.scheduledHours, expectedMinutes / 60)
+      ) {
+        document.invalidate(
+          "scheduledHours",
+          "scheduledHours must describe the full schedule for one position."
+        );
+      }
+    }
+
+    if (Number.isSafeInteger(document.breakDuration) && document.breakDuration >= minutes) {
+      document.invalidate("breakDuration", "Break duration must be shorter than each work date.");
+    }
+  }
+
+  if (
+    !Number.isSafeInteger(dates) ||
+    dates < 1 ||
+    dates > MAX_SHIFT_OCCURRENCES ||
+    !Number.isSafeInteger(positions) ||
+    positions < 1
+  ) {
+    return null;
+  }
+
+  try {
+    const total = safeProduct(dates, positions, "Total occurrence count");
+
+    document.totalOccurrenceCount = total;
+
+    if (
+      Number.isSafeInteger(document.totalScheduledMinutes) &&
+      document.totalScheduledMinutes > 0
+    ) {
+      document.totalStaffScheduledMinutes = safeProduct(
+        document.totalScheduledMinutes,
+        positions,
+        "Total staff scheduled minutes"
+      );
+    }
+
+    return total;
+  } catch (error) {
+    document.invalidate("requiredProfessionals", error.message);
+
+    return null;
+  }
+}
+
+/* ─────────────────────────────── POSTING PRICE VALIDATION ─────────────────────────────── */
+
+function validatePricing(document, total) {
+  if (
+    document.pricingLockedAt &&
+    document.cancellationPolicySnapshot?.lockedAt &&
+    document.pricingLockedAt.getTime() !== document.cancellationPolicySnapshot.lockedAt.getTime()
+  ) {
+    document.invalidate(
+      "cancellationPolicySnapshot.lockedAt",
+      "Cancellation policy and pricing must be locked at the same time."
+    );
+  }
+
+  const standardBaseRate = Number(document.standardBasePlatformFeeRate);
+
+  const appliedBaseRate = Number(document.basePlatformFeeRate);
+
+  const overtimeRate = Number(document.overtimePlatformFeeRate);
+
+  const benefitSource = String(document.basePlatformFeeBenefitSource || "standard");
+
+  if (benefitSource === "standard") {
+    if (document.basePlatformFeeSubscription) {
+      document.invalidate(
+        "basePlatformFeeSubscription",
+        "A standard BASE platform-fee rate cannot reference a subscription benefit."
+      );
+    }
+
+    if (
+      isSupportedFinancialRate(standardBaseRate) &&
+      isSupportedFinancialRate(appliedBaseRate) &&
+      appliedBaseRate !== standardBaseRate
+    ) {
+      document.invalidate(
+        "basePlatformFeeRate",
+        "Without a subscription benefit, the applied BASE platform-fee rate must equal the standard BASE rate."
+      );
+    }
+  }
+
+  if (benefitSource === "subscription") {
+    if (!document.basePlatformFeeSubscription) {
+      document.invalidate(
+        "basePlatformFeeSubscription",
+        "A subscription-discounted BASE platform-fee rate requires the granting subscription."
+      );
+    }
+
+    if (
+      isSupportedFinancialRate(standardBaseRate) &&
+      isSupportedFinancialRate(appliedBaseRate) &&
+      appliedBaseRate >= standardBaseRate
+    ) {
+      document.invalidate(
+        "basePlatformFeeRate",
+        "A subscription BASE platform-fee rate must be lower than the standard BASE rate."
+      );
+    }
+  }
+
+  // Overtime has its own disclosed snapshot and is intentionally not derived
+  // from the subscriber BASE rate. Future policy may configure this rate
+  // independently without rewriting already funded Shifts.
+  if (!isSupportedFinancialRate(overtimeRate)) {
+    document.invalidate(
+      "overtimePlatformFeeRate",
+      "overtimePlatformFeeRate must use the supported financial rate precision."
+    );
+  }
+
+  validateAmountTriple(document, {
     professionalPath: "estimatedProfessionalPay",
     platformPath: "estimatedPlatformFee",
     employerPath: "estimatedEmployerCharge",
     label: "Estimated",
   });
 
-  const pricingHourlyRate = Number(this.hourlyRate);
-
-  const pricingScheduledMinutesPerOccurrence = Number(this.scheduledMinutesPerOccurrence);
-
-  const pricingOccurrenceCount = Number(this.occurrenceCount);
-
-  const pricingEstimatedProfessionalPay = Number(this.estimatedProfessionalPay);
-
-  const pricingEstimatedPlatformFee = Number(this.estimatedPlatformFee);
-
-  const pricingPlatformFeeRate = Number(this.platformFeeRate);
-
-  let expectedProfessionalPayPerOccurrence = null;
-
   if (
-    Number.isSafeInteger(pricingHourlyRate) &&
-    pricingHourlyRate > 0 &&
-    Number.isSafeInteger(pricingScheduledMinutesPerOccurrence) &&
-    pricingScheduledMinutesPerOccurrence > 0
+    !Number.isSafeInteger(total) ||
+    total <= 0 ||
+    !Number.isSafeInteger(document.hourlyRate) ||
+    document.hourlyRate <= 0 ||
+    !Number.isSafeInteger(document.scheduledMinutesPerOccurrence) ||
+    document.scheduledMinutesPerOccurrence <= 0 ||
+    !isSupportedFinancialRate(appliedBaseRate)
   ) {
-    try {
-      expectedProfessionalPayPerOccurrence = money.calculateMinorPayFromMinutes({
-        hourlyRateMinor: pricingHourlyRate,
-        minutes: pricingScheduledMinutesPerOccurrence,
-        fieldName: "Estimated professional pay per occurrence",
-      });
-    } catch (error) {
-      this.invalidate(
-        "estimatedProfessionalPay",
-        "Estimated professional pay exceeds the supported safe-integer range."
-      );
-    }
+    return;
   }
 
-  if (
-    Number.isSafeInteger(expectedProfessionalPayPerOccurrence) &&
-    Number.isSafeInteger(pricingOccurrenceCount) &&
-    pricingOccurrenceCount > 0 &&
-    pricingOccurrenceCount <= MAX_SHIFT_OCCURRENCES
-  ) {
-    let expectedEstimatedProfessionalPay = null;
+  try {
+    // Round one position/date first, then sum identical snapshots across capacity.
+    const pay = money.calculateMinorPayFromMinutes({
+      hourlyRateMinor: document.hourlyRate,
+      minutes: document.scheduledMinutesPerOccurrence,
+      fieldName: "Estimated professional pay per occurrence",
+    });
 
-    try {
-      expectedEstimatedProfessionalPay = money.sumMinorUnitAmounts(
-        Array.from(
-          {
-            length: pricingOccurrenceCount,
-          },
-          () => expectedProfessionalPayPerOccurrence
-        ),
-        "Estimated professional pay"
-      );
-    } catch (error) {
-      this.invalidate(
-        "estimatedProfessionalPay",
-        "Estimated professional pay exceeds the supported safe-integer range."
-      );
-    }
+    const fee = money.calculateMinorAmountFromRate({
+      amountMinor: pay,
+      rate: appliedBaseRate,
+      rateScale: FINANCIAL_RATE_SCALE,
+      fieldName: "Estimated BASE platform fee per occurrence",
+      rateFieldName: "BASE platform fee rate",
+    });
 
-    if (
-      Number.isSafeInteger(expectedEstimatedProfessionalPay) &&
-      pricingEstimatedProfessionalPay !== expectedEstimatedProfessionalPay
-    ) {
-      this.invalidate(
-        "estimatedProfessionalPay",
-        "Estimated professional pay must equal the per-occurrence professional pay multiplied by occurrenceCount."
-      );
+    const expectedPay = safeProduct(pay, total, "Estimated professional pay");
+
+    const expectedFee = safeProduct(fee, total, "Estimated platform fee");
+
+    const expectedCharge = money.sumMinorUnitAmounts(
+      [expectedPay, expectedFee],
+      "Estimated employer charge"
+    );
+
+    for (const [field, expected] of [
+      ["estimatedProfessionalPay", expectedPay],
+      ["estimatedPlatformFee", expectedFee],
+      ["estimatedEmployerCharge", expectedCharge],
+    ]) {
+      if (document[field] !== expected) {
+        document.invalidate(
+          field,
+          `${field} must include every required position on every scheduled date.`
+        );
+      }
     }
+  } catch (error) {
+    document.invalidate(
+      "estimatedEmployerCharge",
+      "Posting totals are invalid or exceed the supported safe-integer range."
+    );
   }
+}
+
+/* ─────────────────────────────── FINANCIAL SUMMARY VALIDATION ─────────────────────────────── */
+
+function validateFinancialSummary(document) {
+  const summary = document.settlementSummary || {};
+
+  const approved = count(summary, "approvedProfessionalPay");
+
+  const released = count(summary, "releasedProfessionalPay");
+
+  const earned = count(summary, "earnedPlatformFee");
+
+  const collected = count(summary, "collectedPlatformFee");
+
+  const committed = count(summary, "committedEmployerCharge");
+
+  const funded = document.fundedAmount;
+
+  const refunded = document.refundedAmount;
+
+  const topUp = document.topUpRequired;
 
   if (
-    Number.isSafeInteger(expectedProfessionalPayPerOccurrence) &&
-    Number.isSafeInteger(pricingOccurrenceCount) &&
-    pricingOccurrenceCount > 0 &&
-    pricingOccurrenceCount <= MAX_SHIFT_OCCURRENCES &&
-    isSupportedFinancialRate(pricingPlatformFeeRate)
+    ![approved, released, earned, collected, committed, funded, refunded, topUp].every(
+      (value) => Number.isSafeInteger(value) && value >= 0
+    )
   ) {
-    let expectedPlatformFeePerOccurrence = null;
-
-    let expectedEstimatedPlatformFee = null;
-
-    try {
-      expectedPlatformFeePerOccurrence = money.calculateMinorAmountFromRate({
-        amountMinor: expectedProfessionalPayPerOccurrence,
-        rate: pricingPlatformFeeRate,
-        rateScale: FINANCIAL_RATE_SCALE,
-        fieldName: "Estimated platform fee per occurrence",
-        rateFieldName: "Platform fee rate",
-      });
-
-      expectedEstimatedPlatformFee = money.sumMinorUnitAmounts(
-        Array.from(
-          {
-            length: pricingOccurrenceCount,
-          },
-          () => expectedPlatformFeePerOccurrence
-        ),
-        "Estimated platform fee"
-      );
-    } catch (error) {
-      this.invalidate(
-        "estimatedPlatformFee",
-        "Estimated platform fee exceeds the supported safe-integer range."
-      );
-    }
-
-    if (
-      Number.isSafeInteger(expectedEstimatedPlatformFee) &&
-      pricingEstimatedPlatformFee !== expectedEstimatedPlatformFee
-    ) {
-      this.invalidate(
-        "estimatedPlatformFee",
-        "Estimated platform fee must equal the per-occurrence platform fee multiplied by occurrenceCount."
-      );
-    }
-  }
-
-  /* ─────────────────────────────── PARENT FINANCIAL SUMMARY ─────────────────────────────── */
-
-  const approvedProfessionalPay = Number(this.settlementSummary?.approvedProfessionalPay || 0);
-
-  const releasedProfessionalPay = Number(this.settlementSummary?.releasedProfessionalPay || 0);
-
-  const earnedPlatformFee = Number(this.settlementSummary?.earnedPlatformFee || 0);
-
-  const collectedPlatformFee = Number(this.settlementSummary?.collectedPlatformFee || 0);
-
-  const committedEmployerCharge = Number(this.settlementSummary?.committedEmployerCharge || 0);
-
-  if (
-    !Number.isSafeInteger(approvedProfessionalPay) ||
-    !Number.isSafeInteger(releasedProfessionalPay) ||
-    !Number.isSafeInteger(earnedPlatformFee) ||
-    !Number.isSafeInteger(collectedPlatformFee) ||
-    !Number.isSafeInteger(committedEmployerCharge)
-  ) {
-    this.invalidate(
+    document.invalidate(
       "settlementSummary",
-      "Parent settlement summary amounts must be safe whole-number minor-unit amounts."
+      "Financial summaries require non-negative safe-integer minor-unit amounts."
     );
+
+    return;
   }
 
-  if (releasedProfessionalPay > approvedProfessionalPay) {
-    this.invalidate(
+  if (released > approved) {
+    document.invalidate(
       "settlementSummary.releasedProfessionalPay",
-      "Released professional pay cannot exceed approved professional pay."
+      "Released pay cannot exceed approved pay."
     );
   }
 
-  if (collectedPlatformFee > earnedPlatformFee) {
-    this.invalidate(
+  if (collected > earned) {
+    document.invalidate(
       "settlementSummary.collectedPlatformFee",
-      "Collected platform fee cannot exceed the currently earned platform fee."
+      "Collected fees cannot exceed earned fees."
     );
   }
 
-  if (
-    Number.isSafeInteger(approvedProfessionalPay) &&
-    Number.isSafeInteger(earnedPlatformFee) &&
-    Number.isSafeInteger(committedEmployerCharge)
-  ) {
-    try {
-      const expectedCommittedEmployerCharge = money.sumMinorUnitAmounts(
-        [approvedProfessionalPay, earnedPlatformFee],
-        "Committed employer charge"
-      );
-
-      if (committedEmployerCharge !== expectedCommittedEmployerCharge) {
-        this.invalidate(
-          "settlementSummary.committedEmployerCharge",
-          "committedEmployerCharge must equal approvedProfessionalPay plus earnedPlatformFee."
-        );
-      }
-    } catch (error) {
-      this.invalidate(
+  try {
+    if (committed !== money.sumMinorUnitAmounts([approved, earned], "Committed employer charge")) {
+      document.invalidate(
         "settlementSummary.committedEmployerCharge",
-        "committedEmployerCharge exceeds the supported safe-integer range."
+        "Committed charge must equal approved professional pay plus earned platform fees."
       );
     }
-  }
 
-  if (this.settlementSummary?.lastProfessionalApprovedAt && approvedProfessionalPay <= 0) {
-    this.invalidate(
-      "settlementSummary.lastProfessionalApprovedAt",
-      "lastProfessionalApprovedAt requires positive approved professional pay."
-    );
-  }
-
-  if (this.settlementSummary?.lastProfessionalReleasedAt && releasedProfessionalPay <= 0) {
-    this.invalidate(
-      "settlementSummary.lastProfessionalReleasedAt",
-      "lastProfessionalReleasedAt requires positive released professional pay."
-    );
-  }
-
-  if (this.settlementSummary?.lastPlatformFeeEarnedAt && earnedPlatformFee <= 0) {
-    this.invalidate(
-      "settlementSummary.lastPlatformFeeEarnedAt",
-      "lastPlatformFeeEarnedAt requires a positive earned platform fee."
-    );
-  }
-
-  if (this.settlementSummary?.lastPlatformFeeCollectedAt && collectedPlatformFee <= 0) {
-    this.invalidate(
-      "settlementSummary.lastPlatformFeeCollectedAt",
-      "lastPlatformFeeCollectedAt requires a positive collected platform fee."
-    );
-  }
-
-  const currentTopUpRequired = Number(this.topUpRequired || 0);
-
-  if (
-    Number.isSafeInteger(this.fundedAmount) &&
-    Number.isSafeInteger(this.refundedAmount) &&
-    Number.isSafeInteger(currentTopUpRequired) &&
-    Number.isSafeInteger(committedEmployerCharge)
-  ) {
-    try {
-      const committedAndRefunded = money.sumMinorUnitAmounts(
-        [committedEmployerCharge, this.refundedAmount],
-        "Committed employer charges plus refunds"
-      );
-
-      const protectedAndOutstanding = money.sumMinorUnitAmounts(
-        [this.fundedAmount, currentTopUpRequired],
-        "Protected funding plus outstanding top-up"
-      );
-
-      if (committedAndRefunded > protectedAndOutstanding) {
-        this.invalidate(
-          "settlementSummary.committedEmployerCharge",
-          "Committed employer charges and completed refunds cannot exceed funded protection plus the current outstanding top-up obligation."
-        );
-      }
-    } catch (error) {
-      this.invalidate(
+    if (
+      money.sumMinorUnitAmounts([committed, refunded], "Committed charges plus refunds") >
+      money.sumMinorUnitAmounts([funded, topUp], "Funding plus outstanding top-up")
+    ) {
+      document.invalidate(
         "settlementSummary.committedEmployerCharge",
-        "Parent committed funding reconciliation exceeds the supported safe-integer range."
+        "Committed charges and refunds cannot exceed funding plus outstanding top-up."
       );
     }
-  }
 
-  if (
-    Number.isSafeInteger(this.fundedAmount) &&
-    Number.isSafeInteger(this.refundedAmount) &&
-    Number.isSafeInteger(releasedProfessionalPay) &&
-    Number.isSafeInteger(collectedPlatformFee)
-  ) {
-    try {
-      const completedOutflows = money.sumMinorUnitAmounts(
-        [releasedProfessionalPay, collectedPlatformFee, this.refundedAmount],
-        "Completed parent financial outflows"
-      );
-
-      if (completedOutflows > this.fundedAmount) {
-        this.invalidate(
-          "settlementSummary",
-          "Completed professional payouts, collected platform fees and completed refunds cannot exceed cumulative protected funding."
-        );
-      }
-    } catch (error) {
-      this.invalidate(
+    if (money.sumMinorUnitAmounts([released, collected, refunded], "Completed outflows") > funded) {
+      document.invalidate(
         "settlementSummary",
-        "Completed parent financial outflows exceed the supported safe-integer range."
+        "Completed payouts, fee collections and refunds cannot exceed funding."
       );
     }
-  }
-
-  /* ─────────────────────────────── ASSIGNMENT SUMMARY ─────────────────────────────── */
-
-  const hasAssignedProfessional = hasDocumentValue(this.assignedProfessional);
-
-  const hasActiveAssignment = hasDocumentValue(this.activeAssignment);
-
-  const hasAssignedAt = hasDocumentValue(this.assignedAt);
-
-  const hasAssignedBy = hasDocumentValue(this.assignedBy);
-
-  const completeAssignmentSummary =
-    hasAssignedProfessional && hasActiveAssignment && hasAssignedAt && hasAssignedBy;
-
-  const assignmentValueCount = [
-    hasAssignedProfessional,
-    hasActiveAssignment,
-    hasAssignedAt,
-    hasAssignedBy,
-  ].filter(Boolean).length;
-
-  if (assignmentValueCount > 0 && !completeAssignmentSummary) {
-    this.invalidate(
-      "activeAssignment",
-      "Parent assignment summary must include activeAssignment, assignedProfessional, assignedAt and assignedBy together."
+  } catch (error) {
+    document.invalidate(
+      "settlementSummary",
+      "Financial reconciliation exceeds the supported safe-integer range."
     );
   }
 
-  const replacementHiringStatus = this.replacementHiring?.status || "closed";
-
-  const replacementGapIsOpen = replacementHiringStatus === "open" && !completeAssignmentSummary;
-
-  if (
-    SHIFT_ASSIGNMENT_SUMMARY_REQUIRED_STATUSES.includes(this.status) &&
-    !completeAssignmentSummary &&
-    !(this.status === "confirmed" && replacementGapIsOpen)
-  ) {
-    this.invalidate(
-      "activeAssignment",
-      `${this.status} requires a complete assignment summary unless confirmed replacement hiring is open between assignments.`
-    );
-  }
-
-  if (
-    ["pending_funding", "open", "completed", "cancelled"].includes(this.status) &&
-    assignmentValueCount > 0
-  ) {
-    this.invalidate(
-      "activeAssignment",
-      `${this.status} cannot retain a current assignment summary.`
-    );
-  }
-
-  if (this.status === "open" && replacementHiringStatus !== "closed") {
-    this.invalidate(
-      "replacementHiring.status",
-      "Initial marketplace status open cannot be combined with replacement hiring."
-    );
-  }
-
-  /* ─────────────────────────────── REPLACEMENT HIRING ─────────────────────────────── */
-
-  const replacementHiringValues = [
-    this.replacementHiring?.assignmentCase,
-    this.replacementHiring?.applicationRound,
-    this.replacementHiring?.replacementForAssignment,
-    this.replacementHiring?.startSequenceNumber,
-    this.replacementHiring?.endSequenceNumber,
-    this.replacementHiring?.reasonCode,
-    this.replacementHiring?.openedAt,
-    this.replacementHiring?.openedBy,
-  ];
-
-  const replacementHiringHasCoreMetadata = replacementHiringValues.every(hasDocumentValue);
-
-  if (replacementHiringStatus === "closed") {
-    const closedOnlyValues = [
-      ...replacementHiringValues,
-      this.replacementHiring?.reasonDetails,
-      this.replacementHiring?.filledAt,
-      this.replacementHiring?.filledByAssignment,
-      this.replacementHiring?.cancelledAt,
-      this.replacementHiring?.cancelledBy,
-      this.replacementHiring?.cancellationReason,
-    ];
-
-    if (
-      closedOnlyValues.some(hasDocumentValue) ||
-      Number(this.replacementHiring?.occurrenceCount || 0) !== 0
-    ) {
-      this.invalidate(
-        "replacementHiring.status",
-        "Closed replacement hiring cannot retain replacement recruitment metadata."
+  for (const [field, value] of [
+    ["lastProfessionalApprovedAt", approved],
+    ["lastProfessionalReleasedAt", released],
+    ["lastPlatformFeeEarnedAt", earned],
+    ["lastPlatformFeeCollectedAt", collected],
+  ]) {
+    if (summary[field] && value <= 0) {
+      document.invalidate(
+        `settlementSummary.${field}`,
+        `${field} requires a positive corresponding amount.`
       );
     }
   }
+}
 
-  if (REPLACEMENT_HIRING_CONTEXT_STATUSES.includes(replacementHiringStatus)) {
-    if (!replacementHiringHasCoreMetadata) {
-      this.invalidate(
-        "replacementHiring.assignmentCase",
-        `${replacementHiringStatus} replacement hiring requires assignmentCase, applicationRound, replacementForAssignment, range, reasonCode, openedAt and openedBy.`
-      );
-    }
+/* ─────────────────────────────── HIRING SUMMARY VALIDATION ─────────────────────────────── */
 
-    if (
-      !Number.isSafeInteger(this.replacementHiring?.applicationRound) ||
-      this.replacementHiring.applicationRound < 2
-    ) {
-      this.invalidate(
-        "replacementHiring.applicationRound",
-        "Replacement hiring must retain application round 2 or greater."
-      );
-    }
+function validateHiring(document) {
+  const initialAccepted = count(document.hiringSummary, "initialAcceptedCount");
 
-    if (
-      Number.isSafeInteger(this.replacementHiring?.applicationRound) &&
-      this.replacementHiring.applicationRound !== this.applicationRound
-    ) {
-      this.invalidate(
-        "applicationRound",
-        "Parent applicationRound must match replacementHiring.applicationRound."
-      );
-    }
+  const openReplacements = count(document.hiringSummary, "openReplacementCount");
 
-    const replacementStart = this.replacementHiring?.startSequenceNumber;
+  const operationalAssignments = sumCounts(document.assignmentSummary, [
+    "scheduled",
+    "active",
+    "ending",
+  ]);
 
-    const replacementEnd = this.replacementHiring?.endSequenceNumber;
-
-    const replacementCount = this.replacementHiring?.occurrenceCount;
-
-    if (
-      !Number.isSafeInteger(replacementStart) ||
-      !Number.isSafeInteger(replacementEnd) ||
-      !Number.isSafeInteger(replacementCount) ||
-      replacementCount <= 0
-    ) {
-      this.invalidate(
-        "replacementHiring.occurrenceCount",
-        "Replacement hiring must retain a complete positive occurrence range."
-      );
-    } else {
-      if (replacementEnd < replacementStart) {
-        this.invalidate(
-          "replacementHiring.endSequenceNumber",
-          "replacementHiring.endSequenceNumber cannot be earlier than startSequenceNumber."
-        );
-      }
-
-      if (replacementCount !== replacementEnd - replacementStart + 1) {
-        this.invalidate(
-          "replacementHiring.occurrenceCount",
-          "replacementHiring.occurrenceCount must match the replacement sequence range."
-        );
-      }
-
-      if (replacementEnd > occurrenceCount) {
-        this.invalidate(
-          "replacementHiring.endSequenceNumber",
-          "Replacement hiring cannot extend beyond occurrenceCount."
-        );
-      }
-    }
-
-    const replacementReasonCode = this.replacementHiring?.reasonCode;
-
-    const replacementReasonDetails = this.replacementHiring?.reasonDetails;
-
-    if (
-      REPLACEMENT_REASON_CODES_REQUIRING_DETAILS.includes(replacementReasonCode) &&
-      !replacementReasonDetails
-    ) {
-      this.invalidate(
-        "replacementHiring.reasonDetails",
-        `${replacementReasonCode} requires additional replacement details.`
-      );
-    }
-
-    validateMinimumDetails(
-      this,
-      "replacementHiring.reasonDetails",
-      replacementReasonDetails,
-      "Replacement details"
-    );
-  }
-
-  if (replacementHiringStatus === "open") {
-    if (["pending_funding", "open", "completed", "cancelled"].includes(this.status)) {
-      this.invalidate(
-        "replacementHiring.status",
-        `Open replacement hiring is incompatible with Shift status ${this.status}.`
-      );
-    }
-
-    if (this.replacementHiring?.filledAt || this.replacementHiring?.filledByAssignment) {
-      this.invalidate(
-        "replacementHiring.filledAt",
-        "Open replacement hiring cannot contain filled assignment details."
-      );
-    }
-
-    if (
-      this.replacementHiring?.cancelledAt ||
-      this.replacementHiring?.cancelledBy ||
-      this.replacementHiring?.cancellationReason
-    ) {
-      this.invalidate(
-        "replacementHiring.cancelledAt",
-        "Open replacement hiring cannot contain cancellation details."
-      );
-    }
-  }
-
-  if (replacementHiringStatus === "filled") {
-    if (!this.replacementHiring?.filledAt || !this.replacementHiring?.filledByAssignment) {
-      this.invalidate(
-        "replacementHiring.filledAt",
-        "Filled replacement hiring requires filledAt and filledByAssignment."
-      );
-    }
-
-    if (
-      this.replacementHiring?.openedAt &&
-      this.replacementHiring?.filledAt &&
-      this.replacementHiring.filledAt < this.replacementHiring.openedAt
-    ) {
-      this.invalidate("replacementHiring.filledAt", "filledAt cannot be earlier than openedAt.");
-    }
-
-    if (
-      this.replacementHiring?.cancelledAt ||
-      this.replacementHiring?.cancelledBy ||
-      this.replacementHiring?.cancellationReason
-    ) {
-      this.invalidate(
-        "replacementHiring.cancelledAt",
-        "Filled replacement hiring cannot contain cancellation details."
-      );
-    }
-
-    if (
-      this.replacementHiring?.filledByAssignment &&
-      this.replacementHiring?.replacementForAssignment &&
-      String(this.replacementHiring.filledByAssignment) ===
-        String(this.replacementHiring.replacementForAssignment)
-    ) {
-      this.invalidate(
-        "replacementHiring.filledByAssignment",
-        "The replacement assignment cannot be the assignment being replaced."
-      );
-    }
-  }
-
-  if (replacementHiringStatus === "cancelled") {
-    if (
-      !this.replacementHiring?.cancelledAt ||
-      !this.replacementHiring?.cancelledBy ||
-      !this.replacementHiring?.cancellationReason
-    ) {
-      this.invalidate(
-        "replacementHiring.cancelledAt",
-        "Cancelled replacement hiring requires cancelledAt, cancelledBy and cancellationReason."
-      );
-    }
-
-    if (
-      this.replacementHiring?.openedAt &&
-      this.replacementHiring?.cancelledAt &&
-      this.replacementHiring.cancelledAt < this.replacementHiring.openedAt
-    ) {
-      this.invalidate(
-        "replacementHiring.cancelledAt",
-        "cancelledAt cannot be earlier than openedAt."
-      );
-    }
-
-    validateMinimumDetails(
-      this,
-      "replacementHiring.cancellationReason",
-      this.replacementHiring?.cancellationReason,
-      "Replacement cancellation reason"
-    );
-
-    if (this.replacementHiring?.filledAt || this.replacementHiring?.filledByAssignment) {
-      this.invalidate(
-        "replacementHiring.filledAt",
-        "Cancelled replacement hiring cannot contain filled assignment details."
-      );
-    }
-  }
-
-  if (this.applicationRound === 1 && replacementHiringStatus !== "closed") {
-    this.invalidate(
+  if (document.applicationRound !== 1) {
+    document.invalidate(
       "applicationRound",
-      "Initial application round 1 cannot contain replacement hiring."
+      "Parent initial hiring remains round 1; replacement rounds belong to their own opportunities."
     );
   }
 
-  if (this.currentRoundApplications > this.totalApplications) {
-    this.invalidate(
+  if (initialAccepted > document.requiredProfessionals) {
+    document.invalidate(
+      "hiringSummary.initialAcceptedCount",
+      "Initial acceptances cannot exceed requiredProfessionals."
+    );
+  }
+
+  if (document.currentRoundApplications > document.totalApplications) {
+    document.invalidate(
       "currentRoundApplications",
       "currentRoundApplications cannot exceed totalApplications."
     );
   }
 
-  /* ─────────────────────────────── OCCURRENCE PROGRESS ─────────────────────────────── */
+  if (initialAccepted > document.totalApplications) {
+    document.invalidate(
+      "hiringSummary.initialAcceptedCount",
+      "Initial accepted applications cannot exceed totalApplications."
+    );
+  }
 
-  if (this.occurrenceProgress && Number.isSafeInteger(occurrenceCount)) {
-    const assignmentProgressFields = [
-      "unassigned",
-      "assigned",
-      "replacementRequired",
-      "expiredUnfilled",
-    ];
+  if (
+    ["assigned", "confirmed"].includes(document.status) &&
+    operationalAssignments === 0 &&
+    openReplacements === 0
+  ) {
+    document.invalidate(
+      "assignmentSummary",
+      "Assigned or confirmed engagements require operational assignments or open replacement hiring."
+    );
+  }
 
-    const occurrenceStatusProgressFields = [
-      "scheduled",
-      "inProgress",
-      "pendingSettlement",
-      "completed",
-      "cancelled",
-      "noShow",
-      "disputed",
-      "expiredUnfilled",
-    ];
-
-    const settlementProgressFields = [
-      "settlementNotDue",
-      "pendingReview",
-      "awaitingOvertimeReview",
-      "awaitingTopup",
-      "approvedForRelease",
-      "releasePending",
-      "released",
-      "failed",
-      "settlementDisputed",
-    ];
-
-    const refundProgressFields = [
-      "refundNotEligible",
-      "refundHeld",
-      "refundEligible",
-      "refundBatched",
-      "refundProcessing",
-      "refunded",
-    ];
-
-    const progressFields = [
-      ...new Set([
-        ...assignmentProgressFields,
-        ...occurrenceStatusProgressFields,
-        ...settlementProgressFields,
-        ...refundProgressFields,
-        "resolved",
-      ]),
-    ];
-
-    const dimensionIsZero = (fieldNames) =>
-      fieldNames.every((fieldName) => Number(this.occurrenceProgress[fieldName] || 0) === 0);
-
-    if (this.isNew) {
-      if (dimensionIsZero(assignmentProgressFields)) {
-        this.occurrenceProgress.unassigned = occurrenceCount;
-      }
-
-      if (dimensionIsZero(occurrenceStatusProgressFields)) {
-        this.occurrenceProgress.scheduled = occurrenceCount;
-      }
-
-      if (dimensionIsZero(settlementProgressFields)) {
-        this.occurrenceProgress.settlementNotDue = occurrenceCount;
-      }
-
-      if (dimensionIsZero(refundProgressFields)) {
-        this.occurrenceProgress.refundNotEligible = occurrenceCount;
-      }
-    }
-
-    for (const fieldName of progressFields) {
-      const value = Number(this.occurrenceProgress[fieldName] || 0);
-
-      if (!Number.isSafeInteger(value) || value < 0 || value > occurrenceCount) {
-        this.invalidate(
-          `occurrenceProgress.${fieldName}`,
-          `${fieldName} occurrence count must be between 0 and occurrenceCount.`
-        );
-      }
-    }
-
-    const sumProgress = (fieldNames) =>
-      fieldNames.reduce(
-        (total, fieldName) => total + Number(this.occurrenceProgress[fieldName] || 0),
-        0
-      );
-
-    if (sumProgress(assignmentProgressFields) !== occurrenceCount) {
-      this.invalidate(
-        "occurrenceProgress.assigned",
-        "The assignment progress dimension must cover every occurrence exactly once."
+  if (["pending_funding", "completed", "cancelled"].includes(document.status)) {
+    if (operationalAssignments !== 0) {
+      document.invalidate(
+        "assignmentSummary",
+        `${document.status} cannot retain operational assignments requiring future coverage.`
       );
     }
 
-    if (sumProgress(occurrenceStatusProgressFields) !== occurrenceCount) {
-      this.invalidate(
-        "occurrenceProgress.scheduled",
-        "The occurrence-status progress dimension must cover every occurrence exactly once."
-      );
-    }
-
-    if (sumProgress(settlementProgressFields) !== occurrenceCount) {
-      this.invalidate(
-        "occurrenceProgress.settlementNotDue",
-        "The settlement progress dimension must cover every occurrence exactly once."
-      );
-    }
-
-    if (sumProgress(refundProgressFields) !== occurrenceCount) {
-      this.invalidate(
-        "occurrenceProgress.refundNotEligible",
-        "The refund progress dimension must cover every occurrence exactly once."
-      );
-    }
-
-    const replacementRequiredCount = Number(this.occurrenceProgress.replacementRequired || 0);
-
-    const replacementHiringOccurrenceCount = Number(this.replacementHiring?.occurrenceCount || 0);
-
-    if (
-      replacementHiringStatus === "open" &&
-      replacementRequiredCount !== replacementHiringOccurrenceCount
-    ) {
-      this.invalidate(
-        "occurrenceProgress.replacementRequired",
-        "Open replacement hiring must match the number of occurrences marked replacement_required."
-      );
-    }
-
-    if (replacementHiringStatus === "filled" && replacementRequiredCount !== 0) {
-      this.invalidate(
-        "occurrenceProgress.replacementRequired",
-        "Filled replacement hiring requires every advertised occurrence to be assigned."
-      );
-    }
-
-    if (
-      replacementRequiredCount > 0 &&
-      this.status !== "cancelled" &&
-      replacementHiringStatus !== "open"
-    ) {
-      this.invalidate(
-        "replacementHiring.status",
-        "Active replacement-required occurrences require replacementHiring.status to be open."
-      );
-    }
-
-    if (this.status === "cancelled" && replacementRequiredCount > 0) {
-      if (replacementHiringStatus !== "cancelled") {
-        this.invalidate(
-          "replacementHiring.status",
-          "A cancelled engagement with preserved replacement-required occurrences must retain cancelled replacement hiring context."
-        );
-      }
-
-      if (replacementRequiredCount !== replacementHiringOccurrenceCount) {
-        this.invalidate(
-          "occurrenceProgress.replacementRequired",
-          "Preserved replacement-required occurrences must match the cancelled replacement hiring range."
-        );
-      }
-    }
-
-    const terminalOccurrenceCount =
-      Number(this.occurrenceProgress.completed || 0) +
-      Number(this.occurrenceProgress.cancelled || 0) +
-      Number(this.occurrenceProgress.noShow || 0) +
-      Number(this.occurrenceProgress.expiredUnfilled || 0);
-
-    if (Number(this.occurrenceProgress.resolved || 0) > terminalOccurrenceCount) {
-      this.invalidate(
-        "occurrenceProgress.resolved",
-        "resolved cannot exceed the number of terminal occurrence outcomes."
-      );
-    }
-
-    if (
-      this.status === "completed" &&
-      Number(this.occurrenceProgress.resolved || 0) !== occurrenceCount
-    ) {
-      this.invalidate(
-        "occurrenceProgress.resolved",
-        "A completed engagement must have every occurrence operationally and financially resolved."
+    if (openReplacements !== 0) {
+      document.invalidate(
+        "hiringSummary.openReplacementCount",
+        `${document.status} cannot retain open replacement hiring.`
       );
     }
   }
 
-  /* ─────────────────────────────── PUBLICATION AND PAYMENT ─────────────────────────────── */
+  if (document.status === "pending_funding" && initialAccepted !== 0) {
+    document.invalidate(
+      "hiringSummary.initialAcceptedCount",
+      "An unfunded engagement cannot contain accepted applications."
+    );
+  }
 
-  const statusRequiresPublication = [
+  if (openReplacements > 0 && ["unpaid", "released", "refunded"].includes(document.paymentStatus)) {
+    document.invalidate(
+      "paymentStatus",
+      "Open replacement hiring requires protected funds available for remaining coverage."
+    );
+  }
+
+  // Ordinary vacancies and replacement hiring may coexist with active assignments.
+  // Actual fillability and assignment ranges must be checked against occurrences.
+}
+
+/* ─────────────────────────────── OCCURRENCE PROGRESS VALIDATION ─────────────────────────────── */
+
+function validateOccurrenceProgress(document, total) {
+  if (!Number.isSafeInteger(total) || total < 1) {
+    return;
+  }
+
+  const progress = document.occurrenceProgress;
+
+  if (!progress) {
+    document.invalidate("occurrenceProgress", "Occurrence progress is required.");
+
+    return;
+  }
+
+  const dimensions = [
+    [ASSIGNMENT_PROGRESS_FIELDS, "unassigned"],
+    [STATUS_PROGRESS_FIELDS, "scheduled"],
+    [SETTLEMENT_PROGRESS_FIELDS, "settlementNotDue"],
+    [REFUND_PROGRESS_FIELDS, "refundNotEligible"],
+  ];
+
+  if (document.isNew) {
+    for (const [fields, initial] of dimensions) {
+      if (fields.every((field) => count(progress, field) === 0)) {
+        progress[initial] = total;
+      }
+    }
+  }
+
+  for (const field of PROGRESS_FIELDS) {
+    const value = count(progress, field);
+
+    if (!Number.isSafeInteger(value) || value < 0 || value > total) {
+      document.invalidate(
+        `occurrenceProgress.${field}`,
+        `${field} must be between 0 and totalOccurrenceCount.`
+      );
+    }
+  }
+
+  for (const [fields, initial] of dimensions) {
+    if (sumCounts(progress, fields) !== total) {
+      document.invalidate(
+        `occurrenceProgress.${initial}`,
+        "Each progress dimension must cover every position/date occurrence exactly once."
+      );
+    }
+  }
+
+  const terminal = sumCounts(progress, ["completed", "cancelled", "noShow", "expiredUnfilled"]);
+
+  if (count(progress, "resolved") > terminal) {
+    document.invalidate(
+      "occurrenceProgress.resolved",
+      "Resolved count cannot exceed terminal occurrence count."
+    );
+  }
+
+  if (document.status === "completed" && count(progress, "resolved") !== total) {
+    document.invalidate(
+      "occurrenceProgress.resolved",
+      "A completed engagement must resolve every position/date occurrence."
+    );
+  }
+}
+
+/* ─────────────────────────────── PUBLICATION AND PAYMENT VALIDATION ─────────────────────────────── */
+
+function validatePublicationAndPayment(document, total) {
+  const progress = document.occurrenceProgress || {};
+
+  const summary = document.settlementSummary || {};
+
+  const approved = count(summary, "approvedProfessionalPay");
+
+  const released = count(summary, "releasedProfessionalPay");
+
+  const committed = count(summary, "committedEmployerCharge");
+
+  const refunded = document.refundedAmount;
+
+  const topUp = document.topUpRequired;
+
+  const requiresPublication = [
     "open",
     "assigned",
     "confirmed",
@@ -2356,908 +1350,578 @@ shiftSchema.pre("validate", function validateShift() {
     "completed",
     "disputed",
     "no_show",
-  ].includes(this.status);
+  ].includes(document.status);
 
-  const hasPublicationAudit = hasDocumentValue(this.publishedAt);
-
-  if (statusRequiresPublication && !hasPublicationAudit) {
-    this.invalidate(
-      "publishedAt",
-      `${this.status} requires the engagement to have been published.`
-    );
+  if (requiresPublication && !document.publishedAt) {
+    document.invalidate("publishedAt", `${document.status} requires publication.`);
   }
 
-  if (hasPublicationAudit) {
-    if (!SHIFT_PUBLISHED_PAYMENT_STATUSES.includes(this.paymentStatus)) {
-      this.invalidate(
+  if (document.publishedAt) {
+    if (!SHIFT_PUBLISHED_PAYMENT_STATUSES.includes(document.paymentStatus)) {
+      document.invalidate(
         "paymentStatus",
-        "A published engagement must have protected funding or a later settlement state."
+        "A published engagement requires protected funding or a later financial state."
       );
     }
 
     if (
-      !Number.isSafeInteger(this.fundedAmount) ||
-      !Number.isSafeInteger(this.estimatedEmployerCharge) ||
-      this.fundedAmount < this.estimatedEmployerCharge
+      !Number.isSafeInteger(document.fundedAmount) ||
+      !Number.isSafeInteger(document.estimatedEmployerCharge) ||
+      document.fundedAmount < document.estimatedEmployerCharge
     ) {
-      this.invalidate(
+      document.invalidate(
         "fundedAmount",
-        "A published engagement must have cumulative protected funding of at least the estimated employer charge."
+        "Publication requires funding for every required position's full schedule."
       );
     }
 
-    if (!this.fundingMethod) {
-      this.invalidate("fundingMethod", "fundingMethod is required for a published engagement.");
+    for (const field of ["fundingMethod", "fundedAt", "fundingTransaction"]) {
+      if (!document[field]) {
+        document.invalidate(field, `${field} is required for a published engagement.`);
+      }
     }
 
-    if (!this.fundedAt) {
-      this.invalidate("fundedAt", "fundedAt is required for a published engagement.");
+    if (
+      document.fundingInitiatedAt &&
+      document.fundedAt &&
+      document.fundedAt < document.fundingInitiatedAt
+    ) {
+      document.invalidate("fundedAt", "fundedAt cannot precede fundingInitiatedAt.");
     }
 
-    if (!this.fundingTransaction) {
-      this.invalidate(
-        "fundingTransaction",
-        "A published engagement must reference its completed protected-funding transaction."
-      );
-    }
-
-    if (this.fundingInitiatedAt && this.fundedAt && this.fundedAt < this.fundingInitiatedAt) {
-      this.invalidate("fundedAt", "fundedAt cannot be earlier than fundingInitiatedAt.");
-    }
-
-    if (this.fundedAt && this.publishedAt && this.publishedAt < this.fundedAt) {
-      this.invalidate("publishedAt", "publishedAt cannot be earlier than fundedAt.");
+    if (document.fundedAt && document.publishedAt < document.fundedAt) {
+      document.invalidate("publishedAt", "publishedAt cannot precede fundedAt.");
     }
   }
 
-  if (this.status === "pending_funding") {
-    if (this.publishedAt) {
-      this.invalidate("publishedAt", "A pending-funding engagement cannot already be published.");
+  if (document.status === "pending_funding") {
+    if (document.publishedAt) {
+      document.invalidate("publishedAt", "A pending-funding engagement cannot be published.");
     }
 
-    if (this.paymentStatus !== "unpaid") {
-      this.invalidate(
-        "paymentStatus",
-        "A pending-funding engagement must have unpaid payment status."
-      );
+    if (document.paymentStatus !== "unpaid") {
+      document.invalidate("paymentStatus", "A pending-funding engagement must remain unpaid.");
     }
 
-    if (Number(this.fundedAmount || 0) !== 0) {
-      this.invalidate(
+    if (document.fundedAmount !== 0) {
+      document.invalidate(
         "fundedAmount",
         "A pending-funding engagement cannot contain protected funding."
       );
     }
   }
 
-  if (this.status === "open") {
+  if (document.status === "open") {
     if (
-      !SHIFT_PUBLISHED_PAYMENT_STATUSES.includes(this.paymentStatus) ||
-      ["released", "refunded"].includes(this.paymentStatus)
+      !SHIFT_PUBLISHED_PAYMENT_STATUSES.includes(document.paymentStatus) ||
+      ["released", "refunded"].includes(document.paymentStatus)
     ) {
-      this.invalidate(
+      document.invalidate(
         "paymentStatus",
-        "An open engagement must retain a non-final published payment state while future occurrences remain available."
+        "An open engagement must retain a non-final published payment state."
       );
     }
 
-    if (assignmentValueCount > 0) {
-      this.invalidate(
-        "activeAssignment",
-        "An ordinary open engagement cannot retain an assignment summary."
-      );
-    }
-
-    if (
-      Number(occurrenceProgress.unassigned || 0) <= 0 ||
-      Number(occurrenceProgress.scheduled || 0) <= 0
-    ) {
-      this.invalidate(
+    if (count(progress, "unassigned") <= 0 || count(progress, "scheduled") <= 0) {
+      document.invalidate(
         "occurrenceProgress.unassigned",
-        "An open engagement requires at least one unassigned scheduled occurrence."
+        "An open engagement requires unassigned scheduled capacity."
       );
     }
+  }
 
-    if (Number(occurrenceProgress.replacementRequired || 0) > 0) {
-      this.invalidate(
-        "occurrenceProgress.replacementRequired",
-        "Initial marketplace status open cannot contain replacement-required occurrences."
-      );
-    }
+  if (document.paymentStatus === "funded" && (released !== 0 || refunded !== 0 || topUp !== 0)) {
+    document.invalidate(
+      "paymentStatus",
+      "funded cannot retain professional payouts, refunds or outstanding top-up."
+    );
   }
 
   if (
-    ACTIVE_REPLACEMENT_HIRING_STATUSES.includes(replacementHiringStatus) &&
-    ["released", "refunded"].includes(this.paymentStatus)
+    document.paymentStatus === "awaiting_overtime_review" &&
+    count(progress, "awaitingOvertimeReview") <= 0
   ) {
-    this.invalidate(
-      "paymentStatus",
-      "Open replacement hiring cannot remain on a fully released or fully refunded engagement."
+    document.invalidate(
+      "occurrenceProgress.awaitingOvertimeReview",
+      "This payment state requires an occurrence awaiting OT review."
     );
   }
 
-  if (this.paymentStatus === "funded") {
-    if (
-      releasedProfessionalPay !== 0 ||
-      Number(this.refundedAmount || 0) !== 0 ||
-      Number(this.topUpRequired || 0) !== 0
-    ) {
-      this.invalidate(
-        "paymentStatus",
-        "funded cannot retain professional payouts, refunds or an outstanding top-up."
-      );
-    }
-  }
-
-  if (this.paymentStatus === "awaiting_overtime_review") {
-    if (Number(occurrenceProgress.awaitingOvertimeReview || 0) <= 0) {
-      this.invalidate(
-        "occurrenceProgress.awaitingOvertimeReview",
-        "awaiting_overtime_review requires at least one occurrence awaiting overtime review."
-      );
-    }
-  }
-
-  if (this.paymentStatus === "awaiting_topup") {
-    if (Number(this.topUpRequired || 0) <= 0) {
-      this.invalidate(
-        "topUpRequired",
-        "awaiting_topup requires a positive outstanding top-up amount."
-      );
+  if (document.paymentStatus === "awaiting_topup") {
+    if (topUp <= 0) {
+      document.invalidate("topUpRequired", "awaiting_topup requires a positive top-up amount.");
     }
 
-    if (Number(occurrenceProgress.awaitingTopup || 0) <= 0) {
-      this.invalidate(
+    if (count(progress, "awaitingTopup") <= 0) {
+      document.invalidate(
         "occurrenceProgress.awaitingTopup",
-        "awaiting_topup requires at least one occurrence awaiting top-up."
+        "awaiting_topup requires an occurrence awaiting top-up."
       );
     }
-  } else if (Number(this.topUpRequired || 0) > 0) {
-    this.invalidate(
+  } else if (topUp > 0) {
+    document.invalidate(
       "paymentStatus",
-      "A positive topUpRequired requires paymentStatus awaiting_topup."
+      "A positive top-up requires paymentStatus awaiting_topup."
     );
   }
 
-  if (this.paymentStatus === "release_pending") {
-    if (
-      Number(occurrenceProgress.releasePending || 0) <= 0 &&
-      Number(occurrenceProgress.approvedForRelease || 0) <= 0
-    ) {
-      this.invalidate(
-        "occurrenceProgress.releasePending",
-        "release_pending requires at least one occurrence approved for professional release or already in payout processing."
-      );
-    }
+  if (
+    document.paymentStatus === "release_pending" &&
+    count(progress, "releasePending") <= 0 &&
+    count(progress, "approvedForRelease") <= 0
+  ) {
+    document.invalidate(
+      "occurrenceProgress.releasePending",
+      "release_pending requires approved or processing professional payout."
+    );
   }
 
-  if (this.paymentStatus === "partially_released") {
-    if (
-      releasedProfessionalPay <= 0 ||
-      Number(occurrenceProgress.resolved || 0) >= occurrenceCount
-    ) {
-      this.invalidate(
-        "settlementSummary.releasedProfessionalPay",
-        "partially_released requires completed professional payout value and at least one unresolved occurrence workflow."
-      );
-    }
+  if (
+    document.paymentStatus === "partially_released" &&
+    (released <= 0 || (Number.isSafeInteger(total) && count(progress, "resolved") >= total))
+  ) {
+    document.invalidate(
+      "settlementSummary.releasedProfessionalPay",
+      "partially_released requires paid professional earnings and unresolved occurrence workflows."
+    );
   }
 
-  if (this.paymentStatus === "released") {
-    if (
-      approvedProfessionalPay <= 0 ||
-      releasedProfessionalPay !== approvedProfessionalPay ||
-      Number(this.refundedAmount || 0) !== 0
-    ) {
-      this.invalidate(
+  if (document.paymentStatus === "released") {
+    if (approved <= 0 || released !== approved || refunded !== 0) {
+      document.invalidate(
         "settlementSummary.releasedProfessionalPay",
-        "released requires all approved professional pay to be paid and no employer refund."
+        "released requires all approved pay to be paid and no employer refund."
       );
     }
 
-    if (Number(occurrenceProgress.resolved || 0) !== occurrenceCount) {
-      this.invalidate(
+    if (Number.isSafeInteger(total) && count(progress, "resolved") !== total) {
+      document.invalidate(
         "occurrenceProgress.resolved",
-        "released requires every occurrence workflow to be resolved."
+        "released requires all occurrence workflows to be resolved."
       );
     }
   }
 
-  if (["refunded", "partially_refunded"].includes(this.paymentStatus)) {
-    if (Number(this.refundedAmount || 0) <= 0) {
-      this.invalidate(
-        "refundedAmount",
-        `${this.paymentStatus} requires a positive refunded amount.`
-      );
-    }
+  if (["refunded", "partially_refunded"].includes(document.paymentStatus) && refunded <= 0) {
+    document.invalidate(
+      "refundedAmount",
+      "Refunded payment states require a positive completed refund."
+    );
   }
 
-  if (this.paymentStatus === "refunded") {
+  if (
+    document.paymentStatus === "refunded" &&
+    (released !== 0 || refunded !== document.fundedAmount)
+  ) {
+    document.invalidate(
+      "paymentStatus",
+      "refunded requires zero professional payout and a full refund of protected funding."
+    );
+  }
+
+  if (document.paymentStatus === "partially_refunded" && refunded >= document.fundedAmount) {
+    document.invalidate("refundedAmount", "A partial refund must remain below fundedAmount.");
+  }
+
+  if (document.status !== "completed") {
+    return;
+  }
+
+  if (!SHIFT_FINAL_PAYMENT_STATUSES.includes(document.paymentStatus)) {
+    document.invalidate(
+      "paymentStatus",
+      "A completed engagement requires a final released or refunded payment state."
+    );
+  }
+
+  if (topUp !== 0) {
+    document.invalidate(
+      "topUpRequired",
+      "A completed engagement cannot retain outstanding top-up."
+    );
+  }
+
+  if (released !== approved) {
+    document.invalidate(
+      "settlementSummary.releasedProfessionalPay",
+      "A completed engagement must have paid all approved professional earnings."
+    );
+  }
+
+  try {
     if (
-      releasedProfessionalPay !== 0 ||
-      Number(this.refundedAmount || 0) !== Number(this.fundedAmount || 0)
+      money.sumMinorUnitAmounts([committed, refunded], "Completed funding reconciliation") !==
+      document.fundedAmount
     ) {
-      this.invalidate(
-        "paymentStatus",
-        "refunded requires zero professional payout and a full refund of cumulative protected funding."
+      document.invalidate(
+        "settlementSummary.committedEmployerCharge",
+        "Completion must reconcile all funding into committed charges and completed refunds."
+      );
+    }
+  } catch (error) {
+    document.invalidate(
+      "settlementSummary.committedEmployerCharge",
+      "Completed funding reconciliation is invalid or too large."
+    );
+  }
+
+  for (const [fields, path] of [
+    [["scheduled", "inProgress", "pendingSettlement", "disputed"], "resolved"],
+    [
+      [
+        "pendingReview",
+        "awaitingOvertimeReview",
+        "awaitingTopup",
+        "approvedForRelease",
+        "releasePending",
+        "failed",
+        "settlementDisputed",
+      ],
+      "settlementNotDue",
+    ],
+    [["refundHeld", "refundEligible", "refundBatched", "refundProcessing"], "refundEligible"],
+  ]) {
+    if (sumCounts(progress, fields) !== 0) {
+      document.invalidate(
+        `occurrenceProgress.${path}`,
+        "A completed engagement cannot retain unresolved operational, payout or refund workflows."
       );
     }
   }
 
-  if (this.paymentStatus === "partially_refunded") {
-    if (Number(this.refundedAmount || 0) >= Number(this.fundedAmount || 0)) {
-      this.invalidate(
-        "refundedAmount",
-        "partially_refunded requires refundedAmount to remain below fundedAmount."
-      );
-    }
+  if (count(progress, "expiredUnfilled") > count(progress, "refunded")) {
+    document.invalidate(
+      "occurrenceProgress.refunded",
+      "Expired-unfilled occurrences must complete their refunds before engagement completion."
+    );
   }
+}
 
-  if (this.status === "completed") {
-    if (!SHIFT_FINAL_PAYMENT_STATUSES.includes(this.paymentStatus)) {
-      this.invalidate(
-        "paymentStatus",
-        "A completed engagement must have a final released or refunded payment status."
-      );
-    }
+/* ─────────────────────────────── CANCELLATION VALIDATION ─────────────────────────────── */
 
-    if (replacementHiringStatus === "open") {
-      this.invalidate(
-        "replacementHiring.status",
-        "A completed engagement cannot retain open replacement hiring."
-      );
-    }
+function validateCancellation(document, total) {
+  const summary = document.cancellationSummary || {};
 
-    if (Number(this.topUpRequired || 0) !== 0) {
-      this.invalidate(
-        "topUpRequired",
-        "A completed engagement cannot retain an outstanding top-up."
-      );
-    }
+  const active = document.activeWorkCancellation || {};
 
-    if (releasedProfessionalPay !== approvedProfessionalPay) {
-      this.invalidate(
-        "settlementSummary.releasedProfessionalPay",
-        "A completed engagement must have paid all approved professional pay."
-      );
-    }
+  const affected = active.affectedOccurrences || [];
 
-    if (
-      Number.isSafeInteger(this.fundedAmount) &&
-      Number.isSafeInteger(this.refundedAmount) &&
-      Number.isSafeInteger(committedEmployerCharge)
-    ) {
-      try {
-        const reconciledFunding = money.sumMinorUnitAmounts(
-          [committedEmployerCharge, this.refundedAmount],
-          "Completed engagement funding reconciliation"
-        );
+  const summaryHasData =
+    hasDocumentValue(summary.firstAffectedOccurrence) ||
+    hasDocumentValue(summary.firstAffectedSequenceNumber) ||
+    count(summary, "cancelledOccurrenceCount") > 0 ||
+    summary.compensationApplicable === true;
 
-        if (reconciledFunding !== this.fundedAmount) {
-          this.invalidate(
-            "settlementSummary.committedEmployerCharge",
-            "A completed engagement must reconcile all funded protection into committed employer charges and completed refunds."
-          );
-        }
-      } catch (error) {
-        this.invalidate(
-          "settlementSummary.committedEmployerCharge",
-          "Completed engagement funding reconciliation exceeds the supported safe-integer range."
-        );
-      }
-    }
+  const activeHasData =
+    active.occurred === true || affected.length > 0 || hasDocumentValue(active.effectiveAt);
 
-    const unresolvedOccurrenceCount =
-      Number(occurrenceProgress.scheduled || 0) +
-      Number(occurrenceProgress.inProgress || 0) +
-      Number(occurrenceProgress.pendingSettlement || 0) +
-      Number(occurrenceProgress.disputed || 0);
-
-    if (unresolvedOccurrenceCount !== 0) {
-      this.invalidate(
-        "occurrenceProgress.resolved",
-        "A completed engagement cannot retain scheduled, in-progress, pending-settlement or disputed occurrences."
-      );
-    }
-
-    const unresolvedSettlementCount =
-      Number(occurrenceProgress.pendingReview || 0) +
-      Number(occurrenceProgress.awaitingOvertimeReview || 0) +
-      Number(occurrenceProgress.awaitingTopup || 0) +
-      Number(occurrenceProgress.approvedForRelease || 0) +
-      Number(occurrenceProgress.releasePending || 0) +
-      Number(occurrenceProgress.failed || 0) +
-      Number(occurrenceProgress.settlementDisputed || 0);
-
-    if (unresolvedSettlementCount !== 0) {
-      this.invalidate(
-        "occurrenceProgress.settlementNotDue",
-        "A completed engagement cannot retain unresolved settlement states."
-      );
-    }
-
-    const unresolvedRefundCount =
-      Number(occurrenceProgress.refundHeld || 0) +
-      Number(occurrenceProgress.refundEligible || 0) +
-      Number(occurrenceProgress.refundBatched || 0) +
-      Number(occurrenceProgress.refundProcessing || 0);
-
-    if (unresolvedRefundCount !== 0) {
-      this.invalidate(
-        "occurrenceProgress.refundEligible",
-        "A completed engagement cannot retain held, eligible, batched or processing occurrence refunds."
-      );
-    }
-
-    if (
-      Number(occurrenceProgress.expiredUnfilled || 0) > Number(occurrenceProgress.refunded || 0)
-    ) {
-      this.invalidate(
-        "occurrenceProgress.refunded",
-        "Every expired-unfilled occurrence must complete its refund before the engagement can be completed."
-      );
-    }
-
-    if (scheduleMode === "single") {
-      const singleCompletedWork = Number(occurrenceProgress.completed || 0) === 1;
-
-      const singleExpiredUnfilled = Number(occurrenceProgress.expiredUnfilled || 0) === 1;
-
-      if (singleCompletedWork && this.attendanceStatus !== "settled") {
-        this.invalidate(
-          "attendanceStatus",
-          "A completed worked single Shift must have settled parent attendance compatibility status."
-        );
-      }
-
-      if (singleExpiredUnfilled && this.attendanceStatus !== "not_started") {
-        this.invalidate(
-          "attendanceStatus",
-          "A completed expired-unfilled single Shift must retain not_started parent attendance compatibility status."
-        );
-      }
-
-      if (!singleCompletedWork && !singleExpiredUnfilled) {
-        this.invalidate(
-          "occurrenceProgress.completed",
-          "A completed single Shift must resolve through completed work or expired-unfilled finalisation."
-        );
-      }
-    }
-  }
-
-  /* ─────────────────────────────── CANCELLATION CONSISTENCY ─────────────────────────────── */
-
-  /**
-   * Parent cancellation validation is intentionally operational only.
-   *
-   * ShiftOccurrence owns:
-   *
-   * - cancellation compensation professional pay;
-   * - active-work cancellation professional pay;
-   * - BASE platform-fee outcome;
-   * - employer refund obligation and execution.
-   *
-   * The parent Shift must not recalculate or store those amounts.
-   */
-  const cancellationAuditValues = [
-    this.cancelledFromStatus,
-    this.cancellationCode,
-    this.cancelledBy,
-    this.cancelledByUser,
-    this.cancellationReasonCode,
-    this.cancellationReason,
-    this.cancelledAt,
+  const auditFields = [
+    "cancelledFromStatus",
+    "cancellationCode",
+    "cancelledBy",
+    "cancelledByUser",
+    "cancellationReasonCode",
+    "cancellationReason",
+    "cancelledAt",
   ];
 
-  const hasCancellationAudit = cancellationAuditValues.some(hasDocumentValue);
+  if (document.status !== "cancelled") {
+    if (auditFields.some((field) => hasDocumentValue(document[field]))) {
+      document.invalidate("cancelledAt", "Parent cancellation audit requires cancelled status.");
+    }
 
-  const cancellationSummary = this.cancellationSummary || {};
-
-  const cancellationSummaryHasData =
-    hasDocumentValue(cancellationSummary.firstAffectedOccurrence) ||
-    hasDocumentValue(cancellationSummary.firstAffectedSequenceNumber) ||
-    Number(cancellationSummary.cancelledOccurrenceCount || 0) > 0 ||
-    cancellationSummary.compensationApplicable === true;
-
-  if (this.status === "cancelled") {
-    if (!this.cancelledFromStatus) {
-      this.invalidate(
-        "cancelledFromStatus",
-        "A cancelled engagement must record the status it was cancelled from."
+    if (summaryHasData) {
+      document.invalidate(
+        "cancellationSummary",
+        "Parent cancellation summary requires cancelled status."
       );
     }
 
-    if (!this.cancellationCode) {
-      this.invalidate(
-        "cancellationCode",
-        "A cancelled engagement requires a machine-readable cancellationCode."
+    if (activeHasData) {
+      document.invalidate(
+        "activeWorkCancellation",
+        "Parent active-work cancellation requires cancelled status."
       );
     }
 
-    if (!this.cancelledAt || !this.cancelledBy) {
-      this.invalidate(
-        "cancelledAt",
-        "A cancelled engagement requires cancelledAt and cancelledBy."
+    return;
+  }
+
+  for (const field of ["cancelledFromStatus", "cancellationCode", "cancelledAt", "cancelledBy"]) {
+    if (!document[field]) {
+      document.invalidate(field, `${field} is required for a cancelled engagement.`);
+    }
+  }
+
+  if (document.cancelledBy === "employer") {
+    if (!document.cancellationReasonCode) {
+      document.invalidate(
+        "cancellationReasonCode",
+        "Employer cancellation requires a structured reason."
       );
     }
 
-    if (this.cancelledBy === "employer") {
-      if (!this.cancellationReasonCode) {
-        this.invalidate(
-          "cancellationReasonCode",
-          "Employer cancellation requires a structured cancellation reason."
-        );
-      }
-
-      if (
-        CANCELLATION_REASON_CODES_REQUIRING_DETAILS.includes(this.cancellationReasonCode) &&
-        !this.cancellationReason
-      ) {
-        this.invalidate(
-          "cancellationReason",
-          `${this.cancellationReasonCode} requires additional cancellation details.`
-        );
-      }
-    } else {
-      if (this.cancellationReasonCode) {
-        this.invalidate(
-          "cancellationReasonCode",
-          "Only an employer cancellation may contain an employer cancellation reason code."
-        );
-      }
-
-      if (!this.cancellationReason) {
-        this.invalidate(
-          "cancellationReason",
-          "System and admin cancellations require an audit reason."
-        );
-      }
-    }
-
-    if (this.cancellationReason && this.cancellationReason.length < 10) {
-      this.invalidate(
+    if (
+      CANCELLATION_REASON_CODES_REQUIRING_DETAILS.includes(document.cancellationReasonCode) &&
+      !document.cancellationReason
+    ) {
+      document.invalidate(
         "cancellationReason",
-        "Cancellation details must contain at least 10 characters when provided."
-      );
-    }
-
-    if (USER_CANCELLATION_ACTORS.includes(this.cancelledBy) && !this.cancelledByUser) {
-      this.invalidate(
-        "cancelledByUser",
-        `${this.cancelledBy} cancellation requires cancelledByUser.`
-      );
-    }
-
-    if (this.cancelledBy === "system" && this.cancelledByUser) {
-      this.invalidate("cancelledByUser", "A system cancellation cannot contain cancelledByUser.");
-    }
-
-    const requiredCancellationActor = CANCELLATION_CODE_ACTORS[this.cancellationCode];
-
-    if (requiredCancellationActor && this.cancelledBy !== requiredCancellationActor) {
-      this.invalidate(
-        "cancelledBy",
-        `${this.cancellationCode} requires cancelledBy to be ${requiredCancellationActor}.`
-      );
-    }
-
-    if (this.cancelledFromStatus === "pending_funding") {
-      if (this.paymentStatus !== "unpaid") {
-        this.invalidate(
-          "paymentStatus",
-          "An engagement cancelled from pending_funding must remain unpaid."
-        );
-      }
-
-      if (this.publishedAt) {
-        this.invalidate(
-          "publishedAt",
-          "An engagement cancelled from pending_funding cannot have been published."
-        );
-      }
-
-      if (Number(this.fundedAmount || 0) !== 0) {
-        this.invalidate(
-          "fundedAmount",
-          "An engagement cancelled from pending_funding cannot contain protected funding."
-        );
-      }
-    }
-
-    if (["open", "assigned", "confirmed", "in_progress"].includes(this.cancelledFromStatus)) {
-      if (!this.publishedAt) {
-        this.invalidate(
-          "publishedAt",
-          `An engagement cancelled from ${this.cancelledFromStatus} must retain its publication audit.`
-        );
-      }
-    }
-
-    if (this.cancellationCode === "funding_deadline_passed") {
-      if (this.cancelledFromStatus !== "pending_funding") {
-        this.invalidate(
-          "cancelledFromStatus",
-          "funding_deadline_passed can only cancel an engagement from pending_funding."
-        );
-      }
-
-      if (this.startTime && this.cancelledAt && this.cancelledAt < this.startTime) {
-        this.invalidate(
-          "cancelledAt",
-          "A funding-deadline expiration cannot be recorded before the Shift start time."
-        );
-      }
-
-      if (cancellationSummary.compensationApplicable) {
-        this.invalidate(
-          "cancellationSummary.compensationApplicable",
-          "An unfunded expiration cannot create professional cancellation compensation."
-        );
-      }
-    }
-
-    if (replacementHiringStatus === "open") {
-      this.invalidate(
-        "replacementHiring.status",
-        "A cancelled engagement cannot retain open replacement hiring."
-      );
-    }
-
-    if (this.cancelledFromStatus === "in_progress" && !this.activeWorkCancellation?.occurred) {
-      this.invalidate(
-        "activeWorkCancellation.occurred",
-        "Cancelling an in-progress engagement requires the active occurrence to be ended early and identified."
-      );
-    }
-
-    if (this.activeWorkCancellation?.occurred && this.cancelledFromStatus !== "in_progress") {
-      this.invalidate(
-        "cancelledFromStatus",
-        "Parent active-work cancellation requires cancellation from in_progress status."
-      );
-    }
-
-    if (Number(cancellationSummary.cancelledOccurrenceCount || 0) > occurrenceCount) {
-      this.invalidate(
-        "cancellationSummary.cancelledOccurrenceCount",
-        "cancelledOccurrenceCount cannot exceed occurrenceCount."
-      );
-    }
-
-    if (this.activeWorkCancellation?.occurred) {
-      const cancelledOccurrenceCount = Number(cancellationSummary.cancelledOccurrenceCount || 0);
-
-      if (scheduleMode === "single" && cancelledOccurrenceCount !== 0) {
-        this.invalidate(
-          "cancellationSummary.cancelledOccurrenceCount",
-          "An in-progress single Shift is ended early, not counted as a cancelled occurrence."
-        );
-      }
-
-      if (
-        scheduleMode === "multiple" &&
-        cancelledOccurrenceCount > Math.max(occurrenceCount - 1, 0)
-      ) {
-        this.invalidate(
-          "cancellationSummary.cancelledOccurrenceCount",
-          "The active occurrence ended during work cannot be included in cancelledOccurrenceCount."
-        );
-      }
-    }
-
-    if (cancellationSummaryHasData) {
-      if (!cancellationSummary.firstAffectedOccurrence) {
-        this.invalidate(
-          "cancellationSummary.firstAffectedOccurrence",
-          "A cancellation summary must identify the first affected ShiftOccurrence."
-        );
-      }
-
-      if (!Number.isSafeInteger(cancellationSummary.firstAffectedSequenceNumber)) {
-        this.invalidate(
-          "cancellationSummary.firstAffectedSequenceNumber",
-          "A cancellation summary must identify the first affected sequence number."
-        );
-      } else {
-        if (cancellationSummary.firstAffectedSequenceNumber > occurrenceCount) {
-          this.invalidate(
-            "cancellationSummary.firstAffectedSequenceNumber",
-            "The first affected sequence number cannot exceed occurrenceCount."
-          );
-        }
-
-        if (scheduleMode === "single" && cancellationSummary.firstAffectedSequenceNumber !== 1) {
-          this.invalidate(
-            "cancellationSummary.firstAffectedSequenceNumber",
-            "A single Shift must use first affected sequence number 1."
-          );
-        }
-      }
-    }
-
-    if (cancellationSummary.compensationApplicable) {
-      if (this.activeWorkCancellation?.occurred) {
-        this.invalidate(
-          "cancellationSummary.compensationApplicable",
-          "An active occurrence ended early cannot also receive late-cancellation compensation for the same parent cancellation."
-        );
-      }
-
-      if (this.cancellationCode !== "late_employer_cancellation") {
-        this.invalidate(
-          "cancellationCode",
-          "Occurrence-level professional cancellation compensation requires late_employer_cancellation."
-        );
-      }
-
-      if (this.cancelledBy !== "employer") {
-        this.invalidate(
-          "cancelledBy",
-          "Late-cancellation professional compensation requires employer cancellation."
-        );
-      }
-
-      if (!["assigned", "confirmed"].includes(this.cancelledFromStatus)) {
-        this.invalidate(
-          "cancelledFromStatus",
-          "Late-cancellation compensation requires cancellation from assigned or confirmed status."
-        );
-      }
-    } else if (this.cancellationCode === "late_employer_cancellation") {
-      this.invalidate(
-        "cancellationSummary.compensationApplicable",
-        "late_employer_cancellation requires occurrence-level professional compensation."
+        "The selected reason requires additional cancellation details."
       );
     }
   } else {
-    if (hasCancellationAudit) {
-      this.invalidate(
-        "cancelledAt",
-        "Cancellation audit details may only be recorded when status is cancelled."
+    if (document.cancellationReasonCode) {
+      document.invalidate(
+        "cancellationReasonCode",
+        "Only employer cancellation may use an employer reason code."
       );
     }
 
-    if (cancellationSummaryHasData) {
-      this.invalidate(
-        "cancellationSummary",
-        "Cancellation summary details may only be recorded when status is cancelled."
+    if (!document.cancellationReason) {
+      document.invalidate(
+        "cancellationReason",
+        "System and admin cancellations require an audit reason."
       );
     }
   }
 
-  /* ─────────────────────────────── ACTIVE-WORK CANCELLATION CONSISTENCY ─────────────────────────────── */
+  validateMinimumDetails(
+    document,
+    "cancellationReason",
+    document.cancellationReason,
+    "Cancellation details"
+  );
 
-  const activeWorkCancellation = this.activeWorkCancellation || {};
+  if (USER_CANCELLATION_ACTORS.includes(document.cancelledBy) && !document.cancelledByUser) {
+    document.invalidate("cancelledByUser", "User-initiated cancellation requires cancelledByUser.");
+  }
 
-  const activeWorkCancellationHasData =
-    activeWorkCancellation.occurred === true ||
-    hasDocumentValue(activeWorkCancellation.affectedOccurrence) ||
-    hasDocumentValue(activeWorkCancellation.affectedSequenceNumber) ||
-    hasDocumentValue(activeWorkCancellation.effectiveAt);
+  if (document.cancelledBy === "system" && document.cancelledByUser) {
+    document.invalidate("cancelledByUser", "System cancellation cannot contain cancelledByUser.");
+  }
 
-  if (activeWorkCancellation.occurred) {
-    if (this.status !== "cancelled") {
-      this.invalidate(
-        "status",
-        "Parent active-work cancellation is only recorded when an in-progress engagement is cancelled."
-      );
-    }
+  const expectedActor = CANCELLATION_CODE_ACTORS[document.cancellationCode];
 
-    if (this.cancelledFromStatus !== "in_progress") {
-      this.invalidate(
-        "cancelledFromStatus",
-        "Parent active-work cancellation requires cancellation from in_progress status."
-      );
-    }
-
-    if (cancellationSummary.compensationApplicable) {
-      this.invalidate(
-        "cancellationSummary.compensationApplicable",
-        "Parent active-work cancellation and late-cancellation compensation cannot apply to the same cancellation action."
-      );
-    }
-
-    if (
-      !activeWorkCancellation.affectedOccurrence ||
-      !Number.isSafeInteger(activeWorkCancellation.affectedSequenceNumber) ||
-      !activeWorkCancellation.effectiveAt
-    ) {
-      this.invalidate(
-        "activeWorkCancellation.affectedOccurrence",
-        "Active-work cancellation must identify the authoritative affected ShiftOccurrence, sequence number and effective time."
-      );
-    } else {
-      if (activeWorkCancellation.affectedSequenceNumber > occurrenceCount) {
-        this.invalidate(
-          "activeWorkCancellation.affectedSequenceNumber",
-          "The affected sequence number cannot exceed occurrenceCount."
-        );
-      }
-
-      if (scheduleMode === "single" && activeWorkCancellation.affectedSequenceNumber !== 1) {
-        this.invalidate(
-          "activeWorkCancellation.affectedSequenceNumber",
-          "A single Shift must use affected sequence number 1."
-        );
-      }
-    }
-
-    if (
-      activeWorkCancellation.effectiveAt &&
-      this.cancelledAt &&
-      activeWorkCancellation.effectiveAt < this.cancelledAt
-    ) {
-      this.invalidate(
-        "activeWorkCancellation.effectiveAt",
-        "Active-work cancellation effectiveAt cannot be earlier than the parent cancellation time."
-      );
-    }
-
-    if (
-      cancellationSummary.firstAffectedOccurrence &&
-      activeWorkCancellation.affectedOccurrence &&
-      String(cancellationSummary.firstAffectedOccurrence) !==
-        String(activeWorkCancellation.affectedOccurrence)
-    ) {
-      this.invalidate(
-        "cancellationSummary.firstAffectedOccurrence",
-        "The parent cancellation and active-work cancellation summaries must identify the same active occurrence."
-      );
-    }
-
-    if (
-      Number.isSafeInteger(cancellationSummary.firstAffectedSequenceNumber) &&
-      Number.isSafeInteger(activeWorkCancellation.affectedSequenceNumber) &&
-      Number(cancellationSummary.firstAffectedSequenceNumber) !==
-        Number(activeWorkCancellation.affectedSequenceNumber)
-    ) {
-      this.invalidate(
-        "cancellationSummary.firstAffectedSequenceNumber",
-        "The parent cancellation and active-work cancellation summaries must identify the same active sequence number."
-      );
-    }
-
-    if (scheduleMode === "single") {
-      if (!this.checkedInAt || !this.checkedOutAt) {
-        this.invalidate(
-          "checkedOutAt",
-          "A single Shift ended during active work requires checkedInAt and checkedOutAt compatibility summaries."
-        );
-      }
-
-      if (
-        this.checkedOutAt &&
-        activeWorkCancellation.effectiveAt &&
-        this.checkedOutAt.getTime() === activeWorkCancellation.effectiveAt.getTime()
-      ) {
-        // Matching compatibility summary.
-      } else if (this.checkedOutAt && activeWorkCancellation.effectiveAt) {
-        this.invalidate(
-          "checkedOutAt",
-          "Single-Shift checkedOutAt must match activeWorkCancellation.effectiveAt."
-        );
-      }
-
-      if (!["checked_out", "settled", "disputed"].includes(this.attendanceStatus)) {
-        this.invalidate(
-          "attendanceStatus",
-          "A single Shift ended during active work must have checked-out, settled or disputed attendance compatibility status."
-        );
-      }
-    }
-  } else if (activeWorkCancellationHasData) {
-    this.invalidate(
-      "activeWorkCancellation.occurred",
-      "Active-work cancellation details require activeWorkCancellation.occurred to be true."
+  if (expectedActor && document.cancelledBy !== expectedActor) {
+    document.invalidate(
+      "cancelledBy",
+      `${document.cancellationCode} requires actor ${expectedActor}.`
     );
   }
 
-  /* ─────────────────────────────── SINGLE-SHIFT ATTENDANCE COMPATIBILITY ─────────────────────────────── */
-
-  if (scheduleMode === "single") {
-    if (this.status === "in_progress") {
-      if (this.attendanceStatus !== "checked_in" || !this.checkedInAt) {
-        this.invalidate(
-          "attendanceStatus",
-          "A single in-progress Shift requires checked-in parent attendance compatibility fields."
-        );
-      }
+  if (document.cancelledFromStatus === "pending_funding") {
+    if (document.paymentStatus !== "unpaid") {
+      document.invalidate("paymentStatus", "Unfunded cancellation must remain unpaid.");
     }
 
-    if (this.attendanceStatus === "checked_in" && this.status !== "in_progress") {
-      this.invalidate(
-        "status",
-        "Single-Shift checked_in compatibility status requires in_progress Shift status."
+    if (document.publishedAt) {
+      document.invalidate("publishedAt", "Unfunded cancellation cannot have publication audit.");
+    }
+
+    if (document.fundedAmount !== 0) {
+      document.invalidate(
+        "fundedAmount",
+        "Unfunded cancellation cannot contain protected funding."
       );
     }
 
-    if (["checked_out", "settled"].includes(this.attendanceStatus)) {
-      if (!this.checkedInAt || !this.checkedOutAt) {
-        this.invalidate(
-          "checkedOutAt",
-          `${this.attendanceStatus} parent attendance compatibility requires checkedInAt and checkedOutAt.`
-        );
-      }
+    if (summary.compensationApplicable) {
+      document.invalidate(
+        "cancellationSummary.compensationApplicable",
+        "Unfunded cancellation cannot create professional compensation."
+      );
     }
+  } else if (
+    ["open", "assigned", "confirmed", "in_progress"].includes(document.cancelledFromStatus) &&
+    !document.publishedAt
+  ) {
+    document.invalidate(
+      "publishedAt",
+      "Cancellation of a published engagement must retain publication audit."
+    );
+  }
 
-    if (this.checkedOutAt && !this.checkedInAt) {
-      this.invalidate(
-        "checkedInAt",
-        "checkedInAt is required before parent checkedOutAt can be recorded."
+  if (document.cancellationCode === "funding_deadline_passed") {
+    if (document.cancelledFromStatus !== "pending_funding") {
+      document.invalidate(
+        "cancelledFromStatus",
+        "Funding expiration requires cancellation from pending_funding."
       );
     }
 
-    if (this.checkedInAt && this.checkedOutAt && this.checkedOutAt <= this.checkedInAt) {
-      this.invalidate("checkedOutAt", "Parent checkedOutAt must be later than checkedInAt.");
+    if (document.startTime && document.cancelledAt && document.cancelledAt < document.startTime) {
+      document.invalidate("cancelledAt", "Funding expiration cannot precede the Shift start time.");
     }
+  }
 
-    if (this.checkInPinUsedAt && !this.checkedInAt) {
-      this.invalidate("checkInPinUsedAt", "checkInPinUsedAt requires checkedInAt.");
-    }
+  const cancelledCount = count(summary, "cancelledOccurrenceCount");
 
-    if (this.checkOutPinUsedAt && !this.checkedOutAt) {
-      this.invalidate("checkOutPinUsedAt", "checkOutPinUsedAt requires checkedOutAt.");
+  if (Number.isSafeInteger(total) && cancelledCount > total) {
+    document.invalidate(
+      "cancellationSummary.cancelledOccurrenceCount",
+      "Cancelled count cannot exceed totalOccurrenceCount."
+    );
+  }
+
+  if (summaryHasData) {
+    if (!summary.firstAffectedOccurrence) {
+      document.invalidate(
+        "cancellationSummary.firstAffectedOccurrence",
+        "Cancellation summary requires a first affected occurrence."
+      );
     }
 
     if (
-      this.attendancePinsGeneratedAt &&
-      this.checkInPinUsedAt &&
-      this.checkInPinUsedAt < this.attendancePinsGeneratedAt
+      !Number.isSafeInteger(summary.firstAffectedSequenceNumber) ||
+      summary.firstAffectedSequenceNumber < 1 ||
+      summary.firstAffectedSequenceNumber > document.occurrenceCount
     ) {
-      this.invalidate(
-        "checkInPinUsedAt",
-        "checkInPinUsedAt cannot be earlier than attendancePinsGeneratedAt."
-      );
-    }
-
-    if (
-      this.attendancePinsGeneratedAt &&
-      this.checkOutPinUsedAt &&
-      this.checkOutPinUsedAt < this.attendancePinsGeneratedAt
-    ) {
-      this.invalidate(
-        "checkOutPinUsedAt",
-        "checkOutPinUsedAt cannot be earlier than attendancePinsGeneratedAt."
-      );
-    }
-
-    if (this.status === "cancelled" && !activeWorkCancellation.occurred) {
-      if (
-        this.attendanceStatus !== "not_started" ||
-        this.checkedInAt ||
-        this.checkedOutAt ||
-        this.checkInPinUsedAt ||
-        this.checkOutPinUsedAt
-      ) {
-        this.invalidate(
-          "attendanceStatus",
-          "A single Shift cancelled before work starts must retain not_started attendance compatibility fields."
-        );
-      }
-    }
-
-    if (this.status === "no_show" && this.attendanceStatus !== "no_show") {
-      this.invalidate(
-        "attendanceStatus",
-        "A single no-show Shift must have no_show attendance status."
-      );
-    }
-
-    if (this.attendanceStatus === "no_show" && this.status !== "no_show") {
-      this.invalidate("status", "A single Shift with no_show attendance must have no_show status.");
-    }
-
-    if (
-      this.status === "no_show" &&
-      (this.checkedInAt || this.checkedOutAt || this.checkInPinUsedAt || this.checkOutPinUsedAt)
-    ) {
-      this.invalidate(
-        "attendanceStatus",
-        "A single no-show Shift cannot contain attendance timestamps or used PINs."
+      document.invalidate(
+        "cancellationSummary.firstAffectedSequenceNumber",
+        "First affected sequence must be within the shared schedule."
       );
     }
   }
+
+  if (summary.compensationApplicable) {
+    if (
+      document.cancellationCode !== "late_employer_cancellation" ||
+      document.cancelledBy !== "employer"
+    ) {
+      document.invalidate(
+        "cancellationCode",
+        "Late-cancellation compensation requires late_employer_cancellation by the employer."
+      );
+    }
+
+    if (!["open", "assigned", "confirmed", "in_progress"].includes(document.cancelledFromStatus)) {
+      document.invalidate(
+        "cancelledFromStatus",
+        "Compensation requires a published engagement with assigned occurrence coverage."
+      );
+    }
+
+    if (cancelledCount <= 0) {
+      document.invalidate(
+        "cancellationSummary.cancelledOccurrenceCount",
+        "Late-cancellation compensation requires an affected cancelled occurrence."
+      );
+    }
+  } else if (document.cancellationCode === "late_employer_cancellation") {
+    document.invalidate(
+      "cancellationSummary.compensationApplicable",
+      "late_employer_cancellation requires occurrence-level compensation."
+    );
+  }
+
+  if (
+    document.cancelledFromStatus !== "in_progress" &&
+    document.cancellationCode !== "funding_deadline_passed" &&
+    document.cancelledAt &&
+    document.startTime &&
+    document.cancelledAt >= document.startTime
+  ) {
+    document.invalidate(
+      "cancelledAt",
+      "Cancellation of an engagement that has not yet started must happen before the scheduled start time."
+    );
+  }
+
+  if (!active.occurred) {
+    if (activeHasData) {
+      document.invalidate(
+        "activeWorkCancellation.occurred",
+        "Active-work details require occurred to be true."
+      );
+    }
+
+    return;
+  }
+
+  if (document.cancelledFromStatus !== "in_progress") {
+    document.invalidate(
+      "cancelledFromStatus",
+      "Active-work cancellation requires cancellation from in_progress."
+    );
+  }
+
+  if (!affected.length || !active.effectiveAt) {
+    document.invalidate(
+      "activeWorkCancellation.affectedOccurrences",
+      "Active-work cancellation requires affected occurrences and an effective time."
+    );
+  }
+
+  if (affected.length > document.requiredProfessionals) {
+    document.invalidate(
+      "activeWorkCancellation.affectedOccurrences",
+      "Active occurrence count cannot exceed required positions."
+    );
+  }
+
+  const seen = new Set();
+
+  affected.forEach((entry, index) => {
+    const path = `activeWorkCancellation.affectedOccurrences.${index}`;
+
+    if (entry.occurrence) {
+      const id = String(entry.occurrence._id || entry.occurrence);
+
+      if (seen.has(id)) {
+        document.invalidate(`${path}.occurrence`, "An affected occurrence cannot be listed twice.");
+      }
+
+      seen.add(id);
+    }
+
+    if (
+      !Number.isSafeInteger(entry.sequenceNumber) ||
+      entry.sequenceNumber < 1 ||
+      entry.sequenceNumber > document.occurrenceCount
+    ) {
+      document.invalidate(
+        `${path}.sequenceNumber`,
+        "Affected sequence must be within the shared schedule."
+      );
+    }
+  });
+
+  if (Number.isSafeInteger(total) && cancelledCount > total - affected.length) {
+    document.invalidate(
+      "cancellationSummary.cancelledOccurrenceCount",
+      "Occurrences ended during active work must not also count as cancelled occurrences."
+    );
+  }
+
+  if (active.effectiveAt && document.cancelledAt && active.effectiveAt < document.cancelledAt) {
+    document.invalidate(
+      "activeWorkCancellation.effectiveAt",
+      "Effective time cannot precede parent cancellation."
+    );
+  }
+
+  // Different positions can have different cancellation outcomes. One may have
+  // started work while another qualifies for late-cancellation compensation.
+  // The service validates each occurrence and prevents double compensation.
+}
+
+/* ─────────────────────────────── VALIDATION HOOK ─────────────────────────────── */
+
+shiftSchema.pre("validate", function validateShift() {
+  const total = validateSchedule(this);
+
+  validatePricing(this, total);
+
+  validateFinancialSummary(this);
+
+  validateHiring(this);
+
+  validateOccurrenceProgress(this, total);
+
+  validatePublicationAndPayment(this, total);
+
+  validateCancellation(this, total);
 });
 
 /* ─────────────────────────────── INDEXES ─────────────────────────────── */
@@ -3286,10 +1950,6 @@ shiftSchema.index({
 
 shiftSchema.index({
   lastOccurrenceDate: 1,
-});
-
-shiftSchema.index({
-  attendanceStatus: 1,
 });
 
 shiftSchema.index({
@@ -3379,39 +2039,14 @@ shiftSchema.index({
 });
 
 shiftSchema.index({
-  activeAssignment: 1,
-});
-
-shiftSchema.index({
-  assignedProfessional: 1,
-});
-
-shiftSchema.index({
   applicationRound: 1,
   status: 1,
 });
 
 shiftSchema.index({
-  "replacementHiring.status": 1,
+  "hiringSummary.openReplacementCount": 1,
   professionalType: 1,
   startTime: 1,
-});
-
-shiftSchema.index({
-  "replacementHiring.assignmentCase": 1,
-});
-
-shiftSchema.index({
-  "replacementHiring.replacementForAssignment": 1,
-});
-
-shiftSchema.index({
-  "replacementHiring.filledByAssignment": 1,
-});
-
-shiftSchema.index({
-  "replacementHiring.applicationRound": 1,
-  "replacementHiring.status": 1,
 });
 
 shiftSchema.index({
@@ -3424,36 +2059,6 @@ shiftSchema.index({
 
 shiftSchema.index({
   endTime: 1,
-});
-
-shiftSchema.index({
-  assignedProfessional: 1,
-  startTime: 1,
-  endTime: 1,
-});
-
-shiftSchema.index({
-  "checkInLocation.withinGeofence": 1,
-});
-
-shiftSchema.index({
-  "checkOutLocation.withinGeofence": 1,
-});
-
-shiftSchema.index({
-  "lateCheckout.occurred": 1,
-});
-
-shiftSchema.index({
-  "checkoutFallback.required": 1,
-});
-
-shiftSchema.index({
-  "missedCheckInRequest.outcome": 1,
-});
-
-shiftSchema.index({
-  "attendanceOverride.used": 1,
 });
 
 shiftSchema.index({
@@ -3461,13 +2066,14 @@ shiftSchema.index({
 });
 
 shiftSchema.index({
-  cancellationReasonCode: 1,
-  cancelledAt: -1,
+  basePlatformFeeBenefitSource: 1,
+  basePlatformFeeSubscription: 1,
+  fundedAt: -1,
 });
 
 shiftSchema.index({
-  "replacementHiring.reasonCode": 1,
-  "replacementHiring.status": 1,
+  cancellationReasonCode: 1,
+  cancelledAt: -1,
 });
 
 shiftSchema.index({

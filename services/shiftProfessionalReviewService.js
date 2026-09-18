@@ -16,89 +16,21 @@ const logger = require("../utils/logger");
 
 const MAX_IDEMPOTENCY_KEY_LENGTH = 160;
 
-const REVIEW_SELECTIONS = Object.freeze(["overtime", "ordinary_claim"]);
-
-const PROFESSIONAL_CLAIM_APPEAL_ACTION = "submit_claim_issue_appeal";
-const PROFESSIONAL_OVERTIME_APPEAL_ACTION = "submit_overtime_appeal";
-
-const PROFESSIONAL_CLAIM_REBUTTAL_ACTION = "submit_claim_issue_rebuttal";
+const IDEMPOTENT_REVIEW_WORKFLOWS = Object.freeze(["ordinary_claim"]);
 
 /**
- * SINGLE PROFESSIONAL REVIEW ENTRY POINT
+ * Orchestrates the professional's shared post-occurrence review entry point.
  *
- * This service owns orchestration only.
+ * ShiftOccurrence owns the shared review window. Ordinary claims remain BASE
+ * workflow authority in ShiftOccurrenceClaimService. Overtime remains separate
+ * in ShiftOvertimeService.
  *
- * It does NOT own:
- *
- * - overtime request rules;
- * - overtime employer decisions;
- * - overtime appeal/adjudication;
- * - ordinary claim issue validation;
- * - ordinary claim employer review;
- * - claim issue resolution;
- * - settlement calculations;
- * - payout readiness;
- * - platform-fee authority;
- * - overtime funding;
- * - refunds; or
- * - parent Shift reconciliation.
- *
- * SHARED WINDOW
- *
- * ShiftOccurrence owns the single initial professional review envelope:
- *
- * - challengeWindowOpenedAt
- * - challengeDeadlineAt
- * - challengeWindowClosedAt
- * - challengeableSettlementComponents
- *
- * During the remaining shared window:
- *
- * - overtime may be selected only if no OT request already exists;
- * - ordinary claim issues may be selected only if no professional claim case
- *   has ever been submitted for the occurrence; and
- * - one submission may contain BOTH overtime and ordinary claim issues.
- *
- * EXISTING WORKFLOWS
- *
- * Once overtime exists:
- *
- * - overtime is no longer offered as a new selection;
- * - its existing workflow state is returned instead.
- *
- * Once a professional claim case exists:
- *
- * - ordinary claim issue selection is no longer offered;
- * - its existing case/issue workflow is returned instead.
- *
- * A withdrawn or resolved professional claim still consumes the one original
- * professional claim case opportunity.
- *
- * COMBINED SUBMISSION
- *
- * When the professional submits OT + ordinary issues together:
- *
- * 1. validate the shared occurrence window;
- * 2. create the ordinary professional claim case;
- * 3. create the manual OT request;
- * 4. perform both inside one MongoDB transaction.
- *
- * Ordinary claim creation deliberately runs first.
- *
- * This lets ShiftOccurrenceClaimService derive the immutable ordinary issue
- * scope from the occurrence state that existed at the moment the professional
- * submitted the combined review.
- *
- * If either routed workflow fails, the transaction rolls back both.
- *
- * CLAIM / DISPUTE COEXISTENCE
- *
- * An employer dispute does not automatically prohibit this professional
- * review entry point.
- *
- * activeClaim and activeDispute may coexist where they concern genuinely
- * separate controversies.
+ * Combined BASE claim + OT submission runs atomically, with the ordinary claim
+ * routed first. Domain services own fresh-submission validation and idempotent
+ * replay so this orchestrator never blocks a valid replay merely because the
+ * underlying claim or OT request now exists.
  */
+
 class ShiftProfessionalReviewService {
   /* ─────────────────────────────── ERRORS / TRANSACTIONS ─────────────────────────────── */
 
@@ -221,7 +153,7 @@ class ShiftProfessionalReviewService {
       .trim()
       .toLowerCase();
 
-    if (!REVIEW_SELECTIONS.includes(normalizedWorkflow)) {
+    if (!IDEMPOTENT_REVIEW_WORKFLOWS.includes(normalizedWorkflow)) {
       throw this.createError({
         message: "Professional review workflow idempotency scope is invalid.",
         code: "INVALID_PROFESSIONAL_REVIEW_WORKFLOW",
@@ -229,7 +161,7 @@ class ShiftProfessionalReviewService {
       });
     }
 
-    return `${normalizedRootKey}:${normalizedWorkflow}`;
+    return `${normalizedRootKey}:` + `${normalizedWorkflow}`;
   }
 
   static normalizeOrdinaryIssues(issues) {
@@ -260,7 +192,11 @@ class ShiftProfessionalReviewService {
     }
 
     return {
-      ...overtime,
+      requestedMinutes: overtime.requestedMinutes,
+
+      requestStatement: overtime.requestStatement,
+
+      requestEvidence: overtime.requestEvidence === undefined ? [] : overtime.requestEvidence,
     };
   }
 
@@ -273,6 +209,7 @@ class ShiftProfessionalReviewService {
 
     const query = ShiftOccurrence.findOne({
       _id: normalizedOccurrenceId,
+
       shift: normalizedShiftId,
     });
 
@@ -376,7 +313,9 @@ class ShiftProfessionalReviewService {
         status: "not_established",
 
         openedAt: null,
+
         deadlineAt: null,
+
         closedAt: occurrence.challengeWindowClosedAt || null,
 
         remainingMilliseconds: 0,
@@ -426,7 +365,9 @@ class ShiftProfessionalReviewService {
         status: "closed",
 
         openedAt,
+
         deadlineAt,
+
         closedAt,
 
         remainingMilliseconds: 0,
@@ -440,7 +381,9 @@ class ShiftProfessionalReviewService {
         status: "not_open",
 
         openedAt,
+
         deadlineAt,
+
         closedAt: null,
 
         remainingMilliseconds: deadlineAt.getTime() - openedAt.getTime(),
@@ -454,7 +397,9 @@ class ShiftProfessionalReviewService {
         status: "closed",
 
         openedAt,
+
         deadlineAt,
+
         closedAt: null,
 
         remainingMilliseconds: 0,
@@ -467,7 +412,9 @@ class ShiftProfessionalReviewService {
       status: "open",
 
       openedAt,
+
       deadlineAt,
+
       closedAt: null,
 
       remainingMilliseconds: deadlineAt.getTime() - now.getTime(),
@@ -490,16 +437,21 @@ class ShiftProfessionalReviewService {
             : state.status === "not_open"
               ? "The professional review window is not open yet."
               : "The professional review window has closed.",
+
         code:
           state.status === "not_established"
             ? "PROFESSIONAL_REVIEW_WINDOW_NOT_ESTABLISHED"
             : state.status === "not_open"
               ? "PROFESSIONAL_REVIEW_WINDOW_NOT_OPEN"
               : "PROFESSIONAL_REVIEW_WINDOW_CLOSED",
+
         statusCode: 409,
+
         details: {
           challengeWindowOpenedAt: state.openedAt,
+
           challengeDeadlineAt: state.deadlineAt,
+
           challengeWindowClosedAt: state.closedAt,
         },
       });
@@ -517,23 +469,6 @@ class ShiftProfessionalReviewService {
   }
 
   /* ─────────────────────────────── WORKFLOW VIEW ─────────────────────────────── */
-
-  static getProfessionalClaimIssueActions(issue) {
-    const actions = [];
-
-    if (issue?.status === "awaiting_professional_appeal" && issue?.appealStatus === "available") {
-      actions.push(PROFESSIONAL_CLAIM_APPEAL_ACTION);
-    }
-
-    if (
-      issue?.status === "awaiting_professional_rebuttal" &&
-      issue?.rebuttalStatus === "available"
-    ) {
-      actions.push(PROFESSIONAL_CLAIM_REBUTTAL_ACTION);
-    }
-
-    return actions;
-  }
 
   static buildProfessionalClaimWorkflow(claim) {
     if (!claim) {
@@ -566,23 +501,11 @@ class ShiftProfessionalReviewService {
 
         status: issue.status,
 
-        affectedSettlementComponents: Array.from(issue.affectedSettlementComponents || []),
+        challengedSettlementComponents: Array.from(issue.challengedSettlementComponents || []),
 
         employerDecision: issue.employerDecision || null,
 
         employerDecidedAt: issue.employerDecidedAt || null,
-
-        appealStatus: issue.appealStatus || "not_available",
-
-        appealDeadlineAt: issue.appealDeadlineAt || null,
-
-        appealedAt: issue.appealedAt || null,
-
-        rebuttalStatus: issue.rebuttalStatus || "not_available",
-
-        rebuttalDeadlineAt: issue.rebuttalDeadlineAt || null,
-
-        rebuttedAt: issue.rebuttedAt || null,
 
         escalationReason: issue.escalationReason || null,
 
@@ -594,19 +517,9 @@ class ShiftProfessionalReviewService {
 
         resolvedAt: issue.resolvedAt || null,
 
-        availableActions: this.getProfessionalClaimIssueActions(issue),
+        availableActions: [],
       })),
     };
-  }
-
-  static getProfessionalOvertimeActions(overtime) {
-    const actions = [];
-
-    if (overtime?.appealStatus === "available" && overtime?.appealDeadlineAt) {
-      actions.push(PROFESSIONAL_OVERTIME_APPEAL_ACTION);
-    }
-
-    return actions;
   }
 
   static buildOvertimeWorkflow(occurrence) {
@@ -627,22 +540,11 @@ class ShiftProfessionalReviewService {
 
       requestedBy: overtime.requestedBy || null,
 
-      reason: overtime.reason || null,
+      requestedMinutes: overtime.requestedMinutes ?? null,
 
-      /**
-       * Newer OT audit fields are returned when present.
-       *
-       * The orchestrator does not interpret or mutate them.
-       */
-      requestedExtraMinutes: overtime.requestedExtraMinutes ?? null,
+      requestStatement: overtime.requestStatement || null,
 
-      requestedExtraHours: overtime.requestedExtraHours ?? null,
-
-      requestedProfessionalPay: overtime.requestedProfessionalPay ?? null,
-
-      finalApprovedExtraMinutes: overtime.finalApprovedExtraMinutes ?? null,
-
-      finalApprovedExtraHours: overtime.finalApprovedExtraHours ?? overtime.extraHours ?? null,
+      requestEvidence: Array.from(overtime.requestEvidence || []),
 
       employerResponseDeadlineAt: overtime.employerResponseDeadlineAt || null,
 
@@ -650,21 +552,51 @@ class ShiftProfessionalReviewService {
 
       employerResponseOverdueAt: overtime.employerResponseOverdueAt || null,
 
+      decisionSource: overtime.decisionSource || null,
+
+      approvedMinutes: overtime.approvedMinutes ?? null,
+
       approvedAt: overtime.approvedAt || null,
+
+      approvedBy: overtime.approvedBy || null,
 
       rejectedAt: overtime.rejectedAt || null,
 
+      rejectedBy: overtime.rejectedBy || null,
+
+      rejectionBasis: overtime.rejectionBasis || null,
+
       rejectionReason: overtime.rejectionReason || null,
 
-      appealStatus: overtime.appealStatus || null,
+      employerProposedMinutes: overtime.employerProposedMinutes ?? null,
 
-      appealDeadlineAt: overtime.appealDeadlineAt || null,
+      rejectionEvidence: Array.from(overtime.rejectionEvidence || []),
 
-      appealedAt: overtime.appealedAt || null,
+      rejectionNoSupportingEvidence: overtime.rejectionNoSupportingEvidence === true,
+
+      adminReviewReason: overtime.adminReviewReason || null,
+
+      adminReviewStartedAt: overtime.adminReviewStartedAt || null,
+
+      adminEvidence: Array.from(overtime.adminEvidence || []),
+
+      adminDecision: overtime.adminDecision || null,
 
       adminDecidedAt: overtime.adminDecidedAt || null,
 
-      topUpAmount: overtime.topUpAmount || 0,
+      adminDecidedBy: overtime.adminDecidedBy || null,
+
+      adminDecisionReason: overtime.adminDecisionReason || null,
+
+      professionalPay: Number(occurrence.overtimeProfessionalPay || 0),
+
+      platformFee: Number(occurrence.overtimePlatformFee || 0),
+
+      topUpRequired: Number(occurrence.topUpRequired || 0),
+
+      topUpTransactionId: occurrence.topUpTransaction ? String(occurrence.topUpTransaction) : null,
+
+      topUpAmount: Number(overtime.topUpAmount || 0),
 
       topUpDeadlineAt: overtime.topUpDeadlineAt || null,
 
@@ -676,7 +608,7 @@ class ShiftProfessionalReviewService {
 
       topUpPaidAt: overtime.topUpPaidAt || null,
 
-      availableActions: this.getProfessionalOvertimeActions(overtime),
+      availableActions: [],
     };
   }
 
@@ -705,8 +637,8 @@ class ShiftProfessionalReviewService {
       ordinaryClaimUnavailableReason = "review_window_not_open";
     } else if (claimExists) {
       ordinaryClaimUnavailableReason = "professional_claim_case_already_exists";
-    } else if (challengeableComponents.length === 0) {
-      ordinaryClaimUnavailableReason = "no_challengeable_component";
+    } else if (!challengeableComponents.includes("base")) {
+      ordinaryClaimUnavailableReason = "base_not_challengeable";
     }
 
     return {
@@ -788,6 +720,7 @@ class ShiftProfessionalReviewService {
 
     const claim = await this.getProfessionalClaimCase({
       occurrenceId: occurrence._id,
+
       session,
     });
 
@@ -800,12 +733,7 @@ class ShiftProfessionalReviewService {
 
   /* ─────────────────────────────── SUBMISSION VALIDATION ─────────────────────────────── */
 
-  static assertSubmissionAvailability({ occurrence, claim, overtime, issues, currentTime }) {
-    const reviewWindow = this.assertSharedReviewWindowOpen({
-      occurrence,
-      currentTime,
-    });
-
+  static getSubmissionSelections({ overtime, issues }) {
     const hasOvertime = Boolean(overtime);
 
     const hasOrdinaryIssues = Array.isArray(issues) && issues.length > 0;
@@ -817,39 +745,7 @@ class ShiftProfessionalReviewService {
       });
     }
 
-    if (hasOvertime) {
-      if (occurrence.overtime?.requested === true) {
-        throw this.createError({
-          message: "An overtime request already exists for this occurrence.",
-          code: "OVERTIME_REQUEST_ALREADY_EXISTS",
-          statusCode: 409,
-        });
-      }
-
-      if (!reviewWindow.challengeableSettlementComponents.includes("overtime")) {
-        throw this.createError({
-          message: "Overtime is no longer available as a new professional review selection.",
-          code: "OVERTIME_REVIEW_SELECTION_NOT_AVAILABLE",
-          statusCode: 409,
-        });
-      }
-    }
-
-    if (hasOrdinaryIssues && claim) {
-      throw this.createError({
-        message: "A professional claim case has already been submitted for this occurrence.",
-        code: "PROFESSIONAL_CLAIM_CASE_ALREADY_EXISTS",
-        statusCode: 409,
-        details: {
-          claimId: String(claim._id),
-          claimStatus: claim.status,
-        },
-      });
-    }
-
     return {
-      reviewWindow,
-
       hasOvertime,
       hasOrdinaryIssues,
     };
@@ -870,9 +766,11 @@ class ShiftProfessionalReviewService {
     return ShiftOccurrenceClaimService.submitClaim(
       {
         shiftId,
+
         occurrenceId,
 
         professionalId,
+
         submittedByUserId,
 
         issues,
@@ -888,53 +786,35 @@ class ShiftProfessionalReviewService {
   }
 
   static async submitManualOvertime({
-    shiftId,
     occurrenceId,
-    professionalId,
     submittedByUserId,
     overtime,
-    idempotencyKey,
     currentTime,
     session,
   }) {
-    if (typeof ShiftOvertimeService.submitManualOvertimeRequest !== "function") {
+    if (typeof ShiftOvertimeService.createOvertimeRequest !== "function") {
       throw this.createError({
-        message: "shiftOvertimeService does not expose submitManualOvertimeRequest().",
+        message: "shiftOvertimeService does not expose createOvertimeRequest().",
         code: "MANUAL_OVERTIME_SERVICE_CONTRACT_MISSING",
         statusCode: 500,
       });
     }
 
-    /**
-     * OT-specific request fields remain owned by shiftOvertimeService.
-     *
-     * This orchestrator does not interpret them.
-     *
-     * Examples may include the professional's requested minutes, reason,
-     * statement or evidence depending on the final #5 contract.
-     */
-    return ShiftOvertimeService.submitManualOvertimeRequest(
+    return ShiftOvertimeService.createOvertimeRequest(
       {
-        ...overtime,
-
-        shiftId,
         occurrenceId,
 
-        professionalId,
+        professionalUserId: submittedByUserId,
 
-        submittedByUserId,
+        requestedMinutes: overtime.requestedMinutes,
 
-        /**
-         * Keep the actor alias explicit for #5's request audit.
-         *
-         * Extra object properties are harmless where #5 destructures only
-         * the fields it owns.
-         */
-        requestedByUserId: submittedByUserId,
+        source: "manual_request",
 
-        idempotencyKey,
+        requestStatement: overtime.requestStatement,
 
-        currentTime,
+        requestEvidence: overtime.requestEvidence,
+
+        requestedAt: currentTime,
       },
       {
         session,
@@ -947,12 +827,15 @@ class ShiftProfessionalReviewService {
   static async submitReview(
     {
       shiftId,
+
       occurrenceId,
 
       professionalId,
+
       submittedByUserId,
 
       overtime = null,
+
       issues = [],
 
       idempotencyKey,
@@ -969,13 +852,7 @@ class ShiftProfessionalReviewService {
 
     const rootIdempotencyKey = this.normalizeIdempotencyKey(idempotencyKey);
 
-    /**
-     * Validate the submitting user ID at orchestration level so both routed
-     * workflows receive one stable actor identity.
-     *
-     * ProfessionalProfile ownership is still authoritatively checked by the
-     * downstream domain service.
-     */
+    // Domain services still verify that this user owns the professional profile.
     const normalizedSubmittedByUserId = this.normalizeObjectId(
       submittedByUserId,
       "submitting user ID"
@@ -984,49 +861,36 @@ class ShiftProfessionalReviewService {
     return this.runWithOptionalTransaction(options, async (session) => {
       const occurrence = await this.getOccurrence({
         shiftId,
+
         occurrenceId,
+
         session,
       });
 
       this.assertProfessionalOwnsOccurrence({
         occurrence,
+
         professionalId,
       });
 
-      const existingClaim = await this.getProfessionalClaimCase({
-        occurrenceId: occurrence._id,
-        session,
-      });
-
-      const availability = this.assertSubmissionAvailability({
-        occurrence,
-
-        claim: existingClaim,
-
+      const selections = this.getSubmissionSelections({
         overtime: normalizedOvertime,
 
         issues: normalizedIssues,
-
-        currentTime: now,
       });
 
       let ordinaryClaimResult = null;
+
       let overtimeResult = null;
 
-      /**
-       * IMPORTANT ORDER
-       *
-       * Ordinary issues are routed first.
-       *
-       * The claim service derives the professional's immutable ordinary
-       * issue scope against the still-open shared occurrence window.
-       *
-       * Claim submission does not close that shared window, so #5 may then
-       * create the manual OT request inside the same transaction.
+      /*
+       * Ordinary claim runs first so its BASE scope is fixed before OT is
+       * staged. Both writes remain inside the same transaction.
        */
-      if (availability.hasOrdinaryIssues) {
+      if (selections.hasOrdinaryIssues) {
         ordinaryClaimResult = await this.submitOrdinaryClaimIssues({
           shiftId,
+
           occurrenceId,
 
           professionalId,
@@ -1043,18 +907,13 @@ class ShiftProfessionalReviewService {
         });
       }
 
-      if (availability.hasOvertime) {
+      if (selections.hasOvertime) {
         overtimeResult = await this.submitManualOvertime({
-          shiftId,
           occurrenceId,
-
-          professionalId,
 
           submittedByUserId: normalizedSubmittedByUserId,
 
           overtime: normalizedOvertime,
-
-          idempotencyKey: this.deriveWorkflowIdempotencyKey(rootIdempotencyKey, "overtime"),
 
           currentTime: now,
 
@@ -1062,21 +921,18 @@ class ShiftProfessionalReviewService {
         });
       }
 
-      /**
-       * Reload authoritative state after both routed services have run.
-       *
-       * The original occurrence instance above may be stale because the
-       * downstream services load and save their own occurrence documents
-       * inside this same session.
-       */
+      // Reload after routed services mutate their own occurrence documents.
       const refreshedOccurrence = await this.getOccurrence({
         shiftId,
+
         occurrenceId,
+
         session,
       });
 
       const refreshedClaim = await this.getProfessionalClaimCase({
         occurrenceId: refreshedOccurrence._id,
+
         session,
       });
 
@@ -1088,11 +944,15 @@ class ShiftProfessionalReviewService {
         currentTime: now,
       });
 
+      const idempotent =
+        (!selections.hasOrdinaryIssues || ordinaryClaimResult?.idempotent === true) &&
+        (!selections.hasOvertime || overtimeResult?.idempotent === true);
+
       logger.info(
-        `Professional review submitted for occurrence ${refreshedOccurrence.referenceCode}; ` +
-          `ordinary claim: ${availability.hasOrdinaryIssues ? "yes" : "no"}; overtime: ${
-            availability.hasOvertime ? "yes" : "no"
-          }`
+        `Professional review processed for occurrence ${refreshedOccurrence.referenceCode}; ` +
+          `ordinary claim: ${selections.hasOrdinaryIssues ? "yes" : "no"}; overtime: ${
+            selections.hasOvertime ? "yes" : "no"
+          }; idempotent: ${idempotent ? "yes" : "no"}`
       );
 
       return {
@@ -1100,11 +960,13 @@ class ShiftProfessionalReviewService {
 
         submitted: true,
 
-        combined: availability.hasOrdinaryIssues && availability.hasOvertime,
+        idempotent,
 
-        ordinaryClaimSubmitted: availability.hasOrdinaryIssues,
+        combined: selections.hasOrdinaryIssues && selections.hasOvertime,
 
-        overtimeSubmitted: availability.hasOvertime,
+        ordinaryClaimSubmitted: selections.hasOrdinaryIssues,
+
+        overtimeSubmitted: selections.hasOvertime,
 
         ordinaryClaimResult,
 

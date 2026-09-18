@@ -1,8 +1,13 @@
 // controllers/employerShiftApplicationController.js
 
 const ShiftApplicationService = require("../services/shiftApplicationService");
+const ShiftApplicationQueryService = require("../services/shifts/applications/shiftApplicationQueryService");
+const ShiftApplicationViewService = require("../services/shifts/applications/shiftApplicationViewService");
 
 const logger = require("../utils/logger");
+
+const EMPLOYER_SHIFTS_URL = "/employer/shifts";
+const EMPLOYER_APPLICATIONS_VIEW = "employer/shifts/applications";
 
 /* ─────────────────────────────── HELPERS ─────────────────────────────── */
 
@@ -91,31 +96,67 @@ function getEmployerUserId(req) {
   return employerUserId;
 }
 
+function toId(value) {
+  if (!value) {
+    return null;
+  }
+
+  return String(value._id || value);
+}
+
+function toNullableSafeInteger(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const normalized = Number(value);
+
+  return Number.isSafeInteger(normalized) ? normalized : null;
+}
+
+function toNonNegativeSafeInteger(value, fallback = 0) {
+  const normalized = Number(value);
+
+  return Number.isSafeInteger(normalized) && normalized >= 0 ? normalized : fallback;
+}
+
+function toPositiveSafeInteger(value) {
+  const normalized = Number(value);
+
+  return Number.isSafeInteger(normalized) && normalized > 0 ? normalized : null;
+}
+
+function normalizeApplicationType(value, fallback = "initial") {
+  const normalized = String(value || fallback)
+    .trim()
+    .toLowerCase();
+
+  return normalized || fallback;
+}
+
 function buildApplicationResponse(application) {
   if (!application) {
     return null;
   }
 
   return {
-    id: String(application._id),
+    id: toId(application),
 
-    shiftId: application.shift ? String(application.shift) : null,
+    shiftId: toId(application.shift),
 
-    professionalId: application.professional ? String(application.professional) : null,
+    professionalId: toId(application.professional),
 
-    applicationType: application.applicationType || "initial",
+    applicationType: normalizeApplicationType(application.applicationType),
 
-    applicationRound: Number(application.applicationRound || 1),
+    applicationRound: toPositiveSafeInteger(application.applicationRound) || 1,
 
-    occurrenceId: application.occurrence ? String(application.occurrence) : null,
+    slotNumber: toPositiveSafeInteger(application.slotNumber),
 
-    replacementForAssignmentId: application.replacementForAssignment
-      ? String(application.replacementForAssignment)
-      : null,
+    occurrenceId: toId(application.occurrence),
 
-    acceptedAssignmentId: application.acceptedAssignment
-      ? String(application.acceptedAssignment)
-      : null,
+    replacementForAssignmentId: toId(application.replacementForAssignment),
+
+    acceptedAssignmentId: toId(application.acceptedAssignment),
 
     status: application.status,
 
@@ -129,7 +170,7 @@ function buildApplicationResponse(application) {
 
     reviewedAt: application.reviewedAt || null,
 
-    reviewedBy: application.reviewedBy ? String(application.reviewedBy) : null,
+    reviewedBy: toId(application.reviewedBy),
 
     rejectedReason: application.rejectedReason || null,
 
@@ -143,41 +184,53 @@ function buildAssignmentResponse(assignment) {
   }
 
   return {
-    id: String(assignment._id),
+    id: toId(assignment),
 
     referenceCode: assignment.referenceCode,
 
-    shiftId: assignment.shift ? String(assignment.shift) : null,
+    shiftId: toId(assignment.shift),
 
-    professionalId: assignment.professional ? String(assignment.professional) : null,
+    slotNumber: toPositiveSafeInteger(assignment.slotNumber),
+
+    professionalId: toId(assignment.professional),
 
     assignmentType: assignment.assignmentType || null,
 
     source: assignment.source || null,
 
-    applicationId: assignment.application ? String(assignment.application) : null,
+    applicationId: toId(assignment.application),
 
-    replacesAssignmentId: assignment.replacesAssignment
-      ? String(assignment.replacesAssignment)
-      : null,
+    occurrenceId: toId(assignment.occurrence),
 
-    occurrenceId: assignment.occurrence ? String(assignment.occurrence) : null,
+    replacesAssignmentId: toId(assignment.replacesAssignment),
 
-    startSequence: assignment.startSequence ?? null,
+    replacementCaseId: toId(assignment.replacementCase),
 
-    plannedEndSequence: assignment.plannedEndSequence ?? null,
+    startSequence: toNullableSafeInteger(assignment.startSequence),
 
-    plannedOccurrenceCount: Number(assignment.plannedOccurrenceCount || 0),
+    plannedEndSequence: toNullableSafeInteger(assignment.plannedEndSequence),
+
+    plannedOccurrenceCount: toNonNegativeSafeInteger(assignment.plannedOccurrenceCount),
 
     startsAt: assignment.startsAt || null,
 
     plannedEndsAt: assignment.plannedEndsAt || null,
 
+    effectiveEndSequence: toNullableSafeInteger(assignment.effectiveEndSequence),
+
+    effectiveOccurrenceCount: toNullableSafeInteger(assignment.effectiveOccurrenceCount),
+
+    effectiveEndsAt: assignment.effectiveEndsAt || null,
+
     status: assignment.status,
 
     assignedAt: assignment.assignedAt || null,
 
-    assignedBy: assignment.assignedBy ? String(assignment.assignedBy) : null,
+    assignedBy: toId(assignment.assignedBy),
+
+    activatedAt: assignment.activatedAt || null,
+
+    activatedBy: toId(assignment.activatedBy),
   };
 }
 
@@ -192,15 +245,56 @@ function getAcceptedOccurrenceId(result) {
 
   const occurrenceId = candidates.find(Boolean);
 
-  return occurrenceId ? String(occurrenceId) : null;
+  return toId(occurrenceId);
+}
+
+function getAcceptedSlotNumber(result) {
+  const candidates = [
+    result?.application?.slotNumber,
+    result?.assignment?.slotNumber,
+    result?.assignmentResult?.slotNumber,
+    result?.assignmentResult?.assignment?.slotNumber,
+    result?.occurrence?.slotNumber,
+  ];
+
+  for (const candidate of candidates) {
+    const slotNumber = toPositiveSafeInteger(candidate);
+
+    if (slotNumber) {
+      return slotNumber;
+    }
+  }
+
+  return null;
+}
+
+function getAssignedOccurrenceCount(result) {
+  const candidates = [
+    result?.assignmentResult?.assignedOccurrenceCount,
+    result?.assignmentResult?.occurrenceCount,
+    result?.assignment?.plannedOccurrenceCount,
+  ];
+
+  for (const candidate of candidates) {
+    const count = toPositiveSafeInteger(candidate);
+
+    if (count) {
+      return count;
+    }
+  }
+
+  if (Array.isArray(result?.assignmentResult?.occurrences)) {
+    return result.assignmentResult.occurrences.length;
+  }
+
+  return 0;
 }
 
 function getReplacementScope(result) {
-  const applicationType = String(
-    result?.applicationType || result?.application?.applicationType || ""
-  )
-    .trim()
-    .toLowerCase();
+  const applicationType = normalizeApplicationType(
+    result?.applicationType || result?.application?.applicationType,
+    ""
+  );
 
   if (applicationType !== "replacement") {
     return null;
@@ -216,15 +310,45 @@ function getReplacementScope(result) {
     return explicitScope;
   }
 
-  if (getAcceptedOccurrenceId(result)) {
-    return "isolated";
-  }
-
-  return "tail";
+  return getAcceptedOccurrenceId(result) ? "isolated" : "tail";
 }
 
 function getAuthoritativeShift(result) {
   return result?.shift || result?.assignmentResult?.shift || null;
+}
+
+function buildHiringSummary(shift) {
+  if (!shift?.hiringSummary) {
+    return null;
+  }
+
+  return {
+    initialAcceptedCount: toNonNegativeSafeInteger(shift.hiringSummary.initialAcceptedCount),
+
+    openReplacementCount: toNonNegativeSafeInteger(shift.hiringSummary.openReplacementCount),
+
+    lastReconciledAt: shift.hiringSummary.lastReconciledAt || null,
+  };
+}
+
+function buildAssignmentCountSummary(shift) {
+  if (!shift?.assignmentSummary) {
+    return null;
+  }
+
+  return {
+    scheduled: toNonNegativeSafeInteger(shift.assignmentSummary.scheduled),
+
+    active: toNonNegativeSafeInteger(shift.assignmentSummary.active),
+
+    ending: toNonNegativeSafeInteger(shift.assignmentSummary.ending),
+
+    ended: toNonNegativeSafeInteger(shift.assignmentSummary.ended),
+
+    cancelled: toNonNegativeSafeInteger(shift.assignmentSummary.cancelled),
+
+    lastReconciledAt: shift.assignmentSummary.lastReconciledAt || null,
+  };
 }
 
 function buildShiftResponse(result) {
@@ -237,8 +361,12 @@ function buildShiftResponse(result) {
     result?.application?.shift ||
     null;
 
+  if (!shift && !shiftId) {
+    return null;
+  }
+
   return {
-    id: shiftId ? String(shiftId) : null,
+    id: toId(shiftId),
 
     referenceCode: shift?.referenceCode || null,
 
@@ -246,75 +374,92 @@ function buildShiftResponse(result) {
 
     paymentStatus: shift?.paymentStatus || null,
 
-    activeAssignmentId: shift?.activeAssignment ? String(shift.activeAssignment) : null,
+    scheduleMode: shift?.scheduleMode || null,
 
-    assignedProfessionalId: shift?.assignedProfessional ? String(shift.assignedProfessional) : null,
+    occurrenceCount: toPositiveSafeInteger(shift?.occurrenceCount),
 
-    applicationRound:
-      shift?.applicationRound === null || shift?.applicationRound === undefined
-        ? null
-        : Number(shift.applicationRound),
+    requiredProfessionals: toPositiveSafeInteger(shift?.requiredProfessionals),
+
+    totalOccurrenceCount: toPositiveSafeInteger(shift?.totalOccurrenceCount),
+
+    applicationRound: toPositiveSafeInteger(shift?.applicationRound),
+
+    totalApplications: toNonNegativeSafeInteger(shift?.totalApplications),
+
+    currentRoundApplications: toNonNegativeSafeInteger(shift?.currentRoundApplications),
+
+    hiringSummary: buildHiringSummary(shift),
+
+    assignmentSummary: buildAssignmentCountSummary(shift),
+
+    occurrenceProgress: shift?.occurrenceProgress || null,
   };
 }
 
 function buildAcceptanceMessage(result) {
-  const applicationType = String(
-    result?.applicationType || result?.application?.applicationType || "initial"
-  )
-    .trim()
-    .toLowerCase();
-
-  const assignedOccurrenceCount = Number(
-    result?.assignmentResult?.assignedOccurrenceCount ||
-      result?.assignment?.plannedOccurrenceCount ||
-      0
+  const applicationType = normalizeApplicationType(
+    result?.applicationType || result?.application?.applicationType
   );
+
+  const slotNumber = getAcceptedSlotNumber(result);
+  const assignedOccurrenceCount = getAssignedOccurrenceCount(result);
+  const positionText = slotNumber ? `position ${slotNumber}` : "the selected position";
 
   if (applicationType === "replacement") {
     const replacementScope = getReplacementScope(result);
 
     if (replacementScope === "isolated") {
-      return "The replacement professional has been accepted for this Shift occurrence.";
+      return `The replacement professional has been accepted for ${positionText} on this work date.`;
     }
 
     if (assignedOccurrenceCount > 1) {
       return (
-        "The replacement professional has been accepted for the remaining " +
-        `${assignedOccurrenceCount} scheduled Shift occurrences.`
+        `The replacement professional has been accepted for ${positionText} across the remaining ` +
+        `${assignedOccurrenceCount} work dates.`
       );
     }
 
-    return "The replacement professional has been accepted for the remaining Shift occurrence.";
+    return `The replacement professional has been accepted for ${positionText} for the remaining work date.`;
   }
 
   if (assignedOccurrenceCount > 1) {
     return (
-      `The professional has been accepted for all ${assignedOccurrenceCount} ` +
-      "scheduled Shift occurrences."
+      `The professional has been accepted for ${positionText} across ` +
+      `${assignedOccurrenceCount} work dates.`
     );
   }
 
-  return "The professional has been accepted for the Shift.";
+  return `The professional has been accepted for ${positionText}.`;
 }
 
 function buildAssignmentSummary(result) {
+  const assignment = result?.assignment || result?.assignmentResult?.assignment || null;
+
   const replacedAssignmentId =
-    result?.assignmentResult?.replacedAssignmentId ||
-    result?.assignment?.replacesAssignment ||
-    null;
+    result?.assignmentResult?.replacedAssignmentId || assignment?.replacesAssignment || null;
 
   return {
-    assignedOccurrenceCount: Number(
-      result?.assignmentResult?.assignedOccurrenceCount ||
-        result?.assignment?.plannedOccurrenceCount ||
-        0
+    slotNumber: getAcceptedSlotNumber(result),
+
+    assignedOccurrenceCount: getAssignedOccurrenceCount(result),
+
+    startSequence: toNullableSafeInteger(
+      result?.assignmentResult?.startSequence ?? assignment?.startSequence
+    ),
+
+    plannedEndSequence: toNullableSafeInteger(
+      result?.assignmentResult?.plannedEndSequence ?? assignment?.plannedEndSequence
     ),
 
     replacementScope: getReplacementScope(result),
 
     occurrenceId: getAcceptedOccurrenceId(result),
 
-    replacedAssignmentId: replacedAssignmentId ? String(replacedAssignmentId) : null,
+    replacedAssignmentId: toId(replacedAssignmentId),
+
+    replacementCaseId: toId(
+      result?.assignmentResult?.replacementCaseId || assignment?.replacementCase
+    ),
   };
 }
 
@@ -331,7 +476,7 @@ exports.shortlistApplication = async (req, res) => {
 
       reviewedByUserId: getEmployerUserId(req),
 
-      employerPrivateNote: req.body.employerPrivateNote,
+      employerPrivateNote: req.body?.employerPrivateNote,
     });
 
     const message =
@@ -366,6 +511,88 @@ exports.shortlistApplication = async (req, res) => {
   }
 };
 
+/* ─────────────────────────────── APPLICATIONS PAGE ─────────────────────────────── */
+
+/**
+ * Employer application page reads are orchestrated here.
+ *
+ * ShiftApplicationQueryService resolves and returns authorized raw page data:
+ *
+ * - employer/business ownership;
+ * - branch scope;
+ * - optional focused Shift scope;
+ * - status/type filtering;
+ * - application records;
+ * - raw counts;
+ * - pagination facts; and
+ * - read-only vs management capability.
+ *
+ * ShiftApplicationViewService then converts that data into the finalized
+ * presentation model passed to EJS.
+ */
+
+exports.getApplications = async (req, res, next) => {
+  try {
+    const currentTime = new Date();
+
+    const applicationPageData = await ShiftApplicationQueryService.getEmployerApplicationsPageData({
+      userId: getEmployerUserId(req),
+
+      employerProfile: req.employerProfile,
+
+      employerContext: req.employerContext || null,
+
+      status: req.query.status,
+
+      applicationType: req.query.type,
+
+      shiftId: req.query.shift,
+
+      page: req.query.page,
+
+      currentTime,
+    });
+
+    const applicationsView =
+      ShiftApplicationViewService.buildEmployerApplicationsPageView(applicationPageData);
+
+    setNoStoreHeaders(res);
+
+    return res.render(EMPLOYER_APPLICATIONS_VIEW, {
+      layout: "layouts/app-layout",
+
+      title: applicationsView.pageTitle || "Shift Applications",
+
+      breadcrumbs: [
+        {
+          label: "Home",
+          url: "/employer/dashboard",
+        },
+        {
+          label: "Manage Shifts",
+          url: EMPLOYER_SHIFTS_URL,
+        },
+        {
+          label: "Applications",
+          url: null,
+        },
+      ],
+
+      csrfToken: req.csrfToken(),
+
+      applicationsView,
+
+      scripts: `
+        <script src="/js/employer/shift-applications.js"></script>
+      `,
+    });
+  } catch (error) {
+    logger.error("Employer shift applications page error:", error);
+
+    return next(error);
+  }
+};
+
 /* ─────────────────────────────── REJECT APPLICATION ─────────────────────────────── */
 
 exports.rejectApplication = async (req, res) => {
@@ -379,9 +606,9 @@ exports.rejectApplication = async (req, res) => {
 
       reviewedByUserId: getEmployerUserId(req),
 
-      rejectedReason: req.body.rejectedReason,
+      rejectedReason: req.body?.rejectedReason,
 
-      employerPrivateNote: req.body.employerPrivateNote,
+      employerPrivateNote: req.body?.employerPrivateNote,
     });
 
     setNoStoreHeaders(res);
@@ -412,22 +639,18 @@ exports.rejectApplication = async (req, res) => {
 /* ─────────────────────────────── ACCEPT APPLICATION ─────────────────────────────── */
 
 /**
- * Employer accepts an application through ShiftApplicationService.
+ * ShiftApplicationService owns acceptance and capacity enforcement.
  *
- * The controller never decides parent Shift ownership or parent lifecycle
- * status itself.
- *
- * This matters for isolated replacement:
- *
- * - the replacement professional owns only the targeted occurrence;
- * - the continuing engagement professional remains the parent professional;
- * - the parent Shift may already be in progress, pending settlement or another
- *   occurrence-derived state; and
- * - the controller must therefore return the authoritative parent state that
- *   the service/assignment/reconciliation layer produced.
+ * One accepted professional receives one stable staffing position. A
+ * replacement retains that position and may cover either one exact occurrence
+ * or a future sequence range. The parent Shift returns aggregate staffing
+ * summaries only; occurrence and assignment records remain authoritative for
+ * individual professional ownership.
  */
 exports.acceptApplication = async (req, res) => {
   try {
+    const currentTime = new Date();
+
     const result = await ShiftApplicationService.acceptApplication({
       applicationId: req.params.applicationId,
 
@@ -437,7 +660,9 @@ exports.acceptApplication = async (req, res) => {
 
       reviewedByUserId: getEmployerUserId(req),
 
-      employerPrivateNote: req.body.employerPrivateNote,
+      employerPrivateNote: req.body?.employerPrivateNote,
+
+      currentTime,
     });
 
     setNoStoreHeaders(res);
@@ -447,19 +672,26 @@ exports.acceptApplication = async (req, res) => {
 
       message: buildAcceptanceMessage(result),
 
-      applicationType: result.applicationType || result.application?.applicationType || "initial",
-
-      applicationRound: Number(
-        result.applicationRound || result.application?.applicationRound || 1
+      applicationType: normalizeApplicationType(
+        result.applicationType || result.application?.applicationType
       ),
+
+      applicationRound:
+        toPositiveSafeInteger(result.applicationRound || result.application?.applicationRound) || 1,
+
+      slotNumber: getAcceptedSlotNumber(result),
 
       replacementScope: getReplacementScope(result),
 
-      rejectedOtherApplicationCount: Number(result.rejectedOtherApplicationCount || 0),
+      occurrenceId: getAcceptedOccurrenceId(result),
+
+      rejectedOtherApplicationCount: toNonNegativeSafeInteger(result.rejectedOtherApplicationCount),
 
       application: buildApplicationResponse(result.application),
 
-      assignment: buildAssignmentResponse(result.assignment),
+      assignment: buildAssignmentResponse(
+        result.assignment || result.assignmentResult?.assignment || null
+      ),
 
       shift: buildShiftResponse(result),
 

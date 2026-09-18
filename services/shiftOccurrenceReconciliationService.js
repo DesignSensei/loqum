@@ -3,6 +3,7 @@
 const mongoose = require("mongoose");
 
 const Shift = require("../models/Shift");
+const ShiftAssignment = require("../models/ShiftAssignment");
 const ShiftOccurrence = require("../models/ShiftOccurrence");
 const ShiftAssignmentService = require("./shiftAssignmentService");
 
@@ -149,6 +150,16 @@ class ShiftOccurrenceReconciliationService {
   }
 
   static async runWithOptionalTransaction(options = {}, callback) {
+    if (
+      options.session &&
+      (typeof options.session.inTransaction !== "function" || !options.session.inTransaction())
+    ) {
+      throw this.createError({
+        message: "An active transaction is required.",
+        code: "ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
     return runServiceTransaction(options, callback);
   }
 
@@ -182,7 +193,11 @@ class ShiftOccurrenceReconciliationService {
   }
 
   static normalizeCurrentTime(value = new Date()) {
-    const currentTime = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+    const supported =
+      value instanceof Date ||
+      typeof value === "number" ||
+      (typeof value === "string" && value.trim() !== "");
+    const currentTime = supported ? new Date(value) : new Date(NaN);
 
     if (Number.isNaN(currentTime.getTime())) {
       throw this.createError({
@@ -195,7 +210,7 @@ class ShiftOccurrenceReconciliationService {
   }
 
   static amount(value, fieldName = "amount") {
-    const amount = Number(value ?? 0);
+    const amount = value;
 
     if (!Number.isSafeInteger(amount) || amount < 0) {
       throw this.createError({
@@ -229,8 +244,7 @@ class ShiftOccurrenceReconciliationService {
   static maxDate(values) {
     const dates = Array.from(values || [])
       .filter(Boolean)
-      .map((value) => new Date(value))
-      .filter((value) => !Number.isNaN(value.getTime()));
+      .map((value) => this.normalizeCurrentTime(value));
 
     if (dates.length === 0) {
       return null;
@@ -291,59 +305,12 @@ class ShiftOccurrenceReconciliationService {
   }
 
   static async getOccurrencesForParentReconciliation({ shiftId, session }) {
-    const query = ShiftOccurrence.find({
-      shift: shiftId,
-    })
-      .select(
-        [
-          "sequenceNumber",
-
-          "assignmentStatus",
-          "assignedProfessional",
-          "assignment",
-          "assignedAt",
-
-          "status",
-          "attendanceStatus",
-          "settlementStatus",
-          "refundStatus",
-
-          "baseProfessionalPay",
-          "basePlatformFee",
-          "basePlatformFeeAudit",
-          "baseSettlement",
-
-          "overtimeProfessionalPay",
-          "overtimePlatformFee",
-          "overtimePlatformFeeAudit",
-          "overtimeSettlement",
-          "overtime",
-
-          "topUpRequired",
-
-          "cancellationCompensation",
-          "activeWorkCancellation",
-
-          "refundableAmount",
-          "refundedAmount",
-          "refundedAt",
-
-          "activeClaim",
-          "activeDispute",
-        ].join(" ")
-      )
-      .sort({
-        sequenceNumber: 1,
-      });
-
-    if (session) {
-      query.session(session);
-    }
-
-    return query.lean();
+    // Read full records: finality and identity checks must not depend on omitted fields.
+    return ShiftOccurrence.find({ shift: shiftId })
+      .sort({ sequenceNumber: 1, slotNumber: 1 })
+      .session(session)
+      .lean();
   }
-
-  /* ─────────────────────────────── COMPONENT / AUDIT HELPERS ─────────────────────────────── */
 
   static getComponentAudit(occurrence, component) {
     if (component === "base") {
@@ -1538,9 +1505,25 @@ class ShiftOccurrenceReconciliationService {
     occurrences,
     occurrenceProgress,
     paymentStatus,
+    currentTime = occurrenceProgress.lastReconciledAt,
   }) {
-    if (shift.status === "cancelled") {
-      return "cancelled";
+    if (["cancelled", "pending_funding"].includes(shift.status)) {
+      return shift.status;
+    }
+
+    if (occurrenceProgress.inProgress > 0) {
+      return "in_progress";
+    }
+
+    if (
+      occurrences.some(
+        (occurrence) =>
+          occurrence.status === "scheduled" &&
+          occurrence.assignmentStatus === "unassigned" &&
+          (!currentTime || this.normalizeCurrentTime(occurrence.fillCutoffAt) > currentTime)
+      )
+    ) {
+      return "open";
     }
 
     const hasActiveChallenge = occurrences.some(
@@ -1591,6 +1574,10 @@ class ShiftOccurrenceReconciliationService {
         (occurrence) => occurrence.assignmentStatus === "unassigned"
       );
 
+      if (hasOrdinaryUnassigned) {
+        return "open";
+      }
+
       if (hasReplacementRequired) {
         return "confirmed";
       }
@@ -1640,94 +1627,107 @@ class ShiftOccurrenceReconciliationService {
 
   /* ─────────────────────────────── PARENT ASSIGNMENT SUMMARY ─────────────────────────────── */
 
-  static reconcileParentAssignmentSummary({ shift, occurrences, nextStatus }) {
-    const assignedOccurrences = occurrences.filter(
-      (occurrence) =>
-        occurrence.assignmentStatus === "assigned" &&
-        ["scheduled", "in_progress"].includes(occurrence.status) &&
-        occurrence.assignment &&
-        occurrence.assignedProfessional &&
-        occurrence.assignedAt
-    );
-
-    if (
-      ["pending_funding", "open", "completed", "cancelled", "no_show"].includes(nextStatus) ||
-      assignedOccurrences.length === 0
-    ) {
-      shift.activeAssignment = null;
-
-      shift.assignedProfessional = null;
-
-      shift.assignedAt = null;
-
-      shift.assignedBy = null;
-
-      return shift;
-    }
-
-    const currentAssignmentStillExists = assignedOccurrences.some(
-      (occurrence) => String(occurrence.assignment) === String(shift.activeAssignment || "")
-    );
-
-    if (!currentAssignmentStillExists) {
-      if (["assigned", "confirmed", "in_progress"].includes(nextStatus)) {
+  static async reconcileParentAssignmentSummary({ shift, occurrences, currentTime, session }) {
+    const assignments = await ShiftAssignment.find({ shift: shift._id }).session(session).lean();
+    const statuses = ["scheduled", "active", "ending", "ended", "cancelled"];
+    const summary = Object.fromEntries(statuses.map((status) => [status, 0]));
+    for (const assignment of assignments) {
+      if (
+        !statuses.includes(assignment.status) ||
+        !Number.isSafeInteger(assignment.slotNumber) ||
+        assignment.slotNumber < 1 ||
+        assignment.slotNumber > shift.requiredProfessionals ||
+        String(assignment.business) !== String(shift.business) ||
+        String(assignment.branch) !== String(shift.branch)
+      ) {
         throw this.createError({
-          message:
-            "The parent assignment summary does not match any authoritative assigned occurrence.",
-          code: "PARENT_ASSIGNMENT_SUMMARY_OUT_OF_SYNC",
+          message: "Assignment summary contains invalid ownership or status.",
+          code: "ASSIGNMENT_SUMMARY_CONTEXT_MISMATCH",
           statusCode: 409,
-          details: {
-            shiftId: String(shift._id),
-
-            activeAssignment: shift.activeAssignment ? String(shift.activeAssignment) : null,
-
-            occurrenceAssignments: assignedOccurrences.map((occurrence) =>
-              String(occurrence.assignment)
-            ),
-          },
         });
       }
-
-      shift.activeAssignment = null;
-
-      shift.assignedProfessional = null;
-
-      shift.assignedAt = null;
-
-      shift.assignedBy = null;
-
-      return shift;
+      summary[assignment.status] += 1;
     }
-
-    const currentOccurrence = assignedOccurrences.find(
-      (occurrence) => String(occurrence.assignment) === String(shift.activeAssignment)
-    );
-
-    /*
-     * assignedBy cannot be reconstructed from ShiftOccurrence.
-     *
-     * The assignment service owns that actor audit. Reconciliation only keeps
-     * the occurrence-derived summary fields aligned.
-     */
-    shift.assignedProfessional = currentOccurrence.assignedProfessional;
-
-    shift.assignedAt = currentOccurrence.assignedAt;
-
+    shift.assignmentSummary = { ...summary, lastReconciledAt: currentTime };
+    const opportunities = new Set();
+    for (const occurrence of occurrences) {
+      if (
+        occurrence.status !== "scheduled" ||
+        occurrence.assignmentStatus !== "replacement_required" ||
+        occurrence.refundStatus !== "not_eligible" ||
+        this.normalizeCurrentTime(occurrence.fillCutoffAt) <= currentTime
+      )
+        continue;
+      if (!occurrence.replacementForAssignment) {
+        throw this.createError({
+          message: "Replacement opportunity is missing its prior assignment.",
+          code: "REPLACEMENT_ASSIGNMENT_REQUIRED",
+          statusCode: 409,
+        });
+      }
+      opportunities.add(
+        occurrence.replacementCase
+          ? `${occurrence.slotNumber}:${occurrence.replacementForAssignment}:case:${occurrence.replacementCase}`
+          : `${occurrence.slotNumber}:${occurrence.replacementForAssignment}:occurrence:${occurrence._id}`
+      );
+    }
+    shift.hiringSummary = {
+      initialAcceptedCount: assignments.filter(
+        (assignment) => assignment.assignmentType === "initial" && assignment.application
+      ).length,
+      openReplacementCount: shift.status === "cancelled" ? 0 : opportunities.size,
+      lastReconciledAt: currentTime,
+    };
     return shift;
   }
 
-  /* ─────────────────────────────── PARENT RECONCILIATION ─────────────────────────────── */
-
   static async reconcileParentShift({ shift, currentTime, session }) {
+    if (!session || typeof session.inTransaction !== "function" || !session.inTransaction()) {
+      throw this.createError({
+        message: "Parent reconciliation requires an active transaction.",
+        code: "ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+    currentTime = this.normalizeCurrentTime(currentTime);
     const occurrences = await this.getOccurrencesForParentReconciliation({
       shiftId: shift._id,
 
       session,
     });
 
-    const expectedOccurrenceCount = Number(shift.occurrenceCount || 0);
+    const expectedOccurrenceCount = shift.occurrenceCount * shift.requiredProfessionals;
+    const positions = new Set();
+    for (const occurrence of occurrences) {
+      const key = `${occurrence.slotNumber}:${occurrence.sequenceNumber}`;
+      if (
+        positions.has(key) ||
+        !Number.isSafeInteger(occurrence.slotNumber) ||
+        occurrence.slotNumber < 1 ||
+        occurrence.slotNumber > shift.requiredProfessionals ||
+        !Number.isSafeInteger(occurrence.sequenceNumber) ||
+        occurrence.sequenceNumber < 1 ||
+        occurrence.sequenceNumber > shift.occurrenceCount ||
+        String(occurrence.shift) !== String(shift._id) ||
+        String(occurrence.business) !== String(shift.business) ||
+        String(occurrence.branch) !== String(shift.branch) ||
+        occurrence.currency !== shift.currency ||
+        occurrence.countryCode !== shift.countryCode
+      ) {
+        throw this.createError({
+          message: "Occurrence slot/date or ownership is inconsistent.",
+          code: "OCCURRENCE_CONTEXT_MISMATCH",
+          statusCode: 409,
+        });
+      }
+      positions.add(key);
+    }
 
     if (
+      !Number.isSafeInteger(shift.occurrenceCount) ||
+      shift.occurrenceCount < 1 ||
+      !Number.isSafeInteger(shift.requiredProfessionals) ||
+      shift.requiredProfessionals < 1 ||
       !Number.isSafeInteger(expectedOccurrenceCount) ||
       expectedOccurrenceCount <= 0 ||
       occurrences.length !== expectedOccurrenceCount
@@ -1755,6 +1755,10 @@ class ShiftOccurrenceReconciliationService {
 
       session,
     });
+
+    if (isolatedAssignmentClosures.some((result) => result.closed)) {
+      shift = await this.getShift(shift._id, session);
+    }
 
     const occurrenceProgress = this.buildOccurrenceProgress({
       occurrences,
@@ -1792,6 +1796,7 @@ class ShiftOccurrenceReconciliationService {
       occurrenceProgress,
 
       paymentStatus,
+      currentTime,
     });
 
     shift.occurrenceProgress = occurrenceProgress;
@@ -1806,12 +1811,14 @@ class ShiftOccurrenceReconciliationService {
 
     shift.status = nextStatus;
 
-    this.reconcileParentAssignmentSummary({
+    await this.reconcileParentAssignmentSummary({
       shift,
 
       occurrences,
 
       nextStatus,
+      currentTime,
+      session,
     });
 
     await shift.save({
@@ -1836,6 +1843,8 @@ class ShiftOccurrenceReconciliationService {
       status: nextStatus,
 
       isolatedAssignmentClosures,
+      assignmentSummary: shift.assignmentSummary,
+      hiringSummary: shift.hiringSummary,
 
       activeProfessionalClaimCount: occurrences.filter((occurrence) =>
         Boolean(occurrence.activeClaim)
@@ -1899,17 +1908,8 @@ class ShiftOccurrenceReconciliationService {
       options,
 
       async (session) => {
-        const [shift, occurrence] = await Promise.all([
-          this.getShift(shiftId, session),
-
-          this.getOccurrence({
-            shiftId,
-
-            occurrenceId,
-
-            session,
-          }),
-        ]);
+        const shift = await this.getShift(shiftId, session);
+        const occurrence = await this.getOccurrence({ shiftId, occurrenceId, session });
 
         const parentResult = await this.reconcileParentShift({
           shift,

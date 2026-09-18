@@ -15,7 +15,7 @@ const passport = require("passport");
 const mongoose = require("mongoose");
 
 // Jobs
-// const { startBackgroundJobs, stopBackgroundJobs } = require("./jobs");
+const { startBackgroundJobs, stopBackgroundJobs } = require("./jobs");
 
 // Utilities
 const attachViewLocals = require("./middleware/viewLocalsMiddleware");
@@ -46,6 +46,7 @@ const PORT = process.env.PORT || 3000;
 
 let server = null;
 let isShuttingDown = false;
+let backgroundJobsStarted = false;
 
 /* ---------- Parsers ---------- */
 
@@ -237,8 +238,9 @@ async function shutdown(signal) {
    * Stop scheduling new background work before closing the
    * HTTP server or MongoDB connection.
    */
-  stopBackgroundJobs();
-
+  if (backgroundJobsStarted) {
+    stopBackgroundJobs();
+  }
   const closeDatabase = async () => {
     try {
       if (mongoose.connection.readyState !== 0) {
@@ -257,22 +259,24 @@ async function shutdown(signal) {
     }
   };
 
-  if (!server) {
+  if (!server || !server.listening) {
+    server = null;
+
     await closeDatabase();
 
     return;
   }
 
   server.close(async (error) => {
-    if (error) {
+    if (error && error.code !== "ERR_SERVER_NOT_RUNNING") {
       logger.error("HTTP server shutdown failed:", error);
 
       process.exit(1);
-
-      return;
     }
 
-    logger.info("HTTP server closed.");
+    server = null;
+
+    logger.info(error ? "HTTP server was already closed." : "HTTP server closed.");
 
     await closeDatabase();
   });
@@ -297,12 +301,21 @@ process.on("SIGTERM", () => {
     server = app.listen(PORT, () => {
       logger.info(`Server running on http://localhost:${PORT}`);
 
-      // startBackgroundJobs();
+      if (process.env.NODE_ENV === "production") {
+        startBackgroundJobs();
+        backgroundJobsStarted = true;
+
+        logger.info("Background jobs enabled.");
+      } else {
+        logger.info("Background jobs disabled in development.");
+      }
     });
   } catch (error) {
     logger.error("Startup failed:", error);
 
-    // stopBackgroundJobs();
+    if (backgroundJobsStarted) {
+      stopBackgroundJobs();
+    }
 
     if (mongoose.connection.readyState !== 0) {
       await mongoose.disconnect();

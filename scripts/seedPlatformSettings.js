@@ -232,7 +232,6 @@ const createNewPlatformSettings = () => {
     occurrenceClaimWindowHours: 24,
     employerClaimResponseHours: 24,
     professionalDisputeResponseHours: 24,
-    professionalAppealWindowHours: 12,
 
     // Location rules
     defaultGeofenceRadiusMeters: 100,
@@ -241,8 +240,6 @@ const createNewPlatformSettings = () => {
     maximumLocationAccuracyMeters: 100,
 
     // Cancellation rules
-    cancellationSettlementReviewHours: 24,
-
     shiftCancellationPolicy: {
       lateCancellationWindowMinutes: 30,
       lateCancellationProfessionalPayRate: 0.25,
@@ -370,8 +367,6 @@ const backfillGeneralPlatformRules = ({
 
   setWhenMissing(settings, "professionalDisputeResponseHours", 24);
 
-  setWhenMissing(settings, "professionalAppealWindowHours", 12);
-
   // Location rules.
   setWhenMissing(settings, "defaultGeofenceRadiusMeters", 100);
 
@@ -382,8 +377,6 @@ const backfillGeneralPlatformRules = ({
   setWhenMissing(settings, "maximumLocationAccuracyMeters", 100);
 
   // Cancellation rules.
-  setWhenMissing(settings, "cancellationSettlementReviewHours", 24);
-
   if (!settings.shiftCancellationPolicy) {
     settings.shiftCancellationPolicy = {};
   }
@@ -503,6 +496,12 @@ const removeRetiredFields = async (settingsId) => {
 
         checkInPinRevealBeforeMinutes: "",
 
+        professionalAppealWindowHours: "",
+
+        professionalRebuttalWindowHours: "",
+
+        cancellationSettlementReviewHours: "",
+
         "shiftCancellationPolicy.earlyTerminationMinimumPayRate": "",
       },
     }
@@ -574,7 +573,8 @@ const seedPlatformSettings = async () => {
    * from existing MongoDB documents.
    *
    * Remove them only after the new document has saved successfully so a
-   * failed migration cannot destroy the legacy value before it is copied.
+   * failed migration cannot destroy a legacy value before required
+   * compatibility migration has completed.
    */
 
   await removeRetiredFields(settings._id);

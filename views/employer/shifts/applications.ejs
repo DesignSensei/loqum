@@ -1,0 +1,574 @@
+<!-- views/employer/shifts/applications.ejs -->
+
+<div id="shiftApplicationsPage">
+  <!-- ─────────────────────────────── FOCUSED SHIFT ─────────────────────────────── -->
+
+  <% if (applicationsView.focusedShiftSection.visible) { %>
+  <div class="card mb-8">
+    <div class="card-body py-6">
+      <div
+        class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-5"
+      >
+        <div class="d-flex align-items-start gap-4">
+          <div class="symbol symbol-50px flex-shrink-0">
+            <div class="symbol-label bg-light-primary">
+              <i class="ki-duotone ki-briefcase fs-2x text-primary">
+                <span class="path1"></span>
+                <span class="path2"></span>
+              </i>
+            </div>
+          </div>
+
+          <div>
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+              <span class="fw-bold fs-4 text-gray-900">
+                <%= applicationsView.focusedShiftSection.title %>
+              </span>
+
+              <% if (applicationsView.focusedShiftSection.referenceCode) { %>
+              <span class="badge badge-light">
+                <%= applicationsView.focusedShiftSection.referenceCode %>
+              </span>
+              <% } %> <% applicationsView.focusedShiftSection.badges.forEach((badge) => { %>
+              <span class="badge <%= badge.badgeClass %>"> <%= badge.label %> </span>
+              <% }) %>
+            </div>
+
+            <% if (applicationsView.focusedShiftSection.metaItems.length > 0) { %>
+            <div class="d-flex flex-wrap gap-4 fs-7 text-muted">
+              <% applicationsView.focusedShiftSection.metaItems.forEach((item) => { %>
+              <span>
+                <% if (item.icon) { %>
+                <i class="ki-duotone <%= item.icon %> fs-6 me-1">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                </i>
+                <% } %> <%= item.value %>
+              </span>
+              <% }) %>
+            </div>
+            <% } %>
+          </div>
+        </div>
+
+        <div class="d-flex flex-wrap gap-2">
+          <% if (applicationsView.focusedShiftSection.viewShiftAction.visible) { %>
+          <a
+            href="<%= applicationsView.focusedShiftSection.viewShiftAction.url %>"
+            class="btn btn-sm <%= applicationsView.focusedShiftSection.viewShiftAction.buttonClass %>"
+          >
+            <%= applicationsView.focusedShiftSection.viewShiftAction.label %>
+          </a>
+          <% } %> <% if (applicationsView.focusedShiftSection.showAllAction.visible) { %>
+          <a
+            href="<%= applicationsView.focusedShiftSection.showAllAction.url %>"
+            class="btn btn-sm <%= applicationsView.focusedShiftSection.showAllAction.buttonClass %>"
+          >
+            <%= applicationsView.focusedShiftSection.showAllAction.label %>
+          </a>
+          <% } %>
+        </div>
+      </div>
+    </div>
+  </div>
+  <% } %>
+
+  <!-- ─────────────────────────────── READ-ONLY NOTICE ─────────────────────────────── -->
+
+  <% if (applicationsView.readOnlyNotice.visible) { %>
+  <div
+    class="notice d-flex rounded border border-dashed p-6 mb-8 <%= applicationsView.readOnlyNotice.noticeClass %>"
+  >
+    <i
+      class="ki-duotone <%= applicationsView.readOnlyNotice.icon %> fs-2tx me-5 <%= applicationsView.readOnlyNotice.iconClass %>"
+    >
+      <span class="path1"></span>
+      <span class="path2"></span>
+      <span class="path3"></span>
+    </i>
+
+    <div>
+      <div class="fw-bold text-gray-900 mb-1"><%= applicationsView.readOnlyNotice.title %></div>
+
+      <div class="fs-7 text-muted"><%= applicationsView.readOnlyNotice.message %></div>
+    </div>
+  </div>
+  <% } %>
+
+  <!-- ─────────────────────────────── SUMMARY CARDS ─────────────────────────────── -->
+
+  <div class="row g-5 g-xl-8 mb-8">
+    <% applicationsView.summaryCards.forEach((card) => { %>
+    <div class="col-sm-6 col-lg-3">
+      <div class="card card-flush h-100">
+        <div
+          class="card-body d-flex flex-column justify-content-center align-items-center text-center"
+        >
+          <div class="symbol symbol-60px mb-5">
+            <span class="symbol-label <%= card.symbolClass %>">
+              <i class="ki-duotone <%= card.icon %> fs-2x <%= card.iconClass %>">
+                <% card.iconPaths.forEach((path) => { %>
+                <span class="path<%= path %>"></span>
+                <% }) %>
+              </i>
+            </span>
+          </div>
+
+          <div class="fs-2 fw-bold <%= card.valueClass %>"><%= card.value %></div>
+
+          <div class="fs-6 fw-semibold text-gray-700"><%= card.label %></div>
+        </div>
+      </div>
+    </div>
+    <% }) %>
+  </div>
+
+  <!-- ─────────────────────────────── RESULTS HEADER / FILTER ─────────────────────────────── -->
+
+  <div
+    class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3 mb-5"
+  >
+    <div>
+      <div class="fw-bold fs-4 text-gray-900"><%= applicationsView.resultsHeader.title %></div>
+
+      <div class="fs-7 text-muted"><%= applicationsView.resultsHeader.subtitle %></div>
+    </div>
+
+    <div class="d-flex align-items-center">
+      <button
+        type="button"
+        class="btn btn-sm btn-light btn-active-light-primary"
+        data-kt-menu-trigger="click"
+        data-kt-menu-placement="bottom-end"
+      >
+        <i class="ki-duotone ki-filter fs-3">
+          <span class="path1"></span>
+          <span class="path2"></span>
+        </i>
+
+        <%= applicationsView.filters.selectedLabel %>
+
+        <i class="ki-duotone ki-down fs-5 ms-1"></i>
+      </button>
+
+      <div
+        class="menu menu-sub menu-sub-dropdown menu-column menu-rounded menu-gray-600 menu-state-bg-light-primary fw-semibold fs-7 w-250px py-3"
+        data-kt-menu="true"
+      >
+        <% applicationsView.filters.options.forEach((option) => { %>
+        <div class="menu-item px-3">
+          <a href="<%= option.url %>" class="menu-link px-3 <%= option.active ? 'active' : '' %>">
+            <span class="menu-title"> <%= option.label %> </span>
+          </a>
+        </div>
+        <% }) %>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────────────────────────────── APPLICATIONS ─────────────────────────────── -->
+
+  <% if (applicationsView.hasApplications) { %>
+  <div class="d-flex flex-column gap-6">
+    <% applicationsView.applications.forEach((application) => { %>
+    <div
+      class="card application-card"
+      data-application-id="<%= application.data.applicationId %>"
+      data-application-status="<%= application.data.status %>"
+    >
+      <div class="card-body p-6 p-lg-8">
+        <!-- ───────────────── APPLICATION HEADER ───────────────── -->
+
+        <div class="d-flex flex-column flex-lg-row justify-content-between gap-6 mb-7">
+          <div class="d-flex align-items-start gap-4">
+            <% if (application.professional) { %>
+            <div class="symbol symbol-60px symbol-circle flex-shrink-0">
+              <% if (application.professional.avatar.photo) { %>
+              <img
+                src="<%= application.professional.avatar.photo %>"
+                alt="<%= application.professional.avatar.alt %>"
+              />
+              <% } else { %>
+              <div class="symbol-label fs-3 fw-bold bg-light-primary text-primary">
+                <%= application.professional.avatar.initials %>
+              </div>
+              <% } %>
+            </div>
+            <% } %>
+
+            <div>
+              <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                <span class="fw-bold fs-3 text-gray-900">
+                  <%= application.professional ? application.professional.name : "Professional" %>
+                </span>
+
+                <% application.badges.forEach((badge) => { %>
+                <span class="badge <%= badge.badgeClass %>"> <%= badge.label %> </span>
+                <% }) %>
+              </div>
+
+              <% if (application.professionalMeta.length > 0) { %>
+              <div class="d-flex flex-wrap gap-4 fs-7 text-muted">
+                <% application.professionalMeta.forEach((item) => { %>
+                <span> <%= item.value %> </span>
+                <% }) %>
+              </div>
+              <% } %>
+            </div>
+          </div>
+
+          <% if (application.shift) { %>
+          <div class="text-lg-end">
+            <div class="fw-bold text-gray-900 mb-1"><%= application.shift.heading %></div>
+
+            <% if ( application.shift.referenceCode || application.shift.branch?.name ) { %>
+            <div class="fs-7 text-muted mb-2">
+              <% if (application.shift.referenceCode) { %> <%= application.shift.referenceCode %> <%
+              } %> <% if ( application.shift.referenceCode && application.shift.branch?.name ) { %>
+              · <% } %> <% if (application.shift.branch?.name) { %> <%=
+              application.shift.branch.name %> <% } %>
+            </div>
+            <% } %> <% if (application.shift.detailsUrl) { %>
+            <a href="<%= application.shift.detailsUrl %>" class="btn btn-sm btn-light-primary">
+              View Shift
+            </a>
+            <% } %>
+          </div>
+          <% } %>
+        </div>
+
+        <!-- ───────────────── REPLACEMENT CONTEXT ───────────────── -->
+
+        <% if (application.replacement.visible) { %>
+        <div
+          class="notice d-flex rounded border border-dashed p-5 mb-7 <%= application.replacement.noticeClass %>"
+        >
+          <i
+            class="ki-duotone <%= application.replacement.icon %> fs-2x me-4 <%= application.replacement.iconClass %>"
+          >
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+          </i>
+
+          <div class="flex-grow-1">
+            <div class="fw-bold text-gray-900 mb-1"><%= application.replacement.title %></div>
+
+            <div class="fs-7 text-muted"><%= application.replacement.subtitle %></div>
+
+            <% if (application.replacement.details.length > 0) { %>
+            <div class="row g-4 mt-2">
+              <% application.replacement.details.forEach((detail) => { %>
+              <div class="col-sm-6 col-xl-4">
+                <div class="fs-8 text-muted"><%= detail.label %></div>
+
+                <div class="fw-semibold text-gray-800 fs-7"><%= detail.value %></div>
+              </div>
+              <% }) %>
+            </div>
+            <% } %>
+          </div>
+        </div>
+        <% } %>
+
+        <!-- ───────────────── LIVE PROFESSIONAL INFORMATION ───────────────── -->
+
+        <% if ( application.professional && application.professional.metrics.length > 0 ) { %>
+        <div class="row g-5 mb-7">
+          <% application.professional.metrics.forEach((metric) => { %>
+          <div class="col-sm-6 col-xl-3">
+            <div class="border rounded p-4 h-100">
+              <div class="fs-8 text-muted text-uppercase fw-semibold mb-1"><%= metric.label %></div>
+
+              <div class="fw-bold text-gray-900">
+                <% if (metric.icon) { %>
+                <i class="ki-duotone <%= metric.icon %> fs-6 text-warning me-1"></i>
+                <% } %> <%= metric.value %>
+              </div>
+            </div>
+          </div>
+          <% }) %>
+        </div>
+        <% } %>
+
+        <!-- ───────────────── PROFESSIONAL STATUS BADGES ───────────────── -->
+
+        <% if ( application.professional && application.professional.statusBadges.length > 0 ) { %>
+        <div class="d-flex flex-wrap gap-2 mb-7">
+          <% application.professional.statusBadges.forEach((badge) => { %>
+          <span class="badge <%= badge.badgeClass %>"> <%= badge.label %> </span>
+          <% }) %>
+        </div>
+        <% } %>
+
+        <!-- ───────────────── HISTORICAL MATCH SNAPSHOT ───────────────── -->
+
+        <% if (application.matchSnapshot.visible) { %>
+        <div class="border border-dashed rounded p-5 mb-7">
+          <div class="d-flex align-items-center justify-content-between flex-wrap gap-3 mb-4">
+            <div>
+              <div class="fw-bold text-gray-900"><%= application.matchSnapshot.title %></div>
+
+              <div class="fs-8 text-muted"><%= application.matchSnapshot.description %></div>
+            </div>
+
+            <span class="badge <%= application.matchSnapshot.badge.badgeClass %>">
+              <%= application.matchSnapshot.badge.label %>
+            </span>
+          </div>
+
+          <% if (application.matchSnapshot.fields.length > 0) { %>
+          <div class="row g-4">
+            <% application.matchSnapshot.fields.forEach((field) => { %>
+            <div class="col-sm-6 col-xl-3">
+              <div class="fs-8 text-muted"><%= field.label %></div>
+
+              <div class="fw-semibold text-gray-800"><%= field.value %></div>
+            </div>
+            <% }) %>
+          </div>
+          <% } %>
+        </div>
+        <% } %>
+
+        <!-- ───────────────── PROFESSIONAL NOTE ───────────────── -->
+
+        <% if (application.professionalNote.visible) { %>
+        <div class="bg-light rounded p-5 mb-7">
+          <div class="fw-semibold text-gray-700 fs-7 mb-2">
+            <%= application.professionalNote.title %>
+          </div>
+
+          <div class="text-gray-800 fs-7"><%= application.professionalNote.value %></div>
+        </div>
+        <% } %>
+
+        <!-- ───────────────── ACCEPTED ASSIGNMENT ───────────────── -->
+
+        <% if (application.accepted.visible) { %>
+        <div
+          class="notice d-flex rounded border border-dashed p-5 mb-7 <%= application.accepted.noticeClass %>"
+        >
+          <i
+            class="ki-duotone <%= application.accepted.icon %> fs-2x me-4 <%= application.accepted.iconClass %>"
+          >
+            <span class="path1"></span>
+            <span class="path2"></span>
+          </i>
+
+          <div class="flex-grow-1">
+            <div class="fw-bold text-gray-900 mb-1"><%= application.accepted.title %></div>
+
+            <div class="fs-7 text-muted mb-3"><%= application.accepted.subtitle %></div>
+
+            <% if (application.accepted.details.length > 0) { %>
+            <div class="d-flex flex-wrap gap-4 fs-7">
+              <% application.accepted.details.forEach((detail) => { %>
+              <span>
+                <span class="text-muted"> <%= detail.label %>: </span>
+
+                <span class="fw-semibold text-gray-800"> <%= detail.value %> </span>
+              </span>
+              <% }) %>
+            </div>
+            <% } %>
+          </div>
+        </div>
+        <% } %>
+
+        <!-- ───────────────── EMPLOYER REVIEW ───────────────── -->
+
+        <% if (application.reviewDetails.visible) { %>
+        <div class="border-top pt-5 mb-5">
+          <div class="fw-bold text-gray-900 mb-4"><%= application.reviewDetails.title %></div>
+
+          <div class="row g-4">
+            <% application.reviewDetails.items.forEach((item) => { %>
+            <div class="col-md-6">
+              <div class="fs-8 text-muted mb-1"><%= item.label %></div>
+
+              <div class="fs-7 text-gray-800"><%= item.value %></div>
+            </div>
+            <% }) %>
+          </div>
+        </div>
+        <% } %>
+
+        <!-- ───────────────── APPLICATION ACTIONS ───────────────── -->
+
+        <div
+          class="d-flex flex-column flex-sm-row align-items-sm-center justify-content-between gap-4 border-top pt-5"
+        >
+          <div class="fs-8 text-muted font-monospace"><%= application.footerReference %></div>
+
+          <% if ( application.actions.canManage && application.actions.hasActions ) { %>
+          <div class="d-flex flex-wrap gap-2">
+            <% application.actions.items.forEach((action) => { %>
+            <button
+              type="button"
+              class="btn btn-sm <%= action.buttonClass %> js-application-action-trigger"
+              data-bs-toggle="modal"
+              data-bs-target="#<%= applicationsView.actionModal.id %>"
+              data-action-config="<%= JSON.stringify(action) %>"
+            >
+              <% if (action.icon) { %>
+              <i class="ki-duotone <%= action.icon %> fs-5">
+                <span class="path1"></span>
+                <span class="path2"></span>
+                <span class="path3"></span>
+              </i>
+              <% } %> <%= action.label %>
+            </button>
+            <% }) %>
+          </div>
+          <% } else if ( application.actions.reviewable && application.actions.readOnly ) { %>
+          <span class="badge badge-light-secondary"> Read-only </span>
+          <% } %>
+        </div>
+      </div>
+    </div>
+    <% }) %>
+  </div>
+  <% } else { %>
+  <!-- ─────────────────────────────── EMPTY STATE ─────────────────────────────── -->
+
+  <div class="card">
+    <div class="card-body py-15 text-center">
+      <div class="mb-5">
+        <i class="ki-duotone <%= applicationsView.emptyState.icon %> fs-5x text-gray-400">
+          <span class="path1"></span>
+          <span class="path2"></span>
+          <span class="path3"></span>
+          <span class="path4"></span>
+        </i>
+      </div>
+
+      <h3 class="fw-bold text-gray-900 mb-2"><%= applicationsView.emptyState.title %></h3>
+
+      <div class="text-muted fs-6 mb-6"><%= applicationsView.emptyState.message %></div>
+
+      <% if (applicationsView.emptyState.action.visible) { %>
+      <a
+        href="<%= applicationsView.emptyState.action.url %>"
+        class="btn <%= applicationsView.emptyState.action.buttonClass %>"
+      >
+        <%= applicationsView.emptyState.action.label %>
+      </a>
+      <% } %>
+    </div>
+  </div>
+  <% } %>
+
+  <!-- ─────────────────────────────── PAGINATION ─────────────────────────────── -->
+
+  <% if (applicationsView.pagination.hasPagination) { %>
+  <div
+    class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-4 mt-8"
+  >
+    <div class="fs-7 text-muted"><%= applicationsView.pagination.pageText %></div>
+
+    <div class="d-flex gap-2">
+      <% if (applicationsView.pagination.previous.enabled) { %>
+      <a href="<%= applicationsView.pagination.previous.url %>" class="btn btn-sm btn-light">
+        <%= applicationsView.pagination.previous.label %>
+      </a>
+      <% } else { %>
+      <button type="button" class="btn btn-sm btn-light" disabled>
+        <%= applicationsView.pagination.previous.label %>
+      </button>
+      <% } %> <% if (applicationsView.pagination.next.enabled) { %>
+      <a href="<%= applicationsView.pagination.next.url %>" class="btn btn-sm btn-light">
+        <%= applicationsView.pagination.next.label %>
+      </a>
+      <% } else { %>
+      <button type="button" class="btn btn-sm btn-light" disabled>
+        <%= applicationsView.pagination.next.label %>
+      </button>
+      <% } %>
+    </div>
+  </div>
+  <% } %>
+</div>
+
+<!-- ─────────────────────────────── APPLICATION ACTION MODAL ─────────────────────────────── -->
+
+<% if (applicationsView.actionModal.enabled) { %>
+<div
+  class="modal fade"
+  id="<%= applicationsView.actionModal.id %>"
+  tabindex="-1"
+  aria-labelledby="<%= applicationsView.actionModal.titleId %>"
+  aria-hidden="true"
+>
+  <div class="modal-dialog modal-dialog-centered mw-600px">
+    <div class="modal-content">
+      <form id="<%= applicationsView.actionModal.formId %>" novalidate>
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+        <input type="hidden" id="<%= applicationsView.actionModal.actionTypeInputId %>" value="" />
+
+        <input type="hidden" id="<%= applicationsView.actionModal.actionUrlInputId %>" value="" />
+
+        <div class="modal-header">
+          <div>
+            <h2 class="fw-bold text-gray-900 mb-1" id="<%= applicationsView.actionModal.titleId %>">
+              <%= applicationsView.actionModal.defaultTitle %>
+            </h2>
+
+            <div class="fs-7 text-muted" id="<%= applicationsView.actionModal.contextId %>"></div>
+          </div>
+
+          <button
+            type="button"
+            class="btn btn-icon btn-sm btn-active-light-primary"
+            data-bs-dismiss="modal"
+            aria-label="Close"
+          >
+            <i class="ki-duotone ki-cross fs-2">
+              <span class="path1"></span>
+              <span class="path2"></span>
+            </i>
+          </button>
+        </div>
+
+        <div class="modal-body py-8 px-lg-10">
+          <div
+            class="alert alert-danger d-none"
+            id="<%= applicationsView.actionModal.alertId %>"
+            role="alert"
+          ></div>
+
+          <div
+            class="notice rounded border border-dashed p-5 mb-7 d-none"
+            id="<%= applicationsView.actionModal.noticeId %>"
+          ></div>
+
+          <div id="<%= applicationsView.actionModal.fieldsContainerId %>"></div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">
+            <%= applicationsView.actionModal.cancelLabel %>
+          </button>
+
+          <button
+            type="submit"
+            class="btn btn-primary"
+            id="<%= applicationsView.actionModal.submitButtonId %>"
+          >
+            <span class="indicator-label">
+              <%= applicationsView.actionModal.defaultSubmitLabel %>
+            </span>
+
+            <span class="indicator-progress">
+              <%= applicationsView.actionModal.loadingLabel %>
+
+              <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+            </span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+<% } %>

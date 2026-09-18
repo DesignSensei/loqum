@@ -28,8 +28,10 @@ const WalletWithdrawalService = require("./walletWithdrawalService");
  *
  * Before POST /transfer, Loqum persists a deterministic
  * paystackTransferReference and marks the withdrawal as provider-processing.
- * Once that boundary has been crossed, every later attempt is reconciliation-
- * only. An uncertain HTTP result must never cause another blind Transfer POST.
+ * Once that boundary has been crossed, every later attempt must reconcile the
+ * persisted deterministic reference first. A provider-not-found result may
+ * recover by resubmitting that SAME reference; a new Transfer reference must
+ * never be generated for the same withdrawal.
  *
  * External Paystack requests are deliberately kept outside MongoDB transaction
  * boundaries because a database rollback cannot roll back a provider Transfer.
@@ -51,7 +53,7 @@ class PaystackTransferService {
   }
 
   static cleanCurrency(value) {
-    const currency = String(value || "NGN")
+    const currency = String(value ?? "")
       .trim()
       .toUpperCase();
 
@@ -63,7 +65,7 @@ class PaystackTransferService {
   }
 
   static cleanCountryCode(value) {
-    const countryCode = String(value || "NG")
+    const countryCode = String(value ?? "")
       .trim()
       .toUpperCase();
 
@@ -489,23 +491,55 @@ class PaystackTransferService {
 
   /* ─────────────────────────────── WITHDRAWAL CONTEXT ─────────────────────────────── */
 
+  static getWithdrawalOwnerContext(withdrawalTransaction) {
+    const metadata = withdrawalTransaction?.metadata || {};
+
+    const ownerType =
+      PaystackTransferService.cleanString(metadata.ownerType)?.toLowerCase() || null;
+
+    const employerProfileId = PaystackTransferService.cleanString(metadata.employerProfileId);
+
+    const professionalProfileId = PaystackTransferService.cleanString(
+      metadata.professionalProfileId
+    );
+
+    if (!["employer", "professional"].includes(ownerType)) {
+      throw new Error("Withdrawal Transaction must belong to an employer or professional.");
+    }
+
+    if (employerProfileId && professionalProfileId) {
+      throw new Error(
+        "Withdrawal Transaction cannot belong to both an employer and a professional."
+      );
+    }
+
+    if (ownerType === "employer" && (!employerProfileId || professionalProfileId)) {
+      throw new Error("Employer withdrawal contains an invalid owner identity.");
+    }
+
+    if (ownerType === "professional" && (!professionalProfileId || employerProfileId)) {
+      throw new Error("Professional withdrawal contains an invalid owner identity.");
+    }
+
+    return {
+      ownerType,
+      employerProfileId,
+      professionalProfileId,
+    };
+  }
+
   static buildTransferReason(withdrawalTransaction) {
-    const ownerType = PaystackTransferService.cleanString(
-      withdrawalTransaction.metadata?.ownerType
-    )?.toLowerCase();
+    const { ownerType } = PaystackTransferService.getWithdrawalOwnerContext(withdrawalTransaction);
 
-    if (ownerType === "professional") {
-      return "Loqum professional wallet withdrawal";
-    }
-
-    if (ownerType === "employer") {
-      return "Loqum employer wallet withdrawal";
-    }
-
-    return "Loqum wallet withdrawal";
+    return ownerType === "professional"
+      ? "Loqum professional wallet withdrawal"
+      : "Loqum employer wallet withdrawal";
   }
 
   static buildTransferMetadata({ withdrawalTransaction, bankAccount, transferReference }) {
+    const { ownerType, employerProfileId, professionalProfileId } =
+      PaystackTransferService.getWithdrawalOwnerContext(withdrawalTransaction);
+
     return {
       source: "loqum_withdrawal_transfer",
 
@@ -515,11 +549,11 @@ class PaystackTransferService {
 
       paystackTransferReference: transferReference,
 
-      ownerType: withdrawalTransaction.metadata?.ownerType || null,
+      ownerType,
 
-      employerProfileId: withdrawalTransaction.metadata?.employerProfileId || null,
+      employerProfileId: employerProfileId || null,
 
-      professionalProfileId: withdrawalTransaction.metadata?.professionalProfileId || null,
+      professionalProfileId: professionalProfileId || null,
 
       bankAccountId: String(bankAccount._id),
     };
@@ -681,6 +715,233 @@ class PaystackTransferService {
 
   /* ─────────────────────────────── RECONCILIATION ─────────────────────────────── */
 
+  static async submitPreparedWithdrawalTransfer({
+    withdrawalTransaction,
+    transferReference,
+    bankAccount = null,
+    recipientResult = null,
+    reason = null,
+    metadata = {},
+    currentTime = new Date(),
+    recoverySubmission = false,
+  }) {
+    const normalizedCurrentTime = PaystackTransferService.normalizeCurrentTime(currentTime);
+
+    if (!withdrawalTransaction?._id) {
+      throw new Error("Withdrawal Transaction is required for Paystack Transfer submission.");
+    }
+
+    if (withdrawalTransaction.status !== "processing") {
+      throw new Error(
+        `Paystack Transfer can only be submitted while withdrawal is processing, not ${withdrawalTransaction.status}.`
+      );
+    }
+
+    const persistedTransferReference = PaystackTransferService.cleanString(
+      withdrawalTransaction.paystackTransferReference
+    );
+
+    const normalizedTransferReference = PaystackTransferService.cleanString(transferReference);
+
+    if (!persistedTransferReference) {
+      throw new Error("Withdrawal Transaction has no persisted Paystack Transfer reference.");
+    }
+
+    if (normalizedTransferReference && normalizedTransferReference !== persistedTransferReference) {
+      throw new Error(
+        "Paystack Transfer submission reference conflicts with the persisted withdrawal reference."
+      );
+    }
+
+    const authoritativeTransferReference = persistedTransferReference;
+
+    const resolvedBankAccount =
+      bankAccount ||
+      (await PaystackTransferService.getBankAccount(withdrawalTransaction.bankAccount));
+
+    const authoritativeMetadata = {
+      ...metadata,
+
+      ...PaystackTransferService.buildTransferMetadata({
+        withdrawalTransaction,
+        bankAccount: resolvedBankAccount,
+        transferReference: authoritativeTransferReference,
+      }),
+
+      recoverySubmission: Boolean(recoverySubmission),
+    };
+
+    const resolvedRecipientResult =
+      recipientResult ||
+      (await PaystackTransferService.ensureTransferRecipient({
+        bankAccount: resolvedBankAccount,
+
+        countryCode: withdrawalTransaction.countryCode,
+
+        currency: withdrawalTransaction.currency,
+
+        metadata: {
+          source: "loqum_withdrawal_recipient",
+
+          ownerType: withdrawalTransaction.metadata?.ownerType || null,
+
+          employerProfileId: withdrawalTransaction.metadata?.employerProfileId || null,
+
+          professionalProfileId: withdrawalTransaction.metadata?.professionalProfileId || null,
+
+          bankAccountId: String(resolvedBankAccount._id),
+        },
+      }));
+
+    const transferReason =
+      PaystackTransferService.cleanString(withdrawalTransaction.metadata?.paystackTransferReason) ||
+      PaystackTransferService.cleanString(reason) ||
+      PaystackTransferService.buildTransferReason(withdrawalTransaction);
+
+    let transfer;
+
+    try {
+      transfer = await PaystackService.initiateTransfer({
+        source: "balance",
+
+        amount: withdrawalTransaction.amount,
+
+        recipient: resolvedRecipientResult.recipientCode,
+
+        reference: authoritativeTransferReference,
+
+        reason: transferReason,
+
+        currency: PaystackTransferService.cleanCurrency(withdrawalTransaction.currency),
+      });
+    } catch (error) {
+      /*
+       * On the original submission, a conclusive provider
+       * rejection can safely fail/reverse the withdrawal.
+       *
+       * During SAME-REFERENCE recovery, however, a provider
+       * rejection must not automatically reverse funds.
+       * The original request may have reached Paystack even
+       * though verification had not exposed it yet.
+       */
+      if (
+        recoverySubmission &&
+        PaystackTransferService.isDefinitiveTransferSubmissionFailure(error)
+      ) {
+        throw new Error(
+          "Paystack rejected the same-reference recovery submission. The withdrawal remains reserved and requires another reference reconciliation before any reversal."
+        );
+      }
+
+      if (PaystackTransferService.isDefinitiveTransferSubmissionFailure(error)) {
+        const failedOutcome = {
+          status: "failed",
+
+          rawStatus: "provider_rejected",
+
+          reference: authoritativeTransferReference,
+
+          transferCode: null,
+
+          recipientCode: resolvedRecipientResult.recipientCode,
+
+          amount: Number(withdrawalTransaction.amount),
+
+          currency: PaystackTransferService.cleanCurrency(withdrawalTransaction.currency),
+
+          providerTransferId: null,
+
+          raw: error.providerResponse || null,
+        };
+
+        const failed = await PaystackTransferService.persistTransferOutcome({
+          withdrawalTransactionId: withdrawalTransaction._id,
+
+          outcome: failedOutcome,
+
+          recipientCode: resolvedRecipientResult.recipientCode,
+
+          recipientCreated: resolvedRecipientResult.created,
+
+          metadata: {
+            ...authoritativeMetadata,
+
+            providerSubmissionRejected: true,
+
+            providerSubmissionError: error.message,
+          },
+
+          currentTime: normalizedCurrentTime,
+        });
+
+        return {
+          ...failed,
+
+          definitiveProviderFailure: true,
+
+          submitted: false,
+
+          recoverySubmission: Boolean(recoverySubmission),
+        };
+      }
+
+      throw new Error(
+        recoverySubmission
+          ? "Paystack same-reference recovery submission could not be conclusively confirmed. The wallet reservation remains intact and the deterministic Transfer reference must be reconciled again."
+          : "Paystack withdrawal Transfer submission could not be conclusively confirmed. The wallet reservation remains intact, and the next attempt must verify the deterministic Transfer reference before any new submission."
+      );
+    }
+
+    const outcome = PaystackTransferService.normalizeTransferOutcome(transfer);
+
+    if (outcome.status === "ambiguous") {
+      throw new Error(
+        recoverySubmission
+          ? "Paystack same-reference recovery returned an ambiguous Transfer response. The wallet reservation remains intact and the deterministic reference must be reconciled again."
+          : "Paystack withdrawal Transfer returned an ambiguous response. The wallet reservation remains intact until the deterministic Transfer reference is reconciled."
+      );
+    }
+
+    PaystackTransferService.assertTransferOutcomeMatches({
+      withdrawalTransaction,
+      outcome,
+    });
+
+    const persisted = await PaystackTransferService.persistTransferOutcome({
+      withdrawalTransactionId: withdrawalTransaction._id,
+
+      outcome,
+
+      recipientCode: resolvedRecipientResult.recipientCode,
+
+      recipientCreated: resolvedRecipientResult.created,
+
+      metadata: authoritativeMetadata,
+
+      currentTime: normalizedCurrentTime,
+    });
+
+    return {
+      ...persisted,
+
+      bankAccount: resolvedRecipientResult.bankAccount || resolvedBankAccount,
+
+      recipientCode: resolvedRecipientResult.recipientCode,
+
+      transfer,
+
+      transferReference: authoritativeTransferReference,
+
+      paystackTransferCode: outcome.transferCode,
+
+      requiresOtp: outcome.status === "otp",
+
+      submitted: ["pending", "otp", "success"].includes(outcome.status),
+
+      recoverySubmission: Boolean(recoverySubmission),
+    };
+  }
+
   static async reconcileWithdrawalTransfer(
     { withdrawalTransactionId, currentTime = new Date() },
     options = {}
@@ -736,9 +997,50 @@ class PaystackTransferService {
       transfer = await PaystackService.verifyTransfer(referenceResult.transferReference);
     } catch (error) {
       if (Number(error?.providerStatusCode) === 404) {
-        throw new Error(
-          "The withdrawal Transfer is not yet visible to Paystack verification. Loqum will not submit another Transfer while the existing provider attempt remains unresolved."
+        /*
+         * The local processing boundary may have committed
+         * before this process actually reached POST /transfer.
+         *
+         * Recover with the SAME deterministic reference.
+         * Never generate another reference for this withdrawal.
+         */
+        const bankAccount = await PaystackTransferService.getBankAccount(
+          withdrawalTransaction.bankAccount
         );
+
+        const recoveryResult = await PaystackTransferService.submitPreparedWithdrawalTransfer({
+          withdrawalTransaction,
+
+          transferReference: referenceResult.transferReference,
+
+          bankAccount,
+
+          reason: withdrawalTransaction.metadata?.paystackTransferReason || null,
+
+          metadata: {
+            reconciledBy: "paystackTransferService",
+
+            reconciliationReference: referenceResult.transferReference,
+
+            recoveryReason: "provider_reference_not_found",
+
+            sameReferenceRecovery: true,
+          },
+
+          currentTime: normalizedCurrentTime,
+
+          recoverySubmission: true,
+        });
+
+        return {
+          ...recoveryResult,
+
+          reconciled: true,
+
+          recoverySubmitted: true,
+
+          sameReferenceRecovery: true,
+        };
       }
 
       throw new Error(
@@ -816,6 +1118,13 @@ class PaystackTransferService {
       );
     }
 
+    /*
+     * Once a withdrawal is already processing, never start
+     * another ordinary submission path.
+     *
+     * Reconciliation checks the same deterministic reference
+     * and owns same-reference recovery when required.
+     */
     if (withdrawalTransaction.status === "processing") {
       return PaystackTransferService.reconcileWithdrawalTransfer(
         {
@@ -839,16 +1148,43 @@ class PaystackTransferService {
 
     const transferReference = referenceResult.transferReference;
 
+    /*
+     * Persist the exact reason intended for this provider
+     * attempt so crash recovery can reconstruct the same
+     * submission without inventing different provider data.
+     */
+    const transferReason =
+      PaystackTransferService.cleanString(reason) ||
+      PaystackTransferService.buildTransferReason(withdrawalTransaction);
+
+    /*
+     * Caller metadata is applied first.
+     *
+     * Authoritative withdrawal identity is applied afterwards
+     * so callers cannot overwrite owner, bank-account,
+     * transaction or deterministic-reference metadata.
+     */
     const transferMetadata = {
+      ...metadata,
+
       ...PaystackTransferService.buildTransferMetadata({
         withdrawalTransaction,
         bankAccount,
         transferReference,
       }),
 
-      ...metadata,
+      paystackTransferReason: transferReason,
     };
 
+    const ownerContext = PaystackTransferService.getWithdrawalOwnerContext(withdrawalTransaction);
+
+    /*
+     * Resolve/create the provider recipient before crossing
+     * the provider-processing boundary.
+     *
+     * The recipient carries the authoritative withdrawal owner
+     * identity used by downstream Paystack transfer webhooks.
+     */
     const recipientResult = await PaystackTransferService.ensureTransferRecipient({
       bankAccount,
 
@@ -859,21 +1195,27 @@ class PaystackTransferService {
       metadata: {
         source: "loqum_withdrawal_recipient",
 
-        ownerType: withdrawalTransaction.metadata?.ownerType || null,
+        ownerType: ownerContext.ownerType,
 
-        employerProfileId: withdrawalTransaction.metadata?.employerProfileId || null,
+        employerProfileId: ownerContext.employerProfileId || null,
 
-        professionalProfileId: withdrawalTransaction.metadata?.professionalProfileId || null,
+        professionalProfileId: ownerContext.professionalProfileId || null,
 
         bankAccountId: String(bankAccount._id),
       },
     });
 
     /*
-     * Commit the local provider-boundary state BEFORE POST /transfer.
+     * Commit the local provider boundary BEFORE POST /transfer.
      *
-     * From here onward, a timeout or ambiguous exception is reconciliation-
-     * only. Never send another blind Transfer using a new reference.
+     * After this succeeds, the withdrawal is processing and
+     * every later retry must reconcile the same deterministic
+     * reference.
+     *
+     * If the process crashes immediately after this point and
+     * before Paystack receives POST /transfer,
+     * reconcileWithdrawalTransfer() may perform controlled
+     * SAME-reference recovery.
      */
     const processingResult = await WalletService.markPendingExternalDebitProcessing({
       transactionId: withdrawalTransaction._id,
@@ -886,127 +1228,39 @@ class PaystackTransferService {
         paystackRecipientCode: recipientResult.recipientCode,
 
         paystackRecipientCreated: Boolean(recipientResult.created),
+
+        paystackTransferReason: transferReason,
       },
     });
 
     withdrawalTransaction = processingResult.transaction;
 
-    let transfer;
-
-    try {
-      transfer = await PaystackService.initiateTransfer({
-        source: "balance",
-
-        amount: withdrawalTransaction.amount,
-
-        recipient: recipientResult.recipientCode,
-
-        reference: transferReference,
-
-        reason: reason || PaystackTransferService.buildTransferReason(withdrawalTransaction),
-
-        currency: PaystackTransferService.cleanCurrency(withdrawalTransaction.currency),
-      });
-    } catch (error) {
-      if (PaystackTransferService.isDefinitiveTransferSubmissionFailure(error)) {
-        const failedOutcome = {
-          status: "failed",
-
-          rawStatus: "provider_rejected",
-
-          reference: transferReference,
-
-          transferCode: null,
-
-          recipientCode: recipientResult.recipientCode,
-
-          amount: Number(withdrawalTransaction.amount),
-
-          currency: PaystackTransferService.cleanCurrency(withdrawalTransaction.currency),
-
-          providerTransferId: null,
-
-          raw: error.providerResponse || null,
-        };
-
-        const failed = await PaystackTransferService.persistTransferOutcome({
-          withdrawalTransactionId: withdrawalTransaction._id,
-
-          outcome: failedOutcome,
-
-          recipientCode: recipientResult.recipientCode,
-
-          recipientCreated: recipientResult.created,
-
-          metadata: {
-            ...transferMetadata,
-
-            providerSubmissionRejected: true,
-
-            providerSubmissionError: error.message,
-          },
-
-          currentTime: normalizedCurrentTime,
-        });
-
-        return {
-          ...failed,
-
-          definitiveProviderFailure: true,
-
-          submitted: false,
-        };
-      }
-
-      throw new Error(
-        "Paystack withdrawal Transfer submission could not be conclusively confirmed. The wallet reservation remains intact, and the next attempt must verify the deterministic Transfer reference before any new submission."
-      );
-    }
-
-    const outcome = PaystackTransferService.normalizeTransferOutcome(transfer);
-
-    if (outcome.status === "ambiguous") {
-      throw new Error(
-        "Paystack withdrawal Transfer returned an ambiguous response. The wallet reservation remains intact until the deterministic Transfer reference is reconciled."
-      );
-    }
-
-    PaystackTransferService.assertTransferOutcomeMatches({
+    /*
+     * The actual provider POST is centralized in
+     * submitPreparedWithdrawalTransfer().
+     *
+     * That same helper is also used by 404 reconciliation
+     * recovery, guaranteeing that recovery reuses this exact
+     * deterministic reference instead of generating another
+     * transfer identity.
+     */
+    return PaystackTransferService.submitPreparedWithdrawalTransfer({
       withdrawalTransaction,
-      outcome,
-    });
 
-    const persisted = await PaystackTransferService.persistTransferOutcome({
-      withdrawalTransactionId: withdrawalTransaction._id,
+      transferReference,
 
-      outcome,
+      bankAccount: recipientResult.bankAccount || bankAccount,
 
-      recipientCode: recipientResult.recipientCode,
+      recipientResult,
 
-      recipientCreated: recipientResult.created,
+      reason: transferReason,
 
       metadata: transferMetadata,
 
       currentTime: normalizedCurrentTime,
+
+      recoverySubmission: false,
     });
-
-    return {
-      ...persisted,
-
-      bankAccount: recipientResult.bankAccount,
-
-      recipientCode: recipientResult.recipientCode,
-
-      transfer,
-
-      transferReference,
-
-      paystackTransferCode: outcome.transferCode,
-
-      requiresOtp: outcome.status === "otp",
-
-      submitted: ["pending", "otp", "success"].includes(outcome.status),
-    };
   }
 
   /* ─────────────────────────────── OTP FINALIZATION ─────────────────────────────── */

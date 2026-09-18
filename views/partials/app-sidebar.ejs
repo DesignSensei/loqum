@@ -105,6 +105,23 @@
     </div>
     <!--end::My Shifts-->
 
+    <!--begin::Cases-->
+    <a
+      href="/professional/cases"
+      class="loqum-sidebar-link"
+      data-bs-toggle="tooltip"
+      data-bs-placement="right"
+      title="Cases"
+    >
+      <i class="ki-duotone ki-notepad-edit fs-1">
+        <span class="path1"></span>
+        <span class="path2"></span>
+        <span class="path3"></span>
+        <span class="path4"></span>
+      </i>
+    </a>
+    <!--end::Cases-->
+
     <!--begin::Billing-->
     <a
       href="/professional/billing"
@@ -228,6 +245,23 @@
       <!--end::Menu sub-->
     </div>
     <!--end::Manage Shifts-->
+
+    <!--begin::Cases-->
+    <a
+      href="/employer/cases"
+      class="loqum-sidebar-link"
+      data-bs-toggle="tooltip"
+      data-bs-placement="right"
+      title="Cases"
+    >
+      <i class="ki-duotone ki-notepad-edit fs-1">
+        <span class="path1"></span>
+        <span class="path2"></span>
+        <span class="path3"></span>
+        <span class="path4"></span>
+      </i>
+    </a>
+    <!--end::Cases-->
 
     <!--begin::Billing-->
     <a
@@ -378,9 +412,64 @@
             <span class="menu-title"> All Shifts </span>
           </a>
         </div>
+      </div>
+      <!--end::Menu sub-->
+    </div>
+    <!--end::Shift Management-->
 
+    <!--begin::Case Management-->
+    <div
+      class="menu menu-item loqum-sidebar-menu-item"
+      data-kt-menu-trigger="{default: 'click', lg: 'hover'}"
+      data-kt-menu-placement="right-start"
+      data-kt-menu-attach="parent"
+    >
+      <!--begin::Menu link-->
+      <span
+        class="menu-link menu-center loqum-sidebar-link"
+        data-bs-toggle="tooltip"
+        data-bs-placement="right"
+        title="Cases"
+      >
+        <span class="menu-icon me-0">
+          <i class="ki-duotone ki-notepad-edit fs-2x">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+            <span class="path4"></span>
+          </i>
+        </span>
+      </span>
+      <!--end::Menu link-->
+
+      <!--begin::Menu sub-->
+      <div
+        class="menu-sub menu-sub-dropdown menu-sub-indention px-2 py-4 w-175px"
+        data-kt-menu="true"
+      >
         <div class="menu-item">
-          <a class="menu-link" href="/admin/disputes">
+          <div class="menu-content">
+            <span class="menu-section fs-5 fw-bolder ps-1 py-1"> Cases </span>
+          </div>
+        </div>
+
+        <div class="separator my-2"></div>
+
+        <!--begin::Claims-->
+        <div class="menu-item">
+          <a class="menu-link" href="/admin/cases?type=claims">
+            <span class="menu-bullet">
+              <span class="bullet bullet-dot"></span>
+            </span>
+
+            <span class="menu-title"> Claims </span>
+          </a>
+        </div>
+        <!--end::Claims-->
+
+        <!--begin::Disputes-->
+        <div class="menu-item">
+          <a class="menu-link" href="/admin/cases?type=disputes">
             <span class="menu-bullet">
               <span class="bullet bullet-dot"></span>
             </span>
@@ -388,10 +477,11 @@
             <span class="menu-title"> Disputes </span>
           </a>
         </div>
+        <!--end::Disputes-->
       </div>
       <!--end::Menu sub-->
     </div>
-    <!--end::Shift Management-->
+    <!--end::Case Management-->
 
     <!--begin::Finance-->
     <a

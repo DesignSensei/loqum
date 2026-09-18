@@ -2,6 +2,7 @@
 
 const ShiftOccurrenceClaimService = require("../services/shiftOccurrenceClaimService");
 const ShiftOccurrenceDisputeService = require("../services/shiftOccurrenceDisputeService");
+const ShiftCasePageService = require("../services/shiftCasePageService");
 
 const logger = require("../utils/logger");
 
@@ -103,6 +104,36 @@ function getIdempotencyKey(req) {
   return String(req.get("Idempotency-Key") || req.body?.idempotencyKey || "").trim();
 }
 
+function getClaimChallengedSettlementComponents(claim) {
+  if (!claim || !Array.isArray(claim.issues)) {
+    return [];
+  }
+
+  return [
+    ...new Set(
+      claim.issues.flatMap((issue) =>
+        Array.isArray(issue.challengedSettlementComponents)
+          ? issue.challengedSettlementComponents
+          : []
+      )
+    ),
+  ];
+}
+
+function getDisputeAffectedSettlementComponents(dispute) {
+  if (!dispute || !Array.isArray(dispute.issues)) {
+    return [];
+  }
+
+  return [
+    ...new Set(
+      dispute.issues.flatMap((issue) =>
+        Array.isArray(issue.affectedSettlementComponents) ? issue.affectedSettlementComponents : []
+      )
+    ),
+  ];
+}
+
 /* ─────────────────────────────── CLAIM RESPONSE ─────────────────────────────── */
 
 function buildClaimIssueResponse(issue) {
@@ -115,8 +146,8 @@ function buildClaimIssueResponse(issue) {
 
     type: issue.type,
 
-    affectedSettlementComponents: Array.isArray(issue.affectedSettlementComponents)
-      ? [...issue.affectedSettlementComponents]
+    challengedSettlementComponents: Array.isArray(issue.challengedSettlementComponents)
+      ? [...issue.challengedSettlementComponents]
       : [],
 
     details: issue.details || null,
@@ -138,30 +169,6 @@ function buildClaimIssueResponse(issue) {
     employerCounterPosition: issue.employerCounterPosition || null,
 
     employerEvidence: Array.isArray(issue.employerEvidence) ? [...issue.employerEvidence] : [],
-
-    appealStatus: issue.appealStatus || "not_available",
-
-    appealDeadlineAt: issue.appealDeadlineAt || null,
-
-    appealedAt: issue.appealedAt || null,
-
-    appealedBy: issue.appealedBy ? String(issue.appealedBy) : null,
-
-    appealStatement: issue.appealStatement || null,
-
-    appealEvidence: Array.isArray(issue.appealEvidence) ? [...issue.appealEvidence] : [],
-
-    rebuttalStatus: issue.rebuttalStatus || "not_available",
-
-    rebuttalDeadlineAt: issue.rebuttalDeadlineAt || null,
-
-    rebuttedAt: issue.rebuttedAt || null,
-
-    rebuttedBy: issue.rebuttedBy ? String(issue.rebuttedBy) : null,
-
-    rebuttalStatement: issue.rebuttalStatement || null,
-
-    rebuttalEvidence: Array.isArray(issue.rebuttalEvidence) ? [...issue.rebuttalEvidence] : [],
 
     escalatedAt: issue.escalatedAt || null,
 
@@ -206,6 +213,8 @@ function buildClaimResponse(claim) {
     submittedIssueTypes: Array.isArray(claim.submittedIssueTypes)
       ? [...claim.submittedIssueTypes]
       : [],
+
+    challengedSettlementComponents: getClaimChallengedSettlementComponents(claim),
 
     issues: Array.isArray(claim.issues) ? claim.issues.map(buildClaimIssueResponse) : [],
 
@@ -289,20 +298,6 @@ function buildDisputeIssueResponse(issue) {
   };
 }
 
-function getDisputeAffectedSettlementComponents(dispute) {
-  if (!dispute || !Array.isArray(dispute.issues)) {
-    return [];
-  }
-
-  return [
-    ...new Set(
-      dispute.issues.flatMap((issue) =>
-        Array.isArray(issue.affectedSettlementComponents) ? issue.affectedSettlementComponents : []
-      )
-    ),
-  ];
-}
-
 function buildDisputeResponse(dispute) {
   if (!dispute) {
     return null;
@@ -361,6 +356,8 @@ function buildOccurrenceResponse(occurrence) {
 
     referenceCode: occurrence.referenceCode,
 
+    slotNumber: Number(occurrence.slotNumber || 0),
+
     sequenceNumber: Number(occurrence.sequenceNumber || 0),
 
     occurrenceDate: occurrence.occurrenceDate || null,
@@ -399,22 +396,43 @@ function buildClaimReviewSuccessMessage(result) {
   }
 
   if (decision === "rejected") {
-    if (result?.appealAvailable === true) {
-      return "The claim issue has been rejected. " + "The professional may request a review.";
-    }
-
-    if (result?.rebuttalAvailable === true) {
-      return (
-        "The claim issue has been rejected. " +
-        "The professional may respond to the employer's position."
-      );
-    }
-
-    return "The claim issue has been rejected.";
+    return "The claim issue has been rejected and sent for admin review.";
   }
 
   return "The claim issue has been reviewed.";
 }
+
+/* ─────────────────────────────── CASES PAGE ─────────────────────────────── */
+
+exports.getCases = async (req, res, next) => {
+  try {
+    const casesView = await ShiftCasePageService.getEmployerCasesPageData({
+      businessId: getEmployerProfileId(req),
+      employerContext: req.employerContext || null,
+      type: req.query.type,
+      status: req.query.status,
+      page: req.query.page,
+    });
+
+    setNoStoreHeaders(res);
+
+    return res.render("employer/cases/index", {
+      layout: "layouts/app-layout",
+      title: casesView.pageTitle,
+      breadcrumbs: [
+        { label: "Home", url: "/employer/dashboard" },
+        { label: "Cases", url: null },
+      ],
+      csrfToken: req.csrfToken(),
+      casesView,
+      scripts: '<script src="/js/cases.js"></script>',
+    });
+  } catch (error) {
+    logger.error("Employer cases page error:", error);
+
+    return next(error);
+  }
+};
 
 /* ─────────────────────────────── SUBMIT EMPLOYER DISPUTE ─────────────────────────────── */
 
@@ -494,6 +512,59 @@ exports.submitDispute = async (req, res) => {
   }
 };
 
+/* ─────────────────────────────── WITHDRAW EMPLOYER DISPUTE ─────────────────────────────── */
+
+exports.withdrawDispute = async (req, res) => {
+  try {
+    const result = await ShiftOccurrenceDisputeService.withdrawDispute({
+      disputeId: req.params.disputeId,
+
+      employerProfileId: getEmployerProfileId(req),
+
+      employerUserId: getEmployerUserId(req),
+
+      employerContext: req.employerContext || null,
+
+      reason: req.body.reason,
+
+      currentTime: new Date(),
+    });
+
+    setNoStoreHeaders(res);
+
+    return res.status(200).json({
+      success: true,
+
+      message:
+        result?.idempotent === true
+          ? "This dispute has already been withdrawn."
+          : "The dispute has been withdrawn.",
+
+      withdrawn: result?.withdrawn === true,
+
+      idempotent: result?.idempotent === true,
+
+      professionalClaimStillActive: result?.professionalClaimStillActive === true,
+
+      dispute: buildDisputeResponse(result?.dispute),
+
+      occurrence: buildOccurrenceResponse(result?.occurrence),
+    });
+  } catch (error) {
+    return handleJsonError({
+      res,
+
+      error,
+
+      logContext: "Employer occurrence dispute withdrawal",
+
+      fallbackMessage: "The dispute could not be withdrawn. Please try again.",
+
+      fallbackCode: "OCCURRENCE_DISPUTE_WITHDRAWAL_FAILED",
+    });
+  }
+};
+
 /* ─────────────────────────────── REVIEW CLAIM ISSUE ─────────────────────────────── */
 
 /**
@@ -538,14 +609,6 @@ exports.reviewClaim = async (req, res) => {
       issueResolved: result?.issueResolved === true,
 
       caseResolved: result?.caseResolved === true,
-
-      appealAvailable: result?.appealAvailable === true,
-
-      appealDeadlineAt: result?.appealDeadlineAt || result?.issue?.appealDeadlineAt || null,
-
-      rebuttalAvailable: result?.rebuttalAvailable === true,
-
-      rebuttalDeadlineAt: result?.rebuttalDeadlineAt || result?.issue?.rebuttalDeadlineAt || null,
 
       employerCounterPosition:
         result?.employerCounterPosition || result?.issue?.employerCounterPosition || null,

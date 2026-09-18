@@ -11,7 +11,7 @@ const money = require("../utils/money");
 const FACILITY_TYPES = Object.freeze(["pharmacy", "clinic", "hospital", "laboratory"]);
 
 class AdminPlatformSettingsService {
-  /* ─────────────────────────────── GENERIC HELPERS ─────────────────────────────── */
+  /* ------------------------------- GENERIC HELPERS ------------------------------- */
 
   static isProvided(value) {
     return value !== undefined;
@@ -156,7 +156,7 @@ class AdminPlatformSettingsService {
     return normalizedFacilityType;
   }
 
-  /* ─────────────────────────────── SETTINGS / COUNTRY LOOKUP ─────────────────────────────── */
+  /* ------------------------------- SETTINGS / COUNTRY LOOKUP ------------------------------- */
 
   static async getActivePlatformSettings({ session = null } = {}) {
     const query = PlatformSettings.findOne({
@@ -219,7 +219,7 @@ class AdminPlatformSettingsService {
     return settings;
   }
 
-  /* ─────────────────────────────── PROTECTED SHIFT LIMITS ─────────────────────────────── */
+  /* ------------------------------- PROTECTED SHIFT LIMITS ------------------------------- */
 
   static normalizeProtectedShiftFacilityPolicy(policyInput, facilityType) {
     if (!policyInput || typeof policyInput !== "object" || Array.isArray(policyInput)) {
@@ -293,7 +293,7 @@ class AdminPlatformSettingsService {
     return normalizedLimits;
   }
 
-  /* ─────────────────────────────── COUNTRY MANAGEMENT ─────────────────────────────── */
+  /* ------------------------------- COUNTRY MANAGEMENT ------------------------------- */
 
   static async updateCountryPlatformFee({
     countryCode,
@@ -589,7 +589,7 @@ class AdminPlatformSettingsService {
     };
   }
 
-  /* ─────────────────────────────── SHIFT CANCELLATION POLICY ─────────────────────────────── */
+  /* ------------------------------- SHIFT CANCELLATION POLICY ------------------------------- */
 
   static async updateShiftCancellationPolicy({
     lateCancellationWindowMinutes,
@@ -643,7 +643,7 @@ class AdminPlatformSettingsService {
     };
   }
 
-  /* ─────────────────────────────── ATTENDANCE / OCCURRENCE POLICY ─────────────────────────────── */
+  /* ------------------------------- ATTENDANCE / OCCURRENCE POLICY ------------------------------- */
 
   static async updateAttendancePolicy({
     checkInWindowBeforeMinutes,
@@ -715,25 +715,17 @@ class AdminPlatformSettingsService {
     };
   }
 
-  /* ─────────────────────────────── OCCURRENCE CHALLENGE POLICY ─────────────────────────────── */
+  /* ------------------------------- OCCURRENCE CHALLENGE POLICY ------------------------------- */
 
   static async updateOccurrenceChallengePolicy({
     occurrenceClaimWindowHours,
     employerClaimResponseHours,
     professionalDisputeResponseHours,
-    professionalAppealWindowHours,
-    professionalRebuttalWindowHours,
     updatedBy,
     session = null,
   }) {
     AdminPlatformSettingsService.assertAtLeastOneProvided(
-      [
-        occurrenceClaimWindowHours,
-        employerClaimResponseHours,
-        professionalDisputeResponseHours,
-        professionalAppealWindowHours,
-        professionalRebuttalWindowHours,
-      ],
+      [occurrenceClaimWindowHours, employerClaimResponseHours, professionalDisputeResponseHours],
       "At least one occurrence challenge policy setting must be provided."
     );
 
@@ -755,27 +747,11 @@ class AdminPlatformSettingsService {
       );
     }
 
-    if (AdminPlatformSettingsService.isProvided(professionalRebuttalWindowHours)) {
-      settings.professionalRebuttalWindowHours =
-        AdminPlatformSettingsService.normalizePositiveInteger(
-          professionalRebuttalWindowHours,
-          "professionalRebuttalWindowHours"
-        );
-    }
-
     if (AdminPlatformSettingsService.isProvided(professionalDisputeResponseHours)) {
       settings.professionalDisputeResponseHours =
         AdminPlatformSettingsService.normalizePositiveInteger(
           professionalDisputeResponseHours,
           "professionalDisputeResponseHours"
-        );
-    }
-
-    if (AdminPlatformSettingsService.isProvided(professionalAppealWindowHours)) {
-      settings.professionalAppealWindowHours =
-        AdminPlatformSettingsService.normalizePositiveInteger(
-          professionalAppealWindowHours,
-          "professionalAppealWindowHours"
         );
     }
 
@@ -790,15 +766,11 @@ class AdminPlatformSettingsService {
         employerClaimResponseHours: settings.employerClaimResponseHours,
 
         professionalDisputeResponseHours: settings.professionalDisputeResponseHours,
-
-        professionalAppealWindowHours: settings.professionalAppealWindowHours,
-
-        professionalRebuttalWindowHours: settings.professionalRebuttalWindowHours,
       },
     };
   }
 
-  /* ─────────────────────────────── OVERTIME POLICY ─────────────────────────────── */
+  /* ------------------------------- OVERTIME POLICY ------------------------------- */
 
   static async updateOvertimePolicy({
     overtimeResponseHours,
@@ -853,7 +825,7 @@ class AdminPlatformSettingsService {
     };
   }
 
-  /* ─────────────────────────────── PROFESSIONAL SETTLEMENT SCHEDULE ─────────────────────────────── */
+  /* ------------------------------- PROFESSIONAL SETTLEMENT SCHEDULE ------------------------------- */
 
   static async updateProfessionalSettlementSchedule({
     professionalSettlementPayoutWeekday,
@@ -932,7 +904,7 @@ class AdminPlatformSettingsService {
     };
   }
 
-  /* ─────────────────────────────── LOCATION POLICY ─────────────────────────────── */
+  /* ------------------------------- LOCATION POLICY ------------------------------- */
 
   static async updateLocationPolicy({
     defaultGeofenceRadiusMeters,
@@ -1018,7 +990,7 @@ class AdminPlatformSettingsService {
     };
   }
 
-  /* ─────────────────────────────── CREDITS POLICY ─────────────────────────────── */
+  /* ------------------------------- CREDITS POLICY ------------------------------- */
 
   static async updateCreditsPolicy({
     creditsEnabled,

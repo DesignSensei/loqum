@@ -1,0 +1,186 @@
+<!-- views/partials/cases-page.ejs -->
+
+<%# ─────────────────────────────── PAGE HEADER ─────────────────────────────── %>
+
+<div
+  class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-4 mb-6"
+>
+  <div>
+    <h1 class="fs-2hx fw-bold text-gray-900 mb-2">
+      <%= casesView.pageTitle %>
+    </h1>
+
+    <p class="text-gray-600 fs-6 mb-0">
+      <%= casesView.pageIntro %>
+    </p>
+  </div>
+
+  <div class="d-flex flex-wrap gap-2">
+    <% casesView.filters.typeOptions.forEach((option) => { %>
+      <a
+        href="<%= option.url %>"
+        class="btn btn-sm <%= option.className %>"
+      >
+        <%= option.label %>
+      </a>
+    <% }); %>
+  </div>
+</div>
+
+
+<%# ─────────────────────────────── CASE SUMMARY ─────────────────────────────── %>
+
+<div class="row g-4 mb-6">
+
+  <div class="col-6 col-xl-3">
+    <div class="card card-flush h-100">
+      <div class="card-body p-5">
+
+        <div class="text-gray-500 fw-semibold fs-7 mb-1">
+          Total cases
+        </div>
+
+        <div class="fs-2hx fw-bold text-gray-900">
+          <%= casesView.counts.total %>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+
+  <div class="col-6 col-xl-3">
+    <div class="card card-flush h-100">
+      <div class="card-body p-5">
+
+        <div class="text-gray-500 fw-semibold fs-7 mb-1">
+          Active
+        </div>
+
+        <div class="fs-2hx fw-bold text-primary">
+          <%= casesView.counts.active %>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+
+  <div class="col-6 col-xl-3">
+    <div class="card card-flush h-100">
+      <div class="card-body p-5">
+
+        <div class="text-gray-500 fw-semibold fs-7 mb-1">
+          Action needed on this page
+        </div>
+
+        <div class="fs-2hx fw-bold text-warning">
+          <%= casesView.counts.actionRequired %>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+
+  <div class="col-6 col-xl-3">
+    <div class="card card-flush h-100">
+      <div class="card-body p-5">
+
+        <div class="text-gray-500 fw-semibold fs-7 mb-1">
+          Resolved
+        </div>
+
+        <div class="fs-2hx fw-bold text-success">
+          <%= casesView.counts.resolved %>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+</div>
+
+
+<%# ─────────────────────────────── STATUS FILTER ─────────────────────────────── %>
+
+<div class="card card-flush mb-6">
+
+  <div class="card-body p-4 p-md-5">
+
+    <div class="d-flex flex-wrap align-items-center gap-2">
+
+      <span class="text-gray-700 fw-semibold me-2">
+        Status:
+      </span>
+
+      <% casesView.filters.statusOptions.forEach((option) => { %>
+        <a
+          href="<%= option.url %>"
+          class="badge <%= option.className %> fs-7 text-decoration-none"
+        >
+          <%= option.label %>
+        </a>
+      <% }); %>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+<%# ─────────────────────────────── EMPTY STATE ─────────────────────────────── %>
+
+<% if (!casesView.cases.length) { %>
+
+  <div class="card card-flush">
+
+    <div class="card-body py-15 text-center">
+
+      <i class="ki-duotone ki-notepad-edit fs-3x text-gray-400 mb-4">
+        <span class="path1"></span>
+        <span class="path2"></span>
+        <span class="path3"></span>
+      </i>
+
+      <h2 class="fw-bold text-gray-800 mb-2">
+        No cases found
+      </h2>
+
+      <p class="text-gray-500 mb-0">
+        There are no cases matching the selected filters.
+      </p>
+
+    </div>
+
+  </div>
+
+<% } %>
+
+
+<%# ─────────────────────────────── CASE LIST ─────────────────────────────── %>
+
+<% if (casesView.cases.length) { %>
+
+  <div class="d-flex flex-column gap-5">
+
+    <% casesView.cases.forEach((caseItem) => { %>
+
+      <%- include("cases/case-card", {
+        caseItem,
+        csrfToken
+      }) %>
+
+    <% }); %>
+
+  </div>
+
+<% } %>
+
+
+<%# ─────────────────────────────── PAGINATION ─────────────────────────────── %>
+
+<%- include("cases/pagination", {
+  pagination: casesView.pagination
+}) %>

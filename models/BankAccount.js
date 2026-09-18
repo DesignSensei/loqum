@@ -86,7 +86,8 @@ const bankAccountSchema = new mongoose.Schema(
       default: null,
       select: false,
       // Generated when a Paystack transfer recipient is created.
-      // Must be present before a Paystack withdrawal can be initiated.
+      // May be absent before the first withdrawal because the Transfer service
+      // can create and persist the recipient when needed.
     },
 
     // --- VERIFICATION ---
@@ -211,12 +212,16 @@ bankAccountSchema.pre("validate", function () {
     this.bankName = String(this.bankName).trim();
   }
 
-  if (this.paystackBankCode) {
-    this.paystackBankCode = String(this.paystackBankCode).trim();
+  if (this.paystackBankCode !== null && this.paystackBankCode !== undefined) {
+    this.paystackBankCode = String(this.paystackBankCode).trim() || null;
   }
 
-  if (this.paystackRecipientCode) {
-    this.paystackRecipientCode = String(this.paystackRecipientCode).trim();
+  if (this.paystackRecipientCode !== null && this.paystackRecipientCode !== undefined) {
+    this.paystackRecipientCode = String(this.paystackRecipientCode).trim() || null;
+  }
+
+  if (this.verificationReference !== null && this.verificationReference !== undefined) {
+    this.verificationReference = String(this.verificationReference).trim() || null;
   }
 
   if (this.ownerType === "employer") {

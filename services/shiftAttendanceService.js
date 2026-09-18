@@ -16,6 +16,10 @@ const {
 } = require("./helpers/transactionHelper");
 
 const logger = require("../utils/logger");
+const money = require("../utils/money");
+
+const { FINANCIAL_RATE_SCALE } = require("../constants/shiftPosting");
+const { OCCURRENCE_EVIDENCE_TYPES } = require("../constants/shiftLifecycle");
 
 const MILLISECONDS_PER_MINUTE = 60 * 1000;
 const EARTH_RADIUS_METERS = 6371000;
@@ -24,6 +28,9 @@ const MAX_PROCESSING_BATCH_SIZE = 100;
 
 const MAX_ABSENCE_EXPLANATION_LENGTH = 1000;
 const MAX_OVERTIME_REQUEST_MINUTES = 24 * 60;
+const MAX_OVERTIME_REQUEST_STATEMENT_LENGTH = 1000;
+const MAX_OVERTIME_EVIDENCE_REFERENCE_LENGTH = 1000;
+const MAX_OVERTIME_EVIDENCE_DESCRIPTION_LENGTH = 500;
 
 const ATTENDANCE_LOCATION_SOURCES = ["browser", "mobile_app"];
 
@@ -50,6 +57,7 @@ const PAYMENT_STATUSES_WITHOUT_ACTIVE_PROTECTED_FUNDS = [
 ];
 
 const PARENT_ATTENDANCE_STATUSES = [
+  "open",
   "confirmed",
   "in_progress",
 
@@ -62,6 +70,7 @@ const PARENT_ATTENDANCE_STATUSES = [
 ];
 
 const EMPLOYER_PIN_PARENT_STATUSES = [
+  "open",
   "assigned",
   "confirmed",
   "in_progress",
@@ -80,8 +89,8 @@ const TERMINAL_PARENT_ATTENDANCE_STATUSES = ["completed", "cancelled", "no_show"
  *
  * ShiftOccurrence is authoritative for every actual work date.
  *
- * This includes a Single Shift. A Single Shift has one occurrence with
- * sequenceNumber 1.
+ * A single-date Shift has one occurrence per professional slot, each with
+ * sequenceNumber 1 and its own slotNumber.
  *
  * This service owns attendance facts:
  *
@@ -132,7 +141,7 @@ const TERMINAL_PARENT_ATTENDANCE_STATUSES = ["completed", "cancelled", "no_show"
  * - no overtime platform fee is earned.
  *
  * The service may derive a provisional preview for the response/UI from the
- * requested hours, snapshotted hourlyRate and snapshotted platformFeeRate.
+ * requested minutes, snapshotted hourlyRate and snapshotted overtimePlatformFeeRate.
  * That preview is not written into authoritative occurrence money fields.
  *
  * Employer acceptance or final admin adjudication later establishes the final
@@ -153,8 +162,8 @@ const TERMINAL_PARENT_ATTENDANCE_STATUSES = ["completed", "cancelled", "no_show"
  * ShiftOccurrenceReconciliationService. It does not create occurrence
  * attendance or financial truth.
  *
- * This service retains only the Single-Shift attendance compatibility mirror
- * until the later parent Shift compatibility pass removes or confirms it.
+ * Individual attendance is read from the selected occurrence. Parent
+ * summaries must be reconciled across all slots and dates.
  */
 
 class ShiftAttendanceService {
@@ -175,6 +184,17 @@ class ShiftAttendanceService {
   }
 
   static async runWithOptionalTransaction(options = {}, callback) {
+    if (
+      options.session &&
+      (typeof options.session.inTransaction !== "function" || !options.session.inTransaction())
+    ) {
+      throw ShiftAttendanceService.createError({
+        message: "Attendance processing requires an active transaction when a session is supplied.",
+        code: "ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
     return runServiceTransaction(options, callback);
   }
 
@@ -254,6 +274,117 @@ class ShiftAttendanceService {
     return normalizedValue;
   }
 
+  static normalizeRequiredText(value, fieldName, maximumLength) {
+    const normalizedValue = ShiftAttendanceService.normalizeOptionalText(
+      value,
+      fieldName,
+      maximumLength
+    );
+
+    if (!normalizedValue) {
+      throw ShiftAttendanceService.createError({
+        message: `${fieldName} is required.`,
+        code: `${ShiftAttendanceService.normalizeFieldCode(fieldName)}_REQUIRED`,
+      });
+    }
+
+    return normalizedValue;
+  }
+
+  static normalizeOvertimeRequestStatement(value) {
+    return ShiftAttendanceService.normalizeRequiredText(
+      value,
+      "Overtime request statement",
+      MAX_OVERTIME_REQUEST_STATEMENT_LENGTH
+    );
+  }
+
+  static normalizeOvertimeRequestEvidence(
+    value,
+    { submittedByUser, recordedAt = new Date() } = {}
+  ) {
+    if (value === null || value === undefined) {
+      return [];
+    }
+
+    if (!Array.isArray(value)) {
+      throw ShiftAttendanceService.createError({
+        message: "Overtime request evidence must be an array.",
+        code: "INVALID_OVERTIME_REQUEST_EVIDENCE",
+      });
+    }
+
+    if (value.length === 0) {
+      return [];
+    }
+
+    const normalizedSubmittedByUser = ShiftAttendanceService.normalizeObjectId(
+      submittedByUser,
+      "overtime evidence submitting user ID"
+    );
+
+    const normalizedRecordedAt = ShiftAttendanceService.normalizeCurrentTime(recordedAt);
+
+    return value.map((item, index) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        throw ShiftAttendanceService.createError({
+          message: `Overtime evidence item ${index + 1} is invalid.`,
+          code: "INVALID_OVERTIME_REQUEST_EVIDENCE_ITEM",
+          details: {
+            evidenceIndex: index,
+          },
+        });
+      }
+
+      const type = String(item.type || "")
+        .trim()
+        .toLowerCase();
+
+      if (!OCCURRENCE_EVIDENCE_TYPES.includes(type)) {
+        throw ShiftAttendanceService.createError({
+          message: `Overtime evidence item ${index + 1} has an unsupported evidence type.`,
+          code: "INVALID_OVERTIME_REQUEST_EVIDENCE_TYPE",
+          details: {
+            evidenceIndex: index,
+            evidenceType: type || null,
+            supportedTypes: OCCURRENCE_EVIDENCE_TYPES,
+          },
+        });
+      }
+
+      const reference = ShiftAttendanceService.normalizeOptionalText(
+        item.reference,
+        `Overtime evidence item ${index + 1} reference`,
+        MAX_OVERTIME_EVIDENCE_REFERENCE_LENGTH
+      );
+
+      if (!reference) {
+        throw ShiftAttendanceService.createError({
+          message: `Overtime evidence item ${index + 1} requires a reference.`,
+          code: "OVERTIME_REQUEST_EVIDENCE_REFERENCE_REQUIRED",
+          details: {
+            evidenceIndex: index,
+          },
+        });
+      }
+
+      const description = ShiftAttendanceService.normalizeOptionalText(
+        item.description,
+        `Overtime evidence item ${index + 1} description`,
+        MAX_OVERTIME_EVIDENCE_DESCRIPTION_LENGTH
+      );
+
+      return {
+        type,
+        reference,
+        description,
+        submittedByRole: "professional",
+        submittedByUser: normalizedSubmittedByUser,
+        recordedAt: normalizedRecordedAt,
+      };
+    });
+  }
+
   static normalizeAbsenceExplanation(value) {
     const explanation = String(value || "").trim();
 
@@ -292,7 +423,14 @@ class ShiftAttendanceService {
   }
 
   static normalizeCoordinate(value, fieldName, minimum, maximum) {
-    const number = Number(value);
+    const number = value;
+
+    if (typeof number !== "number") {
+      throw ShiftAttendanceService.createError({
+        message: `${fieldName} must be a number.`,
+        code: `INVALID_${ShiftAttendanceService.normalizeFieldCode(fieldName)}`,
+      });
+    }
 
     if (!Number.isFinite(number) || number < minimum || number > maximum) {
       throw ShiftAttendanceService.createError({
@@ -305,9 +443,13 @@ class ShiftAttendanceService {
   }
 
   static normalizeAccuracy(value) {
-    const accuracyMeters = Number(value);
+    const accuracyMeters = value;
 
-    if (!Number.isFinite(accuracyMeters) || accuracyMeters < 0) {
+    if (
+      typeof accuracyMeters !== "number" ||
+      !Number.isFinite(accuracyMeters) ||
+      accuracyMeters < 0
+    ) {
       throw ShiftAttendanceService.createError({
         message: "Location accuracy is invalid.",
         code: "INVALID_LOCATION_ACCURACY",
@@ -352,7 +494,7 @@ class ShiftAttendanceService {
   }
 
   static normalizeAttendanceLocationInput(location, currentTime = new Date()) {
-    if (!location || typeof location !== "object") {
+    if (!location || typeof location !== "object" || Array.isArray(location)) {
       throw ShiftAttendanceService.createError({
         message: "Your current location is required.",
         code: "ATTENDANCE_LOCATION_REQUIRED",
@@ -478,6 +620,8 @@ class ShiftAttendanceService {
       "currency",
       "scheduleMode",
       "occurrenceCount",
+      "requiredProfessionals",
+      "totalOccurrenceCount",
       "status",
       "paymentStatus",
       "fundedAmount",
@@ -486,15 +630,7 @@ class ShiftAttendanceService {
       "publishedAt",
       "fundingTransaction",
       "cancellationCode",
-      "activeAssignment",
-      "assignedProfessional",
-      "replacementHiring",
       "occurrenceProgress",
-      "attendanceStatus",
-      "checkedInAt",
-      "checkedOutAt",
-      "checkInPinUsedAt",
-      "checkOutPinUsedAt",
     ].join(" ");
   }
 
@@ -505,6 +641,7 @@ class ShiftAttendanceService {
       "branch",
       "referenceCode",
       "sequenceNumber",
+      "slotNumber",
       "occurrenceDate",
       "scheduleTimeZone",
 
@@ -520,7 +657,8 @@ class ShiftAttendanceService {
       "breakDuration",
 
       "hourlyRate",
-      "platformFeeRate",
+      "basePlatformFeeRate",
+      "overtimePlatformFeeRate",
 
       "estimatedProfessionalPay",
       "estimatedPlatformFee",
@@ -608,29 +746,32 @@ class ShiftAttendanceService {
       shift: shift._id,
     };
 
-    if (occurrenceId) {
-      filter._id = ShiftAttendanceService.normalizeObjectId(occurrenceId, "occurrence ID");
-    } else {
-      if (shift.scheduleMode !== "single" && Number(shift.occurrenceCount || 0) !== 1) {
-        throw ShiftAttendanceService.createError({
-          message: "Select the work occurrence you want to access.",
-          code: "SHIFT_OCCURRENCE_REQUIRED",
-          statusCode: 409,
-        });
-      }
+    const hasExplicitOccurrence = occurrenceId !== null && occurrenceId !== undefined;
 
-      filter.sequenceNumber = 1;
+    if (hasExplicitOccurrence) {
+      filter._id = ShiftAttendanceService.normalizeObjectId(occurrenceId, "occurrence ID");
     }
 
-    const query = ShiftOccurrence.findOne(filter).select(
-      ShiftAttendanceService.getOccurrenceFields(pinField)
-    );
+    // Fetch at most two records to establish whether implicit selection is safe.
+    const query = ShiftOccurrence.find(filter)
+      .select(ShiftAttendanceService.getOccurrenceFields(pinField))
+      .limit(2);
 
     if (session) {
       query.session(session);
     }
 
-    const occurrence = await query;
+    const occurrences = await query;
+
+    if (occurrences.length > 1) {
+      throw ShiftAttendanceService.createError({
+        message: "Select the work occurrence you want to access.",
+        code: "SHIFT_OCCURRENCE_REQUIRED",
+        statusCode: 409,
+      });
+    }
+
+    const occurrence = occurrences[0];
 
     if (!occurrence) {
       throw ShiftAttendanceService.createError({
@@ -873,17 +1014,56 @@ class ShiftAttendanceService {
   }
 
   static assertCanRevealCheckInPin({ shift, occurrence }) {
-    return ShiftAttendanceService.assertEmployerPinAccess({
+    ShiftAttendanceService.assertEmployerPinAccess({
       shift,
       occurrence,
     });
+
+    if (
+      occurrence.status !== "scheduled" ||
+      occurrence.attendanceStatus !== "not_started" ||
+      occurrence.checkedInAt ||
+      occurrence.checkInPinUsedAt
+    ) {
+      throw ShiftAttendanceService.createError({
+        message: "The check-in PIN is not available in the current occurrence state.",
+        code: "CHECK_IN_PIN_NOT_AVAILABLE",
+        statusCode: 403,
+        details: {
+          occurrenceStatus: occurrence.status,
+          attendanceStatus: occurrence.attendanceStatus,
+        },
+      });
+    }
+
+    return occurrence;
   }
 
   static assertCanRevealCheckOutPin({ shift, occurrence }) {
-    return ShiftAttendanceService.assertEmployerPinAccess({
+    ShiftAttendanceService.assertEmployerPinAccess({
       shift,
       occurrence,
     });
+
+    if (
+      occurrence.status !== "in_progress" ||
+      occurrence.attendanceStatus !== "checked_in" ||
+      !occurrence.checkedInAt ||
+      occurrence.checkedOutAt ||
+      occurrence.checkOutPinUsedAt
+    ) {
+      throw ShiftAttendanceService.createError({
+        message: "The check-out PIN becomes available after successful check-in.",
+        code: "CHECK_OUT_PIN_NOT_AVAILABLE",
+        statusCode: 403,
+        details: {
+          occurrenceStatus: occurrence.status,
+          attendanceStatus: occurrence.attendanceStatus,
+        },
+      });
+    }
+
+    return occurrence;
   }
 
   static assertCanCheckIn({ occurrence, settings, currentTime }) {
@@ -955,7 +1135,7 @@ class ShiftAttendanceService {
   /* ─────────────────────────────── FINANCIAL BOUNDARY ASSERTIONS ─────────────────────────────── */
 
   static normalizeMoneyAmount(value, fieldName) {
-    const amount = Number(value || 0);
+    const amount = value;
 
     if (!Number.isSafeInteger(amount) || amount < 0) {
       throw ShiftAttendanceService.createError({
@@ -1041,7 +1221,8 @@ class ShiftAttendanceService {
       occurrence.topUpTransaction ||
       overtime.topUpPaid ||
       overtime.topUpPaidAt ||
-      Number(overtime.topUpAmount || 0) > 0 ||
+      ShiftAttendanceService.normalizeMoneyAmount(overtime.topUpAmount, "overtime top-up amount") >
+        0 ||
       overtime.topUpDeadlineAt ||
       audit.earnedAt ||
       audit.outstandingAt ||
@@ -1062,8 +1243,8 @@ class ShiftAttendanceService {
   }
 
   static buildProvisionalOvertimePreview({ occurrence, requestedMinutes }) {
-    const hourlyRate = Number(occurrence.hourlyRate);
-    const platformFeeRate = Number(occurrence.platformFeeRate);
+    const hourlyRate = occurrence.hourlyRate;
+    const platformFeeRate = occurrence.overtimePlatformFeeRate;
 
     if (!Number.isSafeInteger(hourlyRate) || hourlyRate <= 0) {
       throw ShiftAttendanceService.createError({
@@ -1095,11 +1276,36 @@ class ShiftAttendanceService {
 
     const requestedHours = requestedMinutes / 60;
 
-    const provisionalProfessionalPay = Math.round(hourlyRate * requestedHours);
+    let provisionalProfessionalPay;
+    let provisionalPlatformFee;
+    let provisionalEmployerCharge;
 
-    const provisionalPlatformFee = Math.round(provisionalProfessionalPay * platformFeeRate);
+    try {
+      provisionalProfessionalPay = money.calculateMinorPayFromMinutes({
+        hourlyRateMinor: hourlyRate,
+        minutes: requestedMinutes,
+        fieldName: "Provisional overtime professional pay",
+      });
 
-    const provisionalEmployerCharge = provisionalProfessionalPay + provisionalPlatformFee;
+      provisionalPlatformFee = money.calculateMinorAmountFromRate({
+        amountMinor: provisionalProfessionalPay,
+        rate: platformFeeRate,
+        rateScale: FINANCIAL_RATE_SCALE,
+        fieldName: "Provisional overtime platform fee",
+        rateFieldName: "Occurrence overtime platform fee rate",
+      });
+
+      provisionalEmployerCharge = money.sumMinorUnitAmounts(
+        [provisionalProfessionalPay, provisionalPlatformFee],
+        "Provisional overtime employer charge"
+      );
+    } catch (error) {
+      throw ShiftAttendanceService.createError({
+        message: "The provisional overtime pricing could not be calculated safely.",
+        code: "INVALID_PROVISIONAL_OVERTIME_PRICING",
+        statusCode: 500,
+      });
+    }
 
     if (
       !Number.isSafeInteger(provisionalProfessionalPay) ||
@@ -1354,6 +1560,8 @@ class ShiftAttendanceService {
 
       occurrenceReferenceCode: occurrence.referenceCode,
 
+      slotNumber: occurrence.slotNumber,
+
       sequenceNumber: occurrence.sequenceNumber,
 
       type: "check_in",
@@ -1400,6 +1608,8 @@ class ShiftAttendanceService {
 
       occurrenceReferenceCode: occurrence.referenceCode,
 
+      slotNumber: occurrence.slotNumber,
+
       sequenceNumber: occurrence.sequenceNumber,
 
       type: "check_out",
@@ -1436,49 +1646,6 @@ class ShiftAttendanceService {
 
       session,
     });
-
-    /*
-     * Single-Shift attendance compatibility mirror.
-     *
-     * The occurrence remains authoritative. These parent fields exist only for
-     * callers/views that still read attendance directly from Shift.
-     *
-     * Parent aggregate-state reconciliation has already happened above.
-     */
-    if (shift.scheduleMode === "single" || Number(shift.occurrenceCount || 0) === 1) {
-      const compatibilityUpdate = {
-        attendanceStatus: occurrence.attendanceStatus,
-
-        checkedInAt: occurrence.checkedInAt || null,
-
-        checkedOutAt: occurrence.checkedOutAt || null,
-
-        checkInLocation: occurrence.checkInLocation || {},
-
-        checkOutLocation: occurrence.checkOutLocation || {},
-
-        checkInPinUsedAt: occurrence.checkInPinUsedAt || null,
-
-        checkOutPinUsedAt: occurrence.checkOutPinUsedAt || null,
-      };
-
-      await Shift.updateOne(
-        {
-          _id: shift._id,
-        },
-        {
-          $set: compatibilityUpdate,
-        },
-        {
-          session,
-          runValidators: true,
-        }
-      );
-
-      if (parentResult?.shift) {
-        Object.assign(parentResult.shift, compatibilityUpdate);
-      }
-    }
 
     return parentResult;
   }
@@ -1576,6 +1743,10 @@ class ShiftAttendanceService {
 
         occurrenceReferenceCode: occurrence.referenceCode,
 
+        slotNumber: occurrence.slotNumber,
+
+        sequenceNumber: occurrence.sequenceNumber,
+
         professionalProfileId: String(normalizedProfessionalProfileId),
 
         checkedInAt: occurrence.checkedInAt,
@@ -1656,6 +1827,23 @@ class ShiftAttendanceService {
     return normalized;
   }
 
+  static normalizeRequestedOvertimeMinutes(value) {
+    if (value === null || value === undefined || value === "") {
+      return null;
+    }
+
+    const minutes = Number(value);
+
+    if (!Number.isSafeInteger(minutes) || minutes <= 0 || minutes > MAX_OVERTIME_REQUEST_MINUTES) {
+      throw ShiftAttendanceService.createError({
+        message: "Requested overtime minutes must be a positive whole number no greater than 1440.",
+        code: "INVALID_REQUESTED_OVERTIME_MINUTES",
+      });
+    }
+
+    return minutes;
+  }
+
   static normalizeRequestedOvertimeHours(value) {
     if (value === null || value === undefined || value === "") {
       return null;
@@ -1673,40 +1861,80 @@ class ShiftAttendanceService {
     return Number(hours.toFixed(4));
   }
 
-  static assertRequestedOvertimeHoursMatchesObservedMinutes(value, observedMinutes) {
+  static requestedOvertimeHoursToMinutes(value) {
     const legacyRequestedHours = ShiftAttendanceService.normalizeRequestedOvertimeHours(value);
 
     if (legacyRequestedHours === null) {
       return null;
     }
 
-    const rawLegacyMinutes = legacyRequestedHours * 60;
-
-    /*
-     * requestedOvertimeHours is retained only as a compatibility input.
-     *
-     * Because callers may serialize hours to four decimal places, allow only
-     * the tiny representation drift created by that conversion. The
-     * authoritative persisted request remains the exact observed whole-minute
-     * late-checkout duration.
-     */
+    const rawMinutes = legacyRequestedHours * 60;
+    const roundedMinutes = Math.round(rawMinutes);
     const representationToleranceMinutes = 0.01;
 
-    if (Math.abs(rawLegacyMinutes - observedMinutes) > representationToleranceMinutes) {
+    if (Math.abs(rawMinutes - roundedMinutes) > representationToleranceMinutes) {
       throw ShiftAttendanceService.createError({
-        message:
-          "Late-checkout overtime uses the full recorded time after the scheduled end. Requested overtime hours must match the recorded late-checkout duration.",
-        code: "REQUESTED_OVERTIME_MUST_MATCH_OBSERVED_TIME",
-        statusCode: 409,
+        message: "Requested overtime hours must resolve to a whole number of minutes.",
+        code: "REQUESTED_OVERTIME_HOURS_NOT_WHOLE_MINUTES",
         details: {
           requestedOvertimeHours: legacyRequestedHours,
-          requestedOvertimeMinutes: Number(rawLegacyMinutes.toFixed(4)),
+          requestedOvertimeMinutes: Number(rawMinutes.toFixed(4)),
+        },
+      });
+    }
+
+    return ShiftAttendanceService.normalizeRequestedOvertimeMinutes(roundedMinutes);
+  }
+
+  static resolveRequestedOvertimeMinutes({
+    requestedOvertimeMinutes = null,
+    requestedOvertimeHours = null,
+    observedMinutes,
+  }) {
+    if (!Number.isSafeInteger(observedMinutes) || observedMinutes <= 0) {
+      throw ShiftAttendanceService.createError({
+        message: "Observed post-schedule attendance minutes are invalid.",
+        code: "INVALID_OBSERVED_OVERTIME_MINUTES",
+        statusCode: 500,
+      });
+    }
+
+    const canonicalMinutes =
+      ShiftAttendanceService.normalizeRequestedOvertimeMinutes(requestedOvertimeMinutes);
+
+    const legacyMinutes =
+      ShiftAttendanceService.requestedOvertimeHoursToMinutes(requestedOvertimeHours);
+
+    if (canonicalMinutes !== null && legacyMinutes !== null && canonicalMinutes !== legacyMinutes) {
+      throw ShiftAttendanceService.createError({
+        message:
+          "Requested overtime minutes and requested overtime hours do not describe the same duration.",
+        code: "CONFLICTING_OVERTIME_DURATION_INPUTS",
+        details: {
+          requestedOvertimeMinutes: canonicalMinutes,
+          requestedOvertimeHours:
+            ShiftAttendanceService.normalizeRequestedOvertimeHours(requestedOvertimeHours),
+          requestedOvertimeHoursAsMinutes: legacyMinutes,
+        },
+      });
+    }
+
+    const requestedMinutes = canonicalMinutes ?? legacyMinutes ?? observedMinutes;
+
+    if (requestedMinutes > observedMinutes) {
+      throw ShiftAttendanceService.createError({
+        message:
+          "Requested overtime minutes cannot exceed the recorded post-schedule attendance duration.",
+        code: "REQUESTED_OVERTIME_EXCEEDS_OBSERVED_TIME",
+        statusCode: 409,
+        details: {
+          requestedOvertimeMinutes: requestedMinutes,
           observedOvertimeMinutes: observedMinutes,
         },
       });
     }
 
-    return legacyRequestedHours;
+    return requestedMinutes;
   }
 
   static async checkOut(
@@ -1720,6 +1948,9 @@ class ShiftAttendanceService {
       lateCheckoutOption = null,
       lateCheckoutReason = null,
       lateCheckoutNotes = null,
+      requestStatement = null,
+      requestEvidence = [],
+      requestedOvertimeMinutes = null,
       requestedOvertimeHours = null,
       currentTime = new Date(),
     },
@@ -1836,6 +2067,9 @@ class ShiftAttendanceService {
       let selectedReason = null;
       let lateCheckoutNotesValue = null;
       let overtimeRequested = false;
+      let normalizedOvertimeRequestStatement = null;
+      let normalizedOvertimeRequestEvidence = [];
+      let resolvedRequestedOvertimeMinutes = null;
 
       if (isLateCheckout) {
         selectedOption = ShiftAttendanceService.normalizeLateCheckoutOption(lateCheckoutOption);
@@ -1865,16 +2099,36 @@ class ShiftAttendanceService {
         }
       }
 
-      if (
-        !overtimeRequested &&
+      const hasRequestedOvertimeMinutesInput =
+        requestedOvertimeMinutes !== null &&
+        requestedOvertimeMinutes !== undefined &&
+        requestedOvertimeMinutes !== "";
+
+      const hasRequestedOvertimeHoursInput =
         requestedOvertimeHours !== null &&
         requestedOvertimeHours !== undefined &&
-        requestedOvertimeHours !== ""
+        requestedOvertimeHours !== "";
+
+      const hasOvertimeRequestStatementInput =
+        requestStatement !== null &&
+        requestStatement !== undefined &&
+        String(requestStatement).trim() !== "";
+
+      const hasOvertimeRequestEvidenceInput =
+        requestEvidence !== null &&
+        requestEvidence !== undefined &&
+        (!Array.isArray(requestEvidence) || requestEvidence.length > 0);
+
+      if (
+        !overtimeRequested &&
+        (hasRequestedOvertimeMinutesInput ||
+          hasRequestedOvertimeHoursInput ||
+          hasOvertimeRequestStatementInput ||
+          hasOvertimeRequestEvidenceInput)
       ) {
         throw ShiftAttendanceService.createError({
-          message: "Requested overtime hours may only be supplied when overtime is selected.",
-
-          code: "OVERTIME_HOURS_WITHOUT_OVERTIME_REQUEST",
+          message: "Overtime request details may only be supplied when overtime is selected.",
+          code: "OVERTIME_DETAILS_WITHOUT_OVERTIME_REQUEST",
         });
       }
 
@@ -1889,8 +2143,9 @@ class ShiftAttendanceService {
 
         if (minutesLate > MAX_OVERTIME_REQUEST_MINUTES) {
           throw ShiftAttendanceService.createError({
-            message: "Late-checkout overtime cannot exceed 24 hours.",
-            code: "REQUESTED_OVERTIME_EXCEEDS_MAXIMUM",
+            message:
+              "Recorded post-schedule attendance cannot exceed 24 hours for an overtime request.",
+            code: "OBSERVED_OVERTIME_EXCEEDS_MAXIMUM",
             statusCode: 409,
             details: {
               observedOvertimeMinutes: minutesLate,
@@ -1899,18 +2154,30 @@ class ShiftAttendanceService {
           });
         }
 
-        /*
-         * Compatibility input only.
-         *
-         * The current occurrence authority stores immutable requestedMinutes,
-         * and a late-checkout request must use the complete observed
-         * late-checkout duration. Older callers may still send
-         * requestedOvertimeHours; accept it only when it describes the same
-         * observed duration.
-         */
-        ShiftAttendanceService.assertRequestedOvertimeHoursMatchesObservedMinutes(
+        const normalizedProfessionalUserId = ShiftAttendanceService.normalizeObjectId(
+          professionalUserId,
+          "professional user ID"
+        );
+
+        resolvedRequestedOvertimeMinutes = ShiftAttendanceService.resolveRequestedOvertimeMinutes({
+          requestedOvertimeMinutes,
           requestedOvertimeHours,
-          minutesLate
+          observedMinutes: minutesLate,
+        });
+
+        const statementInput = hasOvertimeRequestStatementInput
+          ? requestStatement
+          : lateCheckoutNotesValue;
+
+        normalizedOvertimeRequestStatement =
+          ShiftAttendanceService.normalizeOvertimeRequestStatement(statementInput);
+
+        normalizedOvertimeRequestEvidence = ShiftAttendanceService.normalizeOvertimeRequestEvidence(
+          requestEvidence,
+          {
+            submittedByUser: normalizedProfessionalUserId,
+            recordedAt: normalizedCurrentTime,
+          }
         );
       }
 
@@ -1953,11 +2220,10 @@ class ShiftAttendanceService {
       if (overtimeRequested) {
         const normalizedProfessionalUserId = ShiftAttendanceService.normalizeObjectId(
           professionalUserId,
-
           "professional user ID"
         );
 
-        const requestedMinutes = minutesLate;
+        const requestedMinutes = resolvedRequestedOvertimeMinutes;
 
         overtimePreview = ShiftAttendanceService.buildProvisionalOvertimePreview({
           occurrence,
@@ -1974,9 +2240,13 @@ class ShiftAttendanceService {
 
           source: "late_checkout_prompt",
 
-          reason: lateCheckoutNotesValue || "Professional requested overtime after late checkout.",
+          requestStatement: normalizedOvertimeRequestStatement,
+
+          requestEvidence: normalizedOvertimeRequestEvidence,
 
           requestedMinutes,
+
+          approvedMinutes: null,
 
           status: "pending",
 
@@ -1999,17 +2269,21 @@ class ShiftAttendanceService {
 
           rejectedBy: null,
 
+          rejectionBasis: null,
+
           rejectionReason: null,
 
-          appealStatus: "not_available",
+          employerProposedMinutes: null,
 
-          appealDeadlineAt: null,
+          rejectionEvidence: [],
 
-          appealedAt: null,
+          rejectionNoSupportingEvidence: false,
 
-          appealedBy: null,
+          adminReviewReason: null,
 
-          appealReason: null,
+          adminReviewStartedAt: null,
+
+          adminEvidence: [],
 
           adminDecision: null,
 
@@ -2063,6 +2337,10 @@ class ShiftAttendanceService {
         occurrenceId: String(occurrence._id),
 
         occurrenceReferenceCode: occurrence.referenceCode,
+
+        slotNumber: occurrence.slotNumber,
+
+        sequenceNumber: occurrence.sequenceNumber,
 
         professionalProfileId: String(normalizedProfessionalProfileId),
 
@@ -2121,6 +2399,10 @@ class ShiftAttendanceService {
                   shiftId: String(shift._id),
 
                   occurrenceId: String(occurrence._id),
+
+                  slotNumber: occurrence.slotNumber,
+
+                  sequenceNumber: occurrence.sequenceNumber,
 
                   professionalId: String(normalizedProfessionalProfileId),
 
@@ -2243,6 +2525,12 @@ class ShiftAttendanceService {
 
         occurrenceId: String(occurrence._id),
 
+        occurrenceReferenceCode: occurrence.referenceCode,
+
+        slotNumber: occurrence.slotNumber,
+
+        sequenceNumber: occurrence.sequenceNumber,
+
         attendanceStatus: occurrence.attendanceStatus,
 
         settlementStatus: occurrence.settlementStatus,
@@ -2258,6 +2546,10 @@ class ShiftAttendanceService {
             shiftId: String(shift._id),
 
             occurrenceId: String(occurrence._id),
+
+            slotNumber: occurrence.slotNumber,
+
+            sequenceNumber: occurrence.sequenceNumber,
 
             professionalId: String(professionalProfileId),
           },

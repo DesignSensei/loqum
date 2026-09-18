@@ -5,9 +5,9 @@ const mongoose = require("mongoose");
 const Shift = require("../models/Shift");
 const ShiftOccurrence = require("../models/ShiftOccurrence");
 const PlatformSettings = require("../models/PlatformSettings");
+const ShiftAssignment = require("../models/ShiftAssignment");
 
-const WalletService = require("./walletService");
-const ShiftOccurrenceReconciliationService = require("./shiftOccurrenceReconciliationService");
+const { runWithOptionalTransaction } = require("./helpers/transactionHelper");
 
 const logger = require("../utils/logger");
 
@@ -16,10 +16,8 @@ const MILLISECONDS_PER_HOUR = 60 * 60 * 1000;
 const MIN_RELEASE_REASON_LENGTH = 20;
 const MAX_RELEASE_REASON_LENGTH = 500;
 
-const DEFAULT_SINGLE_OCCURRENCE_RELEASE_NOTICE_HOURS = 72;
-const DEFAULT_UNFILLED_FINALIZATION_GRACE_MINUTES = 15;
-
 const RELEASE_ALLOWED_PARENT_STATUSES = Object.freeze([
+  "open",
   "assigned",
   "confirmed",
   "in_progress",
@@ -95,7 +93,18 @@ class ShiftOccurrenceReleaseService {
   }
 
   static async runWithOptionalTransaction(options = {}, callback) {
-    return WalletService.runWithOptionalTransaction(options, callback);
+    if (
+      options.session &&
+      (typeof options.session.inTransaction !== "function" || !options.session.inTransaction())
+    ) {
+      throw ShiftOccurrenceReleaseService.createError({
+        message: "A supplied occurrence-release session must have an active transaction.",
+        code: "ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
+    return runWithOptionalTransaction(options, callback);
   }
 
   /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
@@ -132,7 +141,11 @@ class ShiftOccurrenceReleaseService {
   }
 
   static normalizeCurrentTime(value) {
-    const currentTime = value ? new Date(value) : new Date();
+    const supported =
+      value instanceof Date ||
+      typeof value === "number" ||
+      (typeof value === "string" && value.trim() !== "");
+    const currentTime = supported ? new Date(value) : new Date(NaN);
 
     if (Number.isNaN(currentTime.getTime())) {
       throw ShiftOccurrenceReleaseService.createError({
@@ -145,7 +158,7 @@ class ShiftOccurrenceReleaseService {
   }
 
   static normalizeReleaseReason(value) {
-    const reason = String(value || "").trim();
+    const reason = typeof value === "string" ? value.trim() : "";
 
     if (reason.length < MIN_RELEASE_REASON_LENGTH) {
       throw ShiftOccurrenceReleaseService.createError({
@@ -201,9 +214,7 @@ class ShiftOccurrenceReleaseService {
   }
 
   static getReleaseSettings(settings) {
-    const noticeHours = Number(
-      settings.singleOccurrenceReleaseNoticeHours ?? DEFAULT_SINGLE_OCCURRENCE_RELEASE_NOTICE_HOURS
-    );
+    const noticeHours = settings?.singleOccurrenceReleaseNoticeHours;
 
     if (!Number.isSafeInteger(noticeHours) || noticeHours < 0) {
       throw ShiftOccurrenceReleaseService.createError({
@@ -213,9 +224,7 @@ class ShiftOccurrenceReleaseService {
       });
     }
 
-    const finalizationGraceMinutes = Number(
-      settings.unfilledFinalizationGraceMinutes ?? DEFAULT_UNFILLED_FINALIZATION_GRACE_MINUTES
-    );
+    const finalizationGraceMinutes = settings?.unfilledFinalizationGraceMinutes;
 
     if (!Number.isSafeInteger(finalizationGraceMinutes) || finalizationGraceMinutes <= 0) {
       throw ShiftOccurrenceReleaseService.createError({
@@ -289,6 +298,30 @@ class ShiftOccurrenceReleaseService {
   /* ─────────────────────────────── RELEASE ELIGIBILITY ─────────────────────────────── */
 
   static assertOccurrenceBelongsToShift({ shift, occurrence }) {
+    const total = shift.occurrenceCount * shift.requiredProfessionals;
+
+    if (
+      !Number.isSafeInteger(shift.occurrenceCount) ||
+      shift.occurrenceCount < 1 ||
+      !Number.isSafeInteger(shift.requiredProfessionals) ||
+      shift.requiredProfessionals < 1 ||
+      !Number.isSafeInteger(total) ||
+      !Number.isSafeInteger(occurrence.slotNumber) ||
+      occurrence.slotNumber < 1 ||
+      occurrence.slotNumber > shift.requiredProfessionals ||
+      !Number.isSafeInteger(occurrence.sequenceNumber) ||
+      occurrence.sequenceNumber < 1 ||
+      occurrence.sequenceNumber > shift.occurrenceCount ||
+      occurrence.currency !== shift.currency ||
+      occurrence.countryCode !== shift.countryCode
+    ) {
+      throw ShiftOccurrenceReleaseService.createError({
+        message: "Occurrence slot, sequence or currency does not match the parent Shift.",
+        code: "OCCURRENCE_CONTEXT_MISMATCH",
+        statusCode: 409,
+      });
+    }
+
     if (!ShiftOccurrenceReleaseService.sameId(occurrence.shift, shift._id)) {
       throw ShiftOccurrenceReleaseService.createError({
         message: "The occurrence does not belong to the supplied Shift.",
@@ -387,7 +420,24 @@ class ShiftOccurrenceReleaseService {
       occurrence.checkedInAt ||
       occurrence.checkedOutAt ||
       occurrence.checkInPinUsedAt ||
-      occurrence.checkOutPinUsedAt
+      occurrence.checkOutPinUsedAt ||
+      occurrence.activeClaim ||
+      occurrence.activeDispute ||
+      occurrence.overtime?.requested === true ||
+      occurrence.activeWorkCancellation?.occurred === true ||
+      occurrence.topUpTransaction ||
+      occurrence.refundBatch ||
+      occurrence.employerRefund ||
+      [occurrence.baseSettlement, occurrence.overtimeSettlement].some(
+        (component) =>
+          component &&
+          (component.status !== "not_due" ||
+            component.approvedForReleaseAt ||
+            component.settlementBatch ||
+            component.releasePendingAt ||
+            component.releasedAt ||
+            component.payoutTransaction)
+      )
     ) {
       throw ShiftOccurrenceReleaseService.createError({
         message: "An occurrence with attendance or settlement activity cannot be released.",
@@ -396,7 +446,7 @@ class ShiftOccurrenceReleaseService {
       });
     }
 
-    const startTime = new Date(occurrence.startTime);
+    const startTime = ShiftOccurrenceReleaseService.normalizeCurrentTime(occurrence.startTime);
 
     if (Number.isNaN(startTime.getTime())) {
       throw ShiftOccurrenceReleaseService.createError({
@@ -422,6 +472,17 @@ class ShiftOccurrenceReleaseService {
       });
     }
 
+    ShiftOccurrenceReleaseService.normalizeCurrentTime(occurrence.fillCutoffAt);
+    const assignedAt = ShiftOccurrenceReleaseService.normalizeCurrentTime(occurrence.assignedAt);
+
+    if (currentTime < assignedAt) {
+      throw ShiftOccurrenceReleaseService.createError({
+        message: "Occurrence release cannot predate assignment.",
+        code: "OCCURRENCE_RELEASE_TOO_EARLY",
+        statusCode: 409,
+      });
+    }
+
     if (occurrence.refundStatus !== "not_eligible") {
       throw ShiftOccurrenceReleaseService.createError({
         message: "An occurrence already in the refund workflow cannot be released.",
@@ -437,11 +498,40 @@ class ShiftOccurrenceReleaseService {
     professionalId,
     session,
   }) {
+    const assignment = await ShiftAssignment.findById(occurrence.assignment).session(session);
+    const endSequence = assignment?.effectiveEndSequence ?? assignment?.plannedEndSequence;
+
+    if (
+      !assignment ||
+      !ShiftOccurrenceReleaseService.sameId(assignment.shift, shift._id) ||
+      !ShiftOccurrenceReleaseService.sameId(assignment.business, shift.business) ||
+      !ShiftOccurrenceReleaseService.sameId(assignment.branch, shift.branch) ||
+      !ShiftOccurrenceReleaseService.sameId(assignment.professional, professionalId) ||
+      assignment.slotNumber !== occurrence.slotNumber ||
+      !["scheduled", "active", "ending"].includes(assignment.status) ||
+      !Number.isSafeInteger(assignment.startSequence) ||
+      !Number.isSafeInteger(endSequence) ||
+      assignment.startSequence < 1 ||
+      endSequence > shift.occurrenceCount ||
+      occurrence.sequenceNumber < assignment.startSequence ||
+      occurrence.sequenceNumber >= endSequence
+    ) {
+      throw ShiftOccurrenceReleaseService.createError({
+        message: "The occurrence has no valid continuing assignment in this slot.",
+        code: "OCCURRENCE_RELEASE_REQUIRES_CONTINUING_ASSIGNMENT",
+        statusCode: 409,
+      });
+    }
+
     const laterOccurrence = await ShiftOccurrence.findOne({
       shift: shift._id,
+      slotNumber: occurrence.slotNumber,
+      business: occurrence.business,
+      branch: occurrence.branch,
 
       sequenceNumber: {
         $gt: occurrence.sequenceNumber,
+        $lte: endSequence,
       },
 
       assignmentStatus: "assigned",
@@ -479,6 +569,8 @@ class ShiftOccurrenceReleaseService {
       startTime.getTime() - noticeHours * MILLISECONDS_PER_HOUR
     );
 
+    ShiftOccurrenceReleaseService.normalizeCurrentTime(normalNoticeCutoffAt);
+
     const millisecondsBeforeStart = startTime.getTime() - currentTime.getTime();
 
     const hoursBeforeStart = millisecondsBeforeStart / MILLISECONDS_PER_HOUR;
@@ -494,10 +586,18 @@ class ShiftOccurrenceReleaseService {
   }
 
   static calculateUnfilledFinalizationAt({ occurrence, finalizationGraceMinutes }) {
-    return ShiftOccurrenceReconciliationService.calculateUnfilledFinalizationAt({
-      fillCutoffAt: occurrence.fillCutoffAt,
-      graceMinutes: finalizationGraceMinutes,
-    });
+    if (!Number.isSafeInteger(finalizationGraceMinutes) || finalizationGraceMinutes <= 0) {
+      throw this.createError({
+        message: "A positive unfilled finalization grace is required.",
+        code: "INVALID_UNFILLED_FINALIZATION_GRACE_MINUTES",
+        statusCode: 500,
+      });
+    }
+
+    const fillCutoffAt = this.normalizeCurrentTime(occurrence.fillCutoffAt);
+    const finalizationAt = new Date(fillCutoffAt.getTime() + finalizationGraceMinutes * 60 * 1000);
+
+    return ShiftOccurrenceReleaseService.normalizeCurrentTime(finalizationAt);
   }
 
   /* ─────────────────────────────── PARENT ASSIGNMENT PROGRESS ─────────────────────────────── */
@@ -527,16 +627,33 @@ class ShiftOccurrenceReleaseService {
     };
 
     for (const row of rows) {
-      if (Object.prototype.hasOwnProperty.call(counts, row._id)) {
-        counts[row._id] = Number(row.count || 0);
+      if (
+        !Object.prototype.hasOwnProperty.call(counts, row._id) ||
+        !Number.isSafeInteger(row.count) ||
+        row.count < 0
+      ) {
+        throw ShiftOccurrenceReleaseService.createError({
+          message: "Occurrence assignment counts contain an invalid status or count.",
+          code: "INVALID_OCCURRENCE_ASSIGNMENT_COUNTS",
+          statusCode: 500,
+        });
       }
+
+      counts[row._id] = row.count;
     }
 
-    const totalCount = Object.values(counts).reduce((sum, value) => sum + Number(value || 0), 0);
+    const totalCount = Object.values(counts).reduce((sum, value) => sum + value, 0);
 
-    const expectedCount = Number(shift.occurrenceCount || 0);
+    const expectedCount = shift.occurrenceCount * shift.requiredProfessionals;
 
-    if (Number.isSafeInteger(expectedCount) && expectedCount > 0 && totalCount !== expectedCount) {
+    if (
+      !Number.isSafeInteger(shift.occurrenceCount) ||
+      shift.occurrenceCount <= 0 ||
+      !Number.isSafeInteger(shift.requiredProfessionals) ||
+      shift.requiredProfessionals <= 0 ||
+      !Number.isSafeInteger(expectedCount) ||
+      totalCount !== expectedCount
+    ) {
       throw ShiftOccurrenceReleaseService.createError({
         message: "The parent Shift occurrence assignment counts are inconsistent.",
         code: "SHIFT_OCCURRENCE_ASSIGNMENT_COUNT_MISMATCH",
@@ -688,6 +805,7 @@ class ShiftOccurrenceReleaseService {
             professionalId: String(professionalObjectId),
 
             sequenceNumber: occurrence.sequenceNumber,
+            slotNumber: occurrence.slotNumber,
 
             replacementForAssignmentId: String(previousAssignment),
 
@@ -706,6 +824,7 @@ class ShiftOccurrenceReleaseService {
             occurrenceId: String(occurrence._id),
 
             sequenceNumber: occurrence.sequenceNumber,
+            slotNumber: occurrence.slotNumber,
 
             replacementForAssignmentId: String(previousAssignment),
 
@@ -726,6 +845,7 @@ class ShiftOccurrenceReleaseService {
             professionalId: String(professionalObjectId),
 
             sequenceNumber: occurrence.sequenceNumber,
+            slotNumber: occurrence.slotNumber,
 
             noticeThresholdHours: notice.noticeThresholdHours,
 
@@ -751,6 +871,7 @@ class ShiftOccurrenceReleaseService {
           notice,
 
           replacement: {
+            slotNumber: occurrence.slotNumber,
             replacementForAssignment: previousAssignment,
 
             replacementCase: null,
@@ -761,6 +882,7 @@ class ShiftOccurrenceReleaseService {
           },
 
           continuingAssignment: {
+            slotNumber: occurrence.slotNumber,
             assignment: previousAssignment,
 
             nextOccurrenceId: String(laterOccurrence._id),

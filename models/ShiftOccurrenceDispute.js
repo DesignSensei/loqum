@@ -11,29 +11,16 @@ const { SETTLEMENT_BATCH_COMPONENTS } = require("../constants/shiftSettlement");
 const {
   EMPLOYER_OCCURRENCE_DISPUTE_TYPES,
   EMPLOYER_OCCURRENCE_DISPUTE_STATUSES,
+  EMPLOYER_OCCURRENCE_DISPUTE_ISSUE_STATUSES,
   ADMIN_EMPLOYER_OCCURRENCE_DISPUTE_DECISIONS,
 } = require("../constants/shiftLifecycle");
 
 /**
  * Employer disputes are BASE/factual only.
  *
- * The current lifecycle constants deliberately exclude overtime_correction.
- *
- * Per-issue workflow state is local to this model because the existing
- * lifecycle constants expose the coarse dispute-case statuses:
- *
- * - awaiting_professional_response
- * - awaiting_admin_review
- * - resolved
- * - withdrawn
- *
- * Case status is derived from the statuses of the individual immutable issues.
+ * Case status is coarse. Each issue owns its own workflow state.
+ * Overtime remains exclusively in the OT lifecycle.
  */
-const EMPLOYER_DISPUTE_ISSUE_STATUSES = Object.freeze([
-  "awaiting_professional_response",
-  "awaiting_admin_review",
-  "resolved",
-]);
 
 const FORBIDDEN_SNAPSHOT_AUTHORITY_FIELDS = Object.freeze([
   "finalProfessionalPay",
@@ -192,17 +179,9 @@ const attendanceCorrectionPositionSchema = new mongoose.Schema(
 );
 
 /**
- * Employer's immutable original factual/financial position.
+ * Employer's immutable submitted position.
  *
- * attendanceCorrection:
- * Used only for attendance_correction.
- *
- * proposedBaseProfessionalPay:
- * May be used by payment_calculation or other_financial_fact.
- *
- * It is evidential position only.
- *
- * Final BASE entitlement remains owned by settlement/resolution services.
+ * Final BASE authority remains with resolution/settlement services.
  */
 const employerIssueDetailsSchema = new mongoose.Schema(
   {
@@ -212,7 +191,7 @@ const employerIssueDetailsSchema = new mongoose.Schema(
       default: null,
     },
 
-    proposedBaseProfessionalPay: optionalMinorUnitAmountField(),
+    employerProposedBaseProfessionalPay: optionalMinorUnitAmountField(),
   },
   {
     _id: false,
@@ -220,11 +199,7 @@ const employerIssueDetailsSchema = new mongoose.Schema(
 );
 
 /**
- * Professional response may simply dispute the employer's statement without
- * providing a replacement structured position.
- *
- * When the professional does provide a different factual/financial position,
- * it is stored here.
+ * Optional structured professional counter-position.
  */
 const professionalCounterPositionSchema = new mongoose.Schema(
   {
@@ -248,12 +223,7 @@ const professionalCounterPositionSchema = new mongoose.Schema(
 );
 
 /**
- * Admin is not restricted to choosing either party's proposed value.
- *
- * Admin may establish the evidence-supported final fact/value.
- *
- * The resolution service consumes these values and recalculates the
- * authoritative BASE result where required.
+ * Evidence-supported final authority established by admin.
  */
 const adminDisputeOutcomeSchema = new mongoose.Schema(
   {
@@ -271,12 +241,6 @@ const adminDisputeOutcomeSchema = new mongoose.Schema(
 
     finalBaseProfessionalPay: optionalMinorUnitAmountField(),
 
-    /**
-     * Additional final factual outcome where the issue cannot be fully
-     * represented by the structured attendance/pay fields.
-     *
-     * This is especially useful for other_financial_fact.
-     */
     finalOutcome: {
       type: String,
 
@@ -309,15 +273,8 @@ const disputeIssueSchema = new mongoose.Schema(
     },
 
     /**
-     * Employer-originated ordinary disputes are BASE/factual only.
-     *
-     * The service still derives and supplies this field rather than allowing
-     * the client to submit backend component names.
-     *
-     * This issue-level scope is the only stored settlement-component scope
-     * authority on the dispute.
-     *
-     * Live blocking scope is derived only from unresolved issues.
+     * The only stored settlement-component scope authority.
+     * Employer disputes are BASE-only.
      */
     affectedSettlementComponents: requiredUniqueEnumArrayField({
       values: SETTLEMENT_BATCH_COMPONENTS,
@@ -359,7 +316,7 @@ const disputeIssueSchema = new mongoose.Schema(
     status: {
       type: String,
 
-      enum: EMPLOYER_DISPUTE_ISSUE_STATUSES,
+      enum: EMPLOYER_OCCURRENCE_DISPUTE_ISSUE_STATUSES,
 
       default: "awaiting_professional_response",
 
@@ -368,15 +325,6 @@ const disputeIssueSchema = new mongoose.Schema(
 
     // --- PROFESSIONAL RESPONSE ---
 
-    /**
-     * Every submitted employer issue receives its own response opportunity.
-     *
-     * A professional may:
-     *
-     * - disagree with the employer while retaining the current record;
-     * - provide a different factual position; and/or
-     * - submit evidence.
-     */
     professionalResponseStatement: {
       type: String,
 
@@ -411,10 +359,6 @@ const disputeIssueSchema = new mongoose.Schema(
       default: null,
     },
 
-    /**
-     * Records that the issue entered admin review because the professional
-     * did not respond before the shared response deadline.
-     */
     professionalResponseExpiredAt: {
       type: Date,
 
@@ -430,14 +374,10 @@ const disputeIssueSchema = new mongoose.Schema(
     },
 
     /**
-     * approved:
-     * Admin agrees that the employer raised a valid issue.
+     * approved means the dispute established that current authority requires
+     * correction. adminOutcome records the evidence-supported final result.
      *
-     * The final factual value does not need to equal the employer's proposed
-     * value. adminOutcome may establish a different evidence-supported fact.
-     *
-     * rejected:
-     * The employer-originated issue is not upheld.
+     * rejected leaves current authority unchanged.
      */
     adminDecision: {
       type: String,
@@ -595,10 +535,7 @@ const shiftOccurrenceDisputeSchema = new mongoose.Schema(
     // --- IMMUTABLE ORIGINAL ISSUE SET ---
 
     /**
-     * One original employer dispute case may contain one or more genuinely
-     * separate employer-originated ordinary issues.
-     *
-     * Once submitted, issue types cannot be added or removed.
+     * Issue types cannot be added or removed after submission.
      */
     submittedIssueTypes: requiredUniqueEnumArrayField({
       values: EMPLOYER_OCCURRENCE_DISPUTE_TYPES,
@@ -652,16 +589,10 @@ const shiftOccurrenceDisputeSchema = new mongoose.Schema(
       immutable: true,
     },
 
-    // --- SHARED OCCURRENCE CHALLENGE WINDOW SNAPSHOT ---
+    // --- SHARED CHALLENGE WINDOW SNAPSHOT ---
 
     /**
-     * Historical copy of the occurrence-owned shared ordinary review window.
-     *
-     * Employer dispute creation does not close the occurrence challenge
-     * window.
-     *
-     * A professional claim may coexist where it concerns a genuinely
-     * separate factual controversy.
+     * Submission-time copy only. The occurrence owns the live window.
      */
     challengeWindowOpenedAt: {
       type: Date,
@@ -682,15 +613,7 @@ const shiftOccurrenceDisputeSchema = new mongoose.Schema(
     // --- PROFESSIONAL RESPONSE CLOCK ---
 
     /**
-     * All employer issues are submitted together.
-     *
-     * They therefore share one professional response deadline.
-     *
-     * Before this deadline, the professional may respond independently to
-     * each unresolved issue.
-     *
-     * At expiry, only issues still awaiting professional response move to
-     * admin review for non-response.
+     * All issues share the response deadline.
      */
     professionalResponseDeadlineAt: {
       type: Date,
@@ -703,13 +626,7 @@ const shiftOccurrenceDisputeSchema = new mongoose.Schema(
     // --- PRE-DISPUTE FACT SNAPSHOT ---
 
     /**
-     * Evidential snapshot only.
-     *
-     * The dispute document does not own settlement, fee, refund, overtime,
-     * delinquency, payout or challenge-window authority.
-     *
-     * Resolution services should establish authoritative final facts rather
-     * than restoring financial state from this snapshot.
+     * Evidential facts only. No financial or lifecycle authority.
      */
     lifecycleSnapshot: {
       type: mongoose.Schema.Types.Mixed,
@@ -730,35 +647,21 @@ const shiftOccurrenceDisputeSchema = new mongoose.Schema(
         },
 
         message:
-          "lifecycleSnapshot must contain only challenge-relevant occurrence facts and must not contain settlement, platform-fee, refund, overtime, delinquency, employer-charge, legacy final or challenge-window authority fields.",
+          "lifecycleSnapshot must contain only challenge-relevant occurrence facts and must not contain settlement, platform-fee, refund, overtime, delinquency, employer-charge, final aggregate or challenge-window authority fields.",
       },
     },
 
     // --- CASE WORKFLOW STATUS ---
 
     /**
-     * Coarse case status.
-     *
-     * awaiting_professional_response:
-     * At least one issue still awaits the professional.
-     *
-     * awaiting_admin_review:
-     * No issue awaits the professional and at least one unresolved issue is
-     * before admin.
-     *
-     * resolved:
-     * Every issue is finally resolved.
-     *
-     * withdrawn:
-     * Employer withdrew the untouched dispute before professional/admin
-     * action began.
+     * Coarse case status. Issue status owns action state.
      */
     status: {
       type: String,
 
       enum: EMPLOYER_OCCURRENCE_DISPUTE_STATUSES,
 
-      default: "awaiting_professional_response",
+      default: "active",
 
       required: true,
     },
@@ -766,10 +669,7 @@ const shiftOccurrenceDisputeSchema = new mongoose.Schema(
     // --- REFUND RELATIONSHIP ---
 
     /**
-     * Employer disputes are BASE-scoped.
-     *
-     * #15 remains the refund eligibility authority. This relationship is
-     * only a reference to a linked refund record where one exists.
+     * Reference only. Refund authority remains in the refund service.
      */
     employerRefund: {
       type: mongoose.Schema.Types.ObjectId,
@@ -886,7 +786,7 @@ function validateDisputeIssue(dispute, issue, index) {
 
   const hasAttendanceCorrection = hasAttendancePosition(attendanceCorrection);
 
-  const hasEmployerProposedBasePay = hasValue(details.proposedBaseProfessionalPay);
+  const hasEmployerProposedBasePay = hasValue(details.employerProposedBaseProfessionalPay);
 
   const hasProfessionalResponse =
     hasAny([
@@ -910,6 +810,8 @@ function validateDisputeIssue(dispute, issue, index) {
 
   const adminOutcome = issue.adminOutcome || null;
 
+  const hasAdminOutcomeDocument = Boolean(adminOutcome);
+
   const hasStructuredAdminOutcome = hasAdminOutcome(adminOutcome);
 
   const hasAdminEvidence = Array.isArray(issue.adminEvidence) && issue.adminEvidence.length > 0;
@@ -921,9 +823,7 @@ function validateDisputeIssue(dispute, issue, index) {
   }
 
   /**
-   * Generic employer disputes are BASE only.
-   *
-   * OT is governed exclusively by the overtime domain.
+   * Generic employer disputes are BASE-only.
    */
   if (!sameComponents(affectedComponents, ["base"])) {
     dispute.invalidate(
@@ -942,7 +842,7 @@ function validateDisputeIssue(dispute, issue, index) {
 
     if (hasEmployerProposedBasePay) {
       dispute.invalidate(
-        `${pathPrefix}.details.proposedBaseProfessionalPay`,
+        `${pathPrefix}.details.employerProposedBaseProfessionalPay`,
         "attendance_correction must state attendance facts rather than a replacement BASE-pay amount."
       );
     }
@@ -965,28 +865,17 @@ function validateDisputeIssue(dispute, issue, index) {
 
     if (!hasEmployerProposedBasePay) {
       dispute.invalidate(
-        `${pathPrefix}.details.proposedBaseProfessionalPay`,
+        `${pathPrefix}.details.employerProposedBaseProfessionalPay`,
         "payment_calculation requires the employer's proposed BASE professional-pay amount."
       );
     }
   }
 
-  if (issue.type === "other_financial_fact") {
-    if (hasAttendanceCorrection) {
-      dispute.invalidate(
-        `${pathPrefix}.details.attendanceCorrection`,
-        "other_financial_fact cannot contain attendance-correction timestamps."
-      );
-    }
-
-    /**
-     * proposedBaseProfessionalPay remains optional here.
-     *
-     * The factual controversy may affect BASE entitlement without the employer
-     * being able to state the final calculated amount.
-     *
-     * The statement carries the employer's factual position.
-     */
+  if (issue.type === "other_financial_fact" && hasAttendanceCorrection) {
+    dispute.invalidate(
+      `${pathPrefix}.details.attendanceCorrection`,
+      "other_financial_fact cannot contain attendance-correction timestamps."
+    );
   }
 
   /* ─────────────────────────────── PROFESSIONAL RESPONSE ─────────────────────────────── */
@@ -1134,7 +1023,7 @@ function validateDisputeIssue(dispute, issue, index) {
         "An admin issue decision requires admin review, a reason, decision time and deciding user."
       );
     }
-  } else if (hasAdminDecisionAudit || hasStructuredAdminOutcome) {
+  } else if (hasAdminDecisionAudit || hasAdminOutcomeDocument) {
     dispute.invalidate(
       `${pathPrefix}.adminDecision`,
       "Admin decision audit or final outcome requires an admin decision."
@@ -1161,10 +1050,10 @@ function validateDisputeIssue(dispute, issue, index) {
 
   validateAdminOutcome(dispute, adminOutcome, `${pathPrefix}.adminOutcome`);
 
-  if (issue.adminDecision === "rejected" && hasStructuredAdminOutcome) {
+  if (issue.adminDecision === "rejected" && hasAdminOutcomeDocument) {
     dispute.invalidate(
       `${pathPrefix}.adminOutcome`,
-      "A rejected employer dispute issue cannot establish replacement occurrence facts."
+      "A rejected employer dispute issue cannot contain a replacement admin outcome."
     );
   }
 
@@ -1173,6 +1062,16 @@ function validateDisputeIssue(dispute, issue, index) {
       dispute.invalidate(
         `${pathPrefix}.adminOutcome.finalBaseProfessionalPay`,
         "attendance_correction admin outcome must establish attendance facts; final BASE pay is recalculated by the resolution/settlement services."
+      );
+    }
+
+    if (
+      issue.adminDecision === "approved" &&
+      !hasAny([adminOutcome?.finalCheckInAt, adminOutcome?.finalCheckOutAt])
+    ) {
+      dispute.invalidate(
+        `${pathPrefix}.adminOutcome`,
+        "An approved attendance_correction dispute requires admin to establish the final authoritative attendance fact."
       );
     }
   } else if (adminOutcome && (adminOutcome.finalCheckInAt || adminOutcome.finalCheckOutAt)) {
@@ -1213,7 +1112,7 @@ function validateDisputeIssue(dispute, issue, index) {
       issue.adminReviewStartedAt ||
       hasAdminDecision ||
       hasAdminDecisionAudit ||
-      hasStructuredAdminOutcome ||
+      hasAdminOutcomeDocument ||
       hasAdminEvidence ||
       issue.resolvedAt
     ) {
@@ -1251,12 +1150,7 @@ function validateDisputeIssue(dispute, issue, index) {
       );
     }
 
-    if (
-      hasAdminDecision ||
-      hasAdminDecisionAudit ||
-      hasStructuredAdminOutcome ||
-      issue.resolvedAt
-    ) {
+    if (hasAdminDecision || hasAdminDecisionAudit || hasAdminOutcomeDocument || issue.resolvedAt) {
       dispute.invalidate(
         `${pathPrefix}.status`,
         "awaiting_admin_review cannot contain a final admin decision or resolvedAt."
@@ -1363,10 +1257,6 @@ shiftOccurrenceDisputeSchema.pre("validate", function validateShiftOccurrenceDis
     );
   }
 
-  /**
-   * At the shared challenge deadline the original employer submission right
-   * has expired.
-   */
   if (
     this.submittedAt &&
     this.challengeDeadlineAt &&
@@ -1393,49 +1283,22 @@ shiftOccurrenceDisputeSchema.pre("validate", function validateShiftOccurrenceDis
 
   /* ─────────────────────────────── CASE STATUS ─────────────────────────────── */
 
-  const awaitingProfessionalIssues = issues.filter(
-    (issue) => issue?.status === "awaiting_professional_response"
-  );
-
-  const awaitingAdminIssues = issues.filter((issue) => issue?.status === "awaiting_admin_review");
+  const unresolvedIssues = issues.filter((issue) => issue?.status !== "resolved");
 
   const resolvedIssues = issues.filter((issue) => issue?.status === "resolved");
 
-  if (this.status === "awaiting_professional_response") {
-    if (awaitingProfessionalIssues.length === 0) {
+  if (this.status === "active") {
+    if (issues.length === 0 || unresolvedIssues.length === 0) {
       this.invalidate(
         "status",
-        "A dispute awaiting professional response must contain at least one issue awaiting professional response."
-      );
-    }
-
-    if (resolvedIssues.length === issues.length || this.resolvedAt || hasWithdrawalAudit) {
-      this.invalidate(
-        "status",
-        "A dispute awaiting professional response cannot be resolved or withdrawn."
-      );
-    }
-  }
-
-  if (this.status === "awaiting_admin_review") {
-    if (awaitingProfessionalIssues.length > 0) {
-      this.invalidate(
-        "status",
-        "A dispute cannot move to case-level admin review while any issue still awaits the professional."
-      );
-    }
-
-    if (awaitingAdminIssues.length === 0) {
-      this.invalidate(
-        "status",
-        "A dispute awaiting admin review must contain at least one unresolved issue awaiting admin review."
+        "An active employer dispute requires at least one unresolved issue."
       );
     }
 
     if (this.resolvedAt || hasWithdrawalAudit) {
       this.invalidate(
         "status",
-        "A dispute awaiting admin review cannot contain case resolution or withdrawal audit."
+        "An active employer dispute cannot contain case resolution or withdrawal audit."
       );
     }
   }
@@ -1494,12 +1357,7 @@ shiftOccurrenceDisputeSchema.pre("validate", function validateShiftOccurrenceDis
     }
 
     /**
-     * Employer withdrawal is intentionally narrower than ordinary issue
-     * resolution.
-     *
-     * Once the professional has responded to any issue, a response has
-     * expired, or admin review has begun, the dispute cannot simply be
-     * withdrawn out of the adjudication record.
+     * Withdrawal is available only before professional/admin activity.
      */
     const hasStartedAdjudication = issues.some(
       (issue) =>
@@ -1553,12 +1411,7 @@ shiftOccurrenceDisputeSchema.index(
 );
 
 /**
- * Maximum one original employer dispute case per occurrence.
- *
- * Multiple genuinely separate employer-originated issues are carried inside
- * this one case.
- *
- * Withdrawal does not recreate another original employer dispute right.
+ * One original employer dispute case per occurrence.
  */
 shiftOccurrenceDisputeSchema.index(
   {
@@ -1593,10 +1446,7 @@ shiftOccurrenceDisputeSchema.index({
 });
 
 /**
- * Issue-level component scope is the only stored component-scope authority.
- *
- * Combining it with issue status supports unresolved-component queries without
- * reintroducing a case-level aggregate field.
+ * Live component scope is derived from unresolved issues only.
  */
 shiftOccurrenceDisputeSchema.index({
   "issues.affectedSettlementComponents": 1,

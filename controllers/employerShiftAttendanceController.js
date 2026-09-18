@@ -2,7 +2,14 @@
 
 const ShiftAttendanceService = require("../services/shiftAttendanceService");
 
+const ShiftAttendanceQueryService = require("../services/shifts/attendance/shiftAttendanceQueryService");
+
+const ShiftAttendanceViewService = require("../services/shifts/attendance/shiftAttendanceViewService");
+
 const logger = require("../utils/logger");
+
+const EMPLOYER_ATTENDANCE_VIEW = "employer/shifts/attendance";
+const EMPLOYER_SHIFTS_URL = "/employer/shifts";
 
 /* ─────────────────────────────── HELPERS ─────────────────────────────── */
 
@@ -15,9 +22,11 @@ function setSensitiveResponseHeaders(res) {
 }
 
 function isOperationalServiceError(error) {
-  return ["ShiftAttendanceServiceError", "EmployerShiftAttendanceControllerError"].includes(
-    error?.name
-  );
+  return [
+    "ShiftAttendanceServiceError",
+    "ShiftAttendanceQueryServiceError",
+    "EmployerShiftAttendanceControllerError",
+  ].includes(error?.name);
 }
 
 function handleJsonError({ res, error, logContext, fallbackMessage, fallbackCode }) {
@@ -58,7 +67,25 @@ function handleJsonError({ res, error, logContext, fallbackMessage, fallbackCode
 
 /* ─────────────────────────────── REQUEST CONTEXT ─────────────────────────────── */
 
-function getEmployerAttendanceContext(req) {
+function getEmployerUserId(req) {
+  const employerUserId = req.user?._id;
+
+  if (!employerUserId) {
+    const error = new Error("Employer user context is unavailable.");
+
+    error.name = "EmployerShiftAttendanceControllerError";
+
+    error.code = "EMPLOYER_USER_CONTEXT_REQUIRED";
+
+    error.statusCode = 500;
+
+    throw error;
+  }
+
+  return employerUserId;
+}
+
+function getEmployerProfileId(req) {
   const employerProfileId = req.employerProfile?._id;
 
   if (!employerProfileId) {
@@ -73,16 +100,113 @@ function getEmployerAttendanceContext(req) {
     throw error;
   }
 
+  return employerProfileId;
+}
+
+function getEmployerAttendanceContext(req) {
   return {
     shiftId: req.params.shiftId,
 
     occurrenceId: req.params.occurrenceId || null,
 
-    employerProfileId,
+    employerProfileId: getEmployerProfileId(req),
 
     employerContext: req.employerContext || null,
   };
 }
+
+/* ─────────────────────────────── ATTENDANCE PAGE ─────────────────────────────── */
+
+/**
+ * Renders the employer attendance page.
+ *
+ * ShiftAttendanceQueryService owns:
+ *
+ * - employer/business authorization;
+ * - branch scope;
+ * - focused Shift scope;
+ * - attendance-status filtering;
+ * - occurrence reads;
+ * - raw attendance counts; and
+ * - pagination facts.
+ *
+ * ShiftAttendanceViewService owns:
+ *
+ * - occurrence identity presentation;
+ * - professional presentation;
+ * - attendance status presentation;
+ * - attendance audit presentation;
+ * - PIN action availability;
+ * - filters;
+ * - summary cards;
+ * - empty state; and
+ * - pagination presentation.
+ *
+ * Raw attendance PINs are never loaded by this page request.
+ * PIN values remain behind the exact occurrence PIN endpoints below.
+ */
+exports.getAttendance = async (req, res, next) => {
+  try {
+    const currentTime = new Date();
+
+    const attendancePageData = await ShiftAttendanceQueryService.getEmployerAttendancePageData({
+      userId: getEmployerUserId(req),
+
+      employerProfile: req.employerProfile,
+
+      employerContext: req.employerContext || null,
+
+      attendanceStatus: req.query.status,
+
+      shiftId: req.query.shift,
+
+      page: req.query.page,
+
+      currentTime,
+    });
+
+    const attendanceView =
+      ShiftAttendanceViewService.buildEmployerAttendancePageView(attendancePageData);
+
+    setSensitiveResponseHeaders(res);
+
+    return res.render(EMPLOYER_ATTENDANCE_VIEW, {
+      layout: "layouts/app-layout",
+
+      title: attendanceView.pageTitle || "Shift Attendance",
+
+      breadcrumbs: [
+        {
+          label: "Home",
+
+          url: "/employer/dashboard",
+        },
+        {
+          label: "Manage Shifts",
+
+          url: EMPLOYER_SHIFTS_URL,
+        },
+        {
+          label: "Attendance",
+
+          url: null,
+        },
+      ],
+
+      csrfToken: req.csrfToken(),
+
+      attendanceView,
+
+      scripts: `
+          <script src="/js/employer/shift-attendance.js"></script>
+        `,
+    });
+  } catch (error) {
+    logger.error("Employer shift attendance page error:", error);
+
+    return next(error);
+  }
+};
 
 /* ─────────────────────────────── CHECK-IN PIN ─────────────────────────────── */
 
@@ -106,6 +230,7 @@ exports.getCheckInPin = async (req, res) => {
   } catch (error) {
     return handleJsonError({
       res,
+
       error,
 
       logContext: "Employer occurrence check-in PIN request",
@@ -139,6 +264,7 @@ exports.getCheckOutPin = async (req, res) => {
   } catch (error) {
     return handleJsonError({
       res,
+
       error,
 
       logContext: "Employer occurrence check-out PIN request",

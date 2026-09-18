@@ -9,6 +9,7 @@ const TERMINAL_OCCURRENCE_STATUSES = ["completed", "cancelled", "no_show", "expi
 const TERMINAL_ATTENDANCE_STATUSES = ["settled", "no_show"];
 
 const PIN_ELIGIBLE_PARENT_STATUSES = [
+  "open",
   "assigned",
   "confirmed",
   "in_progress",
@@ -86,13 +87,25 @@ class ShiftPinAccessService {
     });
 
     if (selectedOccurrenceId) {
-      const selectedOccurrence = occurrenceList.find(
-        (occurrence) => String(occurrence._id) === String(selectedOccurrenceId)
+      return (
+        occurrenceList.find(
+          (occurrence) => String(occurrence._id) === String(selectedOccurrenceId)
+        ) || null
       );
+    }
 
-      if (selectedOccurrence) {
-        return selectedOccurrence;
+    const slotNumbers = new Set();
+
+    for (const occurrence of occurrenceList) {
+      if (!Number.isSafeInteger(occurrence.slotNumber) || occurrence.slotNumber < 1) {
+        return null;
       }
+
+      slotNumbers.add(occurrence.slotNumber);
+    }
+
+    if (slotNumbers.size > 1) {
+      return null;
     }
 
     const activeOccurrence = occurrenceList.find((occurrence) =>

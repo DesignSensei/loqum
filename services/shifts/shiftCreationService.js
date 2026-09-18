@@ -188,6 +188,94 @@ class ShiftCreationService {
     return currentTime;
   }
 
+  static normalizeRequiredProfessionals(value) {
+    if (value === undefined || value === null || value === "") {
+      return 1;
+    }
+
+    if (
+      !["number", "string"].includes(typeof value) ||
+      (typeof value === "string" && !/^\d+$/.test(value.trim()))
+    ) {
+      throw createShiftError({
+        message: "Required professionals must be a positive whole number.",
+        code: "INVALID_REQUIRED_PROFESSIONALS",
+      });
+    }
+
+    const count = Number(value);
+
+    if (!Number.isSafeInteger(count) || count < 1) {
+      throw createShiftError({
+        message: "Required professionals must be a positive safe whole number.",
+        code: "INVALID_REQUIRED_PROFESSIONALS",
+      });
+    }
+
+    return count;
+  }
+
+  static resolvePostingRateSnapshots(pricing) {
+    // The supplied settings contract exposes one standard country rate.
+    // No subscription resolver or separate OT configuration exists here yet.
+    const standardRate = ShiftPricingService.normalizeFinancialRate(
+      pricing.platformFeeRate,
+      "platformFeeRate"
+    );
+
+    return {
+      standardBasePlatformFeeRate: standardRate,
+      basePlatformFeeRate: standardRate,
+      overtimePlatformFeeRate: standardRate,
+      basePlatformFeeBenefitSource: "standard",
+      basePlatformFeeSubscription: null,
+    };
+  }
+
+  static assertSafeCapacity(schedule, requiredProfessionals) {
+    const dates = ShiftCreationService.assertPositiveInteger(
+      schedule.occurrenceCount,
+      "occurrenceCount"
+    );
+
+    const total = BigInt(dates) * BigInt(requiredProfessionals);
+    const staffMinutes = BigInt(schedule.totalScheduledMinutes) * BigInt(requiredProfessionals);
+
+    if (total > BigInt(Number.MAX_SAFE_INTEGER) || staffMinutes > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw createShiftError({
+        message: "The requested Shift capacity exceeds supported limits.",
+        code: "SHIFT_CAPACITY_TOO_LARGE",
+      });
+    }
+
+    // Check monetary overflow before allocating slot/date documents.
+    for (const amount of Object.values(schedule.aggregatePricing)) {
+      ShiftPricingService.assertCalculatedMinorUnitAmount(amount, "schedule amount");
+      if (BigInt(amount) * BigInt(requiredProfessionals) > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw createShiftError({
+          message: "The requested Shift pricing exceeds supported limits.",
+          code: "SHIFT_CAPACITY_PRICING_TOO_LARGE",
+        });
+      }
+    }
+
+    return Number(total);
+  }
+
+  static aggregateOccurrencePricing(occurrences) {
+    return Object.fromEntries(
+      ["estimatedProfessionalPay", "estimatedPlatformFee", "estimatedEmployerCharge"].map(
+        (field) => [
+          field,
+          ShiftPricingService.sumSafeIntegerAmounts(
+            occurrences.map((occurrence) => occurrence[field]),
+            field
+          ),
+        ]
+      )
+    );
+  }
+
   /* ─────────────────────────────── EMPLOYER / BRANCH ACCESS ─────────────────────────────── */
 
   static async getEmployerProfileForUser(userId, employerProfile = null) {
@@ -386,11 +474,13 @@ class ShiftCreationService {
     };
   }
 
-  static createOccurrenceIdentity({ referenceCode, sequenceNumber }) {
+  static createOccurrenceIdentity({ referenceCode, slotNumber, sequenceNumber }) {
     return {
       occurrenceId: new mongoose.Types.ObjectId(),
 
-      occurrenceReferenceCode: `${referenceCode}-` + String(sequenceNumber).padStart(2, "0"),
+      occurrenceReferenceCode:
+        `${referenceCode}-S${String(slotNumber).padStart(2, "0")}-` +
+        String(sequenceNumber).padStart(2, "0"),
     };
   }
 
@@ -398,6 +488,8 @@ class ShiftCreationService {
 
   static buildOccurrenceDocuments({
     schedule,
+    requiredProfessionals,
+    rateSnapshots,
     shiftId,
     referenceCode,
     businessId,
@@ -410,126 +502,136 @@ class ShiftCreationService {
       "unfilledFinalizationGraceMinutes"
     );
 
-    return schedule.occurrenceBlueprints.map((blueprint) => {
-      const { occurrenceId, occurrenceReferenceCode } =
-        ShiftCreationService.createOccurrenceIdentity({
-          referenceCode,
+    const documents = [];
+
+    for (let slotNumber = 1; slotNumber <= requiredProfessionals; slotNumber += 1) {
+      for (const blueprint of schedule.occurrenceBlueprints) {
+        const { occurrenceId, occurrenceReferenceCode } =
+          ShiftCreationService.createOccurrenceIdentity({
+            referenceCode,
+
+            slotNumber,
+
+            sequenceNumber: blueprint.sequenceNumber,
+          });
+
+        const { checkInPin, checkOutPin } = ShiftCreationService.generateAttendancePins();
+
+        const attendancePinsGeneratedAt = new Date(createdAt);
+
+        const fillCutoffAt = new Date(blueprint.startTime);
+
+        const unfilledFinalizationAt = new Date(
+          fillCutoffAt.getTime() + finalizationGraceMinutes * MILLISECONDS_PER_MINUTE
+        );
+
+        documents.push({
+          _id: occurrenceId,
+
+          slotNumber,
+
+          shift: shiftId,
+
+          business: businessId,
+
+          branch: branchId,
+
+          referenceCode: occurrenceReferenceCode,
 
           sequenceNumber: blueprint.sequenceNumber,
+
+          assignmentStatus: "unassigned",
+
+          assignedProfessional: null,
+
+          assignment: null,
+
+          assignedAt: null,
+
+          replacementRequiredAt: null,
+
+          replacementForAssignment: null,
+
+          replacementCase: null,
+
+          replacementReasonCode: null,
+
+          replacementReasonDetails: null,
+
+          occurrenceDate: blueprint.occurrenceDate,
+
+          scheduleTimeZone: blueprint.scheduleTimeZone,
+
+          startTime: blueprint.startTime,
+
+          endTime: blueprint.endTime,
+
+          scheduledMinutes: blueprint.scheduledMinutes,
+
+          scheduledHours: blueprint.scheduledMinutes / 60,
+
+          breakDuration: blueprint.breakDuration,
+
+          fillCutoffAt,
+
+          unfilledFinalizationAt,
+
+          expiredUnfilledAt: null,
+
+          baseBillableHours: null,
+
+          billableHours: null,
+
+          /*
+           * Occurrence-level pricing snapshots.
+           *
+           * These values are copied from the locked posting calculation and
+           * must not later be re-derived from current PlatformSettings.
+           */
+          hourlyRate: blueprint.hourlyRate,
+
+          ...rateSnapshots,
+
+          estimatedProfessionalPay: blueprint.estimatedProfessionalPay,
+
+          estimatedPlatformFee: blueprint.estimatedPlatformFee,
+
+          estimatedEmployerCharge: blueprint.estimatedEmployerCharge,
+
+          topUpRequired: 0,
+
+          refundableAmount: 0,
+
+          refundedAmount: 0,
+
+          refundStatus: "not_eligible",
+
+          refundReason: null,
+
+          refundEligibleAt: null,
+
+          refundedAt: null,
+
+          checkInPin,
+
+          checkOutPin,
+
+          attendancePinsGeneratedAt,
+
+          checkInPinUsedAt: null,
+
+          checkOutPinUsedAt: null,
+
+          status: "scheduled",
+
+          attendanceStatus: "not_started",
+
+          settlementStatus: "not_due",
         });
+      }
+    }
 
-      const { checkInPin, checkOutPin } = ShiftCreationService.generateAttendancePins();
-
-      const attendancePinsGeneratedAt = new Date(createdAt);
-
-      const fillCutoffAt = new Date(blueprint.startTime);
-
-      const unfilledFinalizationAt = new Date(
-        fillCutoffAt.getTime() + finalizationGraceMinutes * MILLISECONDS_PER_MINUTE
-      );
-
-      return {
-        _id: occurrenceId,
-
-        shift: shiftId,
-
-        business: businessId,
-
-        branch: branchId,
-
-        referenceCode: occurrenceReferenceCode,
-
-        sequenceNumber: blueprint.sequenceNumber,
-
-        assignmentStatus: "unassigned",
-
-        assignedProfessional: null,
-
-        assignment: null,
-
-        assignedAt: null,
-
-        replacementRequiredAt: null,
-
-        replacementForAssignment: null,
-
-        replacementCase: null,
-
-        replacementReasonCode: null,
-
-        replacementReasonDetails: null,
-
-        occurrenceDate: blueprint.occurrenceDate,
-
-        scheduleTimeZone: blueprint.scheduleTimeZone,
-
-        startTime: blueprint.startTime,
-
-        endTime: blueprint.endTime,
-
-        scheduledMinutes: blueprint.scheduledMinutes,
-
-        scheduledHours: blueprint.scheduledHours,
-
-        breakDuration: blueprint.breakDuration,
-
-        fillCutoffAt,
-
-        unfilledFinalizationAt,
-
-        expiredUnfilledAt: null,
-
-        baseBillableHours: null,
-
-        billableHours: null,
-
-        /*
-         * Occurrence-level pricing snapshots.
-         *
-         * These values are copied from the locked posting calculation and
-         * must not later be re-derived from current PlatformSettings.
-         */
-        hourlyRate: blueprint.hourlyRate,
-
-        platformFeeRate: blueprint.platformFeeRate,
-
-        estimatedProfessionalPay: blueprint.estimatedProfessionalPay,
-
-        estimatedPlatformFee: blueprint.estimatedPlatformFee,
-
-        estimatedEmployerCharge: blueprint.estimatedEmployerCharge,
-
-        topUpRequired: 0,
-
-        refundableAmount: 0,
-
-        refundedAmount: 0,
-
-        refundStatus: "not_eligible",
-
-        refundReason: null,
-
-        refundEligibleAt: null,
-
-        refundedAt: null,
-
-        checkInPin,
-
-        checkOutPin,
-
-        attendancePinsGeneratedAt,
-
-        checkInPinUsedAt: null,
-
-        checkOutPinUsedAt: null,
-
-        status: "scheduled",
-
-        attendanceStatus: "not_started",
-
-        settlementStatus: "not_due",
-      };
-    });
+    return documents;
   }
 
   static buildInitialOccurrenceProgress(occurrenceCount, createdAt) {
@@ -576,7 +678,11 @@ class ShiftCreationService {
 
       refundNotEligible: occurrenceCount,
 
+      refundHeld: 0,
+
       refundEligible: 0,
+
+      refundBatched: 0,
 
       refundProcessing: 0,
 
@@ -599,6 +705,9 @@ class ShiftCreationService {
     department,
     roleTitle,
     professionalType,
+    requiredProfessionals,
+    rateSnapshots,
+    aggregatePricing,
     schedule,
     breakDuration,
     hourlyRate,
@@ -630,6 +739,8 @@ class ShiftCreationService {
 
       professionalType,
 
+      requiredProfessionals,
+
       scheduleMode: schedule.scheduleMode,
 
       occurrenceCount: schedule.occurrenceCount,
@@ -656,13 +767,13 @@ class ShiftCreationService {
 
       endTime: schedule.endTime,
 
-      scheduledHours: schedule.scheduledHours,
+      scheduledHours: schedule.totalScheduledMinutes / 60,
 
       breakDuration,
 
       hourlyRate,
 
-      platformFeeRate: pricing.platformFeeRate,
+      ...rateSnapshots,
 
       /*
        * Parent pricing is locked once, at posting.
@@ -680,11 +791,11 @@ class ShiftCreationService {
         lockedAt: pricingLockedAt,
       },
 
-      estimatedProfessionalPay: schedule.aggregatePricing.estimatedProfessionalPay,
+      estimatedProfessionalPay: aggregatePricing.estimatedProfessionalPay,
 
-      estimatedPlatformFee: schedule.aggregatePricing.estimatedPlatformFee,
+      estimatedPlatformFee: aggregatePricing.estimatedPlatformFee,
 
-      estimatedEmployerCharge: schedule.aggregatePricing.estimatedEmployerCharge,
+      estimatedEmployerCharge: aggregatePricing.estimatedEmployerCharge,
 
       totalApplications: 0,
 
@@ -693,7 +804,7 @@ class ShiftCreationService {
       applicationRound: 1,
 
       occurrenceProgress: ShiftCreationService.buildInitialOccurrenceProgress(
-        schedule.occurrenceCount,
+        occurrenceDocuments.length,
         pricingLockedAt
       ),
 
@@ -724,16 +835,6 @@ class ShiftCreationService {
 
       description,
     };
-
-    if (schedule.scheduleMode === "single") {
-      const singleOccurrence = occurrenceDocuments[0];
-
-      shiftPayload.checkInPin = singleOccurrence.checkInPin;
-
-      shiftPayload.checkOutPin = singleOccurrence.checkOutPin;
-
-      shiftPayload.attendancePinsGeneratedAt = singleOccurrence.attendancePinsGeneratedAt;
-    }
 
     return shiftPayload;
   }
@@ -833,9 +934,15 @@ class ShiftCreationService {
       .join(", ");
   }
 
-  static buildCreatedScheduleResponse({ schedule, occurrences = [] }) {
+  static buildCreatedScheduleResponse({ schedule, requiredProfessionals, occurrences = [] }) {
     return {
       scheduleMode: schedule.scheduleMode,
+
+      requiredProfessionals,
+
+      totalOccurrenceCount: occurrences.length,
+
+      totalStaffScheduledMinutes: schedule.totalScheduledMinutes * requiredProfessionals,
 
       scheduleModeLabel: schedule.scheduleMode === "multiple" ? "Multiple Shifts" : "Single Shift",
 
@@ -891,6 +998,8 @@ class ShiftCreationService {
 
         referenceCode: occurrence.referenceCode,
 
+        slotNumber: occurrence.slotNumber,
+
         sequenceNumber: occurrence.sequenceNumber,
 
         occurrenceDate: occurrence.occurrenceDate,
@@ -920,6 +1029,9 @@ class ShiftCreationService {
 
   static buildPricingResponse({
     pricing,
+    requiredProfessionals,
+    rateSnapshots,
+    aggregatePricing,
     platformCurrency,
     schedule,
     hourlyRate,
@@ -936,7 +1048,7 @@ class ShiftCreationService {
 
       scheduledMinutes: schedule.totalScheduledMinutes,
 
-      scheduledHours: schedule.scheduledHours,
+      scheduledHours: schedule.totalScheduledMinutes / 60,
 
       scheduledMinutesPerOccurrence: schedule.scheduledMinutesPerOccurrence,
 
@@ -946,9 +1058,20 @@ class ShiftCreationService {
 
       hourlyRateDisplay: ShiftCreationService.formatAmount(hourlyRate, platformCurrency),
 
-      platformFeeRate: pricing.platformFeeRate,
+      ...rateSnapshots,
 
-      platformFeePercent: Number((pricing.platformFeeRate * 100).toFixed(2)),
+      // Compatibility aliases refer only to the applied BASE rate.
+      platformFeeRate: rateSnapshots.basePlatformFeeRate,
+
+      platformFeePercent: Number((rateSnapshots.basePlatformFeeRate * 100).toFixed(2)),
+
+      overtimePlatformFeePercent: Number((rateSnapshots.overtimePlatformFeeRate * 100).toFixed(2)),
+
+      requiredProfessionals,
+
+      totalOccurrenceCount: schedule.occurrenceCount * requiredProfessionals,
+
+      totalStaffScheduledMinutes: schedule.totalScheduledMinutes * requiredProfessionals,
 
       cancellationPolicy: {
         ...cancellationPolicy,
@@ -985,24 +1108,24 @@ class ShiftCreationService {
         ),
       },
 
-      estimatedProfessionalPay: schedule.aggregatePricing.estimatedProfessionalPay,
+      estimatedProfessionalPay: aggregatePricing.estimatedProfessionalPay,
 
       estimatedProfessionalPayDisplay: ShiftCreationService.formatAmount(
-        schedule.aggregatePricing.estimatedProfessionalPay,
+        aggregatePricing.estimatedProfessionalPay,
         platformCurrency
       ),
 
-      estimatedPlatformFee: schedule.aggregatePricing.estimatedPlatformFee,
+      estimatedPlatformFee: aggregatePricing.estimatedPlatformFee,
 
       estimatedPlatformFeeDisplay: ShiftCreationService.formatAmount(
-        schedule.aggregatePricing.estimatedPlatformFee,
+        aggregatePricing.estimatedPlatformFee,
         platformCurrency
       ),
 
-      estimatedEmployerCharge: schedule.aggregatePricing.estimatedEmployerCharge,
+      estimatedEmployerCharge: aggregatePricing.estimatedEmployerCharge,
 
       estimatedEmployerChargeDisplay: ShiftCreationService.formatAmount(
-        schedule.aggregatePricing.estimatedEmployerCharge,
+        aggregatePricing.estimatedEmployerCharge,
         platformCurrency
       ),
     };
@@ -1090,6 +1213,12 @@ class ShiftCreationService {
       });
     }
 
+    const rateSnapshots = ShiftCreationService.resolvePostingRateSnapshots(pricing);
+
+    const requiredProfessionals = ShiftCreationService.normalizeRequiredProfessionals(
+      shiftData.requiredProfessionals
+    );
+
     const cancellationPolicy = ShiftPricingService.normalizeCancellationPolicy(
       shiftPostingSettings.cancellationPolicy ||
         shiftPostingSettings.shiftCancellationPolicy ||
@@ -1172,12 +1301,14 @@ class ShiftCreationService {
 
       hourlyRate,
 
-      platformFeeRate: pricing.platformFeeRate,
+      platformFeeRate: rateSnapshots.basePlatformFeeRate,
 
       breakDuration,
 
       currentTime: normalizedCurrentTime,
     });
+
+    ShiftCreationService.assertSafeCapacity(schedule, requiredProfessionals);
 
     const { shiftId, referenceCode } = ShiftCreationService.createShiftIdentity();
 
@@ -1188,6 +1319,10 @@ class ShiftCreationService {
 
     const occurrenceDocuments = ShiftCreationService.buildOccurrenceDocuments({
       schedule,
+
+      requiredProfessionals,
+
+      rateSnapshots,
 
       shiftId,
 
@@ -1202,7 +1337,14 @@ class ShiftCreationService {
       createdAt: pricingLockedAt,
     });
 
+    const aggregatePricing = ShiftCreationService.aggregateOccurrencePricing(occurrenceDocuments);
+
     const shiftPayload = ShiftCreationService.buildShiftPayload({
+      requiredProfessionals,
+
+      rateSnapshots,
+
+      aggregatePricing,
       shiftId,
 
       referenceCode,
@@ -1263,6 +1405,14 @@ class ShiftCreationService {
 
         ShiftCreationService.assertBusinessCanPostShifts(currentProfile);
 
+        await ShiftCreationService.getActiveBranch({
+          branchId: branch._id,
+          employerProfileId: currentProfile._id,
+          canManageAllBranches: ShiftCreationService.canManageAllBranches(employerContext),
+          assignedBranchIds,
+          session: transactionSession,
+        });
+
         await ShiftCreationService.assertEmployerNotRestrictedFromPosting({
           businessId: currentProfile._id,
           currentTime: normalizedCurrentTime,
@@ -1302,11 +1452,19 @@ class ShiftCreationService {
     const scheduleResponse = ShiftCreationService.buildCreatedScheduleResponse({
       schedule,
 
+      requiredProfessionals,
+
       occurrences: creationResult.occurrences,
     });
 
     const pricingResponse = ShiftCreationService.buildPricingResponse({
       pricing,
+
+      requiredProfessionals,
+
+      rateSnapshots,
+
+      aggregatePricing,
 
       platformCurrency,
 
@@ -1320,7 +1478,8 @@ class ShiftCreationService {
     logger.info(
       `Pending-funding ${schedule.scheduleMode} Shift ` +
         `${referenceCode} with ` +
-        `${schedule.occurrenceCount} occurrence(s) ` +
+        `${schedule.occurrenceCount} work date(s), ${requiredProfessionals} position(s), ` +
+        `${occurrenceDocuments.length} occurrence(s) ` +
         `created by user ${normalizedUserId} ` +
         `for employer ${profile._id}`
     );

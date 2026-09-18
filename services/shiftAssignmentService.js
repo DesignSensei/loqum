@@ -3,9 +3,12 @@
 const mongoose = require("mongoose");
 
 const Shift = require("../models/Shift");
+const ProfessionalProfile = require("../models/ProfessionalProfile");
 const ShiftOccurrence = require("../models/ShiftOccurrence");
 const ShiftAssignment = require("../models/ShiftAssignment");
 const ShiftAssignmentCase = require("../models/ShiftAssignmentCase");
+
+const money = require("../utils/money");
 
 const WalletService = require("./walletService");
 const ShiftPlatformFeeService = require("./shiftPlatformFeeService");
@@ -84,10 +87,15 @@ class ShiftAssignmentService {
   }
 
   static async transaction(options = {}, callback) {
+    if (options.session && !options.session.inTransaction()) {
+      throw this.error(
+        "An active transaction is required for the supplied session.",
+        "ASSIGNMENT_TRANSACTION_REQUIRED",
+        500
+      );
+    }
     return runWithOptionalTransaction(options, callback);
   }
-
-  /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
 
   static normalizeFieldCode(value) {
     return normalizeFieldCode(value);
@@ -225,98 +233,11 @@ class ShiftAssignmentService {
   /* ─────────────────────────────── LOADERS ─────────────────────────────── */
 
   static getShiftFields() {
-    return [
-      "referenceCode",
-      "business",
-      "branch",
-      "countryCode",
-      "currency",
-      "scheduleMode",
-      "occurrenceCount",
-      "startTime",
-      "endTime",
-      "fundedAmount",
-      "refundedAmount",
-      "settlementSummary",
-      "paymentStatus",
-      "status",
-      "publishedAt",
-      "activeAssignment",
-      "assignedProfessional",
-      "assignedAt",
-      "assignedBy",
-      "applicationRound",
-      "replacementHiring",
-      "occurrenceProgress",
-    ].join(" ");
+    return "";
   }
 
   static getOccurrenceFields() {
-    return [
-      "shift",
-      "business",
-      "branch",
-      "referenceCode",
-      "sequenceNumber",
-      "startTime",
-      "endTime",
-      "fillCutoffAt",
-      "unfilledFinalizationAt",
-
-      "status",
-      "attendanceStatus",
-      "settlementStatus",
-      "refundStatus",
-
-      "assignmentStatus",
-      "assignedProfessional",
-      "assignment",
-      "assignedAt",
-
-      "replacementRequiredAt",
-      "replacementForAssignment",
-      "replacementCase",
-      "replacementReasonCode",
-      "replacementReasonDetails",
-
-      "checkedInAt",
-      "checkedOutAt",
-      "checkInPinUsedAt",
-      "checkOutPinUsedAt",
-
-      "estimatedProfessionalPay",
-      "estimatedPlatformFee",
-      "estimatedEmployerCharge",
-
-      "baseProfessionalPay",
-      "basePlatformFee",
-      "baseEmployerCharge",
-      "basePlatformFeeAudit",
-      "baseSettlement",
-
-      "overtimeProfessionalPay",
-      "overtimePlatformFee",
-      "overtimeEmployerCharge",
-      "overtimePlatformFeeAudit",
-      "overtimeSettlement",
-      "overtime",
-
-      "topUpRequired",
-      "topUpTransaction",
-
-      "cancellationCompensation",
-      "activeWorkCancellation",
-
-      "refundableAmount",
-      "refundedAmount",
-      "refundEligibleAt",
-      "refundedAt",
-      "refundTransaction",
-
-      "expiredUnfilledAt",
-      "activeClaim",
-      "activeDispute",
-    ].join(" ");
+    return "";
   }
 
   static async getShift(shiftId, session = null) {
@@ -369,103 +290,72 @@ class ShiftAssignmentService {
     return assignment;
   }
 
-  static async getActiveAssignment({ shiftId, session = null, required = false }) {
-    const query = ShiftAssignment.findOne({
-      shift: ShiftAssignmentService.objectId(shiftId, "shift ID"),
+  static async getActiveAssignment({ shiftId, slotNumber, session = null, required = false }) {
+    if (!Number.isSafeInteger(slotNumber) || slotNumber < 1) {
+      throw this.error(
+        "Select a valid slot for the current assignment.",
+        "ASSIGNMENT_SLOT_REQUIRED"
+      );
+    }
 
+    const assignment = await ShiftAssignment.findOne({
+      shift: this.objectId(shiftId, "shift ID"),
+      slotNumber,
       occurrence: null,
-
       isCurrentAssignment: true,
+      status: { $in: CURRENT_ASSIGNMENT_STATUSES },
+    }).session(session);
 
-      status: {
-        $in: CURRENT_ASSIGNMENT_STATUSES,
-      },
-    }).sort({
-      assignedAt: -1,
-    });
-
-    if (session) {
-      query.session(session);
-    }
-
-    const assignment = await query;
-
-    if (!assignment && required) {
-      throw ShiftAssignmentService.createError({
-        message: "No current professional assignment was found.",
-        code: "CURRENT_SHIFT_ASSIGNMENT_NOT_FOUND",
-        statusCode: 404,
-      });
-    }
+    if (!assignment && required)
+      throw this.error(
+        "No current assignment exists in this slot.",
+        "CURRENT_SHIFT_ASSIGNMENT_NOT_FOUND",
+        404
+      );
 
     return assignment;
   }
 
   static async getOccurrences(shift, session = null) {
-    const query = ShiftOccurrence.find({
-      shift: shift._id,
-    })
-      .select(ShiftAssignmentService.getOccurrenceFields())
-      .sort({
-        sequenceNumber: 1,
-      });
+    const occurrences = await ShiftOccurrence.find({ shift: shift._id })
+      .sort({ slotNumber: 1, sequenceNumber: 1 })
+      .session(session);
 
-    if (session) {
-      query.session(session);
-    }
+    const dates = shift.occurrenceCount;
 
-    const occurrences = await query;
+    const slots = shift.requiredProfessionals;
 
-    const expected = Number(shift.occurrenceCount || 0);
-
-    if (!Number.isSafeInteger(expected) || expected < 1 || expected > MAX_SHIFT_OCCURRENCES) {
-      throw ShiftAssignmentService.createError({
-        message: "The engagement occurrence count is invalid.",
-        code: "INVALID_SHIFT_OCCURRENCE_COUNT",
-        statusCode: 500,
-      });
-    }
-
-    if (shift.scheduleMode === "multiple" && expected < 2) {
-      throw ShiftAssignmentService.createError({
-        message: "A multiple engagement must contain at least two occurrences.",
-        code: "INVALID_MULTIPLE_SHIFT_OCCURRENCE_COUNT",
-        statusCode: 500,
-      });
-    }
-
-    if (shift.scheduleMode !== "multiple" && expected !== 1) {
-      throw ShiftAssignmentService.createError({
-        message: "A single Shift must contain exactly one occurrence.",
-        code: "INVALID_SINGLE_SHIFT_OCCURRENCE_COUNT",
-        statusCode: 500,
-      });
-    }
-
-    if (occurrences.length !== expected) {
-      throw ShiftAssignmentService.createError({
-        message: "The engagement occurrence records are incomplete.",
-        code: "SHIFT_OCCURRENCE_COUNT_MISMATCH",
-        statusCode: 409,
-        details: {
-          expected,
-          actual: occurrences.length,
-        },
-      });
+    if (
+      !Number.isSafeInteger(dates) ||
+      dates < 1 ||
+      dates > MAX_SHIFT_OCCURRENCES ||
+      !Number.isSafeInteger(slots) ||
+      slots < 1 ||
+      !Number.isSafeInteger(dates * slots) ||
+      occurrences.length !== dates * slots
+    ) {
+      throw this.error(
+        "The Shift slot/date records are incomplete.",
+        "SHIFT_OCCURRENCE_COUNT_MISMATCH",
+        409
+      );
     }
 
     occurrences.forEach((occurrence, index) => {
-      if (occurrence.sequenceNumber !== index + 1) {
-        throw ShiftAssignmentService.createError({
-          message: "The engagement occurrence sequence is incomplete.",
-          code: "SHIFT_OCCURRENCE_SEQUENCE_MISMATCH",
-          statusCode: 409,
-          details: {
-            expectedSequenceNumber: index + 1,
-            actualSequenceNumber: occurrence.sequenceNumber,
-            occurrenceId: String(occurrence._id),
-          },
-        });
+      const expectedSlotNumber = Math.floor(index / dates) + 1;
+      const expectedSequenceNumber = (index % dates) + 1;
+
+      if (
+        occurrence.slotNumber !== expectedSlotNumber ||
+        occurrence.sequenceNumber !== expectedSequenceNumber ||
+        String(occurrence.business) !== String(shift.business) ||
+        String(occurrence.branch) !== String(shift.branch)
+      ) {
+        throw this.error(
+          "Occurrence identity does not match the Shift slot/date structure.",
+          "SHIFT_OCCURRENCE_CONTEXT_MISMATCH",
+          409
+        );
       }
     });
 
@@ -534,7 +424,8 @@ class ShiftAssignmentService {
       Number(occurrence.refundedAmount || 0) === 0 &&
       !occurrence.refundEligibleAt &&
       !occurrence.refundedAt &&
-      !occurrence.refundTransaction &&
+      !occurrence.employerRefund &&
+      !occurrence.refundBatch &&
       !occurrence.expiredUnfilledAt
     );
   }
@@ -547,6 +438,8 @@ class ShiftAssignmentService {
       !occurrence.assignedProfessional &&
       !occurrence.assignment &&
       !occurrence.assignedAt &&
+      occurrence.fillCutoffAt &&
+      new Date(occurrence.fillCutoffAt) > assignedAt &&
       new Date(occurrence.endTime) > assignedAt
     );
   }
@@ -568,6 +461,9 @@ class ShiftAssignmentService {
       occurrence.assignedProfessional ||
       occurrence.assignment ||
       occurrence.assignedAt ||
+      occurrence.slotNumber !== previousAssignment.slotNumber ||
+      !occurrence.fillCutoffAt ||
+      !occurrence.replacementRequiredAt ||
       !occurrence.replacementForAssignment ||
       String(occurrence.replacementForAssignment) !== String(previousAssignment._id) ||
       new Date(occurrence.endTime) <= assignedAt
@@ -1023,29 +919,8 @@ class ShiftAssignmentService {
   /* ─────────────────────────────── ASSIGNMENT WRITES ─────────────────────────────── */
 
   static async nextIdentity(shift, session) {
-    const countQuery = ShiftAssignment.countDocuments({
-      shift: shift._id,
-    });
-
-    if (session) {
-      countQuery.session(session);
-    }
-
-    const number = (await countQuery) + 1;
-
-    if (number > MAX_ASSIGNMENT_REFERENCE_NUMBER) {
-      throw ShiftAssignmentService.createError({
-        message: "The assignment reference limit has been reached.",
-        code: "SHIFT_ASSIGNMENT_REFERENCE_LIMIT_REACHED",
-        statusCode: 409,
-      });
-    }
-
-    return {
-      id: new mongoose.Types.ObjectId(),
-
-      referenceCode: `${shift.referenceCode}-A${String(number).padStart(2, "0")}`,
-    };
+    const id = new mongoose.Types.ObjectId();
+    return { id, referenceCode: `${shift.referenceCode}-A${String(id).toUpperCase()}` };
   }
 
   static resolveNewAssignmentStatus({ range, assignedAt, outgoingRemainsCurrent = false }) {
@@ -1076,6 +951,8 @@ class ShiftAssignmentService {
       referenceCode: identity.referenceCode,
 
       shift: shift._id,
+
+      slotNumber: input.slotNumber,
 
       business: shift.business,
 
@@ -1132,6 +1009,8 @@ class ShiftAssignmentService {
       },
 
       shift: shift._id,
+      slotNumber: occurrences[0].slotNumber,
+      fillCutoffAt: { $gt: assignedAt },
 
       status: "scheduled",
 
@@ -1161,7 +1040,8 @@ class ShiftAssignmentService {
 
       refundedAt: null,
 
-      refundTransaction: null,
+      employerRefund: null,
+      refundBatch: null,
 
       expiredUnfilledAt: null,
 
@@ -1335,140 +1215,169 @@ class ShiftAssignmentService {
   }
 
   static async refreshAssignmentProgress({ shift, session, currentTime }) {
-    const query = ShiftOccurrence.find({
-      shift: shift._id,
-    })
-      .select(
-        [
-          "assignmentStatus",
-          "status",
-          "attendanceStatus",
-          "settlementStatus",
-          "refundStatus",
-          "activeClaim",
-          "activeDispute",
-          "startTime",
-          "endTime",
-        ].join(" ")
-      )
-      .sort({
-        sequenceNumber: 1,
-      })
-      .lean();
-
-    if (session) {
-      query.session(session);
+    const occurrences = await this.getOccurrences(shift, session);
+    const assignments = await ShiftAssignment.find({ shift: shift._id }).session(session);
+    const progress = {};
+    const mappings = [
+      [
+        "assignmentStatus",
+        {
+          unassigned: "unassigned",
+          assigned: "assigned",
+          replacement_required: "replacementRequired",
+          expired_unfilled: "expiredUnfilled",
+        },
+      ],
+      [
+        "status",
+        {
+          scheduled: "scheduled",
+          in_progress: "inProgress",
+          pending_settlement: "pendingSettlement",
+          completed: "completed",
+          cancelled: "cancelled",
+          no_show: "noShow",
+          disputed: "disputed",
+          expired_unfilled: "expiredUnfilled",
+        },
+      ],
+      [
+        "settlementStatus",
+        {
+          not_due: "settlementNotDue",
+          pending_review: "pendingReview",
+          awaiting_overtime_review: "awaitingOvertimeReview",
+          awaiting_topup: "awaitingTopup",
+          approved_for_release: "approvedForRelease",
+          release_pending: "releasePending",
+          released: "released",
+          disputed: "settlementDisputed",
+        },
+      ],
+      [
+        "refundStatus",
+        {
+          not_eligible: "refundNotEligible",
+          held: "refundHeld",
+          eligible: "refundEligible",
+          batched: "refundBatched",
+          processing: "refundProcessing",
+          refunded: "refunded",
+        },
+      ],
+    ];
+    for (const [field, names] of mappings) {
+      for (const [value, key] of Object.entries(names))
+        progress[key] = occurrences.filter((o) => o[field] === value).length;
     }
-
-    const occurrences = await query;
-
-    const count = (predicate) => occurrences.filter(predicate).length;
-
-    shift.occurrenceProgress = shift.occurrenceProgress || {};
-
-    shift.occurrenceProgress.unassigned = count(
-      (occurrence) => occurrence.assignmentStatus === "unassigned"
+    progress.failed = 0;
+    progress.resolved = occurrences.filter((o) =>
+      this.isOccurrenceFinalForIsolatedAssignmentClose(o)
+    ).length;
+    progress.lastReconciledAt = currentTime;
+    shift.occurrenceProgress = progress;
+    shift.assignmentSummary = Object.fromEntries(
+      ["scheduled", "active", "ending", "ended", "cancelled"].map((status) => [
+        status,
+        assignments.filter((a) => a.status === status).length,
+      ])
     );
-
-    shift.occurrenceProgress.assigned = count(
-      (occurrence) => occurrence.assignmentStatus === "assigned"
+    shift.assignmentSummary.lastReconciledAt = currentTime;
+    // Count distinct opportunities, not dates or every historical case.
+    const opportunities = new Set(
+      occurrences
+        .filter(
+          (o) =>
+            o.assignmentStatus === "replacement_required" &&
+            o.status === "scheduled" &&
+            o.fillCutoffAt > currentTime &&
+            o.refundStatus === "not_eligible"
+        )
+        .map((o) =>
+          o.replacementCase
+            ? `case:${o.replacementCase}:assignment:${o.replacementForAssignment}`
+            : `occurrence:${o._id}:assignment:${o.replacementForAssignment}`
+        )
     );
-
-    shift.occurrenceProgress.replacementRequired = count(
-      (occurrence) => occurrence.assignmentStatus === "replacement_required"
+    shift.hiringSummary = {
+      initialAcceptedCount: assignments.filter(
+        (a) => a.assignmentType === "initial" && a.application
+      ).length,
+      openReplacementCount: opportunities.size,
+      lastReconciledAt: currentTime,
+    };
+    const sum = (values) => money.sumMinorUnitAmounts(values, "Shift assignment reconciliation");
+    const components = occurrences
+      .flatMap((o) => [o.baseSettlement, o.overtimeSettlement])
+      .filter(Boolean);
+    const audits = occurrences
+      .flatMap((o) => [o.basePlatformFeeAudit, o.overtimePlatformFeeAudit])
+      .filter(Boolean);
+    const latest = (values) =>
+      values.filter(Boolean).reduce((last, date) => (!last || date > last ? date : last), null);
+    const approved = sum(components.map((c) => (c.status === "not_due" ? 0 : c.professionalPay)));
+    const released = sum(components.map((c) => (c.status === "released" ? c.professionalPay : 0)));
+    const earned = sum(
+      occurrences.flatMap((o) => [o.basePlatformFee || 0, o.overtimePlatformFee || 0])
     );
-
-    shift.occurrenceProgress.expiredUnfilled = count(
-      (occurrence) => occurrence.assignmentStatus === "expired_unfilled"
+    const collected = sum(
+      occurrences.flatMap((o) => [
+        o.basePlatformFeeAudit?.collectedAt ? o.basePlatformFee : 0,
+        o.overtimePlatformFeeAudit?.collectedAt ? o.overtimePlatformFee : 0,
+      ])
     );
-
-    shift.occurrenceProgress.lastReconciledAt = currentTime;
-
+    shift.settlementSummary = {
+      approvedProfessionalPay: approved,
+      releasedProfessionalPay: released,
+      earnedPlatformFee: earned,
+      collectedPlatformFee: collected,
+      committedEmployerCharge: sum([approved, earned]),
+      lastProfessionalApprovedAt: latest(components.map((c) => c.approvedForReleaseAt)),
+      lastProfessionalReleasedAt: latest(components.map((c) => c.releasedAt)),
+      lastPlatformFeeEarnedAt: latest(audits.map((a) => a.earnedAt)),
+      lastPlatformFeeCollectedAt: latest(audits.map((a) => a.collectedAt)),
+      lastReconciledAt: currentTime,
+    };
+    shift.refundedAmount = sum(occurrences.map((o) => o.refundedAmount || 0));
+    shift.topUpRequired = sum(occurrences.map((o) => o.topUpRequired || 0));
+    shift.status = this.determineParentOperationalStatus({ shift, occurrences, currentTime });
     return occurrences;
   }
 
   static determineParentOperationalStatus({ shift, occurrences, currentTime }) {
-    if (TERMINAL_PARENT_STATUSES.includes(shift.status)) {
-      return shift.status;
-    }
-
-    const hasDispute = occurrences.some(
-      (occurrence) =>
-        Boolean(occurrence.activeClaim) ||
-        Boolean(occurrence.activeDispute) ||
-        occurrence.status === "disputed" ||
-        occurrence.attendanceStatus === "disputed" ||
-        occurrence.settlementStatus === "disputed"
-    );
-
-    if (hasDispute) {
+    if (["pending_funding", "cancelled", "completed"].includes(shift.status)) return shift.status;
+    if (occurrences.some((o) => o.status === "in_progress")) return "in_progress";
+    if (
+      occurrences.some(
+        (o) =>
+          o.assignmentStatus === "unassigned" &&
+          o.status === "scheduled" &&
+          o.fillCutoffAt > currentTime
+      )
+    )
+      return "open";
+    if (
+      occurrences.some((o) => o.activeClaim || o.activeDispute || o.settlementStatus === "disputed")
+    )
       return "disputed";
+    if (occurrences.some((o) => o.status === "scheduled" && o.endTime > currentTime)) {
+      return shift.assignmentSummary.scheduled +
+        shift.assignmentSummary.active +
+        shift.assignmentSummary.ending >
+        0 || shift.hiringSummary.openReplacementCount > 0
+        ? "confirmed"
+        : "pending_settlement";
     }
-
-    const hasInProgressOccurrence = occurrences.some(
-      (occurrence) => occurrence.status === "in_progress"
-    );
-
-    if (hasInProgressOccurrence) {
-      return "in_progress";
-    }
-
-    const hasRemainingScheduledWork = occurrences.some(
-      (occurrence) =>
-        occurrence.status === "scheduled" &&
-        occurrence.assignmentStatus !== "expired_unfilled" &&
-        new Date(occurrence.endTime) > currentTime
-    );
-
-    if (hasRemainingScheduledWork) {
-      if (
-        shift.activeAssignment ||
-        shift.assignedProfessional ||
-        ["open", "filled"].includes(shift.replacementHiring?.status)
-      ) {
-        return "confirmed";
-      }
-
-      return shift.status;
-    }
-
-    if (occurrences.length === 1 && occurrences[0].status === "no_show") {
-      return "no_show";
-    }
-
-    const hasPendingSettlement = occurrences.some(
-      (occurrence) =>
-        occurrence.status === "pending_settlement" ||
-        PENDING_SETTLEMENT_STATUSES.includes(occurrence.settlementStatus)
-    );
-
-    const hasPendingRefund = occurrences.some((occurrence) =>
-      ["eligible", "held", "batched", "processing"].includes(occurrence.refundStatus)
-    );
-
-    if (hasPendingSettlement || hasPendingRefund) {
-      return "pending_settlement";
-    }
-
-    const allOccurrencesResolved =
-      occurrences.length > 0 &&
-      occurrences.every((occurrence) => RESOLVED_OCCURRENCE_STATUSES.includes(occurrence.status));
-
-    if (allOccurrencesResolved) {
-      return "completed";
-    }
-
-    return shift.status;
+    // Financial completion belongs to final reconciliation, not assignment closure.
+    return "pending_settlement";
   }
 
-  static setParentAssignmentSummary({ shift, assignment }) {
-    shift.activeAssignment = assignment._id;
-
-    shift.assignedProfessional = assignment.professional;
-
-    shift.assignedAt = assignment.assignedAt;
-
-    shift.assignedBy = assignment.assignedBy;
+  static setParentAssignmentSummary() {
+    throw this.error(
+      "Use occurrence and assignment reconciliation for parent summaries.",
+      "PARENT_SINGLE_ASSIGNMENT_SUMMARY_REMOVED",
+      500
+    );
   }
 
   static async finalizeEndingAssignmentIfDue({ assignment, currentTime, session }) {
@@ -1560,1528 +1469,596 @@ class ShiftAssignmentService {
 
   /* ─────────────────────────────── INITIAL ASSIGNMENT ─────────────────────────────── */
 
-  static async createInitialAssignment(payload, options = {}) {
-    const input = ShiftAssignmentService.normalizeAssignmentInput(payload);
-
-    return ShiftAssignmentService.transaction(
-      options,
-
-      async (session) => {
-        const shift = await ShiftAssignmentService.getShift(payload.shiftId, session);
-
-        const assignedAt = ShiftAssignmentService.normalizeDate(
-          payload.assignedAt,
-          "assigned-at time",
-          new Date()
-        );
-
-        if (shift.paymentStatus !== INITIAL_APPLICATION_PAYMENT_STATUS) {
-          throw ShiftAssignmentService.createError({
-            message: "The engagement must be fully funded before initial assignment.",
-            code: "SHIFT_NOT_FUNDED_FOR_INITIAL_ASSIGNMENT",
-            statusCode: 409,
-          });
-        }
-
-        if (
-          shift.status !== "open" ||
-          shift.assignedProfessional ||
-          shift.activeAssignment ||
-          new Date(shift.startTime) <= assignedAt
-        ) {
-          throw ShiftAssignmentService.createError({
-            message: "This engagement is not open for an initial assignment.",
-            code: "SHIFT_NOT_OPEN_FOR_INITIAL_ASSIGNMENT",
-            statusCode: 409,
-          });
-        }
-
-        if (
-          String(shift.replacementHiring?.status || REPLACEMENT_HIRING_STATUSES.CLOSED) !==
-          REPLACEMENT_HIRING_STATUSES.CLOSED
-        ) {
-          throw ShiftAssignmentService.createError({
-            message: "Initial assignment is unavailable while replacement hiring is configured.",
-            code: "INITIAL_ASSIGNMENT_REPLACEMENT_CONTEXT_CONFLICT",
-            statusCode: 409,
-          });
-        }
-
-        const previousQuery = ShiftAssignment.findOne({
-          shift: shift._id,
-        }).select("_id status assignmentType");
-
-        if (session) {
-          previousQuery.session(session);
-        }
-
-        const previous = await previousQuery;
-
-        if (previous) {
-          throw ShiftAssignmentService.createError({
-            message:
-              "This engagement already has assignment history. Use the replacement workflow.",
-            code: "INITIAL_SHIFT_ASSIGNMENT_ALREADY_EXISTS",
-            statusCode: 409,
-            details: {
-              assignmentId: String(previous._id),
-              status: previous.status,
-            },
-          });
-        }
-
-        const occurrences = await ShiftAssignmentService.getOccurrences(shift, session);
-
-        const invalidOccurrence = occurrences.find(
-          (occurrence) =>
-            !ShiftAssignmentService.isInitialOccurrenceEligible(occurrence, assignedAt)
-        );
-
-        if (invalidOccurrence) {
-          throw ShiftAssignmentService.createError({
-            message: "One or more occurrences cannot receive the initial assignment.",
-            code: "INITIAL_ASSIGNMENT_OCCURRENCE_NOT_ELIGIBLE",
-            statusCode: 409,
-            details: {
-              occurrenceId: String(invalidOccurrence._id),
-
-              sequenceNumber: invalidOccurrence.sequenceNumber,
-
-              assignmentStatus: invalidOccurrence.assignmentStatus,
-
-              occurrenceStatus: invalidOccurrence.status,
-
-              refundStatus: invalidOccurrence.refundStatus,
-            },
-          });
-        }
-
-        const { requiredProtectedAmount } =
-          ShiftAssignmentService.assertShiftProtectedLiabilityCovered({
-            shift,
-            occurrences,
-          });
-
-        await ShiftAssignmentService.assertEscrowWalletOperationalCoverage({
-          shift,
-          requiredProtectedAmount,
-          session,
-        });
-
-        const range = ShiftAssignmentService.rangeFromOccurrences(occurrences);
-
-        const assignment = await ShiftAssignmentService.createRecord({
-          shift,
-          input,
-          assignmentType: "initial",
-          range,
-          assignedAt,
-          status: "scheduled",
-          session,
-        });
-
-        await ShiftAssignmentService.assignOccurrences({
-          shift,
-          occurrences,
-          input,
-          assignment,
-          assignedAt,
-          expectedAssignmentStatus: "unassigned",
-          session,
-        });
-
-        /*
-         * Assignment confirmation is the BASE platform-fee earning event.
-         *
-         * For a multi-occurrence assignment this processes every occurrence
-         * covered by the confirmed assignment immediately.
-         */
-        await ShiftAssignmentService.earnBasePlatformFeesForOccurrences({
-          occurrences,
-          assignedAt,
-          session,
-        });
-
-        ShiftAssignmentService.setParentAssignmentSummary({
-          shift,
-          assignment,
-        });
-
-        shift.status = "assigned";
-
-        await ShiftAssignmentService.refreshAssignmentProgress({
-          shift,
-          session,
-          currentTime: assignedAt,
-        });
-
-        await shift.save({
-          session,
-        });
-
-        logger.info(
-          `Initial assignment ${assignment.referenceCode} created for shift ${shift.referenceCode}`
-        );
-
-        return {
-          assignment,
-          shift,
-
-          shiftId: String(shift._id),
-
-          professionalId: String(input.professional),
-
-          assignedOccurrenceCount: occurrences.length,
-
-          assignmentStatus: assignment.status,
-        };
-      }
+  static async lockShiftAndProfessional({ shiftId, professionalId = null, session }) {
+    const shift = await Shift.findOneAndUpdate(
+      { _id: this.objectId(shiftId, "shift ID") },
+      { $inc: { __v: 1 } },
+      { new: true, session }
     );
+    if (!shift) throw this.error("Shift was not found.", "SHIFT_NOT_FOUND", 404);
+    if (professionalId) {
+      const professional = await ProfessionalProfile.findOneAndUpdate(
+        { _id: professionalId },
+        { $inc: { __v: 1 } },
+        { new: true, session }
+      );
+      if (!professional)
+        throw this.error("Professional was not found.", "PROFESSIONAL_PROFILE_NOT_FOUND", 404);
+    }
+    return shift;
   }
 
-  /* ─────────────────────────────── DIRECT ENDING GUARD ─────────────────────────────── */
+  static async assertNoOverlap({ professionalId, occurrences, session }) {
+    const conflict = await ShiftOccurrence.findOne({
+      assignedProfessional: professionalId,
+      assignmentStatus: "assigned",
+      status: { $in: ["scheduled", "in_progress", "pending_settlement", "disputed"] },
+      $or: occurrences.map((o) => ({
+        startTime: { $lt: o.endTime },
+        endTime: { $gt: o.startTime },
+      })),
+    }).session(session);
+    if (conflict)
+      throw this.error(
+        "The professional already has overlapping assigned work.",
+        "PROFESSIONAL_SHIFT_SCHEDULE_CONFLICT",
+        409
+      );
+  }
 
-  static async endActiveAssignmentForReplacement() {
-    throw ShiftAssignmentService.createError({
-      message:
-        "Direct assignment removal is disabled. Confirm the exit through a ShiftAssignmentCase before opening replacement hiring.",
-      code: "ASSIGNMENT_CASE_REQUIRED_FOR_REPLACEMENT",
-      statusCode: 409,
+  static async assertApplicationMatches({
+    shift,
+    input,
+    assignmentType,
+    previous = null,
+    occurrence = null,
+    session,
+  }) {
+    if (!input.application) return;
+    const ShiftApplication = require("../models/ShiftApplication");
+    const application = await ShiftApplication.findOne({
+      _id: input.application,
+      shift: shift._id,
+      professional: input.professional,
+      applicationType: assignmentType,
+      status: { $in: ["pending", "shortlisted"] },
+      occurrence: occurrence?._id || null,
+      replacementForAssignment: previous?._id || null,
+    }).session(session);
+    if (
+      !application ||
+      (assignmentType === "replacement" && application.slotNumber !== input.slotNumber)
+    ) {
+      throw this.error(
+        "Application does not match this assignment opportunity.",
+        "ASSIGNMENT_APPLICATION_MISMATCH",
+        409
+      );
+    }
+  }
+
+  static async finishAssignmentCreation({
+    shift,
+    input,
+    occurrences,
+    assignment,
+    assignedAt,
+    session,
+  }) {
+    await this.earnBasePlatformFeesForOccurrences({ occurrences, assignedAt, session });
+    await this.refreshAssignmentProgress({ shift, session, currentTime: assignedAt });
+    await shift.save({ session });
+    return {
+      assignment,
+      shift,
+      shiftId: String(shift._id),
+      slotNumber: assignment.slotNumber,
+      professionalId: String(input.professional),
+      assignedOccurrenceCount: occurrences.length,
+      assignmentStatus: assignment.status,
+    };
+  }
+
+  static async assertAssignmentFunding({ shift, allOccurrences, session }) {
+    if (
+      !shift.publishedAt ||
+      !shift.fundedAt ||
+      !shift.fundingTransaction ||
+      !shift.fundingMethod ||
+      shift.fundedAmount < shift.estimatedEmployerCharge ||
+      ["unpaid", "released", "refunded"].includes(shift.paymentStatus)
+    ) {
+      throw this.error(
+        "Protected funding is not available for assignment.",
+        "SHIFT_NOT_FUNDED_FOR_ASSIGNMENT",
+        409
+      );
+    }
+    // Reserve the complete remaining original allocation, including amounts
+    // whose refund or attendance recalculation has not yet synchronized.
+    const sum = (values) => money.sumMinorUnitAmounts(values, "Remaining occurrence funding");
+    const liabilities = allOccurrences.map((o) => {
+      const baseOutflows = sum([
+        o.baseSettlement?.status === "released" ? o.baseSettlement.professionalPay : 0,
+        o.basePlatformFeeAudit?.collectedAt ? o.basePlatformFee : 0,
+        o.refundedAmount || 0,
+      ]);
+      if (baseOutflows > o.estimatedEmployerCharge)
+        throw this.error("BASE outflows exceed allocation.", "OCCURRENCE_ALLOCATION_EXCEEDED", 409);
+      const ot = o.overtime?.topUpPaid
+        ? sum([
+            o.overtimeSettlement?.status === "released" ? 0 : o.overtimeProfessionalPay,
+            o.overtimePlatformFeeAudit?.collectedAt ? 0 : o.overtimePlatformFee,
+          ])
+        : 0;
+      return sum([o.estimatedEmployerCharge - baseOutflows, ot]);
+    });
+    const requiredProtectedAmount = sum(liabilities);
+    if (this.getParentProtectedBalance(shift) < requiredProtectedAmount) {
+      throw this.error(
+        "Shift protected funding is insufficient or requires reconciliation.",
+        "SHIFT_PROTECTED_FUNDING_INSUFFICIENT",
+        409
+      );
+    }
+    await this.assertEscrowWalletOperationalCoverage({ shift, requiredProtectedAmount, session });
+  }
+
+  static async createInitialAssignment(payload, options = {}) {
+    const input = this.normalizeAssignmentInput(payload);
+    return this.transaction(options, async (session) => {
+      const shift = await this.lockShiftAndProfessional({
+        shiftId: payload.shiftId,
+        professionalId: input.professional,
+        session,
+      });
+      const assignedAt = this.normalizeDate(payload.assignedAt, "assigned-at time", new Date());
+      if (shift.status !== "open" || shift.startTime <= assignedAt)
+        throw this.error(
+          "Initial hiring is not open.",
+          "SHIFT_NOT_OPEN_FOR_INITIAL_ASSIGNMENT",
+          409
+        );
+      const all = await this.getOccurrences(shift, session);
+      const history = await ShiftAssignment.find({ shift: shift._id }).session(session);
+      const occupied = new Set(history.map((a) => a.slotNumber));
+      let slotNumber = payload.slotNumber;
+      if (
+        slotNumber != null &&
+        (!Number.isSafeInteger(slotNumber) ||
+          slotNumber < 1 ||
+          slotNumber > shift.requiredProfessionals)
+      ) {
+        throw this.error("Invalid assignment slot.", "INVALID_ASSIGNMENT_SLOT");
+      }
+      const available = (slot) =>
+        !occupied.has(slot) &&
+        all
+          .filter((o) => o.slotNumber === slot)
+          .every((o) => this.isInitialOccurrenceEligible(o, assignedAt));
+      if (slotNumber == null) {
+        for (let slot = 1; slot <= shift.requiredProfessionals; slot++)
+          if (available(slot)) {
+            slotNumber = slot;
+            break;
+          }
+      }
+      if (!slotNumber || !available(slotNumber))
+        throw this.error(
+          "No complete initial position is available.",
+          "INITIAL_ASSIGNMENT_CAPACITY_FILLED",
+          409
+        );
+      input.slotNumber = slotNumber;
+      const occurrences = all.filter((o) => o.slotNumber === slotNumber);
+      await this.assertApplicationMatches({ shift, input, assignmentType: "initial", session });
+      await this.assertNoOverlap({ professionalId: input.professional, occurrences, session });
+      await this.assertAssignmentFunding({ shift, allOccurrences: all, session });
+      const assignment = await this.createRecord({
+        shift,
+        input,
+        assignmentType: "initial",
+        range: this.rangeFromOccurrences(occurrences),
+        assignedAt,
+        status: "scheduled",
+        session,
+      });
+      await this.assignOccurrences({
+        shift,
+        occurrences,
+        input,
+        assignment,
+        assignedAt,
+        expectedAssignmentStatus: "unassigned",
+        session,
+      });
+      return this.finishAssignmentCreation({
+        shift,
+        input,
+        occurrences,
+        assignment,
+        assignedAt,
+        session,
+      });
     });
   }
 
-  /* ─────────────────────────────── REPLACEMENT ASSIGNMENT ─────────────────────────────── */
-
-  static async createReplacementAssignment(payload, options = {}) {
-    const input = ShiftAssignmentService.normalizeAssignmentInput(payload);
-
-    const requestedPreviousId = ShiftAssignmentService.objectId(
-      payload.replacesAssignmentId,
-      "replaced assignment ID"
-    );
-
-    const occurrenceId = ShiftAssignmentService.objectId(
-      payload.occurrenceId,
-      "occurrence ID",
-      false
-    );
-
-    const isOccurrenceTargeted = Boolean(occurrenceId);
-
-    const replacementCaseId = ShiftAssignmentService.objectId(
-      payload.replacementCaseId,
-      "replacement case ID",
-      !isOccurrenceTargeted
-    );
-
-    const startSequenceNumber = ShiftAssignmentService.normalizeSequenceNumber(
-      payload.startSequenceNumber,
-      "replacement start sequence number"
-    );
-
-    const endSequenceNumber = ShiftAssignmentService.normalizeSequenceNumber(
-      payload.endSequenceNumber,
-      "replacement end sequence number"
-    );
-
-    if (endSequenceNumber < startSequenceNumber) {
-      throw ShiftAssignmentService.createError({
-        message:
-          "Replacement end sequence number cannot be earlier than the start sequence number.",
-
-        code: "INVALID_REPLACEMENT_SEQUENCE_RANGE",
-      });
-    }
-
-    if (isOccurrenceTargeted && startSequenceNumber !== endSequenceNumber) {
-      throw ShiftAssignmentService.createError({
-        message: "A single-occurrence replacement must target exactly one sequence.",
-
-        code: "INVALID_OCCURRENCE_REPLACEMENT_RANGE",
-      });
-    }
-
-    return ShiftAssignmentService.transaction(
-      options,
-
-      async (session) => {
-        const shift = await ShiftAssignmentService.getShift(payload.shiftId, session);
-
-        const assignedAt = ShiftAssignmentService.normalizeDate(
-          payload.assignedAt,
-          "assigned-at time",
-          new Date()
-        );
-
-        if (shift.scheduleMode !== "multiple") {
-          throw ShiftAssignmentService.createError({
-            message: "Replacement assignment is only available for a multiple engagement.",
-
-            code: "REPLACEMENT_ASSIGNMENT_NOT_AVAILABLE",
-
-            statusCode: 409,
-          });
-        }
-
-        if (
-          !REPLACEMENT_APPLICATION_PARENT_STATUSES.includes(shift.status) ||
-          REPLACEMENT_APPLICATION_BLOCKED_PAYMENT_STATUSES.includes(shift.paymentStatus)
-        ) {
-          throw ShiftAssignmentService.createError({
-            message: "The engagement is not ready for replacement assignment.",
-
-            code: "SHIFT_NOT_READY_FOR_REPLACEMENT_ASSIGNMENT",
-
-            statusCode: 409,
-
-            details: {
-              status: shift.status,
-
-              paymentStatus: shift.paymentStatus,
-            },
-          });
-        }
-
-        const previousAssignment = await ShiftAssignmentService.getAssignment({
-          assignmentId: requestedPreviousId,
-
-          shiftId: shift._id,
-
-          session,
-        });
-
-        const allOccurrences = await ShiftAssignmentService.getOccurrences(shift, session);
-
-        /*
-         * ───────────────────────────────
-         * SINGLE-OCCURRENCE REPLACEMENT
-         * ───────────────────────────────
-         */
-        if (isOccurrenceTargeted) {
-          const allowedSourceStatuses = ["scheduled", ...CURRENT_ASSIGNMENT_STATUSES];
-
-          if (!allowedSourceStatuses.includes(previousAssignment.status)) {
-            throw ShiftAssignmentService.createError({
-              message:
-                "The assignment that previously owned this occurrence is no longer continuing.",
-
-              code: "OCCURRENCE_REPLACEMENT_SOURCE_NOT_AVAILABLE",
-
-              statusCode: 409,
-
-              details: {
-                status: previousAssignment.status,
-              },
-            });
-          }
-
-          if (previousAssignment.occurrence) {
-            throw ShiftAssignmentService.createError({
-              message:
-                "An isolated replacement assignment cannot itself open another continuing-occurrence replacement.",
-
-              code: "ISOLATED_ASSIGNMENT_CANNOT_CONTINUE_OCCURRENCE_REPLACEMENT",
-
-              statusCode: 409,
-            });
-          }
-
-          const occurrence = allOccurrences.find(
-            (candidate) => String(candidate._id) === String(occurrenceId)
-          );
-
-          if (!occurrence) {
-            throw ShiftAssignmentService.createError({
-              message: "The replacement occurrence was not found.",
-
-              code: "REPLACEMENT_OCCURRENCE_NOT_FOUND",
-
-              statusCode: 404,
-            });
-          }
-
-          if (
-            occurrence.sequenceNumber !== startSequenceNumber ||
-            occurrence.sequenceNumber !== endSequenceNumber
-          ) {
-            throw ShiftAssignmentService.createError({
-              message:
-                "The requested occurrence no longer matches the replacement assignment range.",
-
-              code: "STALE_OCCURRENCE_REPLACEMENT_RANGE",
-
-              statusCode: 409,
-
-              details: {
-                occurrenceSequenceNumber: occurrence.sequenceNumber,
-
-                requestedStartSequenceNumber: startSequenceNumber,
-
-                requestedEndSequenceNumber: endSequenceNumber,
-              },
-            });
-          }
-
-          /*
-           * The occurrence must still fall inside the continuing assignment's
-           * responsibility range.
-           */
-          const previousResponsibilityEnd =
-            previousAssignment.status === "ending" &&
-            Number.isSafeInteger(previousAssignment.effectiveEndSequence)
-              ? previousAssignment.effectiveEndSequence
-              : previousAssignment.plannedEndSequence;
-
-          if (
-            occurrence.sequenceNumber < previousAssignment.startSequence ||
-            occurrence.sequenceNumber > previousResponsibilityEnd
-          ) {
-            throw ShiftAssignmentService.createError({
-              message: "The original assignment is no longer responsible for this occurrence.",
-
-              code: "OCCURRENCE_REPLACEMENT_SOURCE_RANGE_CHANGED",
-
-              statusCode: 409,
-            });
-          }
-
-          const occurrenceReplacementCaseId = occurrence.replacementCase
-            ? String(occurrence.replacementCase)
-            : null;
-
-          const requestedReplacementCaseId = replacementCaseId ? String(replacementCaseId) : null;
-
-          if (occurrenceReplacementCaseId !== requestedReplacementCaseId) {
-            throw ShiftAssignmentService.createError({
-              message: "The occurrence replacement context changed before assignment completed.",
-
-              code: "STALE_OCCURRENCE_REPLACEMENT_CASE",
-
-              statusCode: 409,
-            });
-          }
-
-          let replacementCase = null;
-
-          if (replacementCaseId) {
-            replacementCase = await ShiftAssignmentService.getReplacementCase({
-              replacementCaseId,
-
-              shift,
-
-              previousAssignment,
-
-              session,
-            });
-          }
-
-          const eligible = ShiftAssignmentService.isReplacementOccurrenceEligible({
-            occurrence,
-
-            previousAssignment,
-
-            replacementCase,
-
-            occurrenceTargetId: occurrenceId,
-
-            replacementRequiredAt: occurrence.replacementRequiredAt,
-
-            assignedAt,
-          });
-
-          if (!eligible) {
-            throw ShiftAssignmentService.createError({
-              message: "This occurrence changed before replacement assignment completed.",
-
-              code: "OCCURRENCE_REPLACEMENT_ASSIGNMENT_NOT_AVAILABLE",
-
-              statusCode: 409,
-
-              details: {
-                occurrenceId: String(occurrence._id),
-
-                sequenceNumber: occurrence.sequenceNumber,
-
-                assignmentStatus: occurrence.assignmentStatus,
-
-                occurrenceStatus: occurrence.status,
-
-                refundStatus: occurrence.refundStatus,
-              },
-            });
-          }
-
-          const { requiredProtectedAmount } =
-            ShiftAssignmentService.assertShiftProtectedLiabilityCovered({
-              shift,
-
-              occurrences: allOccurrences,
-            });
-
-          await ShiftAssignmentService.assertEscrowWalletOperationalCoverage({
-            shift,
-
-            requiredProtectedAmount,
-
-            session,
-          });
-
-          const occurrences = [occurrence];
-
-          const range = ShiftAssignmentService.rangeFromOccurrences(occurrences);
-
-          const assignmentStatus = ShiftAssignmentService.resolveNewAssignmentStatus({
-            range,
-
-            assignedAt,
-
-            outgoingRemainsCurrent: false,
-          });
-
-          const assignment = await ShiftAssignmentService.createRecord({
-            shift,
-
-            input,
-
-            assignmentType: "replacement",
-
-            range,
-
-            assignedAt,
-
-            status: assignmentStatus,
-
-            occurrence: occurrence._id,
-
-            replacesAssignment: previousAssignment._id,
-
-            replacementCase: replacementCase?._id || null,
-
-            session,
-          });
-
-          await ShiftAssignmentService.assignOccurrences({
-            shift,
-
-            occurrences,
-
-            input,
-
-            assignment,
-
-            assignedAt,
-
-            expectedAssignmentStatus: "replacement_required",
-
-            previousAssignment,
-
-            replacementCase,
-
-            occurrenceTarget: occurrence,
-
-            session,
-          });
-
-          /*
-           * The occurrence already earned its BASE platform fee when it first
-           * became part of a confirmed assignment.
-           *
-           * Calling the fee authority again is intentional. It verifies the
-           * stored earning/collection and returns idempotently instead of
-           * charging a replacement fee.
-           */
-          await ShiftAssignmentService.earnBasePlatformFeesForOccurrences({
-            occurrences,
-            assignedAt,
-            session,
-          });
-
-          /*
-           * IMPORTANT:
-           *
-           * Do not:
-           *
-           * - set previousAssignment.replacedByAssignment
-           * - end previousAssignment
-           * - finalize its exit case
-           * - overwrite Shift.activeAssignment
-           * - overwrite Shift.assignedProfessional
-           * - close Shift.replacementHiring
-           *
-           * The previous professional continues the engagement.
-           */
-
-          const refreshedOccurrences = await ShiftAssignmentService.refreshAssignmentProgress({
-            shift,
-
-            session,
-
-            currentTime: assignedAt,
-          });
-
-          shift.status = ShiftAssignmentService.determineParentOperationalStatus({
-            shift,
-
-            occurrences: refreshedOccurrences,
-
-            currentTime: assignedAt,
-          });
-
-          await shift.save({
-            session,
-          });
-
-          logger.info(
-            `Occurrence replacement assignment ${assignment.referenceCode} created for occurrence ${occurrence.referenceCode} on shift ${shift.referenceCode}`
-          );
-
-          return {
-            assignment,
-
-            shift,
-
-            occurrence,
-
-            replacedAssignment: previousAssignment,
-
-            replacementCase,
-
-            isOccurrenceTargeted: true,
-
-            continuingAssignmentUnchanged: true,
-
-            replacedAssignmentId: String(previousAssignment._id),
-
-            shiftId: String(shift._id),
-
-            occurrenceId: String(occurrence._id),
-
-            professionalId: String(input.professional),
-
-            assignedOccurrenceCount: 1,
-
-            assignmentStatus: assignment.status,
-          };
-        }
-
-        /*
-         * ───────────────────────────────
-         * EXISTING TAIL REPLACEMENT
-         * ───────────────────────────────
-         */
-
-        const replacementHiringStatus = String(
-          shift.replacementHiring?.status || REPLACEMENT_HIRING_STATUSES.CLOSED
-        )
-          .trim()
-          .toLowerCase();
-
-        if (replacementHiringStatus !== REPLACEMENT_HIRING_STATUSES.OPEN) {
-          throw ShiftAssignmentService.createError({
-            message: "Replacement hiring is no longer open for this engagement.",
-
-            code: "REPLACEMENT_HIRING_NOT_OPEN",
-
-            statusCode: 409,
-          });
-        }
-
-        if (
-          String(shift.replacementHiring?.replacementForAssignment || "") !==
-            String(requestedPreviousId) ||
-          String(shift.replacementHiring?.assignmentCase || "") !== String(replacementCaseId)
-        ) {
-          throw ShiftAssignmentService.createError({
-            message: "The replacement request no longer matches the active hiring context.",
-
-            code: "STALE_REPLACEMENT_HIRING_CONTEXT",
-
-            statusCode: 409,
-          });
-        }
-
-        if (
-          Number(shift.replacementHiring?.startSequenceNumber) !== startSequenceNumber ||
-          Number(shift.replacementHiring?.endSequenceNumber) !== endSequenceNumber
-        ) {
-          throw ShiftAssignmentService.createError({
-            message:
-              "The requested assignment range no longer matches the active replacement range.",
-
-            code: "STALE_REPLACEMENT_ASSIGNMENT_RANGE",
-
-            statusCode: 409,
-          });
-        }
-
-        if (!REPLACED_ASSIGNMENT_ALLOWED_STATUSES.includes(previousAssignment.status)) {
-          throw ShiftAssignmentService.createError({
-            message: "The assignment being replaced must be ending or ended.",
-
-            code: "REPLACED_ASSIGNMENT_STATUS_NOT_ALLOWED",
-
-            statusCode: 409,
-
-            details: {
-              status: previousAssignment.status,
-            },
-          });
-        }
-
-        if (previousAssignment.replacedByAssignment) {
-          throw ShiftAssignmentService.createError({
-            message: "A replacement has already been linked to this assignment.",
-
-            code: "ASSIGNMENT_ALREADY_REPLACED",
-
-            statusCode: 409,
-          });
-        }
-
-        if (
-          !previousAssignment.endCase ||
-          String(previousAssignment.endCase) !== String(replacementCaseId)
-        ) {
-          throw ShiftAssignmentService.createError({
-            message: "The outgoing assignment is not linked to the active replacement case.",
-
-            code: "ASSIGNMENT_END_CASE_MISMATCH",
-
-            statusCode: 409,
-          });
-        }
-
-        const replacementCase = await ShiftAssignmentService.getReplacementCase({
-          replacementCaseId,
-
-          shift,
-
-          previousAssignment,
-
-          session,
-        });
-
-        const occurrences = allOccurrences.filter(
-          (occurrence) =>
-            occurrence.sequenceNumber >= startSequenceNumber &&
-            occurrence.sequenceNumber <= endSequenceNumber
-        );
-
-        ShiftAssignmentService.assertExactSequenceRange({
-          occurrences,
-
-          startSequenceNumber,
-
-          endSequenceNumber,
-
-          expectedOccurrenceCount: shift.replacementHiring?.occurrenceCount,
-        });
-
-        const invalidOccurrence = occurrences.find(
-          (occurrence) =>
-            !ShiftAssignmentService.isReplacementOccurrenceEligible({
-              occurrence,
-
-              previousAssignment,
-
-              replacementCase,
-
-              assignedAt,
-            })
-        );
-
-        if (invalidOccurrence) {
-          throw ShiftAssignmentService.createError({
-            message: "One or more replacement occurrences changed before assignment completed.",
-
-            code: "REPLACEMENT_ASSIGNMENT_OCCURRENCE_NOT_ELIGIBLE",
-
-            statusCode: 409,
-
-            details: {
-              occurrenceId: String(invalidOccurrence._id),
-
-              sequenceNumber: invalidOccurrence.sequenceNumber,
-
-              assignmentStatus: invalidOccurrence.assignmentStatus,
-
-              occurrenceStatus: invalidOccurrence.status,
-
-              refundStatus: invalidOccurrence.refundStatus,
-
-              occurrenceEndTime: invalidOccurrence.endTime,
-            },
-          });
-        }
-
-        const { requiredProtectedAmount } =
-          ShiftAssignmentService.assertShiftProtectedLiabilityCovered({
-            shift,
-
-            occurrences: allOccurrences,
-          });
-
-        await ShiftAssignmentService.assertEscrowWalletOperationalCoverage({
-          shift,
-
-          requiredProtectedAmount,
-
-          session,
-        });
-
-        let outgoingRemainsCurrent = previousAssignment.status === "ending";
-
-        if (outgoingRemainsCurrent) {
-          const finalized = await ShiftAssignmentService.finalizeEndingAssignmentIfDue({
-            assignment: previousAssignment,
-
-            currentTime: assignedAt,
-
-            session,
-          });
-
-          outgoingRemainsCurrent = !finalized;
-        }
-
-        const range = ShiftAssignmentService.rangeFromOccurrences(occurrences);
-
-        if (outgoingRemainsCurrent && new Date(range.startsAt) <= assignedAt) {
-          throw ShiftAssignmentService.createError({
-            message:
-              "The outgoing assignment is still current, so an already-started replacement occurrence cannot be activated yet.",
-
-            code: "REPLACEMENT_HANDOVER_NOT_REACHED",
-
-            statusCode: 409,
-
-            details: {
-              outgoingEffectiveEndsAt: previousAssignment.effectiveEndsAt,
-
-              replacementStartsAt: range.startsAt,
-
-              assignedAt,
-            },
-          });
-        }
-
-        const assignmentStatus = ShiftAssignmentService.resolveNewAssignmentStatus({
-          range,
-
-          assignedAt,
-
-          outgoingRemainsCurrent,
-        });
-
-        const assignment = await ShiftAssignmentService.createRecord({
-          shift,
-
-          input,
-
-          assignmentType: "replacement",
-
-          range,
-
-          assignedAt,
-
-          status: assignmentStatus,
-
-          occurrence: null,
-
-          replacesAssignment: previousAssignment._id,
-
-          replacementCase: replacementCase._id,
-
-          session,
-        });
-
-        await ShiftAssignmentService.assignOccurrences({
-          shift,
-
-          occurrences,
-
-          input,
-
-          assignment,
-
-          assignedAt,
-
-          expectedAssignmentStatus: "replacement_required",
-
-          previousAssignment,
-
-          replacementCase,
-
-          session,
-        });
-
-        /*
-         * Tail replacement uses the same idempotent occurrence-level earning
-         * authority. Fees already earned by the outgoing assignment remain
-         * earned and are not charged again.
-         */
-        await ShiftAssignmentService.earnBasePlatformFeesForOccurrences({
-          occurrences,
-          assignedAt,
-          session,
-        });
-
-        previousAssignment.replacedByAssignment = assignment._id;
-
-        await previousAssignment.save({
-          session,
-        });
-
-        await ShiftAssignmentService.finalizeReplacementCase({
-          assignmentCase: replacementCase,
-
-          assignedAt,
-
-          session,
-        });
-
-        ShiftAssignmentService.setParentAssignmentSummary({
-          shift,
-
-          assignment: outgoingRemainsCurrent ? previousAssignment : assignment,
-        });
-
-        shift.replacementHiring.status = "filled";
-
-        shift.replacementHiring.filledAt = assignedAt;
-
-        shift.replacementHiring.filledByAssignment = assignment._id;
-
-        const refreshedOccurrences = await ShiftAssignmentService.refreshAssignmentProgress({
-          shift,
-
-          session,
-
-          currentTime: assignedAt,
-        });
-
-        shift.status = ShiftAssignmentService.determineParentOperationalStatus({
-          shift,
-
-          occurrences: refreshedOccurrences,
-
-          currentTime: assignedAt,
-        });
-
-        await shift.save({
-          session,
-        });
-
-        logger.info(
-          `Replacement assignment ${assignment.referenceCode} created for shift ${shift.referenceCode}`
-        );
-
-        return {
-          assignment,
-
-          shift,
-
-          replacedAssignment: previousAssignment,
-
-          replacementCase,
-
-          isOccurrenceTargeted: false,
-
-          outgoingAssignmentRemainsCurrent: outgoingRemainsCurrent,
-
-          replacedAssignmentId: String(previousAssignment._id),
-
-          shiftId: String(shift._id),
-
-          professionalId: String(input.professional),
-
-          assignedOccurrenceCount: occurrences.length,
-
-          assignmentStatus: assignment.status,
-        };
-      }
+  static async endActiveAssignmentForReplacement() {
+    throw this.error(
+      "Use the assignment case workflow to authorize an exit.",
+      "ASSIGNMENT_CASE_REQUIRED",
+      409
     );
   }
 
-  /* ─────────────────────────────── SCHEDULED ASSIGNMENT ACTIVATION ─────────────────────────────── */
+  static async createReplacementAssignment(payload, options = {}) {
+    const input = this.normalizeAssignmentInput(payload);
+    return this.transaction(options, async (session) => {
+      const shift = await this.lockShiftAndProfessional({
+        shiftId: payload.shiftId,
+        professionalId: input.professional,
+        session,
+      });
+      const assignedAt = this.normalizeDate(payload.assignedAt, "assigned-at time", new Date());
+      if (!REPLACEMENT_APPLICATION_PARENT_STATUSES.includes(shift.status))
+        throw this.error(
+          "Replacement hiring is not available.",
+          "SHIFT_NOT_OPEN_FOR_REPLACEMENT",
+          409
+        );
+      const previous = await this.getAssignment({
+        assignmentId: payload.replacesAssignmentId,
+        shiftId: shift._id,
+        session,
+      });
+      if (
+        String(previous.business) !== String(shift.business) ||
+        String(previous.branch) !== String(shift.branch)
+      ) {
+        throw this.error(
+          "The prior assignment does not match the Shift business and branch.",
+          "REPLACEMENT_ASSIGNMENT_CONTEXT_MISMATCH",
+          409
+        );
+      }
+      input.slotNumber = previous.slotNumber;
+      if (payload.slotNumber != null && payload.slotNumber !== input.slotNumber)
+        throw this.error(
+          "Replacement must retain its prior slot.",
+          "REPLACEMENT_SLOT_MISMATCH",
+          409
+        );
+      const all = await this.getOccurrences(shift, session);
+      let target = null;
+      let assignmentCase = null;
+      let start, end;
+      if (payload.occurrenceId) {
+        target = all.find((o) => String(o._id) === String(payload.occurrenceId));
+        if (
+          !target ||
+          target.slotNumber !== previous.slotNumber ||
+          target.sequenceNumber < previous.startSequence ||
+          target.sequenceNumber > previous.plannedEndSequence
+        ) {
+          throw this.error(
+            "The occurrence does not belong to the previous assignment range.",
+            "REPLACEMENT_OCCURRENCE_CONTEXT_MISMATCH",
+            409
+          );
+        }
+        start = end = target.sequenceNumber;
+        if (target.replacementCase) {
+          assignmentCase = await this.getReplacementCase({
+            replacementCaseId: target.replacementCase,
+            shift,
+            previousAssignment: previous,
+            session,
+          });
+        }
+        if (
+          payload.replacementCaseId &&
+          String(payload.replacementCaseId) !== String(target.replacementCase || "")
+        )
+          throw this.error("Replacement case changed.", "REPLACEMENT_CASE_MISMATCH", 409);
+      } else {
+        if (
+          !["ending", "ended", "cancelled"].includes(previous.status) ||
+          previous.replacedByAssignment
+        )
+          throw this.error(
+            "The prior assignment is not eligible for tail replacement.",
+            "ASSIGNMENT_ALREADY_REPLACED_OR_NOT_ENDING",
+            409
+          );
+        assignmentCase = await this.getReplacementCase({
+          replacementCaseId: payload.replacementCaseId,
+          shift,
+          previousAssignment: previous,
+          session,
+        });
+        const range =
+          assignmentCase.status === "resolved_exit"
+            ? assignmentCase.resolution?.effectiveExitRange
+            : assignmentCase.exitProposal?.range;
+        start = range?.replacementStartSequenceNumber;
+        end = range?.replacementEndSequenceNumber;
+        if (
+          !Number.isSafeInteger(start) ||
+          !Number.isSafeInteger(end) ||
+          start < previous.startSequence ||
+          end !== previous.plannedEndSequence ||
+          start > end ||
+          range.replacementOccurrenceCount !== end - start + 1
+        ) {
+          throw this.error(
+            "The case does not authorize a complete future tail.",
+            "REPLACEMENT_CASE_RANGE_INVALID",
+            409
+          );
+        }
+      }
+      if (
+        (payload.startSequenceNumber != null && payload.startSequenceNumber !== start) ||
+        (payload.endSequenceNumber != null && payload.endSequenceNumber !== end)
+      )
+        throw this.error(
+          "Requested range differs from authoritative replacement range.",
+          "ASSIGNMENT_RANGE_MISMATCH",
+          409
+        );
+      const occurrences = all.filter(
+        (o) =>
+          o.slotNumber === previous.slotNumber &&
+          o.sequenceNumber >= start &&
+          o.sequenceNumber <= end
+      );
+      this.assertExactSequenceRange({
+        occurrences,
+        startSequenceNumber: start,
+        endSequenceNumber: end,
+      });
+      if (
+        occurrences.some(
+          (o) =>
+            !this.isReplacementOccurrenceEligible({
+              occurrence: o,
+              previousAssignment: previous,
+              replacementCase: assignmentCase,
+              occurrenceTargetId: target?._id,
+              replacementRequiredAt: target?.replacementRequiredAt,
+              assignedAt,
+            })
+        )
+      )
+        throw this.error(
+          "Replacement occurrences are no longer eligible.",
+          "REPLACEMENT_OCCURRENCES_NOT_AVAILABLE",
+          409
+        );
+      await this.assertApplicationMatches({
+        shift,
+        input,
+        assignmentType: "replacement",
+        previous,
+        occurrence: target,
+        session,
+      });
+      await this.assertNoOverlap({ professionalId: input.professional, occurrences, session });
+      await this.assertAssignmentFunding({ shift, allOccurrences: all, session });
+      if (!target) {
+        if (
+          ["ending", "ended"].includes(previous.status) &&
+          previous.effectiveEndSequence !== start - 1
+        )
+          throw this.error(
+            "The outgoing assignment endpoint differs from the case.",
+            "REPLACEMENT_END_RANGE_MISMATCH",
+            409
+          );
+        await this.finalizeEndingAssignmentIfDue({
+          assignment: previous,
+          currentTime: assignedAt,
+          session,
+        });
+      }
+      const assignment = await this.createRecord({
+        shift,
+        input,
+        assignmentType: "replacement",
+        range: this.rangeFromOccurrences(occurrences),
+        assignedAt,
+        status: "scheduled",
+        occurrence: target?._id || null,
+        replacesAssignment: previous._id,
+        replacementCase: assignmentCase?._id || null,
+        session,
+      });
+      await this.assignOccurrences({
+        shift,
+        occurrences,
+        input,
+        assignment,
+        assignedAt,
+        expectedAssignmentStatus: "replacement_required",
+        previousAssignment: previous,
+        replacementCase: assignmentCase,
+        occurrenceTarget: target,
+        session,
+      });
+      if (!target) {
+        if (previous.status !== "cancelled") {
+          previous.replacedByAssignment = assignment._id;
+          previous.openCase = null;
+          await previous.save({ session });
+        }
+        await this.finalizeReplacementCase({ assignmentCase, assignedAt, session });
+      }
+      return this.finishAssignmentCreation({
+        shift,
+        input,
+        occurrences,
+        assignment,
+        assignedAt,
+        session,
+      });
+    });
+  }
 
   static async activateScheduledAssignment(
     { assignmentId, activatedByUserId = null, currentTime = new Date() },
     options = {}
   ) {
-    return ShiftAssignmentService.transaction(
-      options,
-
-      async (session) => {
-        const assignment = await ShiftAssignmentService.getAssignment({
-          assignmentId,
-
+    return this.transaction(options, async (session) => {
+      let assignment = await this.getAssignment({ assignmentId, session });
+      const shift = await this.lockShiftAndProfessional({ shiftId: assignment.shift, session });
+      assignment = await this.getAssignment({ assignmentId, session });
+      if (assignment.status === "active") return { assignment, activated: false, idempotent: true };
+      const activatedAt = this.normalizeDate(currentTime, "activation time");
+      if (
+        assignment.status !== "scheduled" ||
+        activatedAt < assignment.startsAt ||
+        activatedAt >= assignment.plannedEndsAt
+      )
+        throw this.error(
+          "Assignment cannot be activated at this time.",
+          "ASSIGNMENT_ACTIVATION_NOT_DUE",
+          409
+        );
+      const activatedBy = this.objectId(activatedByUserId, "activation user ID");
+      const owned = await ShiftOccurrence.find({
+        shift: shift._id,
+        slotNumber: assignment.slotNumber,
+        assignment: assignment._id,
+        assignedProfessional: assignment.professional,
+        assignmentStatus: "assigned",
+      }).session(session);
+      if (
+        !owned.some(
+          (o) => ["scheduled", "in_progress"].includes(o.status) && o.endTime > activatedAt
+        )
+      )
+        throw this.error(
+          "No remaining owned work can be activated.",
+          "ASSIGNMENT_ACTIVATION_NO_WORK",
+          409
+        );
+      if (!assignment.occurrence) {
+        const previous = await this.getActiveAssignment({
+          shiftId: shift._id,
+          slotNumber: assignment.slotNumber,
           session,
         });
-
-        if (assignment.status === "active") {
-          return {
-            assignment,
-
-            activated: false,
-
-            idempotent: true,
-          };
-        }
-
-        if (assignment.status !== "scheduled") {
-          throw ShiftAssignmentService.createError({
-            message: "Only a scheduled assignment can be activated.",
-
-            code: "ASSIGNMENT_ACTIVATION_NOT_ALLOWED",
-
-            statusCode: 409,
-
-            details: {
-              status: assignment.status,
-            },
-          });
-        }
-
-        const activatedAt = ShiftAssignmentService.normalizeDate(currentTime, "activation time");
-
-        if (activatedAt < new Date(assignment.startsAt)) {
-          throw ShiftAssignmentService.createError({
-            message: "The assignment cannot be activated before its work range begins.",
-            code: "ASSIGNMENT_ACTIVATION_NOT_DUE",
-            statusCode: 409,
-            details: {
-              startsAt: assignment.startsAt,
-              activatedAt,
-            },
-          });
-        }
-
-        if (activatedAt >= new Date(assignment.plannedEndsAt)) {
-          throw ShiftAssignmentService.createError({
-            message: "The assignment can no longer be activated because its work range has ended.",
-
-            code: "ASSIGNMENT_ACTIVATION_WINDOW_CLOSED",
-
-            statusCode: 409,
-          });
-        }
-
-        const activatedBy = activatedByUserId
-          ? ShiftAssignmentService.objectId(activatedByUserId, "activated-by user ID")
-          : assignment.assignedBy;
-
-        const shift = await ShiftAssignmentService.getShift(assignment.shift, session);
-
-        /*
-         * ISOLATED OCCURRENCE ASSIGNMENT
-         *
-         * The continuing engagement assignment is expected to remain current.
-         * Therefore it is not a conflict and must not be finalized.
-         */
-        if (assignment.occurrence) {
-          const occurrence = await ShiftOccurrence.findOne({
-            _id: assignment.occurrence,
-
-            shift: shift._id,
-
-            assignment: assignment._id,
-
-            assignedProfessional: assignment.professional,
-
-            assignmentStatus: "assigned",
-
-            endTime: {
-              $gt: activatedAt,
-            },
-          })
-            .select(
-              [
-                "referenceCode",
-                "status",
-                "assignmentStatus",
-                "assignedProfessional",
-                "assignment",
-                "endTime",
-              ].join(" ")
-            )
-            .session(session);
-
-          if (!occurrence) {
-            throw ShiftAssignmentService.createError({
-              message:
-                "The occurrence assigned to this replacement is no longer available for activation.",
-
-              code: "OCCURRENCE_ASSIGNMENT_ACTIVATION_CONFLICT",
-
-              statusCode: 409,
-            });
-          }
-
-          assignment.status = "active";
-
-          assignment.activatedAt = activatedAt;
-
-          assignment.activatedBy = activatedBy;
-
-          await assignment.save({
-            session,
-          });
-
-          /*
-           * Do not call setParentAssignmentSummary().
-           *
-           * Shift.activeAssignment and Shift.assignedProfessional continue to
-           * describe the engagement-level professional.
-           */
-
-          const occurrences = await ShiftAssignmentService.refreshAssignmentProgress({
-            shift,
-
-            session,
-
+        if (previous) {
+          await this.finalizeEndingAssignmentIfDue({
+            assignment: previous,
             currentTime: activatedAt,
-          });
-
-          shift.status = ShiftAssignmentService.determineParentOperationalStatus({
-            shift,
-
-            occurrences,
-
-            currentTime: activatedAt,
-          });
-
-          await shift.save({
             session,
           });
-
-          return {
-            assignment,
-
-            shift,
-
-            occurrence,
-
-            isOccurrenceTargeted: true,
-
-            activated: true,
-
-            idempotent: false,
-          };
+          if (previous.status !== "ended")
+            throw this.error(
+              "The prior slot assignment remains current.",
+              "ASSIGNMENT_ACTIVATION_CONFLICT",
+              409
+            );
         }
-
-        /*
-         * ORDINARY / TAIL ASSIGNMENT ACTIVATION
-         */
-
-        if (assignment.replacesAssignment) {
-          const previousAssignment = await ShiftAssignmentService.getAssignment({
-            assignmentId: assignment.replacesAssignment,
-
-            shiftId: shift._id,
-
-            session,
-          });
-
-          if (previousAssignment.status === "ending") {
-            const finalized = await ShiftAssignmentService.finalizeEndingAssignmentIfDue({
-              assignment: previousAssignment,
-
-              currentTime: activatedAt,
-
-              session,
-            });
-
-            if (!finalized) {
-              throw ShiftAssignmentService.createError({
-                message: "The outgoing assignment is still responsible for the engagement.",
-
-                code: "REPLACEMENT_HANDOVER_NOT_REACHED",
-
-                statusCode: 409,
-              });
-            }
-          }
-        }
-
-        const conflictingCurrentAssignment = await ShiftAssignment.findOne({
-          shift: shift._id,
-
-          _id: {
-            $ne: assignment._id,
-          },
-
-          occurrence: null,
-
-          isCurrentAssignment: true,
-
-          status: {
-            $in: CURRENT_ASSIGNMENT_STATUSES,
-          },
-        }).session(session);
-
-        if (conflictingCurrentAssignment) {
-          throw ShiftAssignmentService.createError({
-            message: "Another assignment is still current for this engagement.",
-
-            code: "CURRENT_ASSIGNMENT_CONFLICT",
-
-            statusCode: 409,
-
-            details: {
-              assignmentId: String(conflictingCurrentAssignment._id),
-
-              status: conflictingCurrentAssignment.status,
-            },
-          });
-        }
-
-        assignment.status = "active";
-
-        assignment.activatedAt = activatedAt;
-
-        assignment.activatedBy = activatedBy;
-
-        await assignment.save({
-          session,
-        });
-
-        ShiftAssignmentService.setParentAssignmentSummary({
-          shift,
-
-          assignment,
-        });
-
-        const occurrences = await ShiftAssignmentService.refreshAssignmentProgress({
-          shift,
-
-          session,
-
-          currentTime: activatedAt,
-        });
-
-        shift.status = ShiftAssignmentService.determineParentOperationalStatus({
-          shift,
-
-          occurrences,
-
-          currentTime: activatedAt,
-        });
-
-        await shift.save({
-          session,
-        });
-
-        return {
-          assignment,
-
-          shift,
-
-          isOccurrenceTargeted: false,
-
-          activated: true,
-
-          idempotent: false,
-        };
       }
-    );
+      assignment.status = "active";
+      assignment.activatedAt = activatedAt;
+      assignment.activatedBy = activatedBy;
+      await assignment.save({ session });
+      await this.refreshAssignmentProgress({ shift, session, currentTime: activatedAt });
+      await shift.save({ session });
+      return { assignment, shift, activated: true, idempotent: false };
+    });
   }
 
-  /* ─────────────────────────────── CLOSE COMPLETED OCCURRENCE ASSIGNMENT ─────────────────────────────── */
-
-  static isOccurrenceFinalForIsolatedAssignmentClose(occurrence) {
-    if (!RESOLVED_OCCURRENCE_STATUSES.includes(occurrence.status)) {
-      return false;
-    }
-
-    if (occurrence.activeClaim || occurrence.activeDispute) {
-      return false;
-    }
-
-    if (PENDING_SETTLEMENT_STATUSES.includes(occurrence.settlementStatus)) {
-      return false;
-    }
-
-    if (!["not_due", "released"].includes(occurrence.settlementStatus)) {
-      return false;
-    }
-
-    if (["eligible", "held", "batched", "processing"].includes(occurrence.refundStatus)) {
-      return false;
-    }
-
-    if (!["not_eligible", "refunded"].includes(occurrence.refundStatus)) {
-      return false;
-    }
-
-    return true;
+  static isOccurrenceFinalForIsolatedAssignmentClose(o) {
+    return (
+      RESOLVED_OCCURRENCE_STATUSES.includes(o.status) &&
+      !o.activeClaim &&
+      !o.activeDispute &&
+      !(o.challengeWindowOpenedAt && !o.challengeWindowClosedAt) &&
+      !["pending", "disputed"].includes(o.overtime?.status) &&
+      ["not_due", "released"].includes(o.settlementStatus) &&
+      ["not_eligible", "refunded"].includes(o.refundStatus)
+    );
   }
 
   static async closeCompletedOccurrenceAssignment(payload, options = {}) {
-    const assignmentId = ShiftAssignmentService.objectId(payload.assignmentId, "assignment ID");
-
-    const shiftId = ShiftAssignmentService.objectId(payload.shiftId, "shift ID");
-
-    const occurrenceId = ShiftAssignmentService.objectId(payload.occurrenceId, "occurrence ID");
-
-    const endedAt = ShiftAssignmentService.normalizeDate(
-      payload.endedAt ?? payload.currentTime,
-      "ended-at time",
-      new Date()
-    );
-
-    return ShiftAssignmentService.transaction(
-      options,
-
-      async (session) => {
-        const assignment = await ShiftAssignmentService.getAssignment({
-          assignmentId,
-
-          shiftId,
-
-          session,
-        });
-
-        if (!assignment.occurrence) {
-          throw ShiftAssignmentService.createError({
-            message:
-              "Only an occurrence-targeted assignment can be closed through occurrence completion.",
-            code: "ASSIGNMENT_NOT_OCCURRENCE_TARGETED",
-            statusCode: 409,
-          });
-        }
-
-        if (String(assignment.occurrence) !== String(occurrenceId)) {
-          throw ShiftAssignmentService.createError({
-            message: "The assignment does not belong to the supplied occurrence.",
-            code: "ASSIGNMENT_OCCURRENCE_MISMATCH",
-            statusCode: 409,
-          });
-        }
-
-        const occurrenceQuery = ShiftOccurrence.findOne({
-          _id: occurrenceId,
-
-          shift: shiftId,
-        }).select(ShiftAssignmentService.getOccurrenceFields());
-
-        if (session) {
-          occurrenceQuery.session(session);
-        }
-
-        const occurrence = await occurrenceQuery;
-
-        if (!occurrence) {
-          throw ShiftAssignmentService.createError({
-            message: "Shift occurrence was not found.",
-            code: "SHIFT_OCCURRENCE_NOT_FOUND",
-            statusCode: 404,
-          });
-        }
-
-        const identityMatches =
-          String(occurrence.assignment || "") === String(assignment._id) &&
-          String(occurrence.assignedProfessional || "") === String(assignment.professional) &&
-          occurrence.assignmentStatus === "assigned";
-
-        if (!identityMatches) {
-          throw ShiftAssignmentService.createError({
-            message:
-              "The occurrence no longer matches the occurrence-targeted assignment being closed.",
-            code: "OCCURRENCE_ASSIGNMENT_IDENTITY_MISMATCH",
-            statusCode: 409,
-            details: {
-              assignmentId: String(assignment._id),
-
-              occurrenceId: String(occurrence._id),
-
-              occurrenceAssignmentId: occurrence.assignment ? String(occurrence.assignment) : null,
-
-              assignmentProfessionalId: String(assignment.professional),
-
-              occurrenceProfessionalId: occurrence.assignedProfessional
-                ? String(occurrence.assignedProfessional)
-                : null,
-
-              assignmentStatus: occurrence.assignmentStatus,
-            },
-          });
-        }
-
-        if (assignment.status === "ended" && assignment.endReason === "engagement_completed") {
-          return {
-            assignment,
-
-            occurrence,
-
-            closed: true,
-
-            idempotent: true,
-          };
-        }
-
-        if (!["scheduled", "active"].includes(assignment.status)) {
-          throw ShiftAssignmentService.createError({
-            message:
-              "Only a scheduled or active occurrence-targeted assignment can close through normal occurrence completion.",
-            code: "OCCURRENCE_ASSIGNMENT_COMPLETION_NOT_ALLOWED",
-            statusCode: 409,
-            details: {
-              status: assignment.status,
-            },
-          });
-        }
-
-        if (!ShiftAssignmentService.isOccurrenceFinalForIsolatedAssignmentClose(occurrence)) {
-          throw ShiftAssignmentService.createError({
-            message:
-              "The occurrence must be operationally, financially and challenge-final before its isolated assignment can close.",
-            code: "OCCURRENCE_NOT_FINAL_FOR_ASSIGNMENT_CLOSE",
-            statusCode: 409,
-            details: {
-              occurrenceStatus: occurrence.status,
-
-              settlementStatus: occurrence.settlementStatus,
-
-              refundStatus: occurrence.refundStatus,
-
-              activeClaim: occurrence.activeClaim ? String(occurrence.activeClaim) : null,
-
-              activeDispute: occurrence.activeDispute ? String(occurrence.activeDispute) : null,
-            },
-          });
-        }
-
-        assignment.status = "ended";
-
-        assignment.effectiveEndSequence = assignment.plannedEndSequence;
-
-        assignment.effectiveOccurrenceCount = assignment.plannedOccurrenceCount;
-
-        assignment.effectiveEndsAt = assignment.plannedEndsAt;
-
-        assignment.endedAt = endedAt;
-
-        assignment.endedBy = null;
-
-        assignment.endedByRole = "system";
-
-        assignment.endReason = "engagement_completed";
-
-        assignment.endNotes = null;
-
-        await assignment.save({
-          session,
-        });
-
-        logger.info(
-          `Occurrence assignment ${assignment.referenceCode} closed after occurrence ${occurrence.referenceCode} reached final resolution`
-        );
-
-        return {
-          assignment,
-
-          occurrence,
-
-          closed: true,
-
-          idempotent: false,
-        };
-      }
-    );
+    return this.closeAssignmentResponsibility(payload, options, true);
   }
 
-  /* ─────────────────────────────── CLOSE COMPLETED ASSIGNMENT ─────────────────────────────── */
-
   static async closeCompletedAssignment(payload, options = {}) {
-    const endedBy = ShiftAssignmentService.objectId(payload.endedByUserId, "ended-by user ID");
+    return this.closeAssignmentResponsibility(payload, options, false);
+  }
 
-    const endedByRole = ShiftAssignmentService.normalizeActorRole(
-      payload.endedByRole || "admin",
-      "ended-by role"
-    );
-
-    const notes = ShiftAssignmentService.notes(payload.endNotes);
-
-    return ShiftAssignmentService.transaction(
-      options,
-
-      async (session) => {
-        const shift = await ShiftAssignmentService.getShift(payload.shiftId, session);
-
-        if (
-          shift.status !== "completed" ||
-          !COMPLETED_ASSIGNMENT_PAYMENT_STATUSES.includes(shift.paymentStatus)
-        ) {
-          throw ShiftAssignmentService.createError({
-            message: "The engagement must be completed and fully released first.",
-
-            code: "ENGAGEMENT_NOT_COMPLETED_FOR_ASSIGNMENT_CLOSE",
-
-            statusCode: 409,
-          });
-        }
-
-        const assignment = await ShiftAssignment.findOne({
-          shift: shift._id,
-
-          occurrence: null,
-
-          isCurrentAssignment: true,
-
-          status: "active",
-        })
-          .sort({
-            assignedAt: -1,
-          })
-          .session(session);
-
-        if (!assignment) {
-          throw ShiftAssignmentService.createError({
-            message: "No active engagement assignment is available to close.",
-
-            code: "ACTIVE_SHIFT_ASSIGNMENT_NOT_FOUND",
-
-            statusCode: 404,
-          });
-        }
-
-        assignment.status = "ended";
-
-        assignment.effectiveEndSequence = assignment.plannedEndSequence;
-
-        assignment.effectiveOccurrenceCount = assignment.plannedOccurrenceCount;
-
-        assignment.effectiveEndsAt = assignment.plannedEndsAt;
-
-        assignment.endedAt = ShiftAssignmentService.normalizeDate(
-          payload.endedAt,
-          "ended-at time",
-          new Date()
+  static async closeAssignmentResponsibility(payload, options, isolated) {
+    return this.transaction(options, async (session) => {
+      const assignment = await this.getAssignment({
+        assignmentId: payload.assignmentId,
+        shiftId: payload.shiftId,
+        session,
+      });
+      const shift = await this.lockShiftAndProfessional({ shiftId: assignment.shift, session });
+      if (
+        Boolean(assignment.occurrence) !== isolated ||
+        (isolated && String(assignment.occurrence) !== String(payload.occurrenceId))
+      )
+        throw this.error(
+          "Assignment scope does not match closure request.",
+          "ASSIGNMENT_CLOSE_SCOPE_MISMATCH",
+          409
         );
-
-        assignment.endedBy = endedBy;
-
-        assignment.endedByRole = endedByRole;
-
-        assignment.endReason = "engagement_completed";
-
-        assignment.endNotes = notes;
-
-        await assignment.save({
-          session,
-        });
-
-        logger.info(
-          `Completed assignment ${assignment.referenceCode} closed for shift ${shift.referenceCode}`
+      if (assignment.status === "ended") return { assignment, shift, idempotent: true };
+      if (assignment.status !== "active" || assignment.openCase)
+        throw this.error(
+          "Only active responsibility without an unresolved exit case can complete normally.",
+          "ASSIGNMENT_CLOSE_NOT_ALLOWED",
+          409
         );
-
-        return {
-          assignment,
-
-          shiftId: String(shift._id),
-        };
-      }
-    );
+      const endedAt = this.normalizeDate(
+        payload.endedAt ?? payload.currentTime,
+        "ended-at time",
+        new Date()
+      );
+      const owned = await ShiftOccurrence.find({
+        assignment: assignment._id,
+        shift: shift._id,
+        slotNumber: assignment.slotNumber,
+      }).session(session);
+      // Isolated dates transferred elsewhere no longer belong to this assignment.
+      // A live replacement request for this assignment still blocks normal closure.
+      const pending = await ShiftOccurrence.findOne({
+        shift: shift._id,
+        replacementForAssignment: assignment._id,
+        assignmentStatus: "replacement_required",
+      }).session(session);
+      if (
+        pending ||
+        endedAt < assignment.plannedEndsAt ||
+        owned.some((o) => !RESOLVED_OCCURRENCE_STATUSES.includes(o.status))
+      )
+        throw this.error(
+          "Assignment still has operational responsibility.",
+          "ASSIGNMENT_WORK_NOT_FINISHED",
+          409
+        );
+      const role = this.normalizeActorRole(payload.endedByRole || (isolated ? "system" : "admin"));
+      assignment.status = "ended";
+      assignment.effectiveEndSequence = assignment.plannedEndSequence;
+      assignment.effectiveOccurrenceCount = assignment.plannedOccurrenceCount;
+      assignment.effectiveEndsAt = assignment.plannedEndsAt;
+      assignment.endedAt = endedAt;
+      assignment.endedByRole = role;
+      assignment.endedBy =
+        role === "system" ? null : this.objectId(payload.endedByUserId, "ended-by user ID");
+      assignment.endReason = "engagement_completed";
+      assignment.endNotes = this.notes(payload.endNotes);
+      await assignment.save({ session });
+      await this.refreshAssignmentProgress({ shift, session, currentTime: endedAt });
+      await shift.save({ session });
+      return { assignment, shift, shiftId: String(shift._id), idempotent: false };
+    });
   }
 }
 

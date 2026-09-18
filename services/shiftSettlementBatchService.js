@@ -13,7 +13,9 @@ const ShiftSettlementService = require("./shiftSettlementService");
 
 const { createServiceError } = require("./helpers/serviceErrorHelper");
 const { normalizeFieldCode } = require("./helpers/serviceValidationHelpers");
-const { runWithOptionalTransaction } = require("./helpers/transactionHelper");
+const {
+  runWithOptionalTransaction: runServiceTransaction,
+} = require("./helpers/transactionHelper");
 
 const { SHIFT_TIME_ZONE } = require("../constants/shiftPosting");
 
@@ -140,6 +142,21 @@ class ShiftSettlementBatchService {
     return error;
   }
 
+  static async runWithOptionalTransaction(options = {}, callback) {
+    if (
+      options.session &&
+      (typeof options.session.inTransaction !== "function" || !options.session.inTransaction())
+    ) {
+      throw this.createError({
+        message: "A supplied batch session must have an active transaction.",
+        code: "ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
+    return runServiceTransaction(options, callback);
+  }
+
   static shortenFailureReason(value) {
     return String(value || "Settlement batch processing failed.")
       .trim()
@@ -169,7 +186,13 @@ class ShiftSettlementBatchService {
   static normalizeDate(value, fieldName) {
     const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
 
-    if (Number.isNaN(date.getTime())) {
+    if (
+      value === null ||
+      value === undefined ||
+      value === "" ||
+      typeof value === "boolean" ||
+      Number.isNaN(date.getTime())
+    ) {
       throw this.createError({
         message: `${fieldName} must be a valid date.`,
         code: `INVALID_${normalizeFieldCode(fieldName)}`,
@@ -396,7 +419,7 @@ class ShiftSettlementBatchService {
       componentAudit.earningType
     );
 
-    const professionalPay = Number(componentAudit.professionalPay);
+    const professionalPay = componentAudit.professionalPay;
 
     if (!Number.isSafeInteger(professionalPay) || professionalPay <= 0) {
       throw this.createError({
@@ -412,6 +435,26 @@ class ShiftSettlementBatchService {
 
           professionalPay,
         },
+      });
+    }
+
+    const currentAmounts = ShiftSettlementService.assertComponentAmounts({
+      component: normalizedComponent,
+      amounts: ShiftSettlementService.getComponentAmounts({
+        occurrence,
+        component: normalizedComponent,
+      }),
+      requirePayable: true,
+    });
+
+    if (
+      currentAmounts.earningType !== earningType ||
+      currentAmounts.professionalPay !== professionalPay
+    ) {
+      throw this.createError({
+        message: "The approved component amount no longer matches its authoritative entitlement.",
+        code: "SETTLEMENT_COMPONENT_ENTITLEMENT_MISMATCH",
+        statusCode: 409,
       });
     }
 
@@ -465,12 +508,12 @@ class ShiftSettlementBatchService {
 
     if (normalizedComponent === "overtime") {
       if (
-        occurrence.status !== "pending_settlement" ||
+        !["pending_settlement", "disputed", "completed"].includes(occurrence.status) ||
         !["checked_out", "settled"].includes(occurrence.attendanceStatus) ||
         occurrence.overtime?.requested !== true ||
         occurrence.overtime?.status !== "approved" ||
         occurrence.overtime?.topUpPaid !== true ||
-        Number(occurrence.topUpRequired || 0) !== 0
+        !ShiftSettlementService.isFundedOvertimeHandoffComplete(occurrence)
       ) {
         throw this.createError({
           message: "The occurrence does not contain a funded payable overtime outcome.",
@@ -864,6 +907,9 @@ class ShiftSettlementBatchService {
 
       "referenceCode",
       "sequenceNumber",
+      "slotNumber",
+      "countryCode",
+      "currency",
 
       "assignmentStatus",
       "assignedProfessional",
@@ -1007,7 +1053,6 @@ class ShiftSettlementBatchService {
     const normalizedLimit = this.normalizePositiveInteger(limit, "Batch query limit", 5000);
 
     const candidates = await ShiftOccurrence.find(this.buildDueComponentQuery(normalizedNow))
-      .select(this.getOccurrenceSettlementFields())
       .sort({
         assignedProfessional: 1,
         shift: 1,
@@ -1177,7 +1222,7 @@ class ShiftSettlementBatchService {
       return [];
     }
 
-    return runWithOptionalTransaction({}, async (session) => {
+    return this.runWithOptionalTransaction({}, async (session) => {
       const results = [];
 
       for (const deferral of deferrals) {
@@ -1347,9 +1392,7 @@ class ShiftSettlementBatchService {
   /* ─────────────────────────────── WALLET RESOLUTION / RELEASE ─────────────────────────────── */
 
   static async resolveBatchWallets({ professionalId, countryCode, currency, session }) {
-    const professional = await ProfessionalProfile.findById(professionalId)
-      .select("countryCode currency")
-      .session(session);
+    const professional = await ProfessionalProfile.findById(professionalId).session(session);
 
     if (!professional) {
       throw this.createError({
@@ -1371,22 +1414,14 @@ class ShiftSettlementBatchService {
       });
     }
 
-    const [professionalWallet, escrowWallet] = await Promise.all([
-      WalletService.createProfessionalWalletIfMissing(professional, {
-        session,
-      }),
+    const professionalWallet = await WalletService.createProfessionalWalletIfMissing(professional, {
+      session,
+    });
 
-      WalletService.getEscrowWallet(
-        {
-          countryCode,
-          currency,
-        },
-
-        {
-          session,
-        }
-      ),
-    ]);
+    const escrowWallet = await WalletService.getEscrowWallet(
+      { countryCode, currency },
+      { session }
+    );
 
     if (!escrowWallet) {
       throw this.createError({
@@ -1402,7 +1437,14 @@ class ShiftSettlementBatchService {
 
     WalletService.assertSameCountryAndCurrency(escrowWallet, professionalWallet);
 
-    if (professionalWallet.ownerType !== "professional" || escrowWallet.ownerType !== "escrow") {
+    if (
+      professionalWallet.ownerType !== "professional" ||
+      escrowWallet.ownerType !== "escrow" ||
+      professionalWallet.countryCode !== countryCode ||
+      professionalWallet.currency !== currency ||
+      escrowWallet.countryCode !== countryCode ||
+      escrowWallet.currency !== currency
+    ) {
       throw this.createError({
         message: "Professional payout wallet ownership types are invalid.",
         code: "INVALID_SETTLEMENT_WALLET_TYPES",
@@ -1453,9 +1495,9 @@ class ShiftSettlementBatchService {
   }
 
   static assertEscrowOperationalCoverage({ batch, escrowWallet }) {
-    const requiredAmount = Number(batch.totalProfessionalPay);
+    const requiredAmount = batch.totalProfessionalPay;
 
-    const availableBalance = Number(escrowWallet.availableBalance || 0);
+    const availableBalance = escrowWallet.availableBalance;
 
     if (!Number.isSafeInteger(requiredAmount) || requiredAmount <= 0) {
       throw this.createError({
@@ -1677,9 +1719,72 @@ class ShiftSettlementBatchService {
 
   /* ─────────────────────────────── COMPONENT ATTACHMENT ─────────────────────────────── */
 
+  static async assertOccurrenceContexts({ occurrences, countryCode, currency, session }) {
+    const shiftIds = [...new Set(occurrences.map((occurrence) => String(occurrence.shift)))];
+    const shifts = await Shift.find({ _id: { $in: shiftIds } })
+      .select(
+        "business branch countryCode currency occurrenceCount requiredProfessionals fundedAmount publishedAt paymentStatus"
+      )
+      .session(session)
+      .lean();
+    const shiftMap = new Map(shifts.map((shift) => [String(shift._id), shift]));
+
+    for (const occurrence of occurrences) {
+      const shift = shiftMap.get(String(occurrence.shift));
+
+      if (
+        !shift ||
+        String(occurrence.business) !== String(shift.business) ||
+        String(occurrence.branch) !== String(shift.branch) ||
+        occurrence.countryCode !== countryCode ||
+        occurrence.currency !== currency ||
+        shift.countryCode !== countryCode ||
+        shift.currency !== currency ||
+        !Number.isSafeInteger(occurrence.slotNumber) ||
+        occurrence.slotNumber < 1 ||
+        !Number.isSafeInteger(shift.requiredProfessionals) ||
+        occurrence.slotNumber > shift.requiredProfessionals ||
+        !Number.isSafeInteger(occurrence.sequenceNumber) ||
+        occurrence.sequenceNumber < 1 ||
+        !Number.isSafeInteger(shift.occurrenceCount) ||
+        occurrence.sequenceNumber > shift.occurrenceCount ||
+        !Number.isSafeInteger(shift.fundedAmount) ||
+        shift.fundedAmount <= 0 ||
+        !shift.publishedAt ||
+        shift.paymentStatus === "unpaid"
+      ) {
+        throw this.createError({
+          message: "The occurrence does not match the batch's funded Shift slot and currency.",
+          code: "SETTLEMENT_OCCURRENCE_CONTEXT_MISMATCH",
+          statusCode: 409,
+          details: { occurrenceId: String(occurrence._id) },
+        });
+      }
+    }
+  }
+
+  static settlementLinesSignature(lines) {
+    return JSON.stringify(
+      lines
+        .map((line) => ({
+          shift: String(line.shift),
+          assignment: String(line.assignment),
+          business: String(line.business),
+          branch: String(line.branch),
+          earningType: line.earningType,
+          occurrenceCount: line.occurrenceCount,
+          professionalPay: line.professionalPay,
+          occurrences: line.occurrences.map(String).sort(),
+        }))
+        .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+    );
+  }
+
   static async loadFreshEligibleEntries({
     occurrenceIds,
     professionalId,
+    countryCode,
+    currency,
     settlementComponent,
     scheduledFor,
     cutoffAt,
@@ -1722,12 +1827,13 @@ class ShiftSettlementBatchService {
         $gt: 0,
       },
     })
-      .select(this.getOccurrenceSettlementFields())
       .sort({
         shift: 1,
         sequenceNumber: 1,
       })
       .session(session);
+
+    await this.assertOccurrenceContexts({ occurrences, countryCode, currency, session });
 
     const entries = [];
 
@@ -1868,83 +1974,12 @@ class ShiftSettlementBatchService {
   /* ─────────────────────────────── BATCH CREATION ─────────────────────────────── */
 
   static async getEntriesForExistingBatch(batch, session) {
-    const occurrenceIds = batch.lines.flatMap((line) => line.occurrences);
-
-    if (occurrenceIds.length === 0) {
-      return [];
-    }
-
-    const occurrences = await ShiftOccurrence.find({
-      _id: {
-        $in: occurrenceIds,
-      },
-    })
-      .select(this.getOccurrenceSettlementFields())
-      .sort({
-        shift: 1,
-        sequenceNumber: 1,
-      })
-      .session(session);
-
-    if (occurrences.length !== occurrenceIds.length) {
-      throw this.createError({
-        message: "An occurrence already recorded in the payout batch was not found.",
-        code: "SETTLEMENT_BATCH_REBUILD_OCCURRENCE_MISSING",
-        statusCode: 409,
-      });
-    }
-
-    return occurrences.map((occurrence) => {
-      const audit = this.getComponentAudit(occurrence, batch.settlementComponent);
-
-      if (
-        !audit ||
-        audit.status !== "release_pending" ||
-        String(audit.settlementBatch || "") !== String(batch._id)
-      ) {
-        throw this.createError({
-          message:
-            "An existing scheduled batch occurrence no longer matches its attached payout component.",
-          code: "SETTLEMENT_BATCH_EXISTING_COMPONENT_MISMATCH",
-          statusCode: 409,
-          details: {
-            occurrenceId: String(occurrence._id),
-
-            settlementComponent: batch.settlementComponent,
-          },
-        });
-      }
-
-      this.assertCompleteAssignment(occurrence, batch.professional);
-
-      this.assertComponentOperationalShape(occurrence, batch.settlementComponent);
-
-      const pricing = this.assertComponentPricing({
-        occurrence,
-
-        component: batch.settlementComponent,
-
-        audit,
-      });
-
-      return {
-        occurrence,
-
-        component: batch.settlementComponent,
-
-        audit,
-
-        approvedForReleaseAt: audit.approvedForReleaseAt,
-
-        scheduledPayoutAt: audit.scheduledPayoutAt,
-
-        ...pricing,
-      };
-    });
+    const { entries } = await this.getBatchOccurrences(batch, session);
+    return entries;
   }
 
   static async createBatchForGroup(group, options = {}) {
-    return runWithOptionalTransaction(
+    return this.runWithOptionalTransaction(
       options,
 
       async (session) => {
@@ -1962,6 +1997,8 @@ class ShiftSettlementBatchService {
           occurrenceIds,
 
           professionalId: group.professionalId,
+          countryCode: group.countryCode,
+          currency: group.currency,
 
           settlementComponent: component,
 
@@ -2384,7 +2421,6 @@ class ShiftSettlementBatchService {
         $in: occurrenceIds,
       },
     })
-      .select(this.getOccurrenceSettlementFields())
       .sort({
         shift: 1,
         sequenceNumber: 1,
@@ -2419,6 +2455,13 @@ class ShiftSettlementBatchService {
         statusCode: 409,
       });
     }
+
+    await this.assertOccurrenceContexts({
+      occurrences,
+      countryCode: batch.countryCode,
+      currency: batch.currency,
+      session,
+    });
 
     const entries = [];
 
@@ -2500,6 +2543,17 @@ class ShiftSettlementBatchService {
         });
       }
 
+      if (
+        this.normalizeDate(audit.scheduledPayoutAt, "Component scheduled payout time").getTime() !==
+        this.normalizeDate(batch.scheduledFor, "Batch scheduled payout time").getTime()
+      ) {
+        throw this.createError({
+          message: "The component payout schedule no longer matches its attached batch.",
+          code: "SETTLEMENT_BATCH_COMPONENT_SCHEDULE_MISMATCH",
+          statusCode: 409,
+        });
+      }
+
       const pricing = this.assertComponentPricing({
         occurrence,
         component,
@@ -2532,7 +2586,8 @@ class ShiftSettlementBatchService {
     if (
       rebuilt.occurrenceCount !== batch.occurrenceCount ||
       rebuilt.totalProfessionalPay !== batch.totalProfessionalPay ||
-      !releaseKeysMatch
+      !releaseKeysMatch ||
+      this.settlementLinesSignature(batch.lines) !== this.settlementLinesSignature(rebuilt.lines)
     ) {
       throw this.createError({
         message:
@@ -2722,9 +2777,13 @@ class ShiftSettlementBatchService {
      *
      * We therefore record this failed attempt explicitly here after rollback.
      */
+    const previousStatus = batch.status;
+    const previousAttemptCount = batch.attemptCount;
+    const previousVersion = batch.__v;
+
     batch.status = "failed";
 
-    batch.attemptCount = Number(batch.attemptCount || 0) + 1;
+    batch.attemptCount = previousAttemptCount + 1;
 
     batch.processingStartedAt = attemptTime;
 
@@ -2743,9 +2802,32 @@ class ShiftSettlementBatchService {
 
     batch.cancellationReason = null;
 
-    await batch.save();
+    await batch.validate();
 
-    return batch;
+    return ShiftSettlementBatch.findOneAndUpdate(
+      {
+        _id: batch._id,
+        status: previousStatus,
+        attemptCount: previousAttemptCount,
+        __v: previousVersion,
+      },
+      {
+        $set: {
+          status: "failed",
+          processingStartedAt: batch.processingStartedAt,
+          lastAttemptAt: batch.lastAttemptAt,
+          processingToken: null,
+          failedAt: batch.failedAt,
+          failureReason: batch.failureReason,
+          releasedAt: null,
+          cancelledAt: null,
+          cancelledBy: null,
+          cancellationReason: null,
+        },
+        $inc: { attemptCount: 1, __v: 1 },
+      },
+      { new: true, runValidators: true }
+    );
   }
 
   /* ─────────────────────────────── COMPONENT RELEASE ─────────────────────────────── */
@@ -2843,7 +2925,7 @@ class ShiftSettlementBatchService {
     const normalizedInitiatedBy = this.normalizeInitiatedBy(initiatedBy);
 
     try {
-      return await runWithOptionalTransaction(
+      return await this.runWithOptionalTransaction(
         options,
 
         async (session) => {
@@ -2999,15 +3081,19 @@ class ShiftSettlementBatchService {
           "SETTLEMENT_BATCH_NOT_FOUND",
         ].includes(error.code)
       ) {
-        await this.markBatchFailed({
-          batchId: normalizedBatchId,
-
-          error,
-
-          attemptedAt: normalizedNow,
-
-          maximumAttempts,
-        });
+        try {
+          await this.markBatchFailed({
+            batchId: normalizedBatchId,
+            error,
+            attemptedAt: normalizedNow,
+            maximumAttempts,
+          });
+        } catch (auditError) {
+          logger.error("Settlement failure audit could not be recorded.", {
+            batchId: String(normalizedBatchId),
+            error: auditError.message,
+          });
+        }
       }
 
       throw error;
@@ -3086,6 +3172,19 @@ class ShiftSettlementBatchService {
 
           totalProfessionalPay: result.batch.totalProfessionalPay,
 
+          affectedShiftIds: result.affectedShiftIds || [
+            ...new Set(result.batch.lines.map((line) => String(line.shift))),
+          ],
+          componentReleaseResults:
+            result.componentReleaseResults ||
+            this.getBatchOccurrenceIds(result.batch).map((occurrenceId) => ({
+              occurrenceId: String(occurrenceId),
+              settlementComponent: result.batch.settlementComponent,
+              refundEvaluationRequired: result.batch.settlementComponent === "base",
+              parentReconciliationRequired: true,
+            })),
+          events: result.events || [],
+
           idempotent: result.idempotent === true,
         });
       } catch (error) {
@@ -3144,7 +3243,7 @@ class ShiftSettlementBatchService {
 
     const now = this.normalizeDate(currentTime, "Settlement batch cancellation time");
 
-    return runWithOptionalTransaction(
+    return this.runWithOptionalTransaction(
       options,
 
       async (session) => {
@@ -3190,9 +3289,7 @@ class ShiftSettlementBatchService {
           _id: {
             $in: occurrenceIds,
           },
-        })
-          .select(this.getOccurrenceSettlementFields())
-          .session(session);
+        }).session(session);
 
         if (occurrences.length !== batch.occurrenceCount) {
           throw this.createError({
@@ -3332,7 +3429,9 @@ class ShiftSettlementBatchService {
         $lte: normalizedStaleBefore,
       },
     })
-      .select("_id referenceCode settlementComponent processingStartedAt")
+      .select(
+        "_id referenceCode settlementComponent processingStartedAt attemptCount +processingToken"
+      )
       .sort({
         processingStartedAt: 1,
       })
@@ -3350,11 +3449,14 @@ class ShiftSettlementBatchService {
 
     const result = await ShiftSettlementBatch.updateMany(
       {
-        _id: {
-          $in: staleBatches.map((batch) => batch._id),
-        },
-
         status: "processing",
+        processingStartedAt: { $lte: normalizedStaleBefore },
+        $or: staleBatches.map((batch) => ({
+          _id: batch._id,
+          processingToken: batch.processingToken,
+          processingStartedAt: batch.processingStartedAt,
+          attemptCount: batch.attemptCount,
+        })),
       },
 
       {

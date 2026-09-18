@@ -11,6 +11,8 @@ class ProviderEventService {
   /* ─────────────────────────────── TRANSACTIONS ─────────────────────────────── */
 
   static async runWithOptionalTransaction(options = {}, callback) {
+    if (typeof callback !== "function") throw new TypeError("Transaction callback is required.");
+    ProviderEventService.assertOptionalSession(options);
     if (options.session) {
       return callback(options.session);
     }
@@ -32,8 +34,57 @@ class ProviderEventService {
 
   /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
 
+  static assertOptionalSession(options = {}) {
+    if (
+      options.session &&
+      (typeof options.session.inTransaction !== "function" || !options.session.inTransaction())
+    ) {
+      throw new Error("A supplied provider-event session must have an active transaction.");
+    }
+  }
+
+  static assertDuplicateIdentity(existing, incoming) {
+    for (const field of [
+      "provider",
+      "eventName",
+      "providerEventId",
+      "providerReference",
+      "providerRefundId",
+      "providerRefundReference",
+      "countryCode",
+      "currency",
+      "amount",
+      "providerFee",
+      "netAmount",
+    ]) {
+      if ((existing[field] ?? null) !== (incoming[field] ?? null)) {
+        throw new Error(
+          `Duplicate provider event conflicts with recorded ${field}; reconciliation is required.`
+        );
+      }
+    }
+
+    // A duplicate replay must not mutate the contents of the existing ProviderEvent.
+    return existing;
+  }
+
+  static async findDuplicate(incoming, session = null) {
+    const conditions = [{ eventKey: incoming.eventKey }];
+    if (incoming.providerEventId) {
+      conditions.push({ provider: incoming.provider, providerEventId: incoming.providerEventId });
+    }
+    const query = ProviderEvent.findOne({ $or: conditions });
+    if (session) query.session(session);
+    const existing = await query;
+    return existing ? ProviderEventService.assertDuplicateIdentity(existing, incoming) : null;
+  }
+
   static cleanString(value) {
-    const cleanValue = String(value || "").trim();
+    if (value === null || value === undefined) return null;
+    if (typeof value !== "string" && !(typeof value === "number" && Number.isSafeInteger(value))) {
+      throw new Error("Provider event text must be a string or safe integer identifier.");
+    }
+    const cleanValue = String(value).trim();
 
     return cleanValue || null;
   }
@@ -45,8 +96,11 @@ class ProviderEventService {
   }
 
   static normalizeCurrentTime(value) {
-    const currentTime =
-      value instanceof Date ? new Date(value.getTime()) : new Date(value || Date.now());
+    if (value === undefined) return new Date();
+    if (!(value instanceof Date) && typeof value !== "number" && typeof value !== "string") {
+      throw new Error("Provider event current time is invalid.");
+    }
+    const currentTime = value instanceof Date ? new Date(value.getTime()) : new Date(value);
 
     if (Number.isNaN(currentTime.getTime())) {
       throw new Error("Provider event current time is invalid.");
@@ -56,10 +110,13 @@ class ProviderEventService {
   }
 
   static normalizeOptionalMinorUnitAmount(value, label) {
-    if (value === null || value === undefined || value === "") {
+    if (value === null || value === undefined) {
       return null;
     }
 
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+      throw new Error(`${label} must be a non-negative safe integer.`);
+    }
     return money.normalizeMinorUnitAmount(value, label);
   }
 
@@ -70,7 +127,7 @@ class ProviderEventService {
   }
 
   static normalizePositiveInteger(value, label) {
-    const normalizedValue = Number(value);
+    const normalizedValue = value;
 
     if (!Number.isSafeInteger(normalizedValue) || normalizedValue <= 0) {
       throw new Error(`${label} must be a positive integer.`);
@@ -254,6 +311,17 @@ class ProviderEventService {
       throw new Error("Provider event is already linked to a different provider refund reference.");
     }
 
+    for (const [field, value] of Object.entries({ employer, shift })) {
+      if (
+        value &&
+        providerEvent[field] &&
+        !ProviderEventService.sameId(providerEvent[field], value)
+      ) {
+        throw new Error(`Provider event is already linked to a different ${field}.`);
+      }
+    }
+    if (!normalizedBatch || !normalizedLineId)
+      throw new Error("Refund execution requires batch and line IDs.");
     providerEvent.eventCategory = "employer_refund";
 
     providerEvent.employerRefundBatch = normalizedBatch;
@@ -291,6 +359,8 @@ class ProviderEventService {
 
     providerRefundId = null,
     providerRefundReference = null,
+    refundTraceKey = null,
+    originalTransactionProviderId = null,
   }) {
     const cleanProvider = ProviderEventService.cleanLowerString(provider);
 
@@ -333,6 +403,22 @@ class ProviderEventService {
 
     if (cleanProviderRefundReference) {
       return `${cleanProvider}:${cleanEventName}:refund-reference:${cleanProviderRefundReference}`;
+    }
+
+    if (cleanProvider === "paystack" && cleanEventName.startsWith("refund.")) {
+      const trace = ProviderEventService.cleanString(refundTraceKey);
+      const original =
+        cleanProviderReference || ProviderEventService.cleanString(originalTransactionProviderId);
+      if (!trace || !original) {
+        throw new Error(
+          "Refund event needs a refund identity or trace plus original transaction identity; payment reference alone is insufficient."
+        );
+      }
+      const digest = crypto
+        .createHash("sha256")
+        .update(JSON.stringify([original, trace]))
+        .digest("hex");
+      return `${cleanProvider}:${cleanEventName}:refund-trace:${digest}`;
     }
 
     if (cleanProviderReference) {
@@ -411,12 +497,12 @@ class ProviderEventService {
   }
 
   /*
-   * Finds processing claims whose latest processing
-   * attempt has exceeded the allowed worker lifetime.
+   * Finds active processing claims whose latest
+   * processing attempt has exceeded the allowed
+   * worker lifetime.
    *
-   * Legacy processing records may have only
-   * processingStartedAt, so that timestamp remains a
-   * compatibility fallback.
+   * Every processing ProviderEvent must have both
+   * processingStartedAt and lastProcessingStartedAt.
    *
    * Finding a stale event does not recover or process
    * it. Recovery remains a separate atomic operation.
@@ -437,8 +523,11 @@ class ProviderEventService {
       "Provider event stale processing limit"
     );
 
-    const staleBefore = new Date(
-      normalizedCurrentTime.getTime() - normalizedStaleProcessingMinutes * 60 * 1000
+    const staleOffset = normalizedStaleProcessingMinutes * 60 * 1000;
+    if (!Number.isSafeInteger(staleOffset))
+      throw new Error("Stale-processing duration is too large.");
+    const staleBefore = ProviderEventService.normalizeCurrentTime(
+      normalizedCurrentTime.getTime() - staleOffset
     );
 
     const query = ProviderEvent.find({
@@ -446,26 +535,17 @@ class ProviderEventService {
 
       status: "processing",
 
-      $or: [
-        {
-          lastProcessingStartedAt: {
-            $ne: null,
-            $lte: staleBefore,
-          },
-        },
-        {
-          lastProcessingStartedAt: null,
+      processingStartedAt: {
+        $ne: null,
+      },
 
-          processingStartedAt: {
-            $ne: null,
-            $lte: staleBefore,
-          },
-        },
-      ],
+      lastProcessingStartedAt: {
+        $ne: null,
+        $lte: staleBefore,
+      },
     })
       .sort({
         lastProcessingStartedAt: 1,
-        processingStartedAt: 1,
         _id: 1,
       })
       .limit(normalizedLimit)
@@ -503,8 +583,8 @@ class ProviderEventService {
       providerFee = null,
       netAmount = null,
 
-      countryCode = "NG",
-      currency = "NGN",
+      countryCode = null,
+      currency = null,
 
       user = null,
       employer = null,
@@ -528,36 +608,43 @@ class ProviderEventService {
     },
     options = {}
   ) {
-    return ProviderEventService.runWithOptionalTransaction(options, async (session) => {
-      const normalizedCurrentTime = ProviderEventService.normalizeCurrentTime(currentTime);
+    let incoming = null;
+    try {
+      return await ProviderEventService.runWithOptionalTransaction(options, async (session) => {
+        if (isVerified !== true)
+          throw new Error("New provider events must be verified before recording.");
+        countryCode = ProviderEventService.cleanString(countryCode)?.toUpperCase();
+        currency = ProviderEventService.cleanString(currency)?.toUpperCase();
+        if (!/^[A-Z]{2}$/.test(countryCode || "") || !/^[A-Z]{3}$/.test(currency || "")) {
+          throw new Error("Explicit provider event country and currency are required.");
+        }
+        const normalizedCurrentTime = ProviderEventService.normalizeCurrentTime(currentTime);
 
-      const cleanProvider = ProviderEventService.cleanLowerString(provider);
+        const cleanProvider = ProviderEventService.cleanLowerString(provider);
 
-      const cleanEventName = ProviderEventService.cleanLowerString(eventName);
+        const cleanEventName = ProviderEventService.cleanLowerString(eventName);
 
-      const cleanEventCategory = ProviderEventService.normalizeEventCategory(eventCategory);
+        const cleanEventCategory = ProviderEventService.normalizeEventCategory(eventCategory);
 
-      const cleanProviderEventId = ProviderEventService.cleanString(providerEventId);
+        const cleanProviderEventId = ProviderEventService.cleanString(providerEventId);
 
-      const cleanProviderReference = ProviderEventService.cleanString(providerReference);
+        const cleanProviderReference = ProviderEventService.cleanString(providerReference);
 
-      const cleanProviderRefundId = ProviderEventService.cleanString(providerRefundId);
+        const cleanProviderRefundId = ProviderEventService.cleanString(providerRefundId);
 
-      const cleanProviderRefundReference =
-        ProviderEventService.cleanString(providerRefundReference);
+        const cleanProviderRefundReference =
+          ProviderEventService.cleanString(providerRefundReference);
 
-      const {
-        employerRefundBatch: normalizedEmployerRefundBatch,
+        const {
+          employerRefundBatch: normalizedEmployerRefundBatch,
 
-        employerRefundBatchLineId: normalizedEmployerRefundBatchLineId,
-      } = ProviderEventService.assertEmployerRefundExecutionLinkPair({
-        employerRefundBatch,
-        employerRefundBatchLineId,
-      });
+          employerRefundBatchLineId: normalizedEmployerRefundBatchLineId,
+        } = ProviderEventService.assertEmployerRefundExecutionLinkPair({
+          employerRefundBatch,
+          employerRefundBatchLineId,
+        });
 
-      const cleanEventKey =
-        ProviderEventService.cleanString(eventKey) ||
-        ProviderEventService.buildEventKey({
+        const cleanEventKey = ProviderEventService.buildEventKey({
           provider: cleanProvider,
 
           eventName: cleanEventName,
@@ -569,147 +656,125 @@ class ProviderEventService {
           providerRefundId: cleanProviderRefundId,
 
           providerRefundReference: cleanProviderRefundReference,
+          refundTraceKey: normalizedPayload?.refundTraceKey,
+          originalTransactionProviderId: normalizedPayload?.originalTransactionProviderId,
         });
+        if (eventKey && ProviderEventService.cleanString(eventKey) !== cleanEventKey) {
+          throw new Error(
+            "Supplied event key does not match the canonical provider event identity."
+          );
+        }
 
-      const normalizedAmount = ProviderEventService.normalizeOptionalMinorUnitAmount(
-        amount,
-        "Provider event amount"
-      );
+        const normalizedAmount = ProviderEventService.normalizeOptionalMinorUnitAmount(
+          amount,
+          "Provider event amount"
+        );
 
-      const normalizedProviderFee = ProviderEventService.normalizeOptionalMinorUnitAmount(
-        providerFee,
-        "Provider event fee"
-      );
+        const normalizedProviderFee = ProviderEventService.normalizeOptionalMinorUnitAmount(
+          providerFee,
+          "Provider event fee"
+        );
 
-      const normalizedNetAmount = ProviderEventService.normalizeOptionalMinorUnitAmount(
-        netAmount,
-        "Provider event net amount"
-      );
+        const normalizedNetAmount = ProviderEventService.normalizeOptionalMinorUnitAmount(
+          netAmount,
+          "Provider event net amount"
+        );
 
-      if (
-        normalizedAmount !== null &&
-        normalizedProviderFee !== null &&
-        normalizedProviderFee > normalizedAmount
-      ) {
-        throw new Error("Provider event fee cannot be greater than amount.");
-      }
+        if (
+          normalizedAmount !== null &&
+          normalizedProviderFee !== null &&
+          normalizedProviderFee > normalizedAmount
+        ) {
+          throw new Error("Provider event fee cannot be greater than amount.");
+        }
 
-      if (
-        normalizedAmount !== null &&
-        normalizedNetAmount !== null &&
-        normalizedNetAmount > normalizedAmount
-      ) {
-        throw new Error("Provider event net amount cannot be greater than amount.");
-      }
+        if (
+          normalizedAmount !== null &&
+          normalizedNetAmount !== null &&
+          normalizedNetAmount > normalizedAmount
+        ) {
+          throw new Error("Provider event net amount cannot be greater than amount.");
+        }
 
-      const providerEventData = {
-        provider: cleanProvider,
+        if (
+          normalizedNetAmount !== null &&
+          (normalizedAmount === null ||
+            normalizedProviderFee === null ||
+            normalizedNetAmount !== normalizedAmount - normalizedProviderFee)
+        ) {
+          throw new Error("Net amount requires amount and fee and must equal their difference.");
+        }
+        const providerEventData = {
+          provider: cleanProvider,
 
-        eventKey: cleanEventKey,
+          eventKey: cleanEventKey,
 
-        providerEventId: cleanProviderEventId,
+          providerEventId: cleanProviderEventId,
 
-        providerReference: cleanProviderReference,
+          providerReference: cleanProviderReference,
 
-        providerRefundId: cleanProviderRefundId,
+          providerRefundId: cleanProviderRefundId,
 
-        providerRefundReference: cleanProviderRefundReference,
+          providerRefundReference: cleanProviderRefundReference,
 
-        eventName: cleanEventName,
+          eventName: cleanEventName,
 
-        eventCategory: cleanEventCategory,
+          eventCategory: cleanEventCategory,
 
-        isVerified: Boolean(isVerified),
+          isVerified: Boolean(isVerified),
 
-        verifiedAt: isVerified ? normalizedCurrentTime : null,
+          verifiedAt: isVerified ? normalizedCurrentTime : null,
 
-        status: "received",
+          status: "received",
 
-        receivedAt: normalizedCurrentTime,
+          receivedAt: normalizedCurrentTime,
 
-        processingClaimId: null,
+          processingClaimId: null,
 
-        amount: normalizedAmount,
+          amount: normalizedAmount,
 
-        providerFee: normalizedProviderFee,
+          providerFee: normalizedProviderFee,
 
-        netAmount: normalizedNetAmount,
+          netAmount: normalizedNetAmount,
 
-        countryCode,
-        currency,
+          countryCode,
+          currency,
 
-        user,
-        employer,
-        professional,
-        wallet,
-        transaction,
-        dva,
-        bankAccount,
-        shift,
-        shiftApplication,
+          user,
+          employer,
+          professional,
+          wallet,
+          transaction,
+          dva,
+          bankAccount,
+          shift,
+          shiftApplication,
 
-        employerRefundBatch: normalizedEmployerRefundBatch,
+          employerRefundBatch: normalizedEmployerRefundBatch,
 
-        employerRefundBatchLineId: normalizedEmployerRefundBatchLineId,
+          employerRefundBatchLineId: normalizedEmployerRefundBatchLineId,
 
-        rawHeaders,
-        rawPayload,
-        normalizedPayload,
-        metadata,
-      };
-
-      try {
-        const [providerEvent] = await ProviderEvent.create([providerEventData], {
-          session,
-        });
-
-        return {
-          providerEvent,
-
-          created: true,
-
-          idempotent: false,
+          rawHeaders,
+          rawPayload,
+          normalizedPayload,
+          metadata,
         };
-      } catch (error) {
-        if (error.code !== 11000) {
-          throw error;
-        }
 
-        const duplicateConditions = [
-          {
-            eventKey: cleanEventKey,
-          },
-        ];
+        incoming = providerEventData;
+        const existing = await ProviderEventService.findDuplicate(incoming, session);
+        if (existing) return { providerEvent: existing, created: false, idempotent: true };
 
-        if (cleanProviderEventId) {
-          duplicateConditions.push({
-            provider: cleanProvider,
-
-            providerEventId: cleanProviderEventId,
-          });
-        }
-
-        const duplicateQuery = ProviderEvent.findOne({
-          $or: duplicateConditions,
-        });
-
-        duplicateQuery.session(session);
-
-        const existingProviderEvent = await duplicateQuery;
-
-        if (!existingProviderEvent) {
-          throw error;
-        }
-
-        return {
-          providerEvent: existingProviderEvent,
-
-          created: false,
-
-          idempotent: true,
-        };
-      }
-    });
+        const [providerEvent] = await ProviderEvent.create([providerEventData], { session });
+        return { providerEvent, created: true, idempotent: false };
+      });
+    } catch (error) {
+      // A duplicate-key write aborts MongoDB's transaction. Read only after our
+      // transaction has ended. An outer-session caller must abort/retry itself.
+      if (error.code !== 11000 || options.session || !incoming) throw error;
+      const existing = await ProviderEventService.findDuplicate(incoming);
+      if (!existing) throw error;
+      return { providerEvent: existing, created: false, idempotent: true };
+    }
   }
 
   /* ─────────────────────────────── LINK EMPLOYER REFUND EXECUTION ─────────────────────────────── */
@@ -807,6 +872,7 @@ class ProviderEventService {
     },
     options = {}
   ) {
+    ProviderEventService.assertOptionalSession(options);
     const normalizedCurrentTime = ProviderEventService.normalizeCurrentTime(currentTime);
 
     const normalizedProviderEventRecordId =
@@ -825,9 +891,12 @@ class ProviderEventService {
 
       isVerified: true,
 
-      status: {
-        $in: ["received", "failed"],
-      },
+      receivedAt: { $lte: normalizedCurrentTime },
+      verifiedAt: { $ne: null, $lte: normalizedCurrentTime },
+      $or: [
+        { status: "received" },
+        { status: "failed", nextRetryAt: { $ne: null, $lte: normalizedCurrentTime } },
+      ],
     };
 
     const commonClaimSet = {
@@ -868,6 +937,7 @@ class ProviderEventService {
         ...baseClaimFilter,
 
         processingStartedAt: null,
+        lastProcessingStartedAt: null,
       },
       {
         $set: {
@@ -889,9 +959,8 @@ class ProviderEventService {
         {
           ...baseClaimFilter,
 
-          processingStartedAt: {
-            $ne: null,
-          },
+          processingStartedAt: { $ne: null, $lte: normalizedCurrentTime },
+          lastProcessingStartedAt: { $ne: null, $lte: normalizedCurrentTime },
         },
         {
           $set: commonClaimSet,
@@ -993,6 +1062,7 @@ class ProviderEventService {
     },
     options = {}
   ) {
+    ProviderEventService.assertOptionalSession(options);
     const normalizedCurrentTime = ProviderEventService.normalizeCurrentTime(currentTime);
 
     const normalizedStaleProcessingMinutes = ProviderEventService.normalizePositiveInteger(
@@ -1003,8 +1073,11 @@ class ProviderEventService {
     const normalizedProviderEventRecordId =
       ProviderEventService.normalizeProviderEventRecordId(providerEventRecordId);
 
-    const staleBefore = new Date(
-      normalizedCurrentTime.getTime() - normalizedStaleProcessingMinutes * 60 * 1000
+    const staleOffset = normalizedStaleProcessingMinutes * 60 * 1000;
+    if (!Number.isSafeInteger(staleOffset))
+      throw new Error("Stale-processing duration is too large.");
+    const staleBefore = ProviderEventService.normalizeCurrentTime(
+      normalizedCurrentTime.getTime() - staleOffset
     );
 
     /*
@@ -1022,22 +1095,11 @@ class ProviderEventService {
 
         status: "processing",
 
-        $or: [
-          {
-            lastProcessingStartedAt: {
-              $ne: null,
-              $lte: staleBefore,
-            },
-          },
-          {
-            lastProcessingStartedAt: null,
-
-            processingStartedAt: {
-              $ne: null,
-              $lte: staleBefore,
-            },
-          },
-        ],
+        processingStartedAt: { $ne: null, $lte: staleBefore },
+        lastProcessingStartedAt: { $ne: null, $lte: staleBefore },
+        verifiedAt: { $ne: null, $lte: normalizedCurrentTime },
+        receivedAt: { $lte: normalizedCurrentTime },
+        retryCount: { $gte: 0, $lt: Number.MAX_SAFE_INTEGER },
       },
       {
         $set: {
@@ -1223,6 +1285,12 @@ class ProviderEventService {
        * completed the event.
        */
       if (providerEvent.status === "processed") {
+        if (processingClaimId) {
+          throw ProviderEventService.createProcessingClaimError({
+            message: "This processing attempt no longer owns the completed event.",
+            code: "PROVIDER_EVENT_PROCESSING_CLAIM_INACTIVE",
+          });
+        }
         return {
           providerEvent,
 
@@ -1300,6 +1368,10 @@ class ProviderEventService {
       providerEvent.processingClaimId = null;
 
       providerEvent.processedAt = normalizedCurrentTime;
+      providerEvent.failedAt = null;
+      providerEvent.failureReason = null;
+      providerEvent.ignoredAt = null;
+      providerEvent.ignoredReason = null;
 
       providerEvent.nextRetryAt = null;
 
@@ -1378,6 +1450,7 @@ class ProviderEventService {
     options = {}
   ) {
     return ProviderEventService.runWithOptionalTransaction(options, async (session) => {
+      if (typeof retryable !== "boolean") throw new Error("retryable must be a boolean.");
       const normalizedCurrentTime = ProviderEventService.normalizeCurrentTime(currentTime);
 
       const providerEvent = await ProviderEventService.getProviderEventById(providerEventRecordId, {
@@ -1448,11 +1521,21 @@ class ProviderEventService {
       providerEvent.processingClaimId = null;
 
       providerEvent.failedAt = normalizedCurrentTime;
+      providerEvent.processedAt = null;
+      providerEvent.ignoredAt = null;
+      providerEvent.ignoredReason = null;
 
       providerEvent.failureReason =
         ProviderEventService.cleanString(failureReason) || "Provider event processing failed.";
 
-      providerEvent.retryCount = Number(providerEvent.retryCount || 0) + 1;
+      if (
+        !Number.isSafeInteger(providerEvent.retryCount) ||
+        providerEvent.retryCount < 0 ||
+        providerEvent.retryCount >= Number.MAX_SAFE_INTEGER
+      ) {
+        throw new Error("Provider event retry count is invalid or exhausted.");
+      }
+      providerEvent.retryCount += 1;
 
       providerEvent.nextRetryAt = retryable ? normalizedNextRetryAt : null;
 
@@ -1503,6 +1586,12 @@ class ProviderEventService {
        * Idempotent read-only result.
        */
       if (providerEvent.status === "ignored") {
+        if (processingClaimId) {
+          throw ProviderEventService.createProcessingClaimError({
+            message: "This processing attempt no longer owns the ignored event.",
+            code: "PROVIDER_EVENT_PROCESSING_CLAIM_INACTIVE",
+          });
+        }
         return {
           providerEvent,
 
@@ -1525,6 +1614,9 @@ class ProviderEventService {
       providerEvent.processingClaimId = null;
 
       providerEvent.ignoredAt = normalizedCurrentTime;
+      providerEvent.processedAt = null;
+      providerEvent.failedAt = null;
+      providerEvent.failureReason = null;
 
       providerEvent.ignoredReason =
         ProviderEventService.cleanString(ignoredReason) || "Provider event ignored.";

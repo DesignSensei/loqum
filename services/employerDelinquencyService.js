@@ -46,10 +46,11 @@ const RESTRICTION_REASON = "overdue_overtime_topup";
  *
  * - overtime was requested;
  * - overtime is finally approved;
- * - overtime top-up is still unpaid;
- * - topUpRequired remains positive;
- * - no completed top-up transaction is attached; and
+ * - topUpRequired remains positive; and
  * - overtime.restrictionTriggeredAt has been reached.
+ *
+ * topUpRequired is the current monetary obligation. Historical or partially
+ * written funding markers must never clear an amount that is still positive.
  *
  * restrictionTriggeredAt is historical audit.
  *
@@ -163,23 +164,19 @@ class EmployerDelinquencyService {
       /*
        * restrictionTriggeredAt is historical.
        *
-       * Current restriction therefore MUST also require the overtime funding
-       * obligation to remain unpaid.
+       * topUpRequired is the current monetary authority. Do not clear an
+       * outstanding restriction merely because topUpPaid/topUpTransaction
+       * contains a stale, partial or reconciliation-time marker.
        */
-      "overtime.topUpPaid": {
-        $ne: true,
-      },
-
       "overtime.restrictionTriggeredAt": {
         $ne: null,
+
         $lte: EmployerDelinquencyService.normalizeCurrentTime(currentTime),
       },
 
       topUpRequired: {
         $gt: 0,
       },
-
-      topUpTransaction: null,
     };
   }
 
@@ -219,8 +216,11 @@ class EmployerDelinquencyService {
       })
       .sort({
         "overtime.restrictionTriggeredAt": 1,
+
         "overtime.topUpOverdueAt": 1,
+
         startTime: 1,
+
         _id: 1,
       })
       .lean();
@@ -244,8 +244,11 @@ class EmployerDelinquencyService {
       throw EmployerDelinquencyService.createError({
         message:
           "A delinquency-blocking occurrence must contain a positive outstanding overtime top-up.",
+
         code: "INVALID_DELINQUENCY_BLOCKING_AMOUNT",
+
         statusCode: 500,
+
         details: {
           occurrenceId: occurrence?._id ? String(occurrence._id) : null,
         },
@@ -257,8 +260,11 @@ class EmployerDelinquencyService {
     if (!restrictionTriggeredAt) {
       throw EmployerDelinquencyService.createError({
         message: "A delinquency-blocking occurrence is missing restrictionTriggeredAt.",
+
         code: "DELINQUENCY_RESTRICTION_TRIGGER_MISSING",
+
         statusCode: 500,
+
         details: {
           occurrenceId: occurrence?._id ? String(occurrence._id) : null,
         },
@@ -309,6 +315,8 @@ class EmployerDelinquencyService {
       topUpPaid: occurrence.overtime?.topUpPaid === true,
 
       topUpPaidAt: occurrence.overtime?.topUpPaidAt || null,
+
+      topUpTransactionId: occurrence.topUpTransaction ? String(occurrence.topUpTransaction) : null,
     };
   }
 
@@ -323,6 +331,7 @@ class EmployerDelinquencyService {
     const occurrences = await EmployerDelinquencyService.getBlockingOccurrences(
       {
         businessId: normalizedBusinessId,
+
         currentTime: now,
       },
       options
@@ -350,8 +359,11 @@ class EmployerDelinquencyService {
             if (Number.isNaN(triggeredAt.getTime())) {
               throw EmployerDelinquencyService.createError({
                 message: "A delinquency restriction timestamp is invalid.",
+
                 code: "INVALID_DELINQUENCY_RESTRICTION_TIMESTAMP",
+
                 statusCode: 500,
+
                 details: {
                   occurrenceId: occurrence.occurrenceId,
                 },
@@ -408,6 +420,7 @@ class EmployerDelinquencyService {
     const restrictionState = await EmployerDelinquencyService.getRestrictionState(
       {
         businessId,
+
         currentTime,
       },
       options
@@ -453,6 +466,7 @@ class EmployerDelinquencyService {
     return EmployerDelinquencyService.assertCanCreateNewObligation(
       {
         businessId,
+
         currentTime,
       },
       options

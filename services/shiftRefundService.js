@@ -153,6 +153,17 @@ class ShiftRefundService {
   }
 
   static async runWithOptionalTransaction(options = {}, callback) {
+    if (
+      options.session &&
+      (typeof options.session.inTransaction !== "function" || !options.session.inTransaction())
+    ) {
+      throw ShiftRefundService.createError({
+        message: "A supplied refund session must have an active transaction.",
+        code: "ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
     return runServiceTransaction(options, callback);
   }
 
@@ -183,7 +194,12 @@ class ShiftRefundService {
   static normalizeCurrentTime(value = new Date()) {
     const currentTime = value instanceof Date ? new Date(value.getTime()) : new Date(value);
 
-    if (Number.isNaN(currentTime.getTime())) {
+    if (
+      value === null ||
+      value === "" ||
+      typeof value === "boolean" ||
+      Number.isNaN(currentTime.getTime())
+    ) {
       throw ShiftRefundService.createError({
         message: "Current time is invalid.",
         code: "INVALID_CURRENT_TIME",
@@ -194,7 +210,7 @@ class ShiftRefundService {
   }
 
   static normalizeAmount(value, fieldName, { positive = false } = {}) {
-    const amount = Number(value ?? 0);
+    const amount = value;
 
     const valid = Number.isSafeInteger(amount) && (positive ? amount > 0 : amount >= 0);
 
@@ -353,6 +369,8 @@ class ShiftRefundService {
         "fundedAmount",
         "fundedAt",
         "publishedAt",
+        "requiredProfessionals",
+        "occurrenceCount",
       ].join(" ")
     );
 
@@ -439,6 +457,17 @@ class ShiftRefundService {
 
         session,
       }));
+
+    if (
+      (shiftId && !ShiftRefundService.sameId(resolvedShift._id, shiftId)) ||
+      (occurrenceId && !ShiftRefundService.sameId(resolvedOccurrence._id, occurrenceId))
+    ) {
+      throw ShiftRefundService.createError({
+        message: "The supplied documents do not match the requested refund IDs.",
+        code: "REFUND_CONTEXT_ID_MISMATCH",
+        statusCode: 409,
+      });
+    }
 
     ShiftRefundService.assertOwnership({
       shift: resolvedShift,
@@ -582,6 +611,25 @@ class ShiftRefundService {
       throw ShiftRefundService.createError({
         message: "The occurrence does not belong to the supplied Shift and employer.",
         code: "SHIFT_OCCURRENCE_OWNERSHIP_MISMATCH",
+        statusCode: 409,
+      });
+    }
+
+    if (
+      occurrence.countryCode !== shift.countryCode ||
+      occurrence.currency !== shift.currency ||
+      !Number.isSafeInteger(occurrence.slotNumber) ||
+      occurrence.slotNumber < 1 ||
+      !Number.isSafeInteger(shift.requiredProfessionals) ||
+      occurrence.slotNumber > shift.requiredProfessionals ||
+      !Number.isSafeInteger(occurrence.sequenceNumber) ||
+      occurrence.sequenceNumber < 1 ||
+      !Number.isSafeInteger(shift.occurrenceCount) ||
+      occurrence.sequenceNumber > shift.occurrenceCount
+    ) {
+      throw ShiftRefundService.createError({
+        message: "The occurrence does not match the Shift's slot/date and currency snapshots.",
+        code: "REFUND_OCCURRENCE_CONTEXT_MISMATCH",
         statusCode: 409,
       });
     }
@@ -817,7 +865,15 @@ class ShiftRefundService {
      * mirror the established baseProfessionalPay authority used by the refund
      * workflow.
      */
-    if (baseSettlementPay > 0 && baseSettlementPay !== baseProfessionalPay) {
+    const hasApprovedBasePayout = ["approved_for_release", "release_pending", "released"].includes(
+      ShiftRefundService.getBaseSettlementStatus(occurrence)
+    );
+
+    if (
+      ((baseSettlementPay > 0 || hasApprovedBasePayout) &&
+        baseSettlementPay !== baseProfessionalPay) ||
+      (hasApprovedBasePayout && baseSettlementPay <= 0)
+    ) {
       throw ShiftRefundService.createError({
         message: "The BASE payout component does not match established baseProfessionalPay.",
         code: "BASE_SETTLEMENT_PROFESSIONAL_PAY_MISMATCH",
@@ -958,10 +1014,7 @@ class ShiftRefundService {
             positive: true,
           });
 
-    if (
-      suppliedAmount !== expectedAmount ||
-      (occurrenceAmount > 0 && occurrenceAmount !== expectedAmount)
-    ) {
+    if (suppliedAmount !== expectedAmount) {
       throw ShiftRefundService.createError({
         message:
           "The refund amount does not match the occurrence's unused scheduled/base allocation.",
@@ -1688,6 +1741,21 @@ class ShiftRefundService {
   }
 
   static clearOccurrenceMirror(occurrence) {
+    if (
+      EXECUTION_REFUND_STATUSES.includes(occurrence.refundStatus) ||
+      occurrence.refundBatch ||
+      occurrence.refundProcessingStartedAt ||
+      occurrence.refundedAt ||
+      ShiftRefundService.normalizeAmount(occurrence.refundedAmount, "Occurrence refunded amount") >
+        0
+    ) {
+      throw ShiftRefundService.createError({
+        message: "Refund execution evidence cannot be cleared as an empty obligation.",
+        code: "OCCURRENCE_REFUND_EXECUTION_MIRROR_CONFLICT",
+        statusCode: 409,
+      });
+    }
+
     occurrence.refundableAmount = 0;
 
     occurrence.refundedAmount = 0;
@@ -1778,7 +1846,10 @@ class ShiftRefundService {
     expectedReason = null,
     requestedHold = null,
   }) {
-    const amountMatches = Number(employerRefund.amount || 0) === Number(expectedRefundAmount || 0);
+    const amountMatches =
+      ShiftRefundService.normalizeAmount(employerRefund.amount, "Locked employer refund amount", {
+        positive: true,
+      }) === ShiftRefundService.normalizeAmount(expectedRefundAmount, "Expected refund amount");
 
     const reasonMatches = expectedReason ? employerRefund.reason === expectedReason : true;
 
@@ -1800,7 +1871,7 @@ class ShiftRefundService {
 
       created: false,
 
-      idempotent: amountMatches && reasonMatches,
+      idempotent: !authoritativeConflict,
 
       mutable: false,
 
@@ -1890,22 +1961,6 @@ class ShiftRefundService {
 
           refundableAmount,
         });
-
-        if (
-          resolvedOccurrence.refundReason &&
-          resolvedOccurrence.refundReason !== normalizedReason
-        ) {
-          throw ShiftRefundService.createError({
-            message: "The requested refund reason does not match the occurrence refund reason.",
-            code: "OCCURRENCE_REFUND_REASON_MISMATCH",
-            statusCode: 409,
-            details: {
-              occurrenceRefundReason: resolvedOccurrence.refundReason,
-
-              requestedRefundReason: normalizedReason,
-            },
-          });
-        }
 
         const requestedHold = await ShiftRefundService.resolveRequestedHold({
           occurrence: resolvedOccurrence,
@@ -2405,25 +2460,23 @@ class ShiftRefundService {
         });
 
         if (ShiftRefundService.isExecutionLocked(employerRefund)) {
-          const boundaryFlags = ShiftRefundService.getExecutionBoundaryFlags({
-            employerRefund,
-            authoritativeConflict: false,
+          const expectedRefundAmount = ShiftRefundService.calculateExpectedRefundAmount(occurrence);
+          const requestedHold = await ShiftRefundService.resolveAutomaticHold({
+            occurrence,
+            currentTime: normalizedCurrentTime,
+            session,
           });
 
           return {
-            shift,
-
-            occurrence,
-
-            employerRefund,
-
+            ...ShiftRefundService.buildExecutionLockedResult({
+              shift,
+              occurrence,
+              employerRefund,
+              actor,
+              expectedRefundAmount,
+              requestedHold,
+            }),
             eligible: false,
-
-            idempotent: false,
-
-            ...boundaryFlags,
-
-            actor,
           };
         }
 
@@ -2660,8 +2713,6 @@ class ShiftRefundService {
 
         const resolvedReason = ShiftRefundService.normalizeRefundReason(
           reason ||
-            resolvedOccurrence.refundReason ||
-            existingRefund?.reason ||
             ShiftRefundService.deriveRefundReason({
               shift: resolvedShift,
 
@@ -2687,7 +2738,17 @@ class ShiftRefundService {
 
             refundableAmount: expectedRefundAmount,
 
-            holdReason,
+            holdReason:
+              holdReason ||
+              (existingRefund?.status === "held" &&
+              ![
+                PROFESSIONAL_CLAIM_HOLD_REASON,
+                EMPLOYER_DISPUTE_HOLD_REASON,
+                PROFESSIONAL_SETTLEMENT_HOLD_REASON,
+                CHALLENGE_WINDOW_HOLD_REASON,
+              ].includes(existingRefund.holdReason)
+                ? existingRefund.holdReason
+                : null),
 
             claimId,
 

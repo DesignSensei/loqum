@@ -10,12 +10,15 @@ const EmployerProfile = require("../models/EmployerProfile");
 const WalletService = require("./walletService");
 const PaystackService = require("./paystackService");
 const ShiftLifecycleService = require("./shiftLifecycleService");
+const ShiftOvertimeFundingService = require("./shiftOvertimeFundingService");
 
 const { createServiceError } = require("./helpers/serviceErrorHelper");
 const { normalizeFieldCode } = require("./helpers/serviceValidationHelpers");
 const { runWithOptionalTransaction } = require("./helpers/transactionHelper");
 
 const { SHIFT_PAYMENT_RETURN_PURPOSE_BY_REASON } = require("../constants/transaction");
+
+const { MAX_SHIFT_OCCURRENCES } = require("../constants/shiftPosting");
 
 const money = require("../utils/money");
 const logger = require("../utils/logger");
@@ -24,6 +27,12 @@ const EMPLOYER_SHIFTS_URL = "/employer/shifts";
 
 const PAYSTACK_OPEN_STATUSES = ["pending", "processing"];
 const PAYSTACK_DEFINITIVE_FAILURE_STATUSES = ["failed", "abandoned", "reversed"];
+
+const BASE_FUNDING_TRANSACTION_TYPE = "shift_funding";
+const BASE_FUNDING_TRANSACTION_PURPOSE = "shift_base_funding";
+
+const OVERTIME_TOPUP_TRANSACTION_TYPE = "shift_topup";
+const OVERTIME_TOPUP_TRANSACTION_PURPOSE = "shift_overtime_topup";
 
 class ShiftFundingService {
   /* ─────────────────────────────── ERRORS / NORMALIZATION ─────────────────────────────── */
@@ -154,10 +163,38 @@ class ShiftFundingService {
   }
 
   static assertCanFundShifts(employerContext) {
+    if (employerContext?.canFundShifts !== true) {
+      throw ShiftFundingService.createFundingError({
+        message: "You do not have permission to fund and publish shifts.",
+        code: "SHIFT_FUNDING_NOT_ALLOWED",
+        statusCode: 403,
+      });
+    }
+
+    return true;
+  }
+
+  static assertCanActivatePendingShift(employerContext) {
     if (employerContext?.canPostShifts !== true) {
       throw ShiftFundingService.createFundingError({
         message: "You do not have permission to fund and publish shifts.",
         code: "SHIFT_FUNDING_NOT_ALLOWED",
+        statusCode: 403,
+      });
+    }
+
+    return true;
+  }
+
+  static roleCanResolveExistingShiftObligations(employerContext = null) {
+    return employerContext?.canManageFinancialObligations === true;
+  }
+
+  static assertCanResolveExistingShiftObligations(employerContext = null) {
+    if (!ShiftFundingService.roleCanResolveExistingShiftObligations(employerContext)) {
+      throw ShiftFundingService.createFundingError({
+        message: "You do not have permission to resolve existing Shift payment obligations.",
+        code: "SHIFT_OBLIGATION_PAYMENT_NOT_ALLOWED",
         statusCode: 403,
       });
     }
@@ -213,6 +250,8 @@ class ShiftFundingService {
 
       "scheduleMode",
       "occurrenceCount",
+      "requiredProfessionals",
+      "totalOccurrenceCount",
 
       "countryCode",
       "currency",
@@ -237,8 +276,6 @@ class ShiftFundingService {
       "estimatedProfessionalPay",
       "estimatedPlatformFee",
       "estimatedEmployerCharge",
-
-      "assignedProfessional",
     ].join(" ");
   }
 
@@ -254,7 +291,9 @@ class ShiftFundingService {
       employerContext,
     });
 
-    const query = Shift.findOne(filter).select(ShiftFundingService.getFundingShiftFields());
+    const query = session
+      ? Shift.findOneAndUpdate(filter, { $inc: { __v: 1 } }, { new: true, session })
+      : Shift.findOne(filter);
 
     if (session) {
       query.session(session);
@@ -276,9 +315,13 @@ class ShiftFundingService {
   static async getSystemShiftForFunding({ shiftId, session = null }) {
     const normalizedShiftId = ShiftFundingService.validateObjectId(shiftId, "shift ID");
 
-    const query = Shift.findById(normalizedShiftId).select(
-      ShiftFundingService.getFundingShiftFields()
-    );
+    const query = session
+      ? Shift.findOneAndUpdate(
+          { _id: normalizedShiftId },
+          { $inc: { __v: 1 } },
+          { new: true, session }
+        )
+      : Shift.findById(normalizedShiftId);
 
     if (session) {
       query.session(session);
@@ -297,10 +340,150 @@ class ShiftFundingService {
     return shift;
   }
 
+  static buildOccurrenceAccessFilter({
+    occurrenceId,
+    employerProfileId,
+    employerContext,
+    shiftId = null,
+  }) {
+    const filter = {
+      _id: ShiftFundingService.validateObjectId(occurrenceId, "occurrence ID"),
+
+      business: ShiftFundingService.validateObjectId(employerProfileId, "employer profile ID"),
+    };
+
+    if (shiftId) {
+      filter.shift = ShiftFundingService.validateObjectId(shiftId, "shift ID");
+    }
+
+    if (!ShiftFundingService.canManageAllBranches(employerContext)) {
+      const assignedBranchIds = ShiftFundingService.getAssignedBranchIds(employerContext);
+
+      if (assignedBranchIds.length === 0) {
+        throw ShiftFundingService.createFundingError({
+          message: "You are not assigned to a branch that can resolve this Shift payment.",
+          code: "SHIFT_BRANCH_ACCESS_NOT_AVAILABLE",
+          statusCode: 403,
+        });
+      }
+
+      filter.branch = {
+        $in: assignedBranchIds,
+      };
+    }
+
+    return filter;
+  }
+
+  static async getEmployerOccurrenceForOvertimeFunding({
+    occurrenceId,
+    employerProfileId,
+    employerContext,
+    shiftId = null,
+    session = null,
+  }) {
+    const filter = ShiftFundingService.buildOccurrenceAccessFilter({
+      occurrenceId,
+      employerProfileId,
+      employerContext,
+      shiftId,
+    });
+
+    const query = ShiftOccurrence.findOne(filter);
+
+    if (session) {
+      query.session(session);
+    }
+
+    const occurrence = await query;
+
+    if (!occurrence) {
+      throw ShiftFundingService.createFundingError({
+        message: "Shift occurrence was not found or is not available to you.",
+        code: "SHIFT_OCCURRENCE_NOT_FOUND",
+        statusCode: 404,
+      });
+    }
+
+    return occurrence;
+  }
+
+  static async getSystemOccurrenceForOvertimeFunding({ occurrenceId, session = null }) {
+    const normalizedOccurrenceId = ShiftFundingService.validateObjectId(
+      occurrenceId,
+      "occurrence ID"
+    );
+
+    const query = ShiftOccurrence.findById(normalizedOccurrenceId);
+
+    if (session) {
+      query.session(session);
+    }
+
+    const occurrence = await query;
+
+    if (!occurrence) {
+      throw ShiftFundingService.createFundingError({
+        message: "The Shift occurrence linked to the overtime payment was not found.",
+        code: "PAYSTACK_OVERTIME_OCCURRENCE_NOT_FOUND",
+        statusCode: 404,
+      });
+    }
+
+    return occurrence;
+  }
+
+  static assertFundingContext({ shift, countryCode, currency }) {
+    if (shift.countryCode !== countryCode || shift.currency !== currency) {
+      throw ShiftFundingService.createFundingError({
+        message: "The funding country and currency must match the Shift snapshots.",
+        code: "SHIFT_FUNDING_CONTEXT_MISMATCH",
+        statusCode: 409,
+      });
+    }
+  }
+
+  static assertOccurrenceBelongsToShift({ occurrence, shift }) {
+    const valid = Boolean(
+      occurrence &&
+      shift &&
+      String(occurrence.shift || "") === String(shift._id || "") &&
+      String(occurrence.business || "") === String(shift.business || "") &&
+      String(occurrence.branch || "") === String(shift.branch || "") &&
+      occurrence.countryCode === shift.countryCode &&
+      occurrence.currency === shift.currency &&
+      Number.isSafeInteger(occurrence.slotNumber) &&
+      occurrence.slotNumber >= 1 &&
+      occurrence.slotNumber <= shift.requiredProfessionals &&
+      Number.isSafeInteger(occurrence.sequenceNumber) &&
+      occurrence.sequenceNumber >= 1 &&
+      occurrence.sequenceNumber <= shift.occurrenceCount
+    );
+
+    if (!valid) {
+      throw ShiftFundingService.createFundingError({
+        message: "The overtime occurrence does not match the resolved parent Shift.",
+        code: "OVERTIME_OCCURRENCE_SHIFT_MISMATCH",
+        statusCode: 409,
+      });
+    }
+
+    return true;
+  }
+
+  static isOvertimeTopUpFunded(occurrence) {
+    return Boolean(
+      occurrence?.overtime?.topUpPaid === true &&
+      occurrence?.overtime?.topUpPaidAt &&
+      occurrence?.topUpTransaction &&
+      occurrence?.topUpRequired === 0
+    );
+  }
+
   /* ─────────────────────────────── FUNDING VALIDATION ─────────────────────────────── */
 
   static validateFundingAmount(shift) {
-    const amount = Number(shift?.estimatedEmployerCharge);
+    const amount = shift?.estimatedEmployerCharge;
 
     if (!Number.isSafeInteger(amount) || amount <= 0) {
       throw ShiftFundingService.createFundingError({
@@ -314,106 +497,140 @@ class ShiftFundingService {
   }
 
   static async assertOccurrenceFundingAllocation({ shift, session }) {
-    const allocation = await ShiftOccurrence.aggregate([
-      {
-        $match: {
-          shift: shift._id,
-        },
-      },
-      {
-        $group: {
-          _id: "$shift",
-
-          occurrenceCount: {
-            $sum: 1,
-          },
-
-          estimatedProfessionalPay: {
-            $sum: "$estimatedProfessionalPay",
-          },
-
-          estimatedPlatformFee: {
-            $sum: "$estimatedPlatformFee",
-          },
-
-          estimatedEmployerCharge: {
-            $sum: "$estimatedEmployerCharge",
-          },
-        },
-      },
-    ]).session(session);
-
-    const summary = allocation[0];
-
-    if (!summary) {
-      throw ShiftFundingService.createFundingError({
-        message: "The Shift does not have any occurrence funding allocations.",
-        code: "SHIFT_OCCURRENCES_NOT_FOUND",
-        statusCode: 409,
-      });
-    }
-
-    const expectedOccurrenceCount = Number(shift.occurrenceCount || 0);
+    const dates = shift.occurrenceCount;
+    const positions = shift.requiredProfessionals;
+    const expectedOccurrenceCount = dates * positions;
 
     if (
+      !Number.isSafeInteger(dates) ||
+      dates < 1 ||
+      dates > MAX_SHIFT_OCCURRENCES ||
+      !Number.isSafeInteger(positions) ||
+      positions < 1 ||
       !Number.isSafeInteger(expectedOccurrenceCount) ||
-      expectedOccurrenceCount <= 0 ||
-      summary.occurrenceCount !== expectedOccurrenceCount
+      shift.totalOccurrenceCount !== expectedOccurrenceCount
     ) {
       throw ShiftFundingService.createFundingError({
-        message: "The Shift occurrence count does not match its funding allocation.",
+        message: "The Shift slot/date counts are invalid.",
         code: "SHIFT_OCCURRENCE_COUNT_MISMATCH",
         statusCode: 409,
+      });
+    }
 
+    const occurrences = await ShiftOccurrence.find({ shift: shift._id })
+      .select(
+        [
+          "shift business branch countryCode currency slotNumber sequenceNumber",
+          "assignmentStatus assignedProfessional assignment assignedAt status",
+          "estimatedProfessionalPay estimatedPlatformFee estimatedEmployerCharge",
+        ].join(" ")
+      )
+      .sort({ slotNumber: 1, sequenceNumber: 1 })
+      .session(session)
+      .lean();
+
+    if (occurrences.length !== expectedOccurrenceCount) {
+      throw ShiftFundingService.createFundingError({
+        message: "The occurrence count does not match the Shift's funded positions and dates.",
+        code: "SHIFT_OCCURRENCE_COUNT_MISMATCH",
+        statusCode: 409,
         details: {
           expectedOccurrenceCount,
-          actualOccurrenceCount: summary.occurrenceCount,
+          actualOccurrenceCount: occurrences.length,
         },
       });
     }
 
-    const expectedProfessionalPay = Number(shift.estimatedProfessionalPay);
-    const expectedPlatformFee = Number(shift.estimatedPlatformFee);
-    const expectedEmployerCharge = Number(shift.estimatedEmployerCharge);
+    const amountFields = [
+      "estimatedProfessionalPay",
+      "estimatedPlatformFee",
+      "estimatedEmployerCharge",
+    ];
 
-    const allocationIsValid =
-      Number.isSafeInteger(summary.estimatedProfessionalPay) &&
-      Number.isSafeInteger(summary.estimatedPlatformFee) &&
-      Number.isSafeInteger(summary.estimatedEmployerCharge) &&
-      summary.estimatedProfessionalPay === expectedProfessionalPay &&
-      summary.estimatedPlatformFee === expectedPlatformFee &&
-      summary.estimatedEmployerCharge === expectedEmployerCharge &&
-      summary.estimatedEmployerCharge ===
-        summary.estimatedProfessionalPay + summary.estimatedPlatformFee;
+    const validateAmounts = (record) => {
+      for (const field of amountFields) {
+        if (!Number.isSafeInteger(record[field]) || record[field] < 0) {
+          throw ShiftFundingService.createFundingError({
+            message: "Every funding allocation must contain valid integer minor-unit amounts.",
+            code: "INVALID_SHIFT_OCCURRENCE_FUNDING_AMOUNT",
+            statusCode: 409,
+            details: { recordId: String(record._id), field },
+          });
+        }
+      }
 
-    if (!allocationIsValid) {
-      throw ShiftFundingService.createFundingError({
-        message: "The occurrence funding allocation does not match the parent Shift totals.",
-        code: "SHIFT_OCCURRENCE_FUNDING_MISMATCH",
-        statusCode: 409,
+      if (
+        BigInt(record.estimatedEmployerCharge) !==
+        BigInt(record.estimatedProfessionalPay) + BigInt(record.estimatedPlatformFee)
+      ) {
+        throw ShiftFundingService.createFundingError({
+          message: "Professional pay and platform fee must equal the employer charge.",
+          code: "SHIFT_OCCURRENCE_FUNDING_MISMATCH",
+          statusCode: 409,
+          details: { recordId: String(record._id) },
+        });
+      }
+    };
 
-        details: {
-          parent: {
-            estimatedProfessionalPay: expectedProfessionalPay,
-            estimatedPlatformFee: expectedPlatformFee,
-            estimatedEmployerCharge: expectedEmployerCharge,
-          },
+    validateAmounts(shift);
 
-          occurrences: {
-            estimatedProfessionalPay: summary.estimatedProfessionalPay,
-            estimatedPlatformFee: summary.estimatedPlatformFee,
-            estimatedEmployerCharge: summary.estimatedEmployerCharge,
-          },
-        },
-      });
+    occurrences.forEach((occurrence, index) => {
+      if (
+        occurrence.slotNumber !== Math.floor(index / dates) + 1 ||
+        occurrence.sequenceNumber !== (index % dates) + 1 ||
+        String(occurrence.shift) !== String(shift._id) ||
+        String(occurrence.business) !== String(shift.business) ||
+        String(occurrence.branch) !== String(shift.branch) ||
+        occurrence.countryCode !== shift.countryCode ||
+        occurrence.currency !== shift.currency
+      ) {
+        throw ShiftFundingService.createFundingError({
+          message: "Occurrence identity does not match the Shift slot/date structure.",
+          code: "SHIFT_OCCURRENCE_CONTEXT_MISMATCH",
+          statusCode: 409,
+        });
+      }
+
+      if (
+        occurrence.assignmentStatus !== "unassigned" ||
+        occurrence.assignedProfessional ||
+        occurrence.assignment ||
+        occurrence.assignedAt ||
+        occurrence.status !== "scheduled"
+      ) {
+        throw ShiftFundingService.createFundingError({
+          message: "Initial funding requires scheduled, unassigned occurrences in every slot.",
+          code: "PENDING_SHIFT_OCCURRENCE_NOT_UNASSIGNED",
+          statusCode: 409,
+        });
+      }
+
+      validateAmounts(occurrence);
+    });
+
+    const summary = { occurrenceCount: occurrences.length };
+
+    for (const field of amountFields) {
+      const total = occurrences.reduce((sum, occurrence) => sum + BigInt(occurrence[field]), 0n);
+
+      if (total !== BigInt(shift[field])) {
+        throw ShiftFundingService.createFundingError({
+          message: "The occurrence allocations do not match the parent Shift totals.",
+          code: "SHIFT_OCCURRENCE_FUNDING_MISMATCH",
+          statusCode: 409,
+          details: { field, expected: shift[field], actual: total.toString() },
+        });
+      }
+
+      summary[field] = Number(total);
     }
 
     return summary;
   }
 
   static isShiftFullyFunded(shift) {
-    const employerCharge = Number(shift?.estimatedEmployerCharge || 0);
-    const fundedAmount = Number(shift?.fundedAmount || 0);
+    const employerCharge = shift?.estimatedEmployerCharge;
+    const fundedAmount = shift?.fundedAmount;
 
     return Boolean(
       Number.isSafeInteger(employerCharge) &&
@@ -488,7 +705,7 @@ class ShiftFundingService {
     const shouldExpire =
       shift.status === "pending_funding" &&
       shift.paymentStatus === "unpaid" &&
-      Number(shift.fundedAmount || 0) === 0 &&
+      shift.fundedAmount === 0 &&
       startTime <= normalizedCurrentTime;
 
     if (!shouldExpire) {
@@ -548,18 +765,10 @@ class ShiftFundingService {
       });
     }
 
-    if (Number(shift.fundedAmount || 0) !== 0) {
+    if (shift.fundedAmount !== 0) {
       throw ShiftFundingService.createFundingError({
         message: "An unpaid pending-funding Shift cannot already contain protected funding.",
         code: "PENDING_SHIFT_CONTAINS_FUNDS",
-        statusCode: 409,
-      });
-    }
-
-    if (shift.assignedProfessional) {
-      throw ShiftFundingService.createFundingError({
-        message: "A pending-funding Shift cannot already have an assigned professional.",
-        code: "PENDING_SHIFT_HAS_ASSIGNED_PROFESSIONAL",
         statusCode: 409,
       });
     }
@@ -627,18 +836,10 @@ class ShiftFundingService {
       });
     }
 
-    if (Number(shift.fundedAmount || 0) !== 0) {
+    if (shift.fundedAmount !== 0) {
       throw ShiftFundingService.createFundingError({
         message: "The Shift already contains protected funding without a completed funding state.",
         code: "INCONSISTENT_SHIFT_FUNDING_STATE",
-        statusCode: 409,
-      });
-    }
-
-    if (shift.assignedProfessional) {
-      throw ShiftFundingService.createFundingError({
-        message: "A pending-funding Shift cannot already have an assigned professional.",
-        code: "PENDING_SHIFT_HAS_ASSIGNED_PROFESSIONAL",
         statusCode: 409,
       });
     }
@@ -663,7 +864,7 @@ class ShiftFundingService {
       });
     }
 
-    const availableBalance = Number(employerWallet.availableBalance || 0);
+    const availableBalance = employerWallet.availableBalance;
 
     if (!Number.isSafeInteger(availableBalance) || availableBalance < 0) {
       throw ShiftFundingService.createFundingError({
@@ -681,6 +882,48 @@ class ShiftFundingService {
         code: "INSUFFICIENT_EMPLOYER_WALLET_BALANCE",
         statusCode: 409,
 
+        details: {
+          availableBalance,
+          requiredAmount: amount,
+          shortfall,
+          currency: employerWallet.currency,
+        },
+      });
+    }
+
+    return true;
+  }
+
+  static assertWalletCanFundOvertimeTopUp({ employerWallet, escrowWallet, amount }) {
+    WalletService.assertWalletIsActive(employerWallet);
+    WalletService.assertWalletIsActive(escrowWallet);
+    WalletService.assertSameCountryAndCurrency(employerWallet, escrowWallet);
+
+    if (employerWallet.ownerType !== "employer" || escrowWallet.ownerType !== "escrow") {
+      throw ShiftFundingService.createFundingError({
+        message: "The overtime top-up wallet source or escrow destination is invalid.",
+        code: "INVALID_OVERTIME_TOPUP_WALLET_TYPES",
+        statusCode: 500,
+      });
+    }
+
+    const availableBalance = employerWallet.availableBalance;
+
+    if (!Number.isSafeInteger(availableBalance) || availableBalance < 0) {
+      throw ShiftFundingService.createFundingError({
+        message: "The employer wallet available balance is invalid.",
+        code: "INVALID_EMPLOYER_WALLET_BALANCE",
+        statusCode: 500,
+      });
+    }
+
+    if (availableBalance < amount) {
+      const shortfall = amount - availableBalance;
+
+      throw ShiftFundingService.createFundingError({
+        message: "Your employer wallet balance is not sufficient to pay this overtime top-up.",
+        code: "INSUFFICIENT_EMPLOYER_WALLET_BALANCE_FOR_OVERTIME_TOPUP",
+        statusCode: 409,
         details: {
           availableBalance,
           requiredAmount: amount,
@@ -970,7 +1213,220 @@ class ShiftFundingService {
     };
   }
 
+  static buildOvertimeTopUpAlreadyFundedResponse({ shift, occurrence, currency }) {
+    const topUpAmount = Number(occurrence?.overtime?.topUpAmount || 0);
+
+    return {
+      alreadyFunded: true,
+      fundingApplied: true,
+      fundingType: "overtime_topup",
+
+      shift: {
+        id: String(shift._id),
+        referenceCode: shift.referenceCode,
+      },
+
+      occurrence: {
+        id: String(occurrence._id),
+        referenceCode: occurrence.referenceCode,
+        topUpAmount,
+        topUpAmountDisplay: ShiftFundingService.formatAmount(topUpAmount, currency),
+        topUpRequired: Number(occurrence.topUpRequired || 0),
+        topUpPaid: occurrence.overtime?.topUpPaid === true,
+        topUpPaidAt: occurrence.overtime?.topUpPaidAt || null,
+        topUpTransaction: occurrence.topUpTransaction ? String(occurrence.topUpTransaction) : null,
+      },
+
+      message: `Overtime top-up for ${occurrence.referenceCode} has already been paid.`,
+
+      redirectUrl: `${EMPLOYER_SHIFTS_URL}/${shift._id}` + `?occurrence=${occurrence._id}`,
+    };
+  }
+
+  static buildOvertimeWalletFundingResponse({
+    shift,
+    occurrence,
+    employerWallet,
+    transferResult,
+    currency,
+    confirmationResult,
+  }) {
+    const topUpAmount = Number(occurrence?.overtime?.topUpAmount || 0);
+
+    return {
+      alreadyFunded: confirmationResult?.idempotent === true,
+      fundingApplied: true,
+      fundingType: "overtime_topup",
+
+      shift: {
+        id: String(shift._id),
+        referenceCode: shift.referenceCode,
+      },
+
+      occurrence: {
+        id: String(occurrence._id),
+        referenceCode: occurrence.referenceCode,
+        topUpAmount,
+        topUpAmountDisplay: ShiftFundingService.formatAmount(topUpAmount, currency),
+        topUpRequired: Number(occurrence.topUpRequired || 0),
+        topUpPaid: occurrence.overtime?.topUpPaid === true,
+        topUpPaidAt: occurrence.overtime?.topUpPaidAt || null,
+        topUpDeadlineAt: occurrence.overtime?.topUpDeadlineAt || null,
+        topUpOverdueAt: occurrence.overtime?.topUpOverdueAt || null,
+        restrictionTriggeredAt: occurrence.overtime?.restrictionTriggeredAt || null,
+        topUpTransaction: occurrence.topUpTransaction ? String(occurrence.topUpTransaction) : null,
+      },
+
+      wallet: {
+        availableBalance: Number(employerWallet.availableBalance || 0),
+        availableBalanceDisplay: ShiftFundingService.formatAmount(
+          employerWallet.availableBalance || 0,
+          currency
+        ),
+      },
+
+      transaction: {
+        groupReference: transferResult.groupReference,
+        debitTransactionId: String(transferResult.debit.transaction._id),
+        creditTransactionId: String(transferResult.credit.transaction._id),
+      },
+
+      message: `Overtime top-up for ${occurrence.referenceCode} was paid from your wallet.`,
+
+      redirectUrl: `${EMPLOYER_SHIFTS_URL}/${shift._id}` + `?occurrence=${occurrence._id}`,
+    };
+  }
+
+  static buildOvertimeCheckoutInitializationResponse({
+    shift,
+    occurrence,
+    transaction,
+    checkout,
+    currency,
+    reused = false,
+  }) {
+    const topUpAmount = Number(occurrence?.overtime?.topUpAmount || occurrence?.topUpRequired || 0);
+
+    return {
+      alreadyFunded: false,
+      fundingApplied: false,
+      fundingType: "overtime_topup",
+      reused,
+
+      shift: {
+        id: String(shift._id),
+        referenceCode: shift.referenceCode,
+      },
+
+      occurrence: {
+        id: String(occurrence._id),
+        referenceCode: occurrence.referenceCode,
+        topUpAmount,
+        topUpAmountDisplay: ShiftFundingService.formatAmount(topUpAmount, currency),
+        topUpDeadlineAt: occurrence.overtime?.topUpDeadlineAt || null,
+        topUpOverdueAt: occurrence.overtime?.topUpOverdueAt || null,
+        restrictionTriggeredAt: occurrence.overtime?.restrictionTriggeredAt || null,
+      },
+
+      checkout: {
+        authorizationUrl: checkout.authorizationUrl,
+        reference: transaction.paystackReference,
+        mode: checkout.mode || transaction.metadata?.paystackMode || null,
+      },
+
+      message: reused
+        ? "Continue with the existing Paystack Checkout overtime top-up."
+        : "Paystack Checkout was initialized for the overtime top-up.",
+    };
+  }
+
+  static buildPaystackOvertimeTopUpResponse({
+    shift,
+    occurrence,
+    transaction,
+    currency,
+    confirmationResult,
+  }) {
+    const topUpAmount = Number(occurrence?.overtime?.topUpAmount || transaction.amount || 0);
+    const idempotent = confirmationResult?.idempotent === true;
+
+    return {
+      alreadyFunded: idempotent,
+      fundingApplied: true,
+      fundingType: "overtime_topup",
+      idempotent,
+
+      shift: {
+        id: String(shift._id),
+        referenceCode: shift.referenceCode,
+      },
+
+      occurrence: {
+        id: String(occurrence._id),
+        referenceCode: occurrence.referenceCode,
+        topUpAmount,
+        topUpAmountDisplay: ShiftFundingService.formatAmount(topUpAmount, currency),
+        topUpRequired: Number(occurrence.topUpRequired || 0),
+        topUpPaid: occurrence.overtime?.topUpPaid === true,
+        topUpPaidAt: occurrence.overtime?.topUpPaidAt || null,
+        topUpDeadlineAt: occurrence.overtime?.topUpDeadlineAt || null,
+        topUpOverdueAt: occurrence.overtime?.topUpOverdueAt || null,
+        restrictionTriggeredAt: occurrence.overtime?.restrictionTriggeredAt || null,
+        topUpTransaction: occurrence.topUpTransaction ? String(occurrence.topUpTransaction) : null,
+      },
+
+      transaction: {
+        id: String(transaction._id),
+        reference: transaction.reference,
+        paystackReference: transaction.paystackReference,
+        amount: transaction.amount,
+        status: transaction.status,
+      },
+
+      message: idempotent
+        ? `Overtime top-up for ${occurrence.referenceCode} has already been confirmed.`
+        : `Overtime top-up for ${occurrence.referenceCode} was paid successfully.`,
+
+      redirectUrl: `${EMPLOYER_SHIFTS_URL}/${shift._id}` + `?occurrence=${occurrence._id}`,
+    };
+  }
+
   /* ─────────────────────────────── PAYSTACK ATTEMPTS ─────────────────────────────── */
+
+  static async clearFailedPaystackFundingSelection({ shiftId, transactionId }) {
+    return runWithOptionalTransaction({}, async (session) => {
+      const shift = await ShiftFundingService.getSystemShiftForFunding({ shiftId, session });
+
+      if (
+        shift.status !== "pending_funding" ||
+        shift.paymentStatus !== "unpaid" ||
+        shift.fundingMethod !== "paystack_checkout" ||
+        shift.fundingTransaction
+      ) {
+        return;
+      }
+
+      const openAttempt = await ShiftFundingService.getOpenPaystackAttempt({ shiftId, session });
+      const latestAttempt = await ShiftFundingService.getLatestPaystackAttempt({
+        shiftId,
+        session,
+      });
+
+      if (
+        openAttempt ||
+        !latestAttempt ||
+        String(latestAttempt._id) !== String(transactionId) ||
+        latestAttempt.status !== "failed"
+      ) {
+        return;
+      }
+
+      shift.fundingMethod = null;
+      shift.fundingInitiatedAt = null;
+
+      await shift.save({ session });
+    });
+  }
 
   static getPaystackAttemptFilter(shiftId) {
     return {
@@ -997,6 +1453,55 @@ class ShiftFundingService {
   static async getOpenPaystackAttempt({ shiftId, session = null }) {
     const query = Transaction.findOne({
       ...ShiftFundingService.getPaystackAttemptFilter(shiftId),
+
+      status: {
+        $in: PAYSTACK_OPEN_STATUSES,
+      },
+    }).sort({
+      createdAt: -1,
+    });
+
+    if (session) {
+      query.session(session);
+    }
+
+    return query;
+  }
+
+  static getOvertimeTopUpPaystackAttemptFilter({ shiftId, occurrenceId }) {
+    return {
+      shift: shiftId,
+      shiftOccurrence: occurrenceId,
+      type: OVERTIME_TOPUP_TRANSACTION_TYPE,
+      purpose: OVERTIME_TOPUP_TRANSACTION_PURPOSE,
+      paymentRail: "paystack_checkout",
+      provider: "paystack",
+    };
+  }
+
+  static async getLatestOvertimeTopUpPaystackAttempt({ shiftId, occurrenceId, session = null }) {
+    const query = Transaction.findOne(
+      ShiftFundingService.getOvertimeTopUpPaystackAttemptFilter({
+        shiftId,
+        occurrenceId,
+      })
+    ).sort({
+      createdAt: -1,
+    });
+
+    if (session) {
+      query.session(session);
+    }
+
+    return query;
+  }
+
+  static async getOpenOvertimeTopUpPaystackAttempt({ shiftId, occurrenceId, session = null }) {
+    const query = Transaction.findOne({
+      ...ShiftFundingService.getOvertimeTopUpPaystackAttemptFilter({
+        shiftId,
+        occurrenceId,
+      }),
 
       status: {
         $in: PAYSTACK_OPEN_STATUSES,
@@ -1063,6 +1568,7 @@ class ShiftFundingService {
       returnedToEmployerWallet: false,
 
       fundingIntegrityConflict: true,
+      fundingApplicationPending: true,
       fundingIntegrityReason: reason,
       fundingIntegrityDetectedAt: currentTime,
 
@@ -1100,6 +1606,38 @@ class ShiftFundingService {
       amount: transaction.amount,
       verifiedPaymentTime,
     };
+  }
+
+  static async recordUnappliedBaseFundingError({ transactionId, error, currentTime }) {
+    // Recheck terminal application flags atomically: a concurrent retry may
+    // already have applied or returned this payment after our attempt failed.
+    return Transaction.updateOne(
+      {
+        _id: transactionId,
+        type: BASE_FUNDING_TRANSACTION_TYPE,
+        purpose: BASE_FUNDING_TRANSACTION_PURPOSE,
+        provider: "paystack",
+        paymentRail: "paystack_checkout",
+        status: "completed",
+        "metadata.appliedToShift": { $ne: true },
+        "metadata.returnedToEmployerWallet": { $ne: true },
+      },
+      {
+        $set: {
+          "metadata.fundingApplicationPending": true,
+          "metadata.fundingIntegrityConflict": true,
+          "metadata.fundingIntegrityReason": "base_funding_application_not_confirmed",
+          "metadata.fundingIntegrityDetectedAt": currentTime,
+          "metadata.fundingApplicationLastErrorAt": currentTime,
+          "metadata.fundingApplicationLastErrorCode": String(
+            error?.code || error?.name || "BASE_FUNDING_APPLICATION_ERROR"
+          ).slice(0, 100),
+          "metadata.fundingApplicationLastErrorMessage": String(
+            error?.message || "The credited payment could not be applied or returned."
+          ).slice(0, 500),
+        },
+      }
+    );
   }
 
   static async returnSuccessfulPaystackPaymentToEmployer({
@@ -1227,6 +1765,10 @@ class ShiftFundingService {
 
       appliedToShift: false,
 
+      fundingApplicationPending: false,
+      fundingApplicationLastErrorAt: null,
+      fundingApplicationLastErrorCode: null,
+      fundingApplicationLastErrorMessage: null,
       returnedToEmployerWallet: true,
       returnReason,
       returnPurpose: purpose,
@@ -1284,6 +1826,8 @@ class ShiftFundingService {
 
     ShiftFundingService.assertCanFundShifts(employerContext);
 
+    ShiftFundingService.assertCanActivatePendingShift(employerContext);
+
     const normalizedCurrentTime = ShiftFundingService.normalizeCurrentTime(currentTime);
 
     const profile = await ShiftFundingService.getEmployerProfileForUser(
@@ -1308,6 +1852,8 @@ class ShiftFundingService {
         employerContext,
         session,
       });
+
+      ShiftFundingService.assertFundingContext({ shift, countryCode, currency });
 
       const fundingWindowState = await ShiftFundingService.expireShiftWhenFundingWindowPassed({
         shift,
@@ -1357,21 +1903,19 @@ class ShiftFundingService {
         session,
       });
 
-      const [employerWallet, escrowWallet] = await Promise.all([
-        WalletService.createEmployerWalletIfMissing(profile, {
-          session,
-        }),
+      const employerWallet = await WalletService.createEmployerWalletIfMissing(profile, {
+        session,
+      });
 
-        WalletService.getEscrowWallet(
-          {
-            countryCode,
-            currency,
-          },
-          {
-            session,
-          }
-        ),
-      ]);
+      const escrowWallet = await WalletService.getEscrowWallet(
+        {
+          countryCode,
+          currency,
+        },
+        {
+          session,
+        }
+      );
 
       ShiftFundingService.assertEscrowWallet({
         wallet: escrowWallet,
@@ -1494,6 +2038,225 @@ class ShiftFundingService {
     return fundingResult;
   }
 
+  /* ─────────────────────────────── OVERTIME TOP-UP FROM EMPLOYER WALLET ─────────────────────────────── */
+
+  static async fundOvertimeTopUpFromWallet({
+    userId,
+    employerProfile = null,
+    employerContext = null,
+    shiftId,
+    occurrenceId,
+    currentTime = new Date(),
+  }) {
+    const normalizedUserId = ShiftFundingService.validateObjectId(userId, "user ID");
+    const normalizedShiftId = ShiftFundingService.validateObjectId(shiftId, "shift ID");
+    const normalizedOccurrenceId = ShiftFundingService.validateObjectId(
+      occurrenceId,
+      "occurrence ID"
+    );
+
+    ShiftFundingService.assertCanResolveExistingShiftObligations(employerContext);
+
+    const normalizedCurrentTime = ShiftFundingService.normalizeCurrentTime(currentTime);
+
+    const profile = await ShiftFundingService.getEmployerProfileForUser(
+      normalizedUserId,
+      employerProfile
+    );
+
+    const currency = ShiftFundingService.normalizeCurrency(
+      profile.currency,
+      "employer overtime funding currency"
+    );
+
+    const countryCode = ShiftFundingService.normalizeCountryCode(
+      profile.countryCode,
+      "employer overtime funding country code"
+    );
+
+    return runWithOptionalTransaction({}, async (session) => {
+      const shift = await ShiftFundingService.getEmployerShiftForFunding({
+        shiftId: normalizedShiftId,
+        employerProfileId: profile._id,
+        employerContext,
+        session,
+      });
+
+      const occurrence = await ShiftFundingService.getEmployerOccurrenceForOvertimeFunding({
+        occurrenceId: normalizedOccurrenceId,
+        employerProfileId: profile._id,
+        employerContext,
+        shiftId: normalizedShiftId,
+        session,
+      });
+
+      ShiftFundingService.assertOccurrenceBelongsToShift({
+        occurrence,
+        shift,
+      });
+
+      ShiftFundingService.assertFundingContext({ shift, countryCode, currency });
+
+      if (ShiftFundingService.isOvertimeTopUpFunded(occurrence)) {
+        return ShiftFundingService.buildOvertimeTopUpAlreadyFundedResponse({
+          shift,
+          occurrence,
+          currency,
+        });
+      }
+
+      const { fundingRequirement } =
+        ShiftOvertimeFundingService.assertOutstandingFundingState(occurrence);
+
+      const unresolvedPaystackAttempt =
+        await ShiftFundingService.getOpenOvertimeTopUpPaystackAttempt({
+          shiftId: shift._id,
+          occurrenceId: occurrence._id,
+          session,
+        });
+
+      if (unresolvedPaystackAttempt) {
+        throw ShiftFundingService.createFundingError({
+          message: "A Paystack Checkout overtime top-up is still unresolved for this occurrence.",
+          code: "OVERTIME_TOPUP_PAYSTACK_PAYMENT_UNRESOLVED",
+          statusCode: 409,
+          details: {
+            transactionId: String(unresolvedPaystackAttempt._id),
+            paystackReference: unresolvedPaystackAttempt.paystackReference,
+            status: unresolvedPaystackAttempt.status,
+          },
+        });
+      }
+
+      const latestPaystackAttempt = await ShiftFundingService.getLatestOvertimeTopUpPaystackAttempt(
+        {
+          shiftId: shift._id,
+          occurrenceId: occurrence._id,
+          session,
+        }
+      );
+
+      if (latestPaystackAttempt?.status === "completed") {
+        throw ShiftFundingService.createFundingError({
+          message:
+            "A completed Paystack overtime top-up already exists for this occurrence " +
+            "but is not reflected as the authoritative paid state.",
+          code: "PAYSTACK_OVERTIME_TOPUP_INTEGRITY_CONFLICT",
+          statusCode: 409,
+          details: {
+            transactionId: String(latestPaystackAttempt._id),
+            paystackReference: latestPaystackAttempt.paystackReference,
+            appliedToOvertimeTopUp: latestPaystackAttempt.metadata?.appliedToOvertimeTopUp === true,
+            fundingIntegrityReason:
+              latestPaystackAttempt.metadata?.overtimeFundingIntegrityReason || null,
+          },
+        });
+      }
+
+      const employerWallet = await WalletService.createEmployerWalletIfMissing(profile, {
+        session,
+      });
+
+      const escrowWallet = await WalletService.getEscrowWallet(
+        {
+          countryCode,
+          currency,
+        },
+        {
+          session,
+        }
+      );
+
+      ShiftFundingService.assertEscrowWallet({
+        wallet: escrowWallet,
+        countryCode,
+        currency,
+      });
+
+      ShiftFundingService.assertWalletCanFundOvertimeTopUp({
+        employerWallet,
+        escrowWallet,
+        amount: fundingRequirement,
+      });
+
+      const idempotencyPrefix = `shift-overtime-topup:${occurrence._id}`;
+
+      const transferResult = await WalletService.transferBetweenWallets(
+        {
+          fromWalletId: employerWallet._id,
+          toWalletId: escrowWallet._id,
+
+          amount: fundingRequirement,
+
+          type: OVERTIME_TOPUP_TRANSACTION_TYPE,
+          purpose: OVERTIME_TOPUP_TRANSACTION_PURPOSE,
+          paymentRail: "wallet_balance",
+
+          debitIdempotencyKey: `${idempotencyPrefix}:employer-debit`,
+          creditIdempotencyKey: `${idempotencyPrefix}:escrow-credit`,
+
+          shift: shift._id,
+          shiftOccurrence: occurrence._id,
+
+          initiatedBy: {
+            role: "employer",
+            userId: normalizedUserId,
+          },
+
+          description: `Overtime top-up funding for ${occurrence.referenceCode}.`,
+
+          metadata: {
+            fundingType: OVERTIME_TOPUP_TRANSACTION_PURPOSE,
+            employerProfileId: String(profile._id),
+            shiftId: String(shift._id),
+            shiftReferenceCode: shift.referenceCode,
+            occurrenceId: String(occurrence._id),
+            occurrenceReferenceCode: occurrence.referenceCode,
+            overtimeProfessionalPay: Number(occurrence.overtimeProfessionalPay || 0),
+            overtimePlatformFee: Number(occurrence.overtimePlatformFee || 0),
+            topUpAmount: fundingRequirement,
+            topUpDeadlineAt: occurrence.overtime?.topUpDeadlineAt || null,
+            fundedAt: normalizedCurrentTime,
+          },
+        },
+        {
+          session,
+        }
+      );
+
+      const confirmationResult = await ShiftOvertimeFundingService.confirmTopUpFunding(
+        {
+          occurrenceId: occurrence._id,
+          topUpTransactionId: transferResult.credit.transaction._id,
+          currentTime: normalizedCurrentTime,
+          initiatedBy: {
+            role: "employer",
+            userId: normalizedUserId,
+          },
+        },
+        {
+          session,
+        }
+      );
+
+      const finalOccurrence = confirmationResult.occurrence || occurrence;
+
+      logger.info(
+        `Overtime top-up for occurrence ${occurrence.referenceCode} ` +
+          `funded from employer wallet by user ${normalizedUserId}`
+      );
+
+      return ShiftFundingService.buildOvertimeWalletFundingResponse({
+        shift,
+        occurrence: finalOccurrence,
+        employerWallet: transferResult.debit.wallet,
+        transferResult,
+        currency,
+        confirmationResult,
+      });
+    });
+  }
+
   /* ─────────────────────────────── INITIALIZE PAYSTACK CHECKOUT ─────────────────────────────── */
 
   static async initializePaystackCheckout({
@@ -1509,6 +2272,8 @@ class ShiftFundingService {
     const normalizedShiftId = ShiftFundingService.validateObjectId(shiftId, "shift ID");
 
     ShiftFundingService.assertCanFundShifts(employerContext);
+
+    ShiftFundingService.assertCanActivatePendingShift(employerContext);
 
     const normalizedCurrentTime = ShiftFundingService.normalizeCurrentTime(currentTime);
 
@@ -1548,6 +2313,8 @@ class ShiftFundingService {
         employerContext,
         session,
       });
+
+      ShiftFundingService.assertFundingContext({ shift, countryCode, currency });
 
       const fundingWindowState = await ShiftFundingService.expireShiftWhenFundingWindowPassed({
         shift,
@@ -1778,7 +2545,7 @@ class ShiftFundingService {
         },
       });
 
-      const checkoutInitializedAt = new Date();
+      const checkoutInitializedAt = normalizedCurrentTime;
 
       await Transaction.updateOne(
         {
@@ -1830,29 +2597,15 @@ class ShiftFundingService {
           failureReason: error.message,
 
           metadata: {
-            checkoutInitializationFailedAt: new Date(),
-
+            checkoutInitializationFailedAt: normalizedCurrentTime,
             checkoutInitializationErrorCode: error.code || null,
           },
         });
 
-        await Shift.updateOne(
-          {
-            _id: preparation.shift._id,
-
-            status: "pending_funding",
-            paymentStatus: "unpaid",
-
-            fundingMethod: "paystack_checkout",
-            fundingTransaction: null,
-          },
-          {
-            $set: {
-              fundingMethod: null,
-              fundingInitiatedAt: null,
-            },
-          }
-        );
+        await ShiftFundingService.clearFailedPaystackFundingSelection({
+          shiftId: preparation.shift._id,
+          transactionId: preparation.transaction._id,
+        });
       } else {
         /*
          * Keep uncertain Paystack attempts pending to prevent duplicate funding.
@@ -1864,12 +2617,348 @@ class ShiftFundingService {
           },
           {
             $set: {
-              "metadata.checkoutInitializationUncertainAt": new Date(),
+              "metadata.checkoutInitializationUncertainAt": normalizedCurrentTime,
 
               "metadata.checkoutInitializationError": String(
                 error.message || "Paystack initialization status is uncertain."
               ).slice(0, 300),
 
+              "metadata.checkoutInitializationErrorCode": error.code || null,
+            },
+          }
+        );
+      }
+
+      throw error;
+    }
+  }
+
+  /* ─────────────────────────────── INITIALIZE OVERTIME TOP-UP CHECKOUT ─────────────────────────────── */
+
+  static async initializeOvertimeTopUpCheckout({
+    userId,
+    employerProfile = null,
+    employerContext = null,
+    shiftId,
+    occurrenceId,
+    callbackUrl,
+    currentTime = new Date(),
+  }) {
+    const normalizedUserId = ShiftFundingService.validateObjectId(userId, "user ID");
+    const normalizedShiftId = ShiftFundingService.validateObjectId(shiftId, "shift ID");
+    const normalizedOccurrenceId = ShiftFundingService.validateObjectId(
+      occurrenceId,
+      "occurrence ID"
+    );
+
+    ShiftFundingService.assertCanResolveExistingShiftObligations(employerContext);
+
+    const normalizedCurrentTime = ShiftFundingService.normalizeCurrentTime(currentTime);
+
+    PaystackService.assertConfigured();
+
+    const profile = await ShiftFundingService.getEmployerProfileForUser(
+      normalizedUserId,
+      employerProfile
+    );
+
+    const currency = ShiftFundingService.normalizeCurrency(
+      profile.currency,
+      "employer overtime checkout currency"
+    );
+
+    const countryCode = ShiftFundingService.normalizeCountryCode(
+      profile.countryCode,
+      "employer overtime checkout country code"
+    );
+
+    const customerEmail = String(profile.businessEmail || "")
+      .trim()
+      .toLowerCase();
+
+    if (!customerEmail) {
+      throw ShiftFundingService.createFundingError({
+        message: "The employer payment email could not be resolved.",
+        code: "EMPLOYER_CHECKOUT_EMAIL_NOT_RESOLVED",
+        statusCode: 500,
+      });
+    }
+
+    const preparation = await runWithOptionalTransaction({}, async (session) => {
+      const shift = await ShiftFundingService.getEmployerShiftForFunding({
+        shiftId: normalizedShiftId,
+        employerProfileId: profile._id,
+        employerContext,
+        session,
+      });
+
+      const occurrence = await ShiftFundingService.getEmployerOccurrenceForOvertimeFunding({
+        occurrenceId: normalizedOccurrenceId,
+        employerProfileId: profile._id,
+        employerContext,
+        shiftId: normalizedShiftId,
+        session,
+      });
+
+      ShiftFundingService.assertOccurrenceBelongsToShift({
+        occurrence,
+        shift,
+      });
+
+      ShiftFundingService.assertFundingContext({ shift, countryCode, currency });
+
+      if (ShiftFundingService.isOvertimeTopUpFunded(occurrence)) {
+        return {
+          alreadyFunded: true,
+          shift,
+          occurrence,
+        };
+      }
+
+      const { fundingRequirement } =
+        ShiftOvertimeFundingService.assertOutstandingFundingState(occurrence);
+
+      const openAttempt = await ShiftFundingService.getOpenOvertimeTopUpPaystackAttempt({
+        shiftId: shift._id,
+        occurrenceId: occurrence._id,
+        session,
+      });
+
+      if (ShiftFundingService.hasReusableCheckout(openAttempt)) {
+        return {
+          alreadyFunded: false,
+          reused: true,
+          shift,
+          occurrence,
+          transaction: openAttempt,
+          checkout: {
+            authorizationUrl: openAttempt.metadata.authorizationUrl,
+            mode: openAttempt.metadata.paystackMode || null,
+          },
+        };
+      }
+
+      if (openAttempt) {
+        throw ShiftFundingService.createFundingError({
+          message:
+            "Paystack Checkout is already being initialized or processed for this overtime top-up.",
+          code: "OVERTIME_TOPUP_CHECKOUT_INITIALIZATION_IN_PROGRESS",
+          statusCode: 409,
+          details: {
+            transactionId: String(openAttempt._id),
+            status: openAttempt.status,
+          },
+        });
+      }
+
+      const latestAttempt = await ShiftFundingService.getLatestOvertimeTopUpPaystackAttempt({
+        shiftId: shift._id,
+        occurrenceId: occurrence._id,
+        session,
+      });
+
+      if (latestAttempt?.status === "completed") {
+        throw ShiftFundingService.createFundingError({
+          message:
+            "A completed Paystack overtime top-up already exists for this occurrence " +
+            "but is not reflected as the authoritative paid state. Another Checkout cannot be created.",
+          code: "PAYSTACK_OVERTIME_TOPUP_INTEGRITY_CONFLICT",
+          statusCode: 409,
+          details: {
+            transactionId: String(latestAttempt._id),
+            paystackReference: latestAttempt.paystackReference,
+            appliedToOvertimeTopUp: latestAttempt.metadata?.appliedToOvertimeTopUp === true,
+            fundingIntegrityReason: latestAttempt.metadata?.overtimeFundingIntegrityReason || null,
+          },
+        });
+      }
+
+      const escrowWallet = await WalletService.getEscrowWallet(
+        {
+          countryCode,
+          currency,
+        },
+        {
+          session,
+        }
+      );
+
+      ShiftFundingService.assertEscrowWallet({
+        wallet: escrowWallet,
+        countryCode,
+        currency,
+      });
+
+      const paystackReference = WalletService.getTransactionReference(
+        OVERTIME_TOPUP_TRANSACTION_TYPE
+      );
+
+      const idempotencyKey =
+        `shift-overtime-paystack-checkout:${occurrence._id}:` + paystackReference;
+
+      const pendingCredit = await WalletService.createPendingExternalCredit(
+        {
+          walletId: escrowWallet._id,
+          amount: fundingRequirement,
+
+          type: OVERTIME_TOPUP_TRANSACTION_TYPE,
+          purpose: OVERTIME_TOPUP_TRANSACTION_PURPOSE,
+          paymentRail: "paystack_checkout",
+          provider: "paystack",
+
+          reference: paystackReference,
+          paystackReference,
+          idempotencyKey,
+
+          shift: shift._id,
+          shiftOccurrence: occurrence._id,
+
+          initiatedBy: {
+            role: "employer",
+            userId: normalizedUserId,
+          },
+
+          description: `Paystack Checkout overtime top-up for ${occurrence.referenceCode}.`,
+
+          metadata: {
+            fundingType: OVERTIME_TOPUP_TRANSACTION_PURPOSE,
+            employerProfileId: String(profile._id),
+            shiftId: String(shift._id),
+            shiftReferenceCode: shift.referenceCode,
+            occurrenceId: String(occurrence._id),
+            occurrenceReferenceCode: occurrence.referenceCode,
+            customerEmail,
+            overtimeProfessionalPay: Number(occurrence.overtimeProfessionalPay || 0),
+            overtimePlatformFee: Number(occurrence.overtimePlatformFee || 0),
+            topUpAmount: fundingRequirement,
+            topUpDeadlineAt: occurrence.overtime?.topUpDeadlineAt || null,
+            callbackUrl,
+            checkoutInitiatedAt: normalizedCurrentTime,
+            appliedToOvertimeTopUp: false,
+            overtimeFundingIntegrityConflict: false,
+          },
+        },
+        {
+          session,
+        }
+      );
+
+      return {
+        alreadyFunded: false,
+        reused: false,
+        shift,
+        occurrence,
+        transaction: pendingCredit.transaction,
+        amount: fundingRequirement,
+        customerEmail,
+        currency,
+      };
+    });
+
+    if (preparation.alreadyFunded) {
+      return ShiftFundingService.buildOvertimeTopUpAlreadyFundedResponse({
+        shift: preparation.shift,
+        occurrence: preparation.occurrence,
+        currency,
+      });
+    }
+
+    if (preparation.reused) {
+      return ShiftFundingService.buildOvertimeCheckoutInitializationResponse({
+        shift: preparation.shift,
+        occurrence: preparation.occurrence,
+        transaction: preparation.transaction,
+        checkout: preparation.checkout,
+        currency,
+        reused: true,
+      });
+    }
+
+    try {
+      const checkout = await PaystackService.initializeTransaction({
+        email: preparation.customerEmail,
+        amount: preparation.amount,
+        reference: preparation.transaction.paystackReference,
+        currency: preparation.currency,
+        callbackUrl,
+
+        metadata: {
+          purpose: "shift_topup",
+          fundingType: OVERTIME_TOPUP_TRANSACTION_PURPOSE,
+          paymentRail: "paystack_checkout",
+          shiftId: String(preparation.shift._id),
+          occurrenceId: String(preparation.occurrence._id),
+          employerProfileId: String(profile._id),
+          referenceCode: preparation.shift.referenceCode,
+          occurrenceReferenceCode: preparation.occurrence.referenceCode,
+        },
+      });
+
+      // OT Checkout initialization
+      const checkoutInitializedAt = normalizedCurrentTime;
+
+      await Transaction.updateOne(
+        {
+          _id: preparation.transaction._id,
+          status: "pending",
+        },
+        {
+          $set: {
+            paystackStatus: "pending",
+            "metadata.authorizationUrl": checkout.authorizationUrl,
+            "metadata.accessCode": checkout.accessCode,
+            "metadata.paystackMode": checkout.mode,
+            "metadata.checkoutInitializedAt": normalizedCurrentTime,
+          },
+        }
+      );
+
+      preparation.transaction.metadata = {
+        ...(preparation.transaction.metadata || {}),
+        authorizationUrl: checkout.authorizationUrl,
+        accessCode: checkout.accessCode,
+        paystackMode: checkout.mode,
+        checkoutInitializedAt,
+      };
+
+      logger.info(
+        `Paystack Checkout initialized for overtime top-up ` +
+          `${preparation.occurrence.referenceCode} with reference ${checkout.reference}`
+      );
+
+      return ShiftFundingService.buildOvertimeCheckoutInitializationResponse({
+        shift: preparation.shift,
+        occurrence: preparation.occurrence,
+        transaction: preparation.transaction,
+        checkout,
+        currency,
+        reused: false,
+      });
+    } catch (error) {
+      const definitiveFailure = ShiftFundingService.isDefinitiveInitializationFailure(error);
+
+      if (definitiveFailure) {
+        await WalletService.markPendingExternalCreditFailed({
+          transactionId: preparation.transaction._id,
+          failureReason: error.message,
+
+          metadata: {
+            checkoutInitializationFailedAt: normalizedCurrentTime,
+            checkoutInitializationErrorCode: error.code || null,
+          },
+        });
+      } else {
+        await Transaction.updateOne(
+          {
+            _id: preparation.transaction._id,
+            status: "pending",
+          },
+          {
+            $set: {
+              "metadata.checkoutInitializationUncertainAt": normalizedCurrentTime,
+              "metadata.checkoutInitializationError": String(
+                error.message || "Paystack overtime top-up initialization status is uncertain."
+              ).slice(0, 300),
               "metadata.checkoutInitializationErrorCode": error.code || null,
             },
           }
@@ -1974,6 +3063,23 @@ class ShiftFundingService {
       });
     }
 
+    const metadataOccurrenceId =
+      verifiedPayment.metadata && typeof verifiedPayment.metadata === "object"
+        ? verifiedPayment.metadata.occurrenceId || verifiedPayment.metadata.shiftOccurrenceId
+        : null;
+
+    if (
+      transaction.shiftOccurrence &&
+      metadataOccurrenceId &&
+      String(metadataOccurrenceId) !== String(transaction.shiftOccurrence)
+    ) {
+      throw ShiftFundingService.createFundingError({
+        message: "The Paystack payment metadata does not match the expected Shift occurrence.",
+        code: "PAYSTACK_PAYMENT_OCCURRENCE_MISMATCH",
+        statusCode: 409,
+      });
+    }
+
     ShiftFundingService.resolveVerifiedPaymentTime(verifiedPayment);
 
     return true;
@@ -1982,9 +3088,12 @@ class ShiftFundingService {
   static getVerifiedProviderAmounts(verifiedPayment) {
     const amount = Number(verifiedPayment.amount);
 
-    const providerFee = Number.isSafeInteger(Number(verifiedPayment.fees))
-      ? Number(verifiedPayment.fees)
-      : 0;
+    const rawProviderFee = verifiedPayment.fees;
+    const providerFee =
+      typeof rawProviderFee === "number" ||
+      (typeof rawProviderFee === "string" && /^\d+$/.test(rawProviderFee))
+        ? Number(rawProviderFee)
+        : NaN;
 
     if (!Number.isSafeInteger(amount) || amount <= 0) {
       throw ShiftFundingService.createFundingError({
@@ -2008,9 +3117,75 @@ class ShiftFundingService {
     };
   }
 
-  /* ─────────────────────────────── FINALIZE PAYSTACK FUNDING ─────────────────────────────── */
+  /* ─────────────────────────────── PAYSTACK SHIFT-PAYMENT DISPATCH ─────────────────────────────── */
 
   static async finalizePaystackShiftFunding({
+    reference,
+    providerEventId = null,
+    currentTime = new Date(),
+  }) {
+    const normalizedReference = String(reference || "").trim();
+
+    if (!normalizedReference) {
+      throw ShiftFundingService.createFundingError({
+        message: "A Paystack payment reference is required.",
+        code: "PAYSTACK_PAYMENT_REFERENCE_REQUIRED",
+      });
+    }
+
+    const transaction = await Transaction.findOne({
+      paystackReference: normalizedReference,
+      paymentRail: "paystack_checkout",
+      provider: "paystack",
+      type: {
+        $in: [BASE_FUNDING_TRANSACTION_TYPE, OVERTIME_TOPUP_TRANSACTION_TYPE],
+      },
+    }).select("type purpose");
+
+    if (!transaction) {
+      throw ShiftFundingService.createFundingError({
+        message: "The internal Paystack Shift payment transaction was not found.",
+        code: "PAYSTACK_SHIFT_TRANSACTION_NOT_FOUND",
+        statusCode: 404,
+      });
+    }
+
+    if (
+      transaction.type === BASE_FUNDING_TRANSACTION_TYPE &&
+      transaction.purpose === BASE_FUNDING_TRANSACTION_PURPOSE
+    ) {
+      return ShiftFundingService.finalizePaystackBaseFunding({
+        reference: normalizedReference,
+        providerEventId,
+        currentTime,
+      });
+    }
+
+    if (
+      transaction.type === OVERTIME_TOPUP_TRANSACTION_TYPE &&
+      transaction.purpose === OVERTIME_TOPUP_TRANSACTION_PURPOSE
+    ) {
+      return ShiftFundingService.finalizePaystackOvertimeTopUp({
+        reference: normalizedReference,
+        providerEventId,
+        currentTime,
+      });
+    }
+
+    throw ShiftFundingService.createFundingError({
+      message: "The Paystack Shift payment transaction has an unsupported funding purpose.",
+      code: "UNSUPPORTED_PAYSTACK_SHIFT_PAYMENT_PURPOSE",
+      statusCode: 409,
+      details: {
+        type: transaction.type,
+        purpose: transaction.purpose,
+      },
+    });
+  }
+
+  /* ─────────────────────────────── FINALIZE BASE PAYSTACK FUNDING ─────────────────────────────── */
+
+  static async finalizePaystackBaseFunding({
     reference,
     providerEventId = null,
     currentTime = new Date(),
@@ -2048,29 +3223,17 @@ class ShiftFundingService {
 
           failureReason: `Paystack payment status: ${verifiedStatus}.`,
 
+          // OT Paystack definitive failure
           metadata: {
-            verifiedAt: new Date(),
+            verifiedAt: normalizedCurrentTime,
             verifiedPaystackStatus: verifiedStatus,
           },
         });
 
-        await Shift.updateOne(
-          {
-            _id: internalTransaction.shift,
-
-            status: "pending_funding",
-            paymentStatus: "unpaid",
-
-            fundingMethod: "paystack_checkout",
-            fundingTransaction: null,
-          },
-          {
-            $set: {
-              fundingMethod: null,
-              fundingInitiatedAt: null,
-            },
-          }
-        );
+        await ShiftFundingService.clearFailedPaystackFundingSelection({
+          shiftId: internalTransaction.shift,
+          transactionId: internalTransaction._id,
+        });
       }
 
       throw ShiftFundingService.createFundingError({
@@ -2092,6 +3255,39 @@ class ShiftFundingService {
     const verifiedPaymentTime = ShiftFundingService.resolveVerifiedPaymentTime(verifiedPayment);
 
     const providerAmounts = ShiftFundingService.getVerifiedProviderAmounts(verifiedPayment);
+
+    /*
+     * A provider payment cannot be rolled back by a local validation failure.
+     * Commit its idempotent escrow credit before applying or returning it.
+     */
+    const completedCredit = await WalletService.completePendingExternalCredit({
+      transactionId: internalTransaction._id,
+      providerEventId,
+
+      providerFee: providerAmounts.providerFee,
+      netAmount: providerAmounts.netAmount,
+
+      metadata: {
+        fundingApplicationPending: true,
+        fundingApplicationRecordedAt: normalizedCurrentTime,
+        appliedToShift: false,
+        returnedToEmployerWallet: false,
+        verifiedAt: normalizedCurrentTime,
+        verifiedPaymentTime,
+
+        paystackTransactionId: verifiedPayment.id,
+        paystackChannel: verifiedPayment.channel,
+        paystackDomain: verifiedPayment.domain,
+        paystackPaidAt: verifiedPayment.paidAt,
+
+        paystackGatewayResponse: verifiedPayment.gatewayResponse,
+
+        verifiedAmount: verifiedPayment.amount,
+        verifiedCurrency: verifiedPayment.currency,
+
+        verifiedCustomerEmail: verifiedPayment.customerEmail,
+      },
+    });
 
     const finalizationResult = await runWithOptionalTransaction({}, async (session) => {
       const transaction = await Transaction.findOne({
@@ -2134,41 +3330,7 @@ class ShiftFundingService {
         });
       }
 
-      /*
-       * Record successful Paystack money in escrow before fund/return/integrity handling.
-       */
-      const completedCredit = await WalletService.completePendingExternalCredit(
-        {
-          transactionId: transaction._id,
-          providerEventId,
-
-          providerFee: providerAmounts.providerFee,
-          netAmount: providerAmounts.netAmount,
-
-          metadata: {
-            verifiedAt: normalizedCurrentTime,
-            verifiedPaymentTime,
-
-            paystackTransactionId: verifiedPayment.id,
-            paystackChannel: verifiedPayment.channel,
-            paystackDomain: verifiedPayment.domain,
-            paystackPaidAt: verifiedPayment.paidAt,
-
-            paystackGatewayResponse: verifiedPayment.gatewayResponse,
-
-            verifiedAmount: verifiedPayment.amount,
-            verifiedCurrency: verifiedPayment.currency,
-
-            verifiedCustomerEmail: verifiedPayment.customerEmail,
-          },
-        },
-        {
-          session,
-        }
-      );
-
-      const completedTransaction = completedCredit.transaction;
-
+      const completedTransaction = transaction;
       const escrowWallet = completedCredit.wallet;
 
       ShiftFundingService.assertEscrowWallet({
@@ -2221,6 +3383,10 @@ class ShiftFundingService {
           completedTransaction.metadata = {
             ...(completedTransaction.metadata || {}),
 
+            fundingApplicationPending: false,
+            fundingApplicationLastErrorAt: null,
+            fundingApplicationLastErrorCode: null,
+            fundingApplicationLastErrorMessage: null,
             appliedToShift: true,
 
             appliedToShiftAt: completedTransaction.metadata?.appliedToShiftAt || shift.fundedAt,
@@ -2411,6 +3577,21 @@ class ShiftFundingService {
         });
       }
 
+      if (
+        completedTransaction.amount !== ShiftFundingService.validateFundingAmount(shift) ||
+        completedTransaction.countryCode !== shift.countryCode ||
+        completedTransaction.currency !== shift.currency
+      ) {
+        return ShiftFundingService.markPaystackFundingIntegrityConflict({
+          transaction: completedTransaction,
+          shift,
+          reason: "payment_does_not_match_shift_funding_snapshot",
+          verifiedPaymentTime,
+          currentTime: normalizedCurrentTime,
+          session,
+        });
+      }
+
       await ShiftFundingService.assertOccurrenceFundingAllocation({
         shift,
         session,
@@ -2441,6 +3622,10 @@ class ShiftFundingService {
       completedTransaction.metadata = {
         ...(completedTransaction.metadata || {}),
 
+        fundingApplicationPending: false,
+        fundingApplicationLastErrorAt: null,
+        fundingApplicationLastErrorCode: null,
+        fundingApplicationLastErrorMessage: null,
         appliedToShift: true,
         appliedToShiftAt: publicationTime,
         fundingEffectiveAt: fundingTime,
@@ -2495,6 +3680,22 @@ class ShiftFundingService {
         currency: completedTransaction.currency,
         idempotent: false,
       });
+    }).catch(async (error) => {
+      try {
+        await ShiftFundingService.recordUnappliedBaseFundingError({
+          transactionId: completedCredit.transaction._id,
+          error,
+          currentTime: normalizedCurrentTime,
+        });
+      } catch (auditError) {
+        // The committed credit still carries its initial pending marker.
+        logger.error("Unable to record the BASE funding application error.", {
+          transactionId: String(completedCredit.transaction._id),
+          error: auditError.message,
+        });
+      }
+
+      throw error;
     });
 
     if (finalizationResult?.fundingIntegrityConflict) {
@@ -2511,6 +3712,304 @@ class ShiftFundingService {
     }
 
     return finalizationResult;
+  }
+
+  /* ─────────────────────────────── OVERTIME PAYSTACK INTEGRITY ─────────────────────────────── */
+
+  static async markPaystackOvertimeFundingIntegrityConflict({
+    transaction,
+    reason,
+    currentTime,
+    verifiedPaymentTime,
+    error = null,
+  }) {
+    transaction.metadata = {
+      ...(transaction.metadata || {}),
+      appliedToOvertimeTopUp: false,
+      overtimeFundingIntegrityConflict: true,
+      overtimeFundingIntegrityReason: reason,
+      overtimeFundingIntegrityDetectedAt: currentTime,
+      verifiedPaymentTime,
+      overtimeFundingIntegrityErrorCode: error?.code || null,
+      overtimeFundingIntegrityErrorMessage: error?.message
+        ? String(error.message).slice(0, 300)
+        : null,
+    };
+
+    transaction.markModified("metadata");
+
+    await transaction.save();
+
+    logger.error(
+      `Paystack overtime top-up integrity conflict for transaction ` +
+        `${transaction.paystackReference}: ${reason}. Funds remain protected in escrow.`
+    );
+
+    return {
+      fundingIntegrityConflict: true,
+      reason,
+      transactionId: String(transaction._id),
+      paystackReference: transaction.paystackReference,
+      shiftId: transaction.shift ? String(transaction.shift) : null,
+      occurrenceId: transaction.shiftOccurrence ? String(transaction.shiftOccurrence) : null,
+      amount: transaction.amount,
+      verifiedPaymentTime,
+    };
+  }
+
+  /* ─────────────────────────────── FINALIZE OVERTIME PAYSTACK TOP-UP ─────────────────────────────── */
+
+  static async finalizePaystackOvertimeTopUp({
+    reference,
+    providerEventId = null,
+    currentTime = new Date(),
+  }) {
+    const normalizedCurrentTime = ShiftFundingService.normalizeCurrentTime(currentTime);
+
+    const verifiedPayment = await PaystackService.verifyTransaction(reference);
+
+    const internalTransaction = await Transaction.findOne({
+      paystackReference: verifiedPayment.reference,
+      type: OVERTIME_TOPUP_TRANSACTION_TYPE,
+      purpose: OVERTIME_TOPUP_TRANSACTION_PURPOSE,
+      paymentRail: "paystack_checkout",
+      provider: "paystack",
+    });
+
+    if (!internalTransaction) {
+      throw ShiftFundingService.createFundingError({
+        message: "The internal Paystack overtime top-up transaction was not found.",
+        code: "PAYSTACK_OVERTIME_TOPUP_TRANSACTION_NOT_FOUND",
+        statusCode: 404,
+      });
+    }
+
+    const verifiedStatus = String(verifiedPayment.status || "")
+      .trim()
+      .toLowerCase();
+
+    if (verifiedStatus !== "success") {
+      if (PAYSTACK_DEFINITIVE_FAILURE_STATUSES.includes(verifiedStatus)) {
+        await WalletService.markPendingExternalCreditFailed({
+          transactionId: internalTransaction._id,
+          failureReason: `Paystack payment status: ${verifiedStatus}.`,
+
+          // BASE Paystack definitive failure
+          metadata: {
+            verifiedAt: normalizedCurrentTime,
+            verifiedPaystackStatus: verifiedStatus,
+          },
+        });
+      }
+
+      throw ShiftFundingService.createFundingError({
+        message: "The Paystack overtime top-up has not been completed successfully.",
+        code: "PAYSTACK_OVERTIME_TOPUP_NOT_SUCCESSFUL",
+        statusCode: 409,
+        details: {
+          paystackStatus: verifiedStatus || null,
+        },
+      });
+    }
+
+    ShiftFundingService.validateVerifiedPaystackPayment({
+      verifiedPayment,
+      transaction: internalTransaction,
+    });
+
+    const verifiedPaymentTime = ShiftFundingService.resolveVerifiedPaymentTime(verifiedPayment);
+    const providerAmounts = ShiftFundingService.getVerifiedProviderAmounts(verifiedPayment);
+
+    /*
+     * External money is recorded first and committed independently.
+     *
+     * Unlike an internal wallet transfer, a successful provider payment cannot
+     * be rolled back at Paystack if later Loqum business-state application
+     * fails. The escrow credit must therefore remain recorded even when a
+     * downstream OT authority conflict requires reconciliation.
+     */
+    const completedCredit = await WalletService.completePendingExternalCredit({
+      transactionId: internalTransaction._id,
+      providerEventId,
+      providerFee: providerAmounts.providerFee,
+      netAmount: providerAmounts.netAmount,
+      metadata: {
+        verifiedAt: normalizedCurrentTime,
+        verifiedPaymentTime,
+        paystackTransactionId: verifiedPayment.id,
+        paystackChannel: verifiedPayment.channel,
+        paystackDomain: verifiedPayment.domain,
+        paystackPaidAt: verifiedPayment.paidAt,
+        paystackGatewayResponse: verifiedPayment.gatewayResponse,
+        verifiedAmount: verifiedPayment.amount,
+        verifiedCurrency: verifiedPayment.currency,
+        verifiedCustomerEmail: verifiedPayment.customerEmail,
+      },
+    });
+
+    const completedTransaction = completedCredit.transaction;
+    const escrowWallet = completedCredit.wallet;
+
+    ShiftFundingService.assertEscrowWallet({
+      wallet: escrowWallet,
+      countryCode: completedTransaction.countryCode,
+      currency: completedTransaction.currency,
+    });
+
+    if (!completedTransaction.shiftOccurrence) {
+      const conflict = await ShiftFundingService.markPaystackOvertimeFundingIntegrityConflict({
+        transaction: completedTransaction,
+        reason: "missing_shift_occurrence_link",
+        currentTime: normalizedCurrentTime,
+        verifiedPaymentTime,
+      });
+
+      throw ShiftFundingService.createFundingError({
+        message:
+          "The Paystack overtime payment succeeded and remains protected in escrow, " +
+          "but its Shift occurrence link is missing and requires investigation.",
+        code: "PAYSTACK_OVERTIME_TOPUP_INTEGRITY_CONFLICT",
+        statusCode: 409,
+        details: conflict,
+      });
+    }
+
+    let occurrence;
+    let shift;
+
+    try {
+      [occurrence, shift] = await Promise.all([
+        ShiftFundingService.getSystemOccurrenceForOvertimeFunding({
+          occurrenceId: completedTransaction.shiftOccurrence,
+        }),
+        ShiftFundingService.getSystemShiftForFunding({
+          shiftId: completedTransaction.shift,
+        }),
+      ]);
+
+      ShiftFundingService.assertOccurrenceBelongsToShift({
+        occurrence,
+        shift,
+      });
+
+      ShiftFundingService.assertFundingContext({
+        shift,
+        countryCode: completedTransaction.countryCode,
+        currency: completedTransaction.currency,
+      });
+    } catch (error) {
+      const conflict = await ShiftFundingService.markPaystackOvertimeFundingIntegrityConflict({
+        transaction: completedTransaction,
+        reason: "overtime_authority_resolution_failed",
+        currentTime: normalizedCurrentTime,
+        verifiedPaymentTime,
+        error,
+      });
+
+      throw ShiftFundingService.createFundingError({
+        message:
+          "The Paystack overtime payment succeeded and remains protected in escrow, " +
+          "but the linked overtime authority could not be resolved.",
+        code: "PAYSTACK_OVERTIME_TOPUP_INTEGRITY_CONFLICT",
+        statusCode: 409,
+        details: conflict,
+        cause: error,
+      });
+    }
+
+    if (
+      ShiftFundingService.isOvertimeTopUpFunded(occurrence) &&
+      String(occurrence.topUpTransaction) !== String(completedTransaction._id)
+    ) {
+      const conflict = await ShiftFundingService.markPaystackOvertimeFundingIntegrityConflict({
+        transaction: completedTransaction,
+        reason: "different_overtime_topup_transaction_already_authoritative",
+        currentTime: normalizedCurrentTime,
+        verifiedPaymentTime,
+      });
+
+      throw ShiftFundingService.createFundingError({
+        message:
+          "The Paystack overtime payment succeeded and remains protected in escrow, " +
+          "but this occurrence was already funded by another transaction.",
+        code: "PAYSTACK_OVERTIME_TOPUP_INTEGRITY_CONFLICT",
+        statusCode: 409,
+        details: conflict,
+      });
+    }
+
+    let confirmationResult;
+
+    try {
+      confirmationResult = await ShiftOvertimeFundingService.confirmTopUpFunding({
+        occurrenceId: occurrence._id,
+        topUpTransactionId: completedTransaction._id,
+        currentTime: normalizedCurrentTime,
+        initiatedBy: {
+          role: "system",
+          userId: null,
+        },
+      });
+    } catch (error) {
+      const conflict = await ShiftFundingService.markPaystackOvertimeFundingIntegrityConflict({
+        transaction: completedTransaction,
+        reason: "overtime_topup_confirmation_failed",
+        currentTime: normalizedCurrentTime,
+        verifiedPaymentTime,
+        error,
+      });
+
+      throw ShiftFundingService.createFundingError({
+        message:
+          "The Paystack overtime payment succeeded and remains protected in escrow, " +
+          "but it could not be applied to the overtime obligation automatically.",
+        code: "PAYSTACK_OVERTIME_TOPUP_INTEGRITY_CONFLICT",
+        statusCode: 409,
+        details: conflict,
+        cause: error,
+      });
+    }
+
+    occurrence = confirmationResult.occurrence || occurrence;
+
+    await Transaction.updateOne(
+      {
+        _id: completedTransaction._id,
+      },
+      {
+        $set: {
+          "metadata.appliedToOvertimeTopUp": true,
+          "metadata.appliedToOvertimeTopUpAt":
+            completedTransaction.metadata?.appliedToOvertimeTopUpAt || normalizedCurrentTime,
+          "metadata.overtimeFundingIntegrityConflict": false,
+          "metadata.overtimeFundingIntegrityReason": null,
+          "metadata.authoritativeTopUpTransactionId": String(completedTransaction._id),
+        },
+      }
+    );
+
+    completedTransaction.metadata = {
+      ...(completedTransaction.metadata || {}),
+      appliedToOvertimeTopUp: true,
+      appliedToOvertimeTopUpAt:
+        completedTransaction.metadata?.appliedToOvertimeTopUpAt || normalizedCurrentTime,
+      overtimeFundingIntegrityConflict: false,
+      overtimeFundingIntegrityReason: null,
+      authoritativeTopUpTransactionId: String(completedTransaction._id),
+    };
+
+    logger.info(
+      `Paystack overtime top-up confirmed for occurrence ` +
+        `${occurrence.referenceCode} with reference ${completedTransaction.paystackReference}`
+    );
+
+    return ShiftFundingService.buildPaystackOvertimeTopUpResponse({
+      shift,
+      occurrence,
+      transaction: completedTransaction,
+      currency: completedTransaction.currency,
+      confirmationResult,
+    });
   }
 }
 

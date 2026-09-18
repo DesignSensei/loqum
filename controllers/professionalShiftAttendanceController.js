@@ -72,6 +72,8 @@ function buildAbsenceExplanationResponse(result) {
 
     occurrenceReferenceCode: occurrence?.referenceCode || null,
 
+    slotNumber: Number(occurrence?.slotNumber || 0),
+
     sequenceNumber: Number(occurrence?.sequenceNumber || 0),
 
     occurrenceDate: occurrence?.occurrenceDate || null,
@@ -190,6 +192,12 @@ exports.checkOut = async (req, res) => {
       lateCheckoutReason: req.body.lateCheckoutReason,
 
       lateCheckoutNotes: req.body.lateCheckoutNotes,
+
+      requestStatement: req.body.requestStatement,
+
+      requestEvidence: req.body.requestEvidence,
+
+      requestedOvertimeMinutes: req.body.requestedOvertimeMinutes,
 
       requestedOvertimeHours: req.body.requestedOvertimeHours,
 

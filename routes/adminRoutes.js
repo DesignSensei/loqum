@@ -22,6 +22,8 @@ router.use(isAuthenticated, isAccountAllowed, isVerified, hasRole("admin"));
 
 router.get("/dashboard", adminController.getDashboard);
 
+router.get("/cases", adminShiftClaimController.getCases);
+
 /* ─────────────────────────────── PROFESSIONAL CLAIM ADJUDICATION ─────────────────────────────── */
 
 /*

@@ -10,6 +10,7 @@ const PlatformSettings = require("../models/PlatformSettings");
 const ProfessionalProfile = require("../models/ProfessionalProfile");
 
 const ShiftSettlementService = require("./shiftSettlementService");
+const ShiftRefundService = require("./shiftRefundService");
 
 const {
   runWithOptionalTransaction: runServiceTransaction,
@@ -68,16 +69,8 @@ const SNAPSHOT_FIELDS = Object.freeze([
 ]);
 
 /**
- * PROFESSIONAL CLAIM ISSUE → EMPLOYER DISPUTE ISSUE
- *
- * A dispute must not recreate a controversy that already belongs to the
- * employer-response/counter-position stage of a professional claim.
- *
- * These pairs represent the same broad ordinary controversy.
- *
- * A withdrawn professional claim does not block the employer from later using
- * its own unused original dispute right while the shared challenge window is
- * still open.
+ * A matching professional claim issue owns that controversy.
+ * A genuinely different issue may coexist in an employer dispute.
  */
 const PROFESSIONAL_CLAIM_OVERLAP_MAP = Object.freeze({
   attendance_correction: "attendance_correction",
@@ -86,102 +79,12 @@ const PROFESSIONAL_CLAIM_OVERLAP_MAP = Object.freeze({
 });
 
 /**
- * EMPLOYER OCCURRENCE DISPUTE AUTHORITY
+ * One employer dispute may contain multiple immutable BASE/factual issues.
  *
- * This service owns:
+ * Case status is active/resolved/withdrawn.
+ * Individual issues own their workflow state.
  *
- * - employer dispute eligibility;
- * - one original employer dispute case per occurrence;
- * - one or more immutable employer-originated ordinary issues;
- * - employer evidence per issue;
- * - professional response opportunity per issue;
- * - professional counter-position and evidence per issue;
- * - professional non-response escalation per issue;
- * - employer withdrawal before adjudication begins; and
- * - professional-response deadline processing.
- *
- * This service does NOT own:
- *
- * - OT request creation;
- * - OT approval/rejection;
- * - OT appeals;
- * - OT admin adjudication;
- * - OT funding;
- * - platform-fee authority;
- * - professional payout execution;
- * - employer refund eligibility or execution;
- * - final claim/dispute financial resolution; or
- * - parent Shift reconciliation.
- *
- * MULTI-ISSUE CASE
- *
- * One ShiftOccurrenceDispute contains one or more employer-originated issues:
- *
- * - attendance_correction
- * - payment_calculation
- * - other_financial_fact
- *
- * Overtime is deliberately excluded.
- *
- * All generic employer dispute issues affect BASE only.
- *
- * Each issue independently progresses:
- *
- * awaiting_professional_response
- * → awaiting_admin_review
- * → resolved
- *
- * Mixed outcomes are therefore supported.
- *
- * The dispute case remains active until every issue is final.
- *
- * SHARED CHALLENGE WINDOW
- *
- * ShiftOccurrence owns the shared initial ordinary challenge window.
- *
- * Employer dispute submission:
- *
- * - does NOT close the shared window;
- * - does NOT clear challengeableSettlementComponents;
- * - does NOT clear a disjoint activeClaim; and
- * - may create activeDispute while a professional claim remains active only
- *   when their unresolved settlement-component scopes do not overlap.
- *
- * activeClaim + activeDispute may therefore coexist only on disjoint live
- * component scopes.
- *
- * DUPLICATE CONTROVERSIES
- *
- * If a professional claim already contains the corresponding controversy,
- * the employer must respond/counter inside that professional claim.
- *
- * The employer must not create a duplicate dispute for the same controversy.
- *
- * A genuinely separate employer issue may still create a dispute only when
- * its live settlement-component scope is disjoint from any active claim.
- *
- * WITHDRAWAL
- *
- * The employer may withdraw the whole dispute only before:
- *
- * - the professional responds to any issue;
- * - any issue's response opportunity expires; or
- * - admin review begins on any issue.
- *
- * Withdrawal:
- *
- * - clears only occurrence.activeDispute;
- * - does not clear occurrence.activeClaim;
- * - does not restore lifecycle snapshots;
- * - does not reopen a second employer dispute right;
- * - does not close the shared challenge window; and
- * - does not directly reevaluate refunds.
- *
- * FINAL ADMIN OUTCOME
- *
- * Final issue adjudication belongs exclusively to:
- *
- * shiftOccurrenceResolutionService.js
+ * Final admin adjudication belongs to shiftOccurrenceResolutionService.js.
  */
 class ShiftOccurrenceDisputeService {
   /* ─────────────────────────────── ERRORS / TRANSACTIONS ─────────────────────────────── */
@@ -201,6 +104,17 @@ class ShiftOccurrenceDisputeService {
   }
 
   static async runWithOptionalTransaction(options = {}, callback) {
+    if (
+      options.session &&
+      (typeof options.session.inTransaction !== "function" || !options.session.inTransaction())
+    ) {
+      throw this.createError({
+        message: "A supplied dispute-processing session must have an active transaction.",
+        code: "ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
     return runServiceTransaction(options, callback);
   }
 
@@ -606,18 +520,15 @@ class ShiftOccurrenceDisputeService {
       MAX_STATEMENT_LENGTH
     );
 
+    /**
+     * The statement is itself the employer's factual evidence.
+     * Supporting uploads are optional.
+     */
     const evidence = this.normalizeEvidence(issue.evidence || [], {
       submittedByRole: "employer",
       submittedByUser,
       recordedAt: currentTime,
     });
-
-    if (evidence.length === 0) {
-      throw this.createError({
-        message: "Employer dispute evidence is required for each issue.",
-        code: "EMPLOYER_DISPUTE_EVIDENCE_REQUIRED",
-      });
-    }
 
     let attendanceCorrection = null;
     let proposedBaseProfessionalPay = null;
@@ -676,8 +587,7 @@ class ShiftOccurrenceDisputeService {
 
       details: {
         attendanceCorrection,
-
-        proposedBaseProfessionalPay,
+        employerProposedBaseProfessionalPay: proposedBaseProfessionalPay,
       },
 
       statement,
@@ -765,7 +675,8 @@ class ShiftOccurrenceDisputeService {
       occurrenceQuery.session(session);
     }
 
-    const [shift, occurrence] = await Promise.all([shiftQuery, occurrenceQuery]);
+    const shift = await shiftQuery;
+    const occurrence = await occurrenceQuery;
 
     if (!shift) {
       throw this.createError({
@@ -992,12 +903,6 @@ class ShiftOccurrenceDisputeService {
       });
     }
 
-    /**
-     * activeClaim is not automatically rejected here.
-     *
-     * Submission separately verifies that an active professional claim has no
-     * unresolved BASE scope before the employer dispute is created.
-     */
     if (occurrence.activeDispute) {
       throw this.createError({
         message: "An employer dispute is already active for this occurrence.",
@@ -1191,19 +1096,13 @@ class ShiftOccurrenceDisputeService {
 
     let baseAffected = false;
 
-    /**
-     * Check-in changes affect scheduled/base work.
-     */
     if (checkInChanges) {
       baseAffected = true;
     }
 
     /**
-     * Checkout changes affect BASE only where either the current or proposed
-     * checkout intersects scheduled work.
-     *
-     * A disagreement solely about time after scheduled end belongs to the OT
-     * domain and cannot be converted into an employer ordinary dispute.
+     * A checkout dispute is ordinary BASE only when current or proposed
+     * checkout intersects scheduled work. Post-scheduled-end disputes are OT.
      */
     if (checkOutChanges) {
       if (!currentEnd || currentEnd < scheduledEnd || correctedCheckOutAt < scheduledEnd) {
@@ -1257,7 +1156,7 @@ class ShiftOccurrenceDisputeService {
       const currentAmount = this.getCurrentBaseProfessionalPay(occurrence);
 
       const proposedAmount = this.normalizeNonNegativeAmount(
-        issue.details?.proposedBaseProfessionalPay,
+        issue.details?.employerProposedBaseProfessionalPay,
         "proposed BASE professional pay"
       );
 
@@ -1285,6 +1184,8 @@ class ShiftOccurrenceDisputeService {
   }
 
   static assertOccurrenceIsDisputable({ shift, occurrence, issues }) {
+    this.assertBaseFinancialExecutionNotStarted(occurrence);
+
     const fundedAmount = this.normalizeNonNegativeAmount(
       shift.fundedAmount ?? 0,
       "Shift funded amount",
@@ -1337,66 +1238,13 @@ class ShiftOccurrenceDisputeService {
 
   /* ─────────────────────────────── PROFESSIONAL CLAIM COEXISTENCE ─────────────────────────────── */
 
-  static async assertNoActiveClaimScopeOverlap({ occurrence, disputeIssues, session }) {
-    if (!occurrence.activeClaim) {
-      return true;
-    }
-
-    const disputeComponents = this.normalizeSettlementComponents(
-      Array.from(
-        new Set(
-          disputeIssues.flatMap((issue) =>
-            Array.from(issue.affectedSettlementComponents || []).map(String)
-          )
-        )
-      )
-    );
-
-    const challengeContext = await ShiftSettlementService.getActiveChallengeContext({
-      occurrence,
-      session,
-    });
-
-    const claimComponents = this.normalizeSettlementComponents(
-      challengeContext?.claim?.affectedSettlementComponents || [],
-      {
-        allowEmpty: true,
-      }
-    );
-
-    const overlappingComponents = disputeComponents.filter((component) =>
-      claimComponents.includes(component)
-    );
-
-    if (overlappingComponents.length > 0) {
-      throw this.createError({
-        message:
-          "An employer dispute cannot overlap an unresolved professional claim on the same settlement component.",
-        code: "DISPUTE_CLAIM_SETTLEMENT_SCOPE_OVERLAP",
-        statusCode: 409,
-        details: {
-          activeClaimId: String(occurrence.activeClaim),
-          disputeComponents,
-          claimComponents,
-          overlappingComponents,
-        },
-      });
-    }
-
-    return true;
-  }
-
   static assertNoDuplicateProfessionalClaimControversy({ claim, disputeIssues }) {
     if (!claim) {
       return true;
     }
 
     /**
-     * A fully withdrawn claim was never adjudicated and consumed no employer
-     * response/counter-position.
-     *
-     * It therefore does not itself prohibit the employer from using its own
-     * unused dispute right before the shared deadline.
+     * Withdrawal leaves the employer's separate original dispute right unused.
      */
     if (claim.status === "withdrawn") {
       return true;
@@ -1521,26 +1369,14 @@ class ShiftOccurrenceDisputeService {
       return dispute;
     }
 
-    const hasSupportedActiveIssue = issues.some((issue) =>
-      ["awaiting_professional_response", "awaiting_admin_review"].includes(issue.status)
-    );
+    /**
+     * Issue status owns the action state.
+     * Any unresolved issue keeps the overall case active.
+     */
+    dispute.status = "active";
+    dispute.resolvedAt = null;
 
-    if (hasSupportedActiveIssue) {
-      dispute.status = "active";
-
-      dispute.resolvedAt = null;
-
-      return dispute;
-    }
-
-    throw this.createError({
-      message: "Employer dispute issue statuses cannot be reconciled into a valid case status.",
-      code: "INVALID_EMPLOYER_DISPUTE_CASE_STATE",
-      statusCode: 500,
-      details: {
-        disputeId: dispute._id ? String(dispute._id) : null,
-      },
-    });
+    return dispute;
   }
 
   static getIssueById(dispute, issueId) {
@@ -1590,7 +1426,8 @@ class ShiftOccurrenceDisputeService {
             }
           : null,
 
-        proposedBaseProfessionalPay: issue.details?.proposedBaseProfessionalPay ?? null,
+        employerProposedBaseProfessionalPay:
+          issue.details?.employerProposedBaseProfessionalPay ?? null,
       },
 
       statement: String(issue.statement || "").trim(),
@@ -1659,15 +1496,45 @@ class ShiftOccurrenceDisputeService {
 
   /* ─────────────────────────────── ACTIVE DISPUTE ACTIVATION ─────────────────────────────── */
 
+  static assertBaseFinancialExecutionNotStarted(occurrence) {
+    this.assertBaseNotInPayoutExecution(occurrence);
+
+    if (
+      occurrence.baseSettlement?.settlementBatch ||
+      occurrence.baseSettlement?.payoutTransaction ||
+      ["eligible", "batched", "processing", "refunded"].includes(occurrence.refundStatus) ||
+      occurrence.refundBatch ||
+      occurrence.refundedAt ||
+      (occurrence.refundedAmount != null && occurrence.refundedAmount !== 0)
+    ) {
+      throw this.createError({
+        message: "BASE payout or refund processing has progressed beyond dispute activation.",
+        code: "BASE_FINANCIAL_EXECUTION_CONFLICT",
+        statusCode: 409,
+      });
+    }
+  }
+
+  static async reevaluateDisputeRefund({ occurrence, currentTime, session }) {
+    return ShiftRefundService.reevaluateOccurrenceRefund(
+      {
+        shiftId: occurrence.shift,
+        occurrence,
+        reason: occurrence.refundReason || null,
+        zeroAmountVoidReason: "The authoritative BASE outcome leaves no employer refund balance.",
+        currentTime,
+        initiatedBy: { role: "system", userId: null },
+      },
+      { session }
+    );
+  }
+
   static async activateDisputeOnOccurrence({ occurrence, dispute, currentTime, session }) {
+    this.assertBaseFinancialExecutionNotStarted(occurrence);
+
     /**
-     * activeClaim is pinned to the value whose unresolved scope was checked
-     * before dispute creation.
-     *
-     * This permits a disjoint professional claim to coexist while preventing
-     * an unnoticed claim-pointer race during dispute activation.
-     *
-     * The shared ordinary window remains open until its actual deadline.
+     * Pin activeClaim so a concurrent claim cannot appear after the duplicate
+     * controversy check and before dispute activation.
      */
     const result = await ShiftOccurrence.updateOne(
       {
@@ -1714,6 +1581,15 @@ class ShiftOccurrenceDisputeService {
     occurrence.activeDispute = dispute._id;
 
     occurrence.settlementStatus = "disputed";
+
+    ShiftSettlementService.resetComponentSettlement({
+      occurrence,
+      component: "base",
+    });
+
+    await this.reevaluateDisputeRefund({ occurrence, currentTime, session });
+
+    await occurrence.save({ session });
 
     return occurrence;
   }
@@ -1791,9 +1667,7 @@ class ShiftOccurrenceDisputeService {
       });
 
       /**
-       * Maximum one original employer dispute case per occurrence.
-       *
-       * Resolved and withdrawn cases still consume that original right.
+       * One original employer dispute case per occurrence.
        */
       const existingDispute = await ShiftOccurrenceDispute.findOne({
         occurrence: occurrence._id,
@@ -1825,17 +1699,9 @@ class ShiftOccurrenceDisputeService {
       });
 
       /**
-       * A professional claim does not globally prohibit this dispute.
-       *
-       * A live claim must first be disjoint at settlement-component level.
-       * Historical duplicate controversy is then checked separately.
+       * Sharing BASE does not itself make two cases duplicates.
+       * Only the same ordinary controversy is prohibited.
        */
-      await this.assertNoActiveClaimScopeOverlap({
-        occurrence,
-        disputeIssues: normalizedIssues,
-        session,
-      });
-
       const professionalClaim = await this.getProfessionalClaimForOccurrence(
         occurrence._id,
         session
@@ -1843,7 +1709,6 @@ class ShiftOccurrenceDisputeService {
 
       this.assertNoDuplicateProfessionalClaimControversy({
         claim: professionalClaim,
-
         disputeIssues: normalizedIssues,
       });
 
@@ -1925,13 +1790,6 @@ class ShiftOccurrenceDisputeService {
               resolvedAt: null,
             })),
 
-            /**
-             * Immutable historical aggregate scope.
-             *
-             * #7 derives the LIVE hold from unresolved issues[] instead.
-             */
-            affectedSettlementComponents: ["base"],
-
             submittedAt: now,
 
             challengeWindowOpenedAt,
@@ -1998,8 +1856,6 @@ class ShiftOccurrenceDisputeService {
             employerProfileId: String(occurrence.business),
 
             submittedIssueTypes,
-
-            affectedSettlementComponents: ["base"],
 
             professionalResponseDeadlineAt,
           },
@@ -2122,6 +1978,17 @@ class ShiftOccurrenceDisputeService {
     return this.runWithOptionalTransaction(options, async (session) => {
       const dispute = await this.getDispute(disputeId, session);
 
+      if (!ACTIVE_EMPLOYER_OCCURRENCE_DISPUTE_STATUSES.includes(dispute.status)) {
+        throw this.createError({
+          message: "This employer dispute is no longer active.",
+          code: "EMPLOYER_OCCURRENCE_DISPUTE_NOT_ACTIVE",
+          statusCode: 409,
+          details: {
+            disputeStatus: dispute.status,
+          },
+        });
+      }
+
       const issue = this.getIssueById(dispute, issueId);
 
       const { professional, user: submittedByUser } = await this.assertUserOwnsProfessionalProfile({
@@ -2139,8 +2006,7 @@ class ShiftOccurrenceDisputeService {
       }
 
       /**
-       * Safe duplicate submission after the original response has already
-       * moved this issue to admin review.
+       * Safe retry after this issue's original response.
        */
       if (issue.status === "awaiting_admin_review" && issue.professionalRespondedAt) {
         return {
@@ -2185,10 +2051,6 @@ class ShiftOccurrenceDisputeService {
         session,
       });
 
-      /**
-       * A disjoint activeClaim may coexist and is deliberately not treated as
-       * a conflict.
-       */
       if (!occurrence.activeDispute || String(occurrence.activeDispute) !== String(dispute._id)) {
         throw this.createError({
           message: "This dispute is no longer the occurrence's active employer dispute.",
@@ -2230,9 +2092,7 @@ class ShiftOccurrenceDisputeService {
       issue.professionalResponseExpiredAt = null;
 
       /**
-       * Employer-originated disputes always require final admin judgment.
-       *
-       * The professional response supplies evidence/position only.
+       * Employer-originated issues always require final admin adjudication.
        */
       issue.adminReviewStartedAt = now;
 
@@ -2305,12 +2165,39 @@ class ShiftOccurrenceDisputeService {
     return this.runWithOptionalTransaction(options, async (session) => {
       const dispute = await this.getDispute(disputeId, session);
 
+      if (dispute.status === "resolved") {
+        return {
+          dispute,
+
+          escalated: false,
+
+          escalatedIssueIds: [],
+
+          idempotent: true,
+        };
+      }
+
+      if (!ACTIVE_EMPLOYER_OCCURRENCE_DISPUTE_STATUSES.includes(dispute.status)) {
+        throw this.createError({
+          message: "This employer dispute is not active.",
+          code: "EMPLOYER_OCCURRENCE_DISPUTE_NOT_ACTIVE",
+          statusCode: 409,
+          details: {
+            disputeStatus: dispute.status,
+          },
+        });
+      }
+
       const waitingIssues = dispute.issues.filter(
         (issue) => issue.status === "awaiting_professional_response"
       );
 
       if (waitingIssues.length === 0) {
-        if (dispute.status === "active" || dispute.status === "resolved") {
+        const hasAwaitingAdmin = dispute.issues.some(
+          (issue) => issue.status === "awaiting_admin_review"
+        );
+
+        if (hasAwaitingAdmin) {
           return {
             dispute,
 
@@ -2323,9 +2210,14 @@ class ShiftOccurrenceDisputeService {
         }
 
         throw this.createError({
-          message: "This dispute has no issue awaiting professional response.",
-          code: "DISPUTE_HAS_NO_PENDING_PROFESSIONAL_RESPONSE",
-          statusCode: 409,
+          message:
+            "The active employer dispute contains no issue awaiting professional response or admin review.",
+          code: "INVALID_EMPLOYER_DISPUTE_CASE_STATE",
+          statusCode: 500,
+          details: {
+            disputeId: String(dispute._id),
+            disputeStatus: dispute.status,
+          },
         });
       }
 
@@ -2357,7 +2249,7 @@ class ShiftOccurrenceDisputeService {
 
       for (const issue of waitingIssues) {
         /**
-         * Professional silence is not acceptance of the employer's position.
+         * Professional silence is never acceptance of the employer position.
          */
         issue.professionalResponseExpiredAt = now;
 
@@ -2485,6 +2377,23 @@ class ShiftOccurrenceDisputeService {
     return this.runWithOptionalTransaction(options, async (session) => {
       const dispute = await this.getDispute(disputeId, session);
 
+      const { shift, occurrence } = await this.getOccurrenceContext({
+        shiftId: dispute.shift,
+
+        occurrenceId: dispute.occurrence,
+
+        session,
+      });
+
+      this.assertEmployerCanManageOccurrence({
+        shift,
+        occurrence,
+        employerProfileId,
+        employerContext,
+      });
+
+      const withdrawnBy = this.normalizeObjectId(employerUserId, "employer user ID");
+
       if (dispute.status === "withdrawn") {
         return {
           dispute,
@@ -2504,23 +2413,6 @@ class ShiftOccurrenceDisputeService {
       }
 
       this.assertDisputeUntouchedForWithdrawal(dispute);
-
-      const { shift, occurrence } = await this.getOccurrenceContext({
-        shiftId: dispute.shift,
-
-        occurrenceId: dispute.occurrence,
-
-        session,
-      });
-
-      this.assertEmployerCanManageOccurrence({
-        shift,
-        occurrence,
-        employerProfileId,
-        employerContext,
-      });
-
-      const withdrawnBy = this.normalizeObjectId(employerUserId, "employer user ID");
 
       if (!occurrence.activeDispute || String(occurrence.activeDispute) !== String(dispute._id)) {
         throw this.createError({
@@ -2552,9 +2444,7 @@ class ShiftOccurrenceDisputeService {
       });
 
       /**
-       * Clear only activeDispute.
-       *
-       * activeClaim may legitimately remain.
+       * Clear only activeDispute. A professional claim may remain active.
        */
       const clearResult = await ShiftOccurrence.updateOne(
         {
@@ -2583,11 +2473,7 @@ class ShiftOccurrenceDisputeService {
       occurrence.activeDispute = null;
 
       /**
-       * Withdrawal does not restore any occurrence snapshot.
-       *
-       * The dispute has not changed authoritative occurrence facts yet.
-       *
-       * The shared window remains open until its real deadline.
+       * Withdrawal changes no authoritative occurrence fact.
        */
       ShiftSettlementService.synchronizeExpiredChallengeWindow({
         occurrence,
@@ -2605,9 +2491,13 @@ class ShiftOccurrenceDisputeService {
         challengeContext,
       });
 
-      await occurrence.save({
+      await this.reevaluateDisputeRefund({
+        occurrence,
+        currentTime: now,
         session,
       });
+
+      await occurrence.save({ session });
 
       logger.info(
         `Employer dispute ${dispute.referenceCode} withdrawn for occurrence ` +
@@ -2645,10 +2535,8 @@ class ShiftOccurrenceDisputeService {
   }
 
   /*
-   * Deliberately no admin-resolution method here.
-   *
-   * Final admin adjudication of each employer-originated issue belongs only
-   * to services/shiftOccurrenceResolutionService.js.
+   * Final admin adjudication belongs to
+   * services/shiftOccurrenceResolutionService.js.
    */
 
   /* ─────────────────────────────── DEADLINES ─────────────────────────────── */

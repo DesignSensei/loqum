@@ -3,6 +3,7 @@
 const mongoose = require("mongoose");
 
 const ShiftOccurrence = require("../models/ShiftOccurrence");
+const PlatformSettings = require("../models/PlatformSettings");
 const ShiftOccurrenceClaim = require("../models/ShiftOccurrenceClaim");
 const ShiftOccurrenceDispute = require("../models/ShiftOccurrenceDispute");
 
@@ -10,7 +11,10 @@ const {
   runWithOptionalTransaction: runServiceTransaction,
 } = require("./helpers/transactionHelper");
 
-const { SETTLEMENT_APPROVAL_SOURCES } = require("../constants/shiftLifecycle");
+const {
+  SETTLEMENT_APPROVAL_SOURCES,
+  ACTIVE_EMPLOYER_OCCURRENCE_DISPUTE_STATUSES,
+} = require("../constants/shiftLifecycle");
 
 const {
   SETTLEMENT_BATCH_COMPONENTS,
@@ -82,7 +86,6 @@ const BASE_SETTLEMENT_EARNING_TYPES = Object.freeze([
  * - OT request creation;
  * - OT employer approval/rejection;
  * - OT response expiry;
- * - OT appeal;
  * - OT admin adjudication;
  * - OT pricing authority;
  * - OT top-up establishment;
@@ -114,7 +117,7 @@ const BASE_SETTLEMENT_EARNING_TYPES = Object.freeze([
  *
  * Professional-claim settlement scope is stored only on:
  *
- * issues[].affectedSettlementComponents
+ * issues[].challengedSettlementComponents
  *
  * Employer-dispute issue scope is likewise stored on:
  *
@@ -132,7 +135,7 @@ const BASE_SETTLEMENT_EARNING_TYPES = Object.freeze([
  */
 
 class ShiftSettlementService {
-  /* ─────────────────────────────── ERRORS / TRANSACTIONS ─────────────────────────────── */
+  /* ------------------------------- ERRORS / TRANSACTIONS ------------------------------- */
 
   static createError({ message, code, statusCode = 400, details = null }) {
     const error = new Error(message);
@@ -149,10 +152,21 @@ class ShiftSettlementService {
   }
 
   static async runWithOptionalTransaction(options = {}, callback) {
+    if (
+      options.session &&
+      (typeof options.session.inTransaction !== "function" || !options.session.inTransaction())
+    ) {
+      throw this.createError({
+        message: "A supplied settlement session must have an active transaction.",
+        code: "ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
     return runServiceTransaction(options, callback);
   }
 
-  /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
+  /* ------------------------------- NORMALIZATION ------------------------------- */
 
   static normalizeFieldCode(value) {
     return String(value)
@@ -188,7 +202,13 @@ class ShiftSettlementService {
   static normalizeDate(value, fieldName, statusCode = 400) {
     const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
 
-    if (Number.isNaN(date.getTime())) {
+    if (
+      value === null ||
+      value === undefined ||
+      value === "" ||
+      typeof value === "boolean" ||
+      Number.isNaN(date.getTime())
+    ) {
       throw this.createError({
         message: `${fieldName} is invalid.`,
         code: `INVALID_${this.normalizeFieldCode(fieldName)}`,
@@ -295,7 +315,7 @@ class ShiftSettlementService {
     return SETTLEMENT_BATCH_COMPONENTS.filter((component) => unique.includes(component));
   }
 
-  /* ─────────────────────────────── LOADERS ─────────────────────────────── */
+  /* ------------------------------- LOADERS ------------------------------- */
 
   static async getOccurrence(occurrenceId, session = null) {
     const id = this.normalizeObjectId(occurrenceId, "occurrence ID");
@@ -336,7 +356,7 @@ class ShiftSettlementService {
     return occurrence;
   }
 
-  /* ─────────────────────────────── COMPONENT AUDIT ─────────────────────────────── */
+  /* ------------------------------- COMPONENT AUDIT ------------------------------- */
 
   static getComponentAuditPath(component) {
     return COMPONENT_SETTLEMENT_PATHS[this.normalizeComponent(component)];
@@ -392,23 +412,20 @@ class ShiftSettlementService {
     if (occurrence.activeWorkCancellation?.occurred === true) {
       return {
         earningType: "active_work_cancellation",
-
-        professionalPay: Number(occurrence.activeWorkCancellation.professionalPay || 0),
+        professionalPay: occurrence.activeWorkCancellation.professionalPay,
       };
     }
 
     if (occurrence.cancellationCompensation?.applicable === true) {
       return {
         earningType: "cancellation_compensation",
-
-        professionalPay: Number(occurrence.cancellationCompensation.professionalPay || 0),
+        professionalPay: occurrence.cancellationCompensation.professionalPay,
       };
     }
 
     return {
       earningType: "worked_base",
-
-      professionalPay: Number(occurrence.baseProfessionalPay || 0),
+      professionalPay: occurrence.baseProfessionalPay,
     };
   }
 
@@ -421,15 +438,19 @@ class ShiftSettlementService {
 
     return {
       earningType: "overtime",
-
-      professionalPay: Number(occurrence.overtimeProfessionalPay || 0),
+      professionalPay: occurrence.overtimeProfessionalPay,
     };
   }
 
   static assertComponentAmounts({ component, amounts, requirePayable = false }) {
     const normalizedComponent = this.normalizeComponent(component);
 
-    if (!SETTLEMENT_LINE_EARNING_TYPES.includes(amounts?.earningType)) {
+    if (
+      !SETTLEMENT_LINE_EARNING_TYPES.includes(amounts?.earningType) ||
+      (normalizedComponent === "base" &&
+        !BASE_SETTLEMENT_EARNING_TYPES.includes(amounts?.earningType)) ||
+      (normalizedComponent === "overtime" && amounts?.earningType !== "overtime")
+    ) {
       throw this.createError({
         message: "Settlement earning type is invalid.",
         code: "INVALID_SETTLEMENT_EARNING_TYPE",
@@ -441,7 +462,7 @@ class ShiftSettlementService {
       });
     }
 
-    const professionalPay = Number(amounts?.professionalPay || 0);
+    const professionalPay = amounts?.professionalPay;
 
     if (!Number.isSafeInteger(professionalPay) || professionalPay < 0) {
       throw this.createError({
@@ -490,7 +511,6 @@ class ShiftSettlementService {
 
     const amounts = this.assertComponentAmounts({
       component: normalizedComponent,
-
       amounts: this.getComponentAmounts({
         occurrence,
         component: normalizedComponent,
@@ -504,7 +524,7 @@ class ShiftSettlementService {
     if (COMPONENT_EXECUTION_STARTED_STATUSES.includes(status)) {
       if (
         existing.earningType !== amounts.earningType ||
-        Number(existing.professionalPay || 0) !== amounts.professionalPay
+        existing.professionalPay !== amounts.professionalPay
       ) {
         throw this.createError({
           message:
@@ -525,7 +545,7 @@ class ShiftSettlementService {
     if (status === "approved_for_release") {
       if (
         existing.earningType !== amounts.earningType ||
-        Number(existing.professionalPay || 0) !== amounts.professionalPay
+        existing.professionalPay !== amounts.professionalPay
       ) {
         throw this.createError({
           message:
@@ -569,15 +589,17 @@ class ShiftSettlementService {
   }
 
   static isFinalApprovedOvertimeEntitlement(occurrence) {
-    const requestedMinutes = Number(occurrence.overtime?.requestedMinutes);
-
+    const approvedMinutes = Number(occurrence.overtime?.approvedMinutes);
     const professionalPay = Number(occurrence.overtimeProfessionalPay);
 
     return Boolean(
       occurrence.overtime?.requested === true &&
       occurrence.overtime?.status === "approved" &&
-      Number.isSafeInteger(requestedMinutes) &&
-      requestedMinutes > 0 &&
+      occurrence.overtime?.approvedAt &&
+      occurrence.overtime?.approvedBy &&
+      ["employer", "admin"].includes(occurrence.overtime?.decisionSource) &&
+      Number.isSafeInteger(approvedMinutes) &&
+      approvedMinutes > 0 &&
       Number.isSafeInteger(professionalPay) &&
       professionalPay > 0
     );
@@ -589,7 +611,7 @@ class ShiftSettlementService {
       occurrence.overtime?.topUpPaid === true &&
       occurrence.overtime?.topUpPaidAt &&
       occurrence.topUpTransaction &&
-      Number(occurrence.topUpRequired || 0) === 0
+      occurrence.topUpRequired === 0
     );
   }
 
@@ -618,9 +640,9 @@ class ShiftSettlementService {
     return components;
   }
 
-  /* ─────────────────────────────── SHARED REVIEW WINDOW ─────────────────────────────── */
+  /* ------------------------------- SHARED REVIEW WINDOW ------------------------------- */
 
-  static getOrdinarilyChallengeableComponents(occurrence) {
+  static getReviewWindowComponents(occurrence) {
     const source = Array.isArray(occurrence.challengeableSettlementComponents)
       ? occurrence.challengeableSettlementComponents
       : [];
@@ -638,13 +660,17 @@ class ShiftSettlementService {
       unique.some((component) => !SETTLEMENT_BATCH_COMPONENTS.includes(component))
     ) {
       throw this.createError({
-        message: "The occurrence contains invalid ordinary challenge component scope.",
+        message: "The occurrence contains invalid shared review component scope.",
         code: "INVALID_OCCURRENCE_CHALLENGE_COMPONENT_SCOPE",
         statusCode: 500,
       });
     }
 
     return SETTLEMENT_BATCH_COMPONENTS.filter((component) => unique.includes(component));
+  }
+
+  static getOrdinarilyChallengeableComponents(occurrence) {
+    return this.getReviewWindowComponents(occurrence).filter((component) => component === "base");
   }
 
   static getChallengeWindowDeadline(occurrence, { required = false } = {}) {
@@ -664,7 +690,7 @@ class ShiftSettlementService {
   }
 
   static isChallengeWindowOpen({ occurrence, currentTime }) {
-    const challengeableComponents = this.getOrdinarilyChallengeableComponents(occurrence);
+    const challengeableComponents = this.getReviewWindowComponents(occurrence);
 
     if (challengeableComponents.length === 0) {
       return false;
@@ -707,13 +733,52 @@ class ShiftSettlementService {
     });
   }
 
-  static establishInitialChallengeWindow({ occurrence, openedAt, components }) {
+  static async getInitialReviewWindowHours({ occurrence, session }) {
+    if (occurrence.challengeWindowOpenedAt) {
+      return undefined;
+    }
+
+    const settings = await PlatformSettings.findOne({
+      key: "global",
+      isActive: true,
+    }).session(session);
+
+    const hours = settings?.occurrenceClaimWindowHours;
+
+    if (typeof hours !== "number" || !Number.isFinite(hours) || hours <= 0) {
+      throw this.createError({
+        message: "The configured occurrence review-window duration is missing or invalid.",
+        code: "INVALID_OCCURRENCE_CLAIM_WINDOW_HOURS",
+        statusCode: 500,
+      });
+    }
+
+    return hours;
+  }
+
+  static establishInitialChallengeWindow({
+    occurrence,
+    openedAt,
+    components,
+    reviewWindowHours = SHARED_REVIEW_WINDOW_HOURS,
+  }) {
     const normalizedOpenedAt = this.normalizeDate(openedAt, "challenge window opening time", 500);
 
     const normalizedComponents = this.normalizeAffectedSettlementComponents(components, {
       allowEmpty: false,
       fieldLabel: "initial challenge window",
     });
+
+    if (
+      !occurrence.challengeWindowOpenedAt &&
+      (occurrence.challengeDeadlineAt || occurrence.challengeWindowClosedAt)
+    ) {
+      throw this.createError({
+        message: "The stored review window is missing its opening timestamp.",
+        code: "INVALID_OCCURRENCE_CHALLENGE_WINDOW_AUDIT",
+        statusCode: 500,
+      });
+    }
 
     if (occurrence.challengeWindowOpenedAt) {
       const existingOpenedAt = this.normalizeDate(
@@ -726,7 +791,15 @@ class ShiftSettlementService {
         required: true,
       });
 
-      const currentComponents = this.getOrdinarilyChallengeableComponents(occurrence);
+      if (existingDeadline <= existingOpenedAt) {
+        throw this.createError({
+          message: "The stored review deadline must follow its opening timestamp.",
+          code: "INVALID_OCCURRENCE_CHALLENGE_WINDOW_AUDIT",
+          statusCode: 500,
+        });
+      }
+
+      const currentComponents = this.getReviewWindowComponents(occurrence);
 
       if (normalizedOpenedAt < existingDeadline) {
         occurrence.challengeableSettlementComponents = SETTLEMENT_BATCH_COMPONENTS.filter(
@@ -738,31 +811,36 @@ class ShiftSettlementService {
       return {
         openedAt: existingOpenedAt,
         deadlineAt: existingDeadline,
-
-        challengeableSettlementComponents: this.getOrdinarilyChallengeableComponents(occurrence),
-
+        challengeableSettlementComponents: this.getReviewWindowComponents(occurrence),
         idempotent: true,
       };
     }
 
-    const deadlineAt = new Date(
-      normalizedOpenedAt.getTime() + SHARED_REVIEW_WINDOW_HOURS * HOUR_MS
-    );
+    const deadlineAt = new Date(normalizedOpenedAt.getTime() + reviewWindowHours * HOUR_MS);
+
+    if (
+      typeof reviewWindowHours !== "number" ||
+      !Number.isFinite(reviewWindowHours) ||
+      reviewWindowHours <= 0 ||
+      Number.isNaN(deadlineAt.getTime()) ||
+      deadlineAt <= normalizedOpenedAt
+    ) {
+      throw this.createError({
+        message: "The review-window duration is invalid.",
+        code: "INVALID_OCCURRENCE_CLAIM_WINDOW_HOURS",
+        statusCode: 500,
+      });
+    }
 
     occurrence.challengeWindowOpenedAt = normalizedOpenedAt;
-
     occurrence.challengeDeadlineAt = deadlineAt;
-
     occurrence.challengeWindowClosedAt = null;
-
     occurrence.challengeableSettlementComponents = normalizedComponents;
 
     return {
       openedAt: normalizedOpenedAt,
       deadlineAt,
-
       challengeableSettlementComponents: normalizedComponents,
-
       idempotent: false,
     };
   }
@@ -770,7 +848,7 @@ class ShiftSettlementService {
   static synchronizeExpiredChallengeWindow({ occurrence, currentTime }) {
     const now = this.normalizeDate(currentTime, "challenge-window synchronization time", 500);
 
-    const components = this.getOrdinarilyChallengeableComponents(occurrence);
+    const components = this.getReviewWindowComponents(occurrence);
 
     if (components.length === 0) {
       if (
@@ -789,9 +867,7 @@ class ShiftSettlementService {
 
       return {
         expired: Boolean(occurrence.challengeWindowClosedAt),
-
         finalizedComponents: [],
-
         idempotent: true,
       };
     }
@@ -803,11 +879,8 @@ class ShiftSettlementService {
     if (now < deadline) {
       return {
         expired: false,
-
         finalizedComponents: [],
-
         challengeableSettlementComponents: components,
-
         idempotent: true,
       };
     }
@@ -818,16 +891,13 @@ class ShiftSettlementService {
 
     return {
       expired: true,
-
       finalizedComponents: components,
-
       challengeableSettlementComponents: [],
-
       idempotent: false,
     };
   }
 
-  /* ─────────────────────────────── ACTIVE CHALLENGE SCOPE ─────────────────────────────── */
+  /* ------------------------------- ACTIVE CHALLENGE SCOPE ------------------------------- */
 
   static getUnresolvedClaimAffectedSettlementComponents(claim) {
     const issues = Array.isArray(claim?.issues) ? claim.issues : [];
@@ -843,8 +913,8 @@ class ShiftSettlementService {
 
     for (const issue of unresolvedIssues) {
       const issueScope = this.normalizeAffectedSettlementComponents(
-        Array.isArray(issue?.affectedSettlementComponents)
-          ? issue.affectedSettlementComponents
+        Array.isArray(issue?.challengedSettlementComponents)
+          ? issue.challengedSettlementComponents
           : [],
         {
           allowEmpty: false,
@@ -852,9 +922,15 @@ class ShiftSettlementService {
         }
       );
 
-      for (const component of issueScope) {
-        aggregate.add(component);
+      if (issueScope.length !== 1 || issueScope[0] !== "base") {
+        throw this.createError({
+          message: "Ordinary claim and dispute issues must affect BASE only.",
+          code: "INVALID_ACTIVE_CHALLENGE_SETTLEMENT_SCOPE",
+          statusCode: 500,
+        });
       }
+
+      aggregate.add("base");
     }
 
     return SETTLEMENT_BATCH_COMPONENTS.filter((component) => aggregate.has(component));
@@ -866,7 +942,7 @@ class ShiftSettlementService {
     }
 
     const query = ShiftOccurrenceClaim.findById(caseId).select(
-      "status issues.status issues.affectedSettlementComponents"
+      "shift occurrence business professional status issues.status issues.challengedSettlementComponents"
     );
 
     if (session) {
@@ -940,9 +1016,15 @@ class ShiftSettlementService {
         }
       );
 
-      for (const component of issueScope) {
-        aggregate.add(component);
+      if (issueScope.length !== 1 || issueScope[0] !== "base") {
+        throw this.createError({
+          message: "Ordinary claim and dispute issues must affect BASE only.",
+          code: "INVALID_ACTIVE_CHALLENGE_SETTLEMENT_SCOPE",
+          statusCode: 500,
+        });
       }
+
+      aggregate.add("base");
     }
 
     return SETTLEMENT_BATCH_COMPONENTS.filter((component) => aggregate.has(component));
@@ -954,7 +1036,7 @@ class ShiftSettlementService {
     }
 
     const query = ShiftOccurrenceDispute.findById(caseId).select(
-      "status issues.status issues.affectedSettlementComponents"
+      "shift occurrence business professional status issues.status issues.affectedSettlementComponents"
     );
 
     if (session) {
@@ -971,7 +1053,7 @@ class ShiftSettlementService {
       });
     }
 
-    if (dispute.status !== "active") {
+    if (!ACTIVE_EMPLOYER_OCCURRENCE_DISPUTE_STATUSES.includes(dispute.status)) {
       throw this.createError({
         message: "The occurrence references an employer dispute that is no longer active.",
         code: "ACTIVE_OCCURRENCE_DISPUTE_STATUS_INVALID",
@@ -1006,17 +1088,36 @@ class ShiftSettlementService {
   }
 
   static async getActiveChallengeContext({ occurrence, session = null }) {
-    const [claimContext, disputeContext] = await Promise.all([
-      this.getActiveClaimCase({
-        caseId: occurrence.activeClaim,
-        session,
-      }),
+    const claimContext = await this.getActiveClaimCase({
+      caseId: occurrence.activeClaim,
+      session,
+    });
 
-      this.getActiveDisputeCase({
-        caseId: occurrence.activeDispute,
-        session,
-      }),
-    ]);
+    const disputeContext = await this.getActiveDisputeCase({
+      caseId: occurrence.activeDispute,
+      session,
+    });
+
+    for (const context of [claimContext, disputeContext]) {
+      if (!context) {
+        continue;
+      }
+
+      const record = context.caseDocument;
+
+      if (
+        String(record.occurrence) !== String(occurrence._id) ||
+        String(record.shift) !== String(occurrence.shift) ||
+        String(record.business) !== String(occurrence.business) ||
+        String(record.professional) !== String(occurrence.assignedProfessional)
+      ) {
+        throw this.createError({
+          message: "The active challenge does not belong to this occurrence and professional.",
+          code: "ACTIVE_CHALLENGE_CONTEXT_MISMATCH",
+          statusCode: 500,
+        });
+      }
+    }
 
     const affectedSettlementComponents = SETTLEMENT_BATCH_COMPONENTS.filter((component) =>
       Boolean(
@@ -1028,13 +1129,28 @@ class ShiftSettlementService {
     return {
       claim: claimContext,
       dispute: disputeContext,
-
       hasActiveClaim: Boolean(claimContext),
       hasActiveDispute: Boolean(disputeContext),
       hasAnyActiveChallenge: Boolean(claimContext || disputeContext),
-
       affectedSettlementComponents,
     };
+  }
+
+  static assertChallengeContextLoaded({ occurrence, component, challengeContext }) {
+    if (component !== "base") {
+      return;
+    }
+
+    if (
+      (occurrence.activeClaim && !challengeContext?.hasActiveClaim) ||
+      (occurrence.activeDispute && !challengeContext?.hasActiveDispute)
+    ) {
+      throw this.createError({
+        message: "Active BASE challenge records must be loaded before checking finality.",
+        code: "ACTIVE_CHALLENGE_CONTEXT_REQUIRED",
+        statusCode: 500,
+      });
+    }
   }
 
   static isComponentChallenged({ component, challengeContext }) {
@@ -1051,6 +1167,12 @@ class ShiftSettlementService {
     actionLabel = "continue settlement",
   }) {
     const normalizedComponent = this.normalizeComponent(component);
+
+    this.assertChallengeContextLoaded({
+      occurrence,
+      component: normalizedComponent,
+      challengeContext,
+    });
 
     if (
       this.isComponentChallenged({
@@ -1100,6 +1222,12 @@ class ShiftSettlementService {
   static isComponentFinal({ occurrence, component, challengeContext, currentTime }) {
     const normalizedComponent = this.normalizeComponent(component);
 
+    this.assertChallengeContextLoaded({
+      occurrence,
+      component: normalizedComponent,
+      challengeContext,
+    });
+
     if (
       this.isComponentChallenged({
         component: normalizedComponent,
@@ -1122,15 +1250,13 @@ class ShiftSettlementService {
     return true;
   }
 
-  /* ─────────────────────────────── BASE PRICING ─────────────────────────────── */
+  /* ------------------------------- BASE PRICING ------------------------------- */
 
   static calculateProfessionalPay({ hourlyRate, minutes }) {
     if (!Number.isSafeInteger(hourlyRate) || hourlyRate <= 0) {
       throw this.createError({
         message: "Occurrence hourly rate is invalid.",
-
         code: "INVALID_OCCURRENCE_HOURLY_RATE",
-
         statusCode: 500,
       });
     }
@@ -1138,9 +1264,7 @@ class ShiftSettlementService {
     if (!Number.isSafeInteger(minutes) || minutes < 0) {
       throw this.createError({
         message: "Billable minutes are invalid.",
-
         code: "INVALID_OCCURRENCE_BILLABLE_MINUTES",
-
         statusCode: 500,
       });
     }
@@ -1160,7 +1284,7 @@ class ShiftSettlementService {
     }
   }
 
-  /* ─────────────────────────────── ATTENDANCE / BASE BILLABLE TIME ─────────────────────────────── */
+  /* ------------------------------- ATTENDANCE / BASE BILLABLE TIME ------------------------------- */
 
   static resolveAttendanceStart(occurrence) {
     return occurrence.attendanceOverride?.approvedStartTime || occurrence.checkedInAt || null;
@@ -1249,6 +1373,7 @@ class ShiftSettlementService {
     });
 
     occurrence.baseBillableHours = Number((baseBillableMinutes / 60).toFixed(4));
+
     occurrence.baseProfessionalPay = professionalPay;
 
     return {
@@ -1271,9 +1396,9 @@ class ShiftSettlementService {
     let approvedOvertimeHours = 0;
 
     if (this.isFinalApprovedOvertimeEntitlement(occurrence)) {
-      const requestedMinutes = Number(occurrence.overtime?.requestedMinutes);
+      const approvedMinutes = Number(occurrence.overtime?.approvedMinutes);
 
-      if (!Number.isSafeInteger(requestedMinutes) || requestedMinutes <= 0) {
+      if (!Number.isSafeInteger(approvedMinutes) || approvedMinutes <= 0) {
         throw this.createError({
           message: "Final approved overtime minutes are invalid.",
           code: "INVALID_FINAL_APPROVED_OVERTIME_MINUTES",
@@ -1281,7 +1406,7 @@ class ShiftSettlementService {
         });
       }
 
-      approvedOvertimeHours = requestedMinutes / 60;
+      approvedOvertimeHours = approvedMinutes / 60;
     }
 
     occurrence.billableHours = Number((baseHours + approvedOvertimeHours).toFixed(4));
@@ -1293,12 +1418,15 @@ class ShiftSettlementService {
     return Boolean(
       occurrence.baseBillableHours !== null &&
       occurrence.baseBillableHours !== undefined &&
-      Number.isSafeInteger(Number(occurrence.baseProfessionalPay)) &&
-      Number(occurrence.baseProfessionalPay) >= 0
+      typeof occurrence.baseBillableHours === "number" &&
+      Number.isFinite(occurrence.baseBillableHours) &&
+      occurrence.baseBillableHours >= 0 &&
+      Number.isSafeInteger(occurrence.baseProfessionalPay) &&
+      occurrence.baseProfessionalPay >= 0
     );
   }
 
-  /* ─────────────────────────────── PAYOUT SCHEDULING ─────────────────────────────── */
+  /* ------------------------------- PAYOUT SCHEDULING ------------------------------- */
 
   static validatePayoutPolicy({
     payoutWeekday = DEFAULT_PAYOUT_WEEKDAY,
@@ -1443,7 +1571,7 @@ class ShiftSettlementService {
     return candidate;
   }
 
-  /* ─────────────────────────────── COMPONENT READINESS ─────────────────────────────── */
+  /* ------------------------------- COMPONENT READINESS ------------------------------- */
 
   static assertComponentEntitlementReady({ occurrence, component }) {
     const normalizedComponent = this.normalizeComponent(component);
@@ -1499,6 +1627,14 @@ class ShiftSettlementService {
 
     const currentStatus = this.getComponentStatus(occurrence, normalizedComponent);
 
+    this.assertComponentChallengeFinal({
+      occurrence,
+      component: normalizedComponent,
+      challengeContext,
+      currentTime: normalizedReadyAt,
+      actionLabel: "become ready for payout release",
+    });
+
     if (COMPONENT_RELEASE_READY_STATUSES.includes(currentStatus)) {
       const audit = this.getComponentAudit(occurrence, normalizedComponent);
 
@@ -1511,14 +1647,6 @@ class ShiftSettlementService {
         idempotent: true,
       };
     }
-
-    this.assertComponentChallengeFinal({
-      occurrence,
-      component: normalizedComponent,
-      challengeContext,
-      currentTime: normalizedReadyAt,
-      actionLabel: "become ready for payout release",
-    });
 
     this.assertComponentEntitlementReady({
       occurrence,
@@ -1568,7 +1696,7 @@ class ShiftSettlementService {
     };
   }
 
-  /* ─────────────────────────────── OVERALL PROFESSIONAL SETTLEMENT STATE ─────────────────────────────── */
+  /* ------------------------------- OVERALL PROFESSIONAL SETTLEMENT STATE ------------------------------- */
 
   static synchronizeOverallSettlementState({
     occurrence,
@@ -1583,6 +1711,7 @@ class ShiftSettlementService {
       occurrence.activeDispute
     ) {
       occurrence.settlementStatus = "disputed";
+
       occurrence.settledAt = null;
 
       return occurrence;
@@ -1592,6 +1721,7 @@ class ShiftSettlementService {
 
     if (overtime.requested === true && !["approved", "rejected"].includes(overtime.status)) {
       occurrence.settlementStatus = "awaiting_overtime_review";
+
       occurrence.settledAt = null;
 
       return occurrence;
@@ -1602,6 +1732,7 @@ class ShiftSettlementService {
       !this.isFundedOvertimeHandoffComplete(occurrence)
     ) {
       occurrence.settlementStatus = "awaiting_topup";
+
       occurrence.settledAt = null;
 
       return occurrence;
@@ -1611,6 +1742,7 @@ class ShiftSettlementService {
 
     if (payableComponents.length === 0) {
       occurrence.settlementStatus = "not_due";
+
       occurrence.settledAt = null;
 
       return occurrence;
@@ -1624,6 +1756,7 @@ class ShiftSettlementService {
 
     if (states.some((item) => item.status === "release_pending")) {
       occurrence.settlementStatus = "release_pending";
+
       occurrence.settledAt = null;
 
       return occurrence;
@@ -1631,6 +1764,7 @@ class ShiftSettlementService {
 
     if (states.some((item) => item.status === "approved_for_release")) {
       occurrence.settlementStatus = "approved_for_release";
+
       occurrence.settledAt = null;
 
       return occurrence;
@@ -1658,6 +1792,7 @@ class ShiftSettlementService {
         occurrence.status !== "no_show"
       ) {
         occurrence.status = "completed";
+
         occurrence.attendanceStatus = "settled";
       }
 
@@ -1665,12 +1800,13 @@ class ShiftSettlementService {
     }
 
     occurrence.settlementStatus = "pending_review";
+
     occurrence.settledAt = null;
 
     return occurrence;
   }
 
-  /* ─────────────────────────────── BASE OUTCOME HANDOFF ─────────────────────────────── */
+  /* ------------------------------- BASE OUTCOME HANDOFF ------------------------------- */
 
   static async establishBaseSettlementOutcome(
     { shiftId = null, occurrenceId, earningType, professionalPay, currentTime = new Date() },
@@ -1713,6 +1849,19 @@ class ShiftSettlementService {
         actionLabel: "be replaced by a new BASE outcome",
       });
 
+      const currentAmounts = this.getBaseSettlementAmounts(occurrence);
+
+      if (
+        currentAmounts.earningType !== normalizedEarningType ||
+        (normalizedEarningType !== "worked_base" && currentAmounts.professionalPay !== amount)
+      ) {
+        throw this.createError({
+          message: "The BASE handoff does not match the occurrence's cancellation outcome.",
+          code: "BASE_SETTLEMENT_OUTCOME_MISMATCH",
+          statusCode: 409,
+        });
+      }
+
       occurrence.baseProfessionalPay = amount;
 
       if (normalizedEarningType === "active_work_cancellation") {
@@ -1738,6 +1887,10 @@ class ShiftSettlementService {
       }
 
       const reviewWindow = this.establishInitialChallengeWindow({
+        reviewWindowHours: await this.getInitialReviewWindowHours({
+          occurrence,
+          session,
+        }),
         occurrence,
         openedAt: now,
         components: ["base"],
@@ -1772,7 +1925,7 @@ class ShiftSettlementService {
     });
   }
 
-  /* ─────────────────────────────── WORKED OCCURRENCE PREPARATION ─────────────────────────────── */
+  /* ------------------------------- WORKED OCCURRENCE PREPARATION ------------------------------- */
 
   static async startOccurrenceReview(
     { occurrenceId, currentTime = new Date(), payoutPolicy = {} },
@@ -1826,10 +1979,12 @@ class ShiftSettlementService {
 
       const billableTime = this.calculateBaseBillableTime(occurrence);
 
-      this.applyBasePricing({
-        occurrence,
-        baseBillableMinutes: billableTime.baseBillableMinutes,
-      });
+      if (!occurrence.challengeWindowOpenedAt || !this.isBasePricingComplete(occurrence)) {
+        this.applyBasePricing({
+          occurrence,
+          baseBillableMinutes: billableTime.baseBillableMinutes,
+        });
+      }
 
       occurrence.status = "pending_settlement";
 
@@ -1840,13 +1995,13 @@ class ShiftSettlementService {
         component: "base",
       });
 
-      const challengeComponents = ["base"];
-
-      if (occurrence.overtime?.requested !== true) {
-        challengeComponents.push("overtime");
-      }
+      const challengeComponents = ["base", "overtime"];
 
       const reviewWindow = this.establishInitialChallengeWindow({
+        reviewWindowHours: await this.getInitialReviewWindowHours({
+          occurrence,
+          session,
+        }),
         occurrence,
         openedAt: now,
         components: challengeComponents,
@@ -1930,7 +2085,7 @@ class ShiftSettlementService {
     });
   }
 
-  /* ─────────────────────────────── COMPONENT RELEASE READINESS ─────────────────────────────── */
+  /* ------------------------------- COMPONENT RELEASE READINESS ------------------------------- */
 
   static async markOccurrenceComponentReadyForRelease(
     {
@@ -1989,7 +2144,8 @@ class ShiftSettlementService {
       }
 
       const worked =
-        occurrence.status === "pending_settlement" && occurrence.attendanceStatus === "checked_out";
+        ["pending_settlement", "disputed", "completed"].includes(occurrence.status) &&
+        ["checked_out", "settled"].includes(occurrence.attendanceStatus);
 
       const compensatedCancellation =
         occurrence.status === "cancelled" &&
@@ -2115,6 +2271,13 @@ class ShiftSettlementService {
         const status = this.getComponentStatus(occurrence, component);
 
         if (COMPONENT_RELEASE_READY_STATUSES.includes(status)) {
+          this.assertComponentChallengeFinal({
+            occurrence,
+            component,
+            challengeContext,
+            currentTime: now,
+          });
+
           componentResults.push({
             component,
             ready: true,
@@ -2238,7 +2401,7 @@ class ShiftSettlementService {
     );
   }
 
-  /* ─────────────────────────────── NO-SHOW FINALIZATION ─────────────────────────────── */
+  /* ------------------------------- NO-SHOW FINALIZATION ------------------------------- */
 
   static async finalizeConfirmedNoShow({ occurrenceId, currentTime = new Date() }, options = {}) {
     const now = this.normalizeDate(currentTime, "no-show finalization time");
@@ -2292,8 +2455,8 @@ class ShiftSettlementService {
       }
 
       const idempotent =
-        Number(occurrence.baseProfessionalPay || 0) === 0 &&
-        Number(occurrence.overtimeProfessionalPay || 0) === 0 &&
+        occurrence.baseProfessionalPay === 0 &&
+        occurrence.overtimeProfessionalPay === 0 &&
         this.getComponentStatus(occurrence, "base") === "not_due" &&
         this.getComponentStatus(occurrence, "overtime") === "not_due";
 
@@ -2301,10 +2464,7 @@ class ShiftSettlementService {
       occurrence.billableHours = 0;
       occurrence.baseProfessionalPay = 0;
 
-      if (
-        occurrence.overtime?.requested === true ||
-        Number(occurrence.overtimeProfessionalPay || 0) > 0
-      ) {
+      if (occurrence.overtime?.requested === true || occurrence.overtimeProfessionalPay > 0) {
         throw this.createError({
           message:
             "The confirmed no-show contains an overtime record that must be resolved " +

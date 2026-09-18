@@ -1,11 +1,34 @@
 // constants/shiftLifecycle.js
 
-exports.MAX_SHIFT_OCCURRENCES = 30;
-exports.MAX_APPLICATION_ROUNDS = 99;
-exports.MINUTES_PER_DAY = 24 * 60;
+const { MAX_SHIFT_OCCURRENCES, MINUTES_PER_DAY } = require("./shiftPosting");
+
+const { MAX_APPLICATION_ROUNDS } = require("./shiftApplication");
+
+/**
+ * Compatibility exports for existing consumers.
+ *
+ * MAX_SHIFT_OCCURRENCES limits shared work dates per slot.
+ * Total occurrence records equal occurrenceCount × requiredProfessionals.
+ *
+ * MAX_APPLICATION_ROUNDS applies to application rounds within their
+ * hiring scope. Replacement hiring does not advance the parent's
+ * initial application round.
+ */
+exports.MAX_SHIFT_OCCURRENCES = MAX_SHIFT_OCCURRENCES;
+
+exports.MAX_APPLICATION_ROUNDS = MAX_APPLICATION_ROUNDS;
+
+exports.MINUTES_PER_DAY = MINUTES_PER_DAY;
 
 /* ─────────────────────────────── PARENT SHIFT ─────────────────────────────── */
 
+/**
+ * Parent statuses summarize the engagement across all professional slots.
+ *
+ * open may coexist with occupied slots while initial vacancies remain.
+ * Assignment ownership and operational facts belong to assignments
+ * and occurrences.
+ */
 exports.SHIFT_STATUSES = Object.freeze([
   "pending_funding",
   "open",
@@ -32,6 +55,13 @@ exports.SHIFT_PAYMENT_STATUSES = Object.freeze([
   "partially_refunded",
 ]);
 
+/**
+ * These statuses require assignment context during reconciliation.
+ *
+ * This does not identify a single parent assignment.
+ * An open Shift may also contain assignments, but may legitimately
+ * have none before its first acceptance.
+ */
 exports.SHIFT_ASSIGNMENT_SUMMARY_REQUIRED_STATUSES = Object.freeze([
   "assigned",
   "confirmed",
@@ -50,13 +80,33 @@ exports.SHIFT_PUBLISHED_PAYMENT_STATUSES = Object.freeze([
   "failed",
 ]);
 
+/**
+ * Payment states compatible with completed engagement reconciliation.
+ *
+ * A listed payment state alone does not establish completion.
+ * In particular, partially_refunded may also describe an engagement
+ * that still has unresolved occurrence workflows.
+ */
 exports.SHIFT_FINAL_PAYMENT_STATUSES = Object.freeze([
   "released",
   "refunded",
   "partially_refunded",
 ]);
 
-exports.SHIFT_OPEN_PAYMENT_STATUSES = Object.freeze(["funded", "partially_refunded"]);
+/**
+ * Occupied slots may have payment activity while initial vacancies remain.
+ *
+ * Match the Shift model's open-state payment guard:
+ * published payment states except fully released or fully refunded.
+ *
+ * Membership does not authorize hiring or prove sufficient funding.
+ * Services must still verify the protected allocation for the target slot.
+ */
+exports.SHIFT_OPEN_PAYMENT_STATUSES = Object.freeze(
+  exports.SHIFT_PUBLISHED_PAYMENT_STATUSES.filter(
+    (status) => !["released", "refunded"].includes(status)
+  )
+);
 
 exports.SHIFT_CANCELLABLE_FROM_STATUSES = Object.freeze([
   "pending_funding",
@@ -68,6 +118,12 @@ exports.SHIFT_CANCELLABLE_FROM_STATUSES = Object.freeze([
 
 /* ─────────────────────────────── OCCURRENCE ASSIGNMENT ─────────────────────────────── */
 
+/**
+ * Assignment state belongs to one slot on one work date.
+ *
+ * Replacing a professional preserves that occurrence's slot, schedule,
+ * identity and funded allocation.
+ */
 exports.OCCURRENCE_ASSIGNMENT_STATUSES = Object.freeze([
   "unassigned",
   "assigned",
@@ -98,6 +154,10 @@ exports.OCCURRENCE_STATUSES_REQUIRING_ASSIGNMENT = Object.freeze([
   "disputed",
 ]);
 
+/**
+ * Operational terminal states do not by themselves establish that
+ * claims, professional payouts and employer refunds have finished.
+ */
 exports.TERMINAL_OCCURRENCE_STATUSES = Object.freeze([
   "completed",
   "cancelled",
@@ -107,6 +167,9 @@ exports.TERMINAL_OCCURRENCE_STATUSES = Object.freeze([
 
 /* ─────────────────────────────── ATTENDANCE ─────────────────────────────── */
 
+/**
+ * Attendance is independent for every professional occurrence.
+ */
 exports.ATTENDANCE_STATUSES = Object.freeze([
   "not_started",
   "checked_in",
@@ -144,11 +207,7 @@ exports.ATTENDANCE_OVERRIDE_REASONS = Object.freeze([
 exports.LATE_CHECKOUT_OPTIONS = Object.freeze(["normal_late_checkout", "overtime_requested"]);
 
 /**
- * These reasons apply only when the professional confirms that the late
- * checkout was not worked overtime.
- *
- * Worked overtime belongs to the dedicated overtime request lifecycle and is
- * represented by lateCheckout.selectedOption = overtime_requested.
+ * Worked overtime belongs to the dedicated OT lifecycle.
  */
 exports.LATE_CHECKOUT_REASONS = Object.freeze(["forgot_to_checkout", "system_issue", "other"]);
 
@@ -179,23 +238,11 @@ exports.MISSED_CHECKIN_OUTCOMES = Object.freeze(["approved", "rejected"]);
 /* ─────────────────────────────── PROFESSIONAL POST-SHIFT REVIEW ─────────────────────────────── */
 
 /**
- * The professional receives one post-shift review entry point during the
- * ordinary occurrence review window.
+ * OT routes to the OT lifecycle.
+ * All other selections belong to one immutable ordinary claim case.
  *
- * The UI may allow one or more selections in the same submission.
- *
- * overtime:
- * Routed to the dedicated overtime lifecycle. It is never stored as a
- * ShiftOccurrenceClaim issue.
- *
- * attendance_correction / payment_calculation / employer_fault:
- * Routed into one ordinary professional ShiftOccurrenceClaim case.
- *
- * Once an overtime request already exists, overtime must not be offered as a
- * new review selection.
- *
- * Once the professional has submitted their one original ordinary claim case,
- * additional ordinary claim selections must not be offered.
+ * The review concerns the professional's own occurrence.
+ * Submission does not close its shared challenge window early.
  */
 exports.PROFESSIONAL_REVIEW_SELECTION_TYPES = Object.freeze([
   "overtime",
@@ -207,48 +254,10 @@ exports.PROFESSIONAL_REVIEW_SELECTION_TYPES = Object.freeze([
 /* ─────────────────────────────── OCCURRENCE CLAIMS ─────────────────────────────── */
 
 /**
- * A ShiftOccurrenceClaim is the professional's one original ordinary claim
- * case for an occurrence.
+ * One professional claim case may contain multiple immutable ordinary issues.
+ * OT is excluded.
  *
- * One claim case may contain one or more structured ordinary issues:
- *
- * - attendance_correction
- * - payment_calculation
- * - employer_fault
- *
- * The submitted issue set is immutable.
- *
- * Each issue is reviewed and resolved independently. Mixed outcomes are
- * therefore valid, for example:
- *
- * - attendance_correction approved;
- * - payment_calculation rejected; and
- * - employer_fault approved.
- *
- * A professional claim and employer dispute may coexist when they concern
- * genuinely different ordinary issues and each case was initiated within the
- * shared occurrence challenge window.
- *
- * The same factual controversy must not be duplicated across a professional
- * claim and employer dispute.
- *
- * Example:
- *
- * Loqum records five worked hours.
- * Professional claims eight hours.
- * Employer says the professional actually worked three hours.
- *
- * This remains one attendance_correction issue inside the professional claim.
- * The employer supplies its counter-position and evidence inside that issue.
- * A separate employer dispute must not be created for the same attendance fact.
- *
- * Overtime is deliberately excluded from generic claims.
- *
- * Employer-approved overtime becomes final through the dedicated overtime
- * lifecycle. An employer-rejected overtime request becomes contested and moves
- * directly to admin review within that same overtime lifecycle.
- *
- * An absence explanation is also not a claim.
+ * Claim ownership is scoped to the occurrence and its professional assignment.
  */
 exports.OCCURRENCE_CLAIM_TYPES = Object.freeze([
   "attendance_correction",
@@ -263,18 +272,7 @@ exports.FINANCIAL_OCCURRENCE_CLAIM_TYPES = Object.freeze([
 ]);
 
 /**
- * Claim-case status is intentionally coarse.
- *
- * active:
- * At least one issue remains unresolved.
- *
- * resolved:
- * Every issue has reached its final outcome.
- *
- * withdrawn:
- * The claim case was withdrawn under the permitted withdrawal rules.
- *
- * Detailed action ownership belongs to each issue, not to the whole claim.
+ * Case status is coarse. Individual issues own workflow state.
  */
 exports.OCCURRENCE_CLAIM_STATUSES = Object.freeze(["active", "resolved", "withdrawn"]);
 
@@ -282,40 +280,14 @@ exports.ACTIVE_OCCURRENCE_CLAIM_STATUSES = Object.freeze(["active"]);
 
 exports.FINAL_OCCURRENCE_CLAIM_STATUSES = Object.freeze(["resolved", "withdrawn"]);
 
-/**
- * Each issue inside one ShiftOccurrenceClaim has its own action-owner status.
- *
- * awaiting_employer_review:
- * Employer must review that issue.
- *
- * awaiting_professional_appeal:
- * Employer rejected the issue without introducing a different factual or
- * financial position, and the professional's appeal window is open.
- *
- * awaiting_professional_rebuttal:
- * Employer rejected the issue and introduced a different factual or financial
- * position. The professional may respond, but silence does not make the
- * employer position authoritative.
- *
- * awaiting_admin_review:
- * The issue requires admin adjudication after professional escalation,
- * employer counter-position, or employer non-response.
- *
- * resolved:
- * The issue has a final outcome.
- */
 exports.OCCURRENCE_CLAIM_ISSUE_STATUSES = Object.freeze([
   "awaiting_employer_review",
-  "awaiting_professional_appeal",
-  "awaiting_professional_rebuttal",
   "awaiting_admin_review",
   "resolved",
 ]);
 
 exports.ACTIVE_OCCURRENCE_CLAIM_ISSUE_STATUSES = Object.freeze([
   "awaiting_employer_review",
-  "awaiting_professional_appeal",
-  "awaiting_professional_rebuttal",
   "awaiting_admin_review",
 ]);
 
@@ -325,89 +297,27 @@ exports.OCCURRENCE_CLAIM_ISSUE_STATUSES_REQUIRING_EMPLOYER_ACTION = Object.freez
   "awaiting_employer_review",
 ]);
 
-exports.OCCURRENCE_CLAIM_ISSUE_STATUSES_REQUIRING_PROFESSIONAL_ACTION = Object.freeze([
-  "awaiting_professional_appeal",
-  "awaiting_professional_rebuttal",
-]);
-
 exports.OCCURRENCE_CLAIM_ISSUE_STATUSES_REQUIRING_ADMIN_ACTION = Object.freeze([
   "awaiting_admin_review",
 ]);
 
 /**
- * Employer decisions are made independently for each claim issue.
+ * Employer provides a position on each professional claim issue.
  *
  * approved:
- * The professional's requested issue outcome is accepted.
+ * Employer accepts the professional position.
  *
  * rejected:
- * The professional's requested outcome is rejected.
- *
- * A rejected issue may also contain an employer counter-position. For example,
- * the employer may reject the professional's requested attendance correction
- * while proposing a different evidence-supported attendance value.
+ * Employer disagrees and may provide supporting evidence and an
+ * alternative factual position. Disagreement proceeds to admin review.
  */
 exports.EMPLOYER_FINANCIAL_CLAIM_DECISIONS = Object.freeze(["approved", "rejected"]);
 
 /**
- * Each employer-rejected claim issue receives at most one professional appeal
- * opportunity.
- */
-exports.OCCURRENCE_CLAIM_APPEAL_STATUSES = Object.freeze([
-  "not_available",
-  "available",
-  "submitted",
-  "expired",
-  "resolved",
-]);
-
-/**
- * Each employer adverse counter-position creates at most one professional
- * rebuttal opportunity.
+ * Admin may accept either party, maintain current authority, or establish
+ * an evidence-supported adjusted outcome.
  *
- * Rebuttal is separate from appeal:
- *
- * appeal:
- * Professional challenges an employer rejection.
- *
- * rebuttal:
- * Professional responds to an employer-provided alternative factual or
- * financial position.
- */
-exports.OCCURRENCE_CLAIM_REBUTTAL_STATUSES = Object.freeze([
-  "not_available",
-  "available",
-  "submitted",
-  "expired",
-  "resolved",
-]);
-
-/**
- * Admin makes one mutually exclusive final decision for each professional
- * claim issue.
- *
- * approve_professional:
- * The professional's submitted position is accepted as the authoritative
- * outcome.
- *
- * approve_employer:
- * The employer's adverse counter-position is accepted as the authoritative
- * outcome.
- *
- * This decision is only available when the issue actually contains an
- * employer counter-position.
- *
- * maintain_current:
- * Neither party's proposed change is accepted.
- *
- * The existing authoritative Loqum occurrence record remains unchanged.
- *
- * adjusted:
- * Neither submitted position is accepted exactly as proposed.
- *
- * Admin establishes a different evidence-supported authoritative fact/value.
- *
- * Exactly one of these four decisions may be recorded for an issue.
+ * Financial adjudication does not change the earned BASE platform fee.
  */
 exports.ADMIN_FINANCIAL_CLAIM_DECISIONS = Object.freeze([
   "approve_professional",
@@ -416,48 +326,13 @@ exports.ADMIN_FINANCIAL_CLAIM_DECISIONS = Object.freeze([
   "adjusted",
 ]);
 
-/**
- * Claim issue escalation has objective lifecycle entry paths.
- *
- * professional_appeal:
- * Employer rejected the issue and the professional submitted the permitted
- * appeal.
- *
- * employer_counter_position:
- * Employer rejected the professional position and supplied a different factual
- * or financial position requiring admin adjudication.
- *
- * employer_non_response:
- * Employer failed to decide the issue before the response deadline.
- *
- * Investigation reasons such as suspected abuse, conflicting evidence or
- * serious conduct concerns belong to the separate support/case subsystem.
- */
-exports.OCCURRENCE_CLAIM_ESCALATION_REASONS = Object.freeze([
-  "professional_appeal",
-  "employer_counter_position",
+exports.OCCURRENCE_CLAIM_ADMIN_REVIEW_REASONS = Object.freeze([
+  "employer_disagreement",
   "employer_non_response",
 ]);
 
 /* ─────────────────────────────── OCCURRENCE EVIDENCE ─────────────────────────────── */
 
-/**
- * Evidence may be supplied by either party or by an administrator while an
- * ordinary professional claim, employer dispute, overtime request, employer OT
- * rejection, or admin OT review is being handled.
- *
- * Party factual accounts are evidence even when no documentary upload exists.
- * Supporting uploads are additional corroboration and are supplied where
- * available. A party must not be forced to manufacture a file that does not
- * exist.
- *
- * System-owned occurrence records remain authoritative in their own models and
- * do not need to be duplicated as uploaded evidence.
- *
- * message means an uploaded external communication record such as an SMS,
- * WhatsApp or email record. It does not imply an in-app Loqum messaging
- * feature.
- */
 exports.OCCURRENCE_EVIDENCE_TYPES = Object.freeze([
   "image",
   "video",
@@ -473,41 +348,11 @@ exports.OCCURRENCE_EVIDENCE_SUBMITTER_ROLES = Object.freeze(["professional", "em
 /* ─────────────────────────────── EMPLOYER OCCURRENCE DISPUTES ─────────────────────────────── */
 
 /**
- * A ShiftOccurrenceDispute is the employer's one original ordinary dispute case
- * for an occurrence.
+ * One employer dispute case may contain multiple immutable BASE/factual issues.
+ * OT is excluded.
  *
- * One dispute case may contain one or more structured BASE/factual issues.
- *
- * The submitted issue set is immutable.
- *
- * Each issue is independently responded to and finally resolved by admin.
- * Mixed outcomes are therefore valid.
- *
- * A professional ShiftOccurrenceClaim and employer ShiftOccurrenceDispute may
- * coexist when:
- *
- * - they concern genuinely different ordinary issues; and
- * - each original case was submitted within the shared occurrence challenge
- *   window.
- *
- * The same factual controversy must not be duplicated across both case types.
- *
- * Example:
- *
- * Loqum records five worked hours.
- * Professional claims eight hours.
- * Employer says the professional actually worked three hours.
- *
- * The employer responds with its three-hour position and evidence inside the
- * professional's attendance_correction issue. It does not open another dispute
- * about the same attendance fact.
- *
- * Overtime is deliberately excluded:
- *
- * - employer-approved overtime is binding and cannot be revoked through an
- *   employer dispute; and
- * - employer-rejected overtime becomes contested inside the dedicated overtime
- *   lifecycle and moves directly to admin adjudication.
+ * A dispute targets one professional occurrence, not every professional
+ * working the same Shift date.
  */
 exports.EMPLOYER_OCCURRENCE_DISPUTE_TYPES = Object.freeze([
   "attendance_correction",
@@ -516,18 +361,7 @@ exports.EMPLOYER_OCCURRENCE_DISPUTE_TYPES = Object.freeze([
 ]);
 
 /**
- * Employer dispute-case status is intentionally coarse.
- *
- * active:
- * At least one dispute issue remains unresolved.
- *
- * resolved:
- * Every issue has reached its final admin outcome.
- *
- * withdrawn:
- * The dispute case was withdrawn under the permitted withdrawal rules.
- *
- * Detailed action ownership belongs to each issue.
+ * Case status is coarse. Individual issues own workflow state.
  */
 exports.EMPLOYER_OCCURRENCE_DISPUTE_STATUSES = Object.freeze(["active", "resolved", "withdrawn"]);
 
@@ -535,20 +369,6 @@ exports.ACTIVE_EMPLOYER_OCCURRENCE_DISPUTE_STATUSES = Object.freeze(["active"]);
 
 exports.FINAL_EMPLOYER_OCCURRENCE_DISPUTE_STATUSES = Object.freeze(["resolved", "withdrawn"]);
 
-/**
- * Each issue inside one ShiftOccurrenceDispute has its own action-owner status.
- *
- * awaiting_professional_response:
- * Professional may respond to the employer's allegation/correction and provide
- * evidence.
- *
- * awaiting_admin_review:
- * Professional responded, or the response deadline expired, and admin owns the
- * final decision.
- *
- * resolved:
- * Admin established the final outcome for that issue.
- */
 exports.EMPLOYER_OCCURRENCE_DISPUTE_ISSUE_STATUSES = Object.freeze([
   "awaiting_professional_response",
   "awaiting_admin_review",
@@ -571,26 +391,22 @@ exports.EMPLOYER_OCCURRENCE_DISPUTE_ISSUE_STATUSES_REQUIRING_ADMIN_ACTION = Obje
 ]);
 
 /**
- * Admin is the final decision-maker for employer-originated dispute issues.
- *
  * approved:
- * The employer's disputed position is accepted.
+ * The employer established that current Loqum authority requires correction.
+ * Admin records the final evidence-supported fact/value.
  *
  * rejected:
- * The employer's disputed position is rejected and no different correction is
- * established.
- *
- * adjusted:
- * Admin establishes a different final fact/value supported by the evidence.
+ * Current Loqum authority remains unchanged.
  */
-exports.ADMIN_EMPLOYER_OCCURRENCE_DISPUTE_DECISIONS = Object.freeze([
-  "approved",
-  "rejected",
-  "adjusted",
-]);
+exports.ADMIN_EMPLOYER_OCCURRENCE_DISPUTE_DECISIONS = Object.freeze(["approved", "rejected"]);
 
 /* ─────────────────────────────── SETTLEMENT ─────────────────────────────── */
 
+/**
+ * Settlement is evaluated independently for each professional occurrence.
+ * BASE and OT retain separate professional payout components.
+ * Platform-fee collection has its own audit.
+ */
 exports.SETTLEMENT_STATUSES = Object.freeze([
   "not_due",
   "pending_review",
@@ -619,13 +435,6 @@ exports.SETTLEMENT_STATUSES_REQUIRING_FINAL_PRICING = Object.freeze([
   "released",
 ]);
 
-/**
- * Cancellation compensation remains a settlement outcome.
- *
- * A compensated cancelled occurrence may proceed through professional
- * settlement even though cancellation compensation is not itself a distinct
- * professional claim type.
- */
 exports.CANCELLATION_COMPENSATION_SETTLEMENT_STATUSES = Object.freeze([
   "pending_review",
   "approved_for_release",
@@ -635,23 +444,7 @@ exports.CANCELLATION_COMPENSATION_SETTLEMENT_STATUSES = Object.freeze([
 ]);
 
 /**
- * approvalSource records the authority that finalized a professional payout
- * component for release.
- *
- * The employer is deliberately excluded. A prefunded ordinary occurrence does
- * not require a second employer settlement approval after work is completed.
- *
- * automatic:
- * Loqum/system finalized a normal payable component after its factual,
- * challenge and funding dependencies were satisfied.
- *
- * admin:
- * An administrator finalized the payable result through an authorized
- * operational intervention, including a final overtime decision.
- *
- * dispute_resolution:
- * A resolved generic professional claim or employer dispute established the
- * final payable BASE result.
+ * Professional payout release authority.
  */
 exports.SETTLEMENT_APPROVAL_SOURCES = Object.freeze(["automatic", "admin", "dispute_resolution"]);
 
@@ -681,33 +474,12 @@ exports.REFUND_STATUSES_AWAITING_EXECUTION = Object.freeze(["eligible", "batched
 exports.REFUND_EXECUTION_STATUSES = Object.freeze(["batched", "processing", "refunded"]);
 
 /**
- * Refund holds protect scheduled/base escrow while the refundable BASE amount
- * is not yet financially final or while positive professional BASE settlement
- * must finish first.
+ * BASE refund holds remain while that occurrence's BASE is challengeable,
+ * challenged, or awaiting professional payout.
  *
- * challenge_window_open:
- * BASE remains ordinarily challengeable during the shared occurrence challenge
- * window. The scheduled/base refund must remain held because a timely BASE
- * claim or employer dispute could still change professional BASE entitlement.
- *
- * A submitted claim or dispute does not close the shared challenge window.
- * Each party's submitted case becomes immutable while the remaining shared
- * deadline continues to govern any still-unused ordinary challenge right.
- *
- * professional_claim_pending:
- * At least one unresolved professional claim issue affects BASE/refund
- * authority.
- *
- * employer_dispute_pending:
- * At least one unresolved employer dispute issue affects BASE/refund authority.
- *
- * professional_settlement_pending:
- * Positive final BASE professional pay must be released before the related
- * scheduled/base refund executes.
- *
- * Overtime is separately funded. OT-only challengeability, a pending OT
- * request, employer OT rejection, pending OT admin review, or OT top-up does
- * not by itself hold the scheduled/base refund.
+ * OT-only state does not hold BASE refunds.
+ * Another slot's unresolved workflow does not automatically hold this
+ * occurrence's refund.
  */
 exports.REFUND_HOLD_REASONS = Object.freeze([
   "attendance_review_pending",
@@ -729,6 +501,12 @@ exports.REFUND_REASONS = Object.freeze([
   "other",
 ]);
 
+/**
+ * Refund-domain funding values.
+ *
+ * Shift fundingMethod "wallet" maps to refund fundingMethod "wallet_balance".
+ * Each Shift retains one original funding source; mixed funding is unsupported.
+ */
 exports.EMPLOYER_REFUND_FUNDING_METHODS = Object.freeze(["wallet_balance", "paystack_checkout"]);
 
 exports.EMPLOYER_REFUND_EXECUTION_METHODS = Object.freeze([
@@ -753,6 +531,15 @@ exports.PAYSTACK_REFUND_STATUSES = Object.freeze([
 
 /* ─────────────────────────────── REPLACEMENT HIRING ─────────────────────────────── */
 
+/**
+ * Replacement lifecycle state belongs to its own hiring scope.
+ *
+ * Separate slots may have independent replacement opportunities.
+ * Initial hiring may remain open at the same time.
+ *
+ * These lifecycle values include outcome history. The application
+ * constants' OPEN/CLOSED object remains a separate eligibility interface.
+ */
 exports.REPLACEMENT_HIRING_STATUSES = Object.freeze(["closed", "open", "filled", "cancelled"]);
 
 exports.ACTIVE_REPLACEMENT_HIRING_STATUSES = Object.freeze(["open"]);
@@ -785,30 +572,11 @@ exports.REPLACEMENT_REASON_CODES_REQUIRING_DETAILS = Object.freeze([
 exports.OVERTIME_SOURCES = Object.freeze(["late_checkout_prompt", "manual_request"]);
 
 /**
- * Overtime is its own decision lifecycle.
+ * The professional requests OT for their own occurrence.
  *
- * pending:
- * The professional submitted an OT request and the employer response window is
- * open.
- *
- * approved:
- * OT entitlement is final. Employer approval is binding. Admin approval after
- * employer rejection or employer non-response is also final.
- *
- * disputed:
- * Admin adjudication is required. Employer rejection moves the OT request
- * directly into this state. Employer non-response also moves the unresolved OT
- * request into admin review after the employer response deadline expires.
- *
- * rejected:
- * Admin made the final decision that the requested OT is not payable.
- *
- * cancelled:
- * The OT request was cancelled before a final payable outcome existed.
- *
- * The professional's original OT request is already their asserted position.
- * The professional is not required to submit a second appeal merely because the
- * employer rejected that position.
+ * Employer approval is final.
+ * Employer rejection/non-response moves unresolved OT to admin.
+ * Final rejected status requires admin authority.
  */
 exports.OVERTIME_STATUSES = Object.freeze([
   "pending",
@@ -818,57 +586,8 @@ exports.OVERTIME_STATUSES = Object.freeze([
   "cancelled",
 ]);
 
-/**
- * decisionSource identifies the authority whose decision established the final
- * OT outcome.
- *
- * employer:
- * Employer approved the professional's OT request. Employer rejection is not a
- * final OT decision and therefore does not use employer as a final rejection
- * authority.
- *
- * admin:
- * Admin made the final OT decision after employer rejection or employer
- * non-response.
- */
 exports.OVERTIME_DECISION_SOURCES = Object.freeze(["employer", "admin"]);
 
-/**
- * Employer rejection is a structured evidentiary position, not a bare veto.
- *
- * Every employer rejection must identify one rejection basis and provide a
- * factual explanation.
- *
- * Supporting documentary evidence is supplied where available. A supporting
- * file is not mandatory when no relevant documentary evidence exists, but the
- * employer must explicitly declare that no supporting evidence is available.
- *
- * overtime_not_worked:
- * Employer says the professional did not work beyond the scheduled end time.
- *
- * minutes_incorrect:
- * Employer accepts that some overtime was worked but disputes the professional's
- * requested duration. The employer should also provide the number of minutes
- * they say were actually worked.
- *
- * remained_on_site_not_working:
- * Employer says the professional remained at the workplace after the scheduled
- * end time but was no longer working.
- *
- * worked_without_authorization:
- * Employer says additional work occurred but was not requested or authorized.
- * This records the employer's factual/policy position for admin adjudication.
- * The basis alone does not automatically establish that worked time is
- * non-payable.
- *
- * attendance_record_incorrect:
- * Employer disputes the attendance or checkout record relied on by the
- * professional's OT request.
- *
- * other:
- * A materially different rejection basis not represented above. A factual
- * explanation remains mandatory.
- */
 exports.OVERTIME_REJECTION_BASES = Object.freeze([
   "overtime_not_worked",
   "minutes_incorrect",
@@ -878,65 +597,26 @@ exports.OVERTIME_REJECTION_BASES = Object.freeze([
   "other",
 ]);
 
-/**
- * These reasons identify why final OT decision authority moved to admin.
- *
- * employer_rejection:
- * Employer rejected the professional's submitted OT position. The professional
- * does not need to appeal because the original OT request already represents
- * their asserted position. Admin adjudicates the professional position,
- * employer position, submitted supporting evidence and Loqum system records.
- *
- * employer_non_response:
- * Employer failed to decide the OT request before the employer response
- * deadline. Admin decides the OT request from the professional's submitted
- * position, supporting evidence and available Loqum system records.
- */
 exports.OVERTIME_ADMIN_REVIEW_REASONS = Object.freeze([
   "employer_rejection",
   "employer_non_response",
 ]);
 
 /**
- * Admin makes the final decision whenever OT reaches admin review.
- *
- * approved:
- * The available evidence supports a payable OT outcome. Admin may establish the
- * final approved OT minutes rather than being restricted to blindly accepting
- * either party's asserted duration.
- *
- * rejected:
- * The available evidence does not establish a payable OT outcome.
+ * Admin may establish the final approved OT minutes from the evidence.
  */
 exports.OVERTIME_ADMIN_DECISIONS = Object.freeze(["approved", "rejected"]);
 
 /* ─────────────────────────────── CANCELLATION ─────────────────────────────── */
 
-/**
- * Cancellation actor records the party whose decision caused the cancellation.
- *
- * For parent-propagated occurrence cancellations, the occurrence copies the
- * originating actor from the parent Shift. The propagation service itself is
- * not treated as the cancellation actor.
- */
 exports.CANCELLATION_ACTORS = Object.freeze(["employer", "system", "admin"]);
 
 exports.USER_CANCELLATION_ACTORS = Object.freeze(["employer", "admin"]);
 
 exports.ACTIVE_WORK_CANCELLATION_INITIATORS = Object.freeze(["employer", "admin"]);
 
-/**
- * Selective occurrence cancellation is limited to future untouched scheduled
- * occurrences.
- */
 exports.OCCURRENCE_CANCELLABLE_FROM_STATUSES = Object.freeze(["scheduled"]);
 
-/**
- * Parent Shift cancellation may propagate into any untouched scheduled
- * occurrence that is unassigned, assigned or awaiting replacement.
- *
- * expired_unfilled is excluded because it is already a terminal outcome.
- */
 exports.OCCURRENCE_CANCELLABLE_ASSIGNMENT_STATUSES = Object.freeze([
   "unassigned",
   "assigned",
@@ -944,23 +624,16 @@ exports.OCCURRENCE_CANCELLABLE_ASSIGNMENT_STATUSES = Object.freeze([
 ]);
 
 /**
- * Individual occurrence cancellation is narrower.
+ * Selective occurrence cancellation excludes replacement_required.
  *
- * replacement_required is excluded because selectively removing an occurrence
- * from the middle of the replacement range could make the remaining parent
- * replacementHiring range noncontiguous.
+ * Select one occurrence by its identity or complete slot/date key.
+ * A shared Shift date can contain multiple professional occurrences.
  */
 exports.INDIVIDUAL_OCCURRENCE_CANCELLABLE_ASSIGNMENT_STATUSES = Object.freeze([
   "unassigned",
   "assigned",
 ]);
 
-/**
- * Only the employer or an administrator may directly cancel one occurrence.
- *
- * A system cancellation may still reach an occurrence through parent
- * cancellation propagation.
- */
 exports.INDIVIDUAL_OCCURRENCE_CANCELLATION_ACTORS = Object.freeze(["employer", "admin"]);
 
 const COMMON_CANCELLATION_CODES = Object.freeze([
@@ -976,29 +649,12 @@ const COMMON_CANCELLATION_CODES = Object.freeze([
 
 exports.COMMON_CANCELLATION_CODES = COMMON_CANCELLATION_CODES;
 
-/**
- * Parent Shift cancellation includes funding_deadline_passed because an
- * unpublished Shift may expire before funding is completed.
- */
 exports.SHIFT_CANCELLATION_CODES = Object.freeze([...COMMON_CANCELLATION_CODES]);
 
-/**
- * An occurrence stores its actual date-specific cancellation outcome.
- *
- * The lifecycle service determines whether that outcome came from parent
- * propagation or direct occurrence cancellation. No separate cancellationScope
- * field is stored on ShiftOccurrence.
- *
- * A separate parent_engagement_cancelled code is therefore unnecessary.
- */
 exports.OCCURRENCE_CANCELLATION_CODES = Object.freeze([...COMMON_CANCELLATION_CODES]);
 
 /**
- * Only cancellation codes that always require one fixed actor belong in this
- * map.
- *
- * Context-dependent codes such as branch_unavailable, compliance_issue and
- * other are excluded because they may originate from different actors.
+ * Only codes with a fixed actor belong here.
  */
 exports.CANCELLATION_CODE_ACTORS = Object.freeze({
   funding_deadline_passed: "system",
@@ -1008,12 +664,6 @@ exports.CANCELLATION_CODE_ACTORS = Object.freeze({
   system_cancelled: "system",
 });
 
-/**
- * Reasons available when the employer cancels the entire engagement.
- *
- * public_holiday is also valid at parent level when the holiday affects the
- * whole remaining engagement.
- */
 const EMPLOYER_CANCELLATION_REASON_CODES = Object.freeze([
   "not_needed",
   "staff_available",
@@ -1030,13 +680,6 @@ const EMPLOYER_CANCELLATION_REASON_CODES = Object.freeze([
 
 exports.EMPLOYER_CANCELLATION_REASON_CODES = EMPLOYER_CANCELLATION_REASON_CODES;
 
-/**
- * Selective occurrence cancellation supports the ordinary employer reasons
- * plus professional_unavailability.
- *
- * professional_unavailability means the professional cannot work that date and
- * the employer has decided not to seek replacement coverage.
- */
 exports.OCCURRENCE_EMPLOYER_CANCELLATION_REASON_CODES = Object.freeze([
   ...EMPLOYER_CANCELLATION_REASON_CODES,
   "professional_unavailability",
@@ -1056,3 +699,5 @@ exports.CANCELLATION_REASON_CODES_REQUIRING_DETAILS = CANCELLATION_REASON_CODES_
 exports.OCCURRENCE_CANCELLATION_REASON_CODES_REQUIRING_DETAILS = Object.freeze([
   ...CANCELLATION_REASON_CODES_REQUIRING_DETAILS,
 ]);
+
+exports.BASE_PLATFORM_FEE_BENEFIT_SOURCES = Object.freeze(["standard", "subscription"]);

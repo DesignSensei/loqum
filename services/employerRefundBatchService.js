@@ -108,6 +108,16 @@ class EmployerRefundBatchService {
   }
 
   static async runWithOptionalTransaction(options = {}, callback) {
+    if (
+      options.session &&
+      (typeof options.session.inTransaction !== "function" || !options.session.inTransaction())
+    ) {
+      throw EmployerRefundBatchService.createError({
+        message: "A supplied refund batch session must have an active transaction.",
+        code: "ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
     return runWithOptionalTransaction(options, callback);
   }
 
@@ -285,7 +295,7 @@ class EmployerRefundBatchService {
 
   static sumAmounts(values) {
     return (Array.isArray(values) ? values : []).reduce((total, value) => {
-      const amount = Number(value || 0);
+      const amount = value;
 
       if (!Number.isSafeInteger(amount) || amount < 0) {
         throw EmployerRefundBatchService.createError({
@@ -364,7 +374,9 @@ class EmployerRefundBatchService {
   static async getBatch(batchId, session = null, { includeProcessingToken = false } = {}) {
     const normalizedBatchId = EmployerRefundBatchService.normalizeObjectId(batchId, "batch ID");
 
-    let query = EmployerRefundBatch.findById(normalizedBatchId);
+    let query = EmployerRefundBatch.findById(normalizedBatchId).select(
+      "+paystackRefundIds +paystackRefundReferences +paystackRefundIdempotencyKeys +paystackRetryIdempotencyKeys"
+    );
 
     if (includeProcessingToken) {
       query = query.select("+processingToken");
@@ -816,11 +828,26 @@ class EmployerRefundBatchService {
 
       const existingBatch = await EmployerRefundBatch.findOne({
         cycleKey: resolvedCycleKey,
+        business: employerProfile._id,
+        countryCode: resolvedCountryCode,
+        currency: resolvedCurrency,
       })
         .select("+processingToken")
         .session(session);
 
       if (existingBatch) {
+        if (
+          existingBatch.refundDate !== refundDate ||
+          existingBatch.timeZone !== timeZone ||
+          new Date(existingBatch.cutoffAt).getTime() !== normalizedCutoffAt.getTime() ||
+          new Date(existingBatch.scheduledFor).getTime() !== normalizedScheduledFor.getTime()
+        ) {
+          throw EmployerRefundBatchService.createError({
+            message: "The existing refund cycle has different schedule snapshots.",
+            code: "REFUND_BATCH_CYCLE_CONFLICT",
+            statusCode: 409,
+          });
+        }
         return {
           batch: existingBatch,
           created: false,
@@ -1321,11 +1348,11 @@ class EmployerRefundBatchService {
   }
 
   static async loadAllocationContext({ allocation, session }) {
-    const [employerRefund, shift, occurrence] = await Promise.all([
-      EmployerRefund.findById(allocation.employerRefund).session(session),
-      Shift.findById(allocation.shift).session(session),
-      ShiftOccurrence.findById(allocation.occurrence).session(session),
-    ]);
+    const employerRefund = await EmployerRefund.findById(allocation.employerRefund).session(
+      session
+    );
+    const shift = await Shift.findById(allocation.shift).session(session);
+    const occurrence = await ShiftOccurrence.findById(allocation.occurrence).session(session);
 
     return {
       employerRefund,
@@ -1341,6 +1368,7 @@ class EmployerRefundBatchService {
     employerRefund,
     shift,
     occurrence,
+    expectedStatus = "batched",
   }) {
     if (!employerRefund) {
       return {
@@ -1353,14 +1381,14 @@ class EmployerRefundBatchService {
     if (!shift || !occurrence) {
       return {
         valid: false,
-        manageable: true,
+        manageable: false,
         holdReason: "manual_review",
         reason: "The Shift or occurrence could not be loaded during final refund validation.",
       };
     }
 
     const exactBatchOwnership =
-      employerRefund.status === "batched" &&
+      employerRefund.status === expectedStatus &&
       EmployerRefundBatchService.sameId(employerRefund.batch, batch._id) &&
       EmployerRefundBatchService.sameId(employerRefund.batchLineId, line._id);
 
@@ -1382,9 +1410,27 @@ class EmployerRefundBatchService {
     if (!ownershipMatches) {
       return {
         valid: false,
-        manageable: true,
+        manageable: false,
         holdReason: "manual_review",
         reason: "Refund ownership no longer matches the batch, Shift and occurrence.",
+      };
+    }
+
+    try {
+      ShiftRefundService.assertOwnership({ shift, occurrence });
+      ShiftRefundService.assertFundedShift(shift);
+    } catch (error) {
+      return { valid: false, manageable: false, reason: error.message };
+    }
+
+    if (
+      !EmployerRefundBatchService.sameId(employerRefund.branch, occurrence.branch) ||
+      employerRefund.reservationStatus !== "reserved"
+    ) {
+      return {
+        valid: false,
+        manageable: false,
+        reason: "Refund branch or reservation is inconsistent.",
       };
     }
 
@@ -1404,7 +1450,7 @@ class EmployerRefundBatchService {
     if (!fundingMatches) {
       return {
         valid: false,
-        manageable: true,
+        manageable: false,
         holdReason: "manual_review",
         reason: "The refund funding source no longer matches the batched allocation.",
       };
@@ -1419,7 +1465,7 @@ class EmployerRefundBatchService {
       ) {
         return {
           valid: false,
-          manageable: true,
+          manageable: false,
           holdReason: "manual_review",
           reason: "The original Paystack reference no longer matches the refund line.",
         };
@@ -1574,15 +1620,15 @@ class EmployerRefundBatchService {
 
     if (!integrity.valid) {
       if (!integrity.manageable || !employerRefund) {
-        return {
-          valid: false,
-          allocation,
-          employerRefund,
-          shift,
-          occurrence,
-          action: "removed_without_mutation",
-          reason: integrity.reason,
-        };
+        throw EmployerRefundBatchService.createError({
+          message: integrity.reason,
+          code: "REFUND_ALLOCATION_INTEGRITY_CONFLICT",
+          statusCode: 409,
+          details: {
+            reconciliationRequired: true,
+            employerRefundId: String(allocation.employerRefund),
+          },
+        });
       }
 
       const safeAmount =
@@ -1610,6 +1656,30 @@ class EmployerRefundBatchService {
         ...result,
         reason: integrity.reason,
       };
+    }
+
+    const fundingTransaction = await ShiftRefundService.getOriginalFundingTransaction(
+      shift,
+      session
+    );
+    const fundingSource = ShiftRefundService.resolveFundingSource({ shift, fundingTransaction });
+    ShiftRefundService.assertExistingFundingSource({
+      employerRefund,
+      fundingTransaction,
+      fundingSource,
+    });
+
+    if (
+      ["processing", "refunded"].includes(occurrence.refundStatus) ||
+      occurrence.refundProcessingStartedAt ||
+      occurrence.refundedAt ||
+      occurrence.refundedAmount !== 0
+    ) {
+      throw EmployerRefundBatchService.createError({
+        message: "The occurrence already contains refund execution evidence.",
+        code: "REFUND_ALLOCATION_EXECUTION_CONFLICT",
+        statusCode: 409,
+      });
     }
 
     let expectedAmount;
@@ -1759,6 +1829,83 @@ class EmployerRefundBatchService {
     };
   }
 
+  static async assertProcessingLineStillPayable({ batch, line, currentTime, session }) {
+    const amounts = [];
+
+    for (const allocation of line.allocations) {
+      const context = await EmployerRefundBatchService.loadAllocationContext({
+        allocation,
+        session,
+      });
+      const { employerRefund, shift, occurrence } = context;
+
+      const integrity = EmployerRefundBatchService.validateAllocationIntegrity({
+        batch,
+        line,
+        allocation,
+        ...context,
+        expectedStatus: "processing",
+      });
+
+      if (!integrity.valid) {
+        throw EmployerRefundBatchService.createError({
+          message: integrity.reason,
+          code: "PROCESSING_REFUND_REVALIDATION_CONFLICT",
+          statusCode: 409,
+        });
+      }
+
+      const fundingTransaction = await ShiftRefundService.getOriginalFundingTransaction(
+        shift,
+        session
+      );
+      const fundingSource = ShiftRefundService.resolveFundingSource({ shift, fundingTransaction });
+      ShiftRefundService.assertExistingFundingSource({
+        employerRefund,
+        fundingTransaction,
+        fundingSource,
+      });
+
+      const expectedAmount = ShiftRefundService.calculateExpectedRefundAmount(occurrence);
+      const blocker = await EmployerRefundBatchService.resolveActualBlockingDependency({
+        occurrence,
+        currentTime,
+        session,
+      });
+
+      if (
+        blocker ||
+        expectedAmount <= 0 ||
+        employerRefund.amount !== expectedAmount ||
+        allocation.amount !== expectedAmount ||
+        occurrence.refundableAmount !== expectedAmount ||
+        occurrence.refundedAmount !== 0 ||
+        occurrence.refundStatus !== "processing" ||
+        !EmployerRefundBatchService.sameId(occurrence.refundBatch, batch._id) ||
+        !EmployerRefundBatchService.sameId(occurrence.employerRefund, employerRefund._id)
+      ) {
+        throw EmployerRefundBatchService.createError({
+          message: "Current BASE entitlement or a BASE dependency blocks further refund movement.",
+          code: "PROCESSING_REFUND_REVALIDATION_CONFLICT",
+          statusCode: 409,
+          details: {
+            reconciliationRequired: true,
+            requiredHoldReason: blocker?.holdReason || null,
+          },
+        });
+      }
+      amounts.push(expectedAmount);
+    }
+
+    if (!amounts.length || EmployerRefundBatchService.sumAmounts(amounts) !== line.totalAmount) {
+      throw EmployerRefundBatchService.createError({
+        message: "The refund line total does not match its current allocations.",
+        code: "PROCESSING_REFUND_TOTAL_CONFLICT",
+        statusCode: 409,
+      });
+    }
+  }
+
   static recalculateLine(line) {
     const allocations = Array.isArray(line.allocations) ? line.allocations : [];
 
@@ -1795,7 +1942,7 @@ class EmployerRefundBatchService {
     ).length;
 
     batch.totalAmount = EmployerRefundBatchService.sumAmounts(
-      lines.map((line) => Number(line.totalAmount || 0))
+      lines.map((line) => line.totalAmount)
     );
 
     batch.completedAmount = EmployerRefundBatchService.sumAmounts(
@@ -2277,6 +2424,13 @@ class EmployerRefundBatchService {
         await context.occurrence.save({ session });
       }
 
+      await EmployerRefundBatchService.assertProcessingLineStillPayable({
+        batch,
+        line,
+        currentTime: normalizedCurrentTime,
+        session,
+      });
+
       const transfer = await WalletService.transferBetweenWallets(
         {
           fromWalletId: batch.escrowWallet,
@@ -2410,6 +2564,13 @@ class EmployerRefundBatchService {
         statusCode: 409,
       });
     }
+
+    await EmployerRefundBatchService.assertProcessingLineStillPayable({
+      batch,
+      line,
+      currentTime,
+      session,
+    });
 
     await EmployerRefundBatchService.setProcessingRefundExecutionMethod({
       batch,
@@ -2606,7 +2767,7 @@ class EmployerRefundBatchService {
   static normalizePaystackRefundOutcome(response) {
     const payload = EmployerRefundBatchService.extractPaystackRefundPayload(response);
 
-    const rawStatus = String(payload.status || response?.status || "pending")
+    const rawStatus = String(payload.status || response?.status || "")
       .trim()
       .toLowerCase();
 
@@ -2933,14 +3094,12 @@ class EmployerRefundBatchService {
 
     const providerStatusCode = Number(error.providerStatusCode);
 
-    if (
-      Number.isInteger(providerStatusCode) &&
-      providerStatusCode >= 400 &&
-      providerStatusCode < 500
-    ) {
-      return true;
+    if ([408, 409, 425, 429].includes(providerStatusCode) || providerStatusCode >= 500) {
+      return false;
     }
 
+    // An HTTP error alone does not prove that no refund was created.
+    // The adapter must explicitly classify a conclusive provider rejection.
     return Boolean(error.code === "PAYSTACK_PROVIDER_REJECTED_REQUEST" && error.providerResponse);
   }
 
@@ -3009,7 +3168,23 @@ class EmployerRefundBatchService {
     };
   }
 
+  static assertProviderRefundIdentity({ line, outcome }) {
+    for (const field of ["refundId", "reference"]) {
+      const stored = line.paystackRefund?.[field];
+      const incoming = outcome?.[field];
+      if (stored && incoming && String(stored) !== String(incoming)) {
+        throw EmployerRefundBatchService.createError({
+          message: "The provider update identifies a different refund.",
+          code: "PAYSTACK_REFUND_IDENTITY_CONFLICT",
+          statusCode: 409,
+        });
+      }
+    }
+  }
+
   static applyPaystackPendingState({ line, outcome, currentTime }) {
+    EmployerRefundBatchService.assertProviderRefundIdentity({ line, outcome });
+
     if (line.paystackRefund.status === "failed") {
       throw EmployerRefundBatchService.createError({
         message:
@@ -3116,6 +3291,8 @@ class EmployerRefundBatchService {
   }
 
   static applyPaystackNeedsAttentionState({ line, outcome, currentTime }) {
+    EmployerRefundBatchService.assertProviderRefundIdentity({ line, outcome });
+
     const providerIdentifier = outcome.reference || outcome.refundId;
 
     if (!providerIdentifier) {
@@ -3184,6 +3361,8 @@ class EmployerRefundBatchService {
   }
 
   static applyPaystackFailureState({ line, outcome, currentTime, failureReason = null }) {
+    EmployerRefundBatchService.assertProviderRefundIdentity({ line, outcome });
+
     if (line.paystackRefund.status === "processed") {
       throw EmployerRefundBatchService.createError({
         message:
@@ -3614,6 +3793,13 @@ class EmployerRefundBatchService {
         });
       }
 
+      await EmployerRefundBatchService.assertProcessingLineStillPayable({
+        batch,
+        line,
+        currentTime: normalizedCurrentTime,
+        session,
+      });
+
       const bankAccount = await EmployerRefundBatchService.getActiveEmployerRefundBankAccount({
         businessId: batch.business,
         bankAccountId: line.bankConsent.bankAccount,
@@ -3993,17 +4179,20 @@ class EmployerRefundBatchService {
     });
   }
 
-  static async finalizeProcessedPaystackLine({
-    batchId,
-    lineId,
-    processingToken = null,
-    outcome,
-    providerEventId = null,
-    currentTime = new Date(),
-  }) {
+  static async finalizeProcessedPaystackLine(
+    {
+      batchId,
+      lineId,
+      processingToken = null,
+      outcome,
+      providerEventId = null,
+      currentTime = new Date(),
+    },
+    options = {}
+  ) {
     const normalizedCurrentTime = EmployerRefundBatchService.normalizeCurrentTime(currentTime);
 
-    return EmployerRefundBatchService.runWithOptionalTransaction({}, async (session) => {
+    return EmployerRefundBatchService.runWithOptionalTransaction(options, async (session) => {
       const batch = await EmployerRefundBatchService.getBatch(batchId, session, {
         includeProcessingToken: true,
       });
@@ -4021,6 +4210,8 @@ class EmployerRefundBatchService {
           statusCode: 404,
         });
       }
+
+      EmployerRefundBatchService.assertProviderRefundIdentity({ line, outcome });
 
       if (line.status === "completed") {
         if (line.finalExecutionMethod === "paystack_refund") {
@@ -4525,20 +4716,23 @@ class EmployerRefundBatchService {
     const incomingReference = reference ? String(reference) : null;
 
     if (normalizedStatus === "processed") {
-      return EmployerRefundBatchService.finalizeProcessedPaystackLine({
-        batchId,
-        lineId,
-        outcome: {
-          status: normalizedStatus,
-          rawStatus: String(status || "")
-            .trim()
-            .toLowerCase(),
-          refundId: incomingRefundId,
-          reference: incomingReference,
+      return EmployerRefundBatchService.finalizeProcessedPaystackLine(
+        {
+          batchId,
+          lineId,
+          outcome: {
+            status: normalizedStatus,
+            rawStatus: String(status || "")
+              .trim()
+              .toLowerCase(),
+            refundId: incomingRefundId,
+            reference: incomingReference,
+          },
+          providerEventId,
+          currentTime: normalizedCurrentTime,
         },
-        providerEventId,
-        currentTime: normalizedCurrentTime,
-      });
+        options
+      );
     }
 
     return EmployerRefundBatchService.runWithOptionalTransaction(options, async (session) => {
@@ -4563,6 +4757,11 @@ class EmployerRefundBatchService {
           statusCode: 409,
         });
       }
+
+      EmployerRefundBatchService.assertProviderRefundIdentity({
+        line,
+        outcome: { refundId: incomingRefundId, reference: incomingReference },
+      });
 
       if (providerEventId && line.paystackRefund.lastProviderEventId === providerEventId) {
         return {

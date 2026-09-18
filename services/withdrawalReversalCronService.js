@@ -2,304 +2,304 @@
 
 const Transaction = require("../models/Transaction");
 
-const PaystackService = require("./paystackService");
-const WalletWithdrawalService = require("./walletWithdrawalService");
+const PaystackTransferService = require("./paystackTransferService");
 
 const logger = require("../utils/logger");
 
 class WithdrawalReversalCronService {
-  /* ---------- Clean string ---------- */
-  static cleanString(value) {
-    const cleanValue = String(value || "").trim();
+  /* ---------- Normalize current time ---------- */
 
-    return cleanValue || null;
+  static normalizeCurrentTime(value = new Date()) {
+    const currentTime = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+
+    if (Number.isNaN(currentTime.getTime())) {
+      throw new Error("Current time is invalid.");
+    }
+
+    return currentTime;
   }
 
-  /* ---------- Get date before minutes ---------- */
-  static getDateBeforeMinutes(minutes) {
-    return new Date(Date.now() - minutes * 60 * 1000);
+  /* ---------- Normalize positive whole number ---------- */
+
+  static normalizePositiveInteger(value, fieldName) {
+    const normalizedValue = Number(value);
+
+    if (!Number.isSafeInteger(normalizedValue) || normalizedValue <= 0) {
+      throw new Error(`${fieldName} must be a positive whole number.`);
+    }
+
+    return normalizedValue;
   }
 
-  /* ---------- Normalize Paystack transfer status ---------- */
-  static normalizePaystackStatus(value) {
+  /* ---------- Normalize provider status ---------- */
+
+  static normalizeProviderStatus(value) {
     return String(value || "")
       .trim()
       .toLowerCase();
   }
 
-  /* ---------- Check failed Paystack transfer status ---------- */
-  static isFailedTransferStatus(status) {
-    const normalizedStatus = WithdrawalReversalCronService.normalizePaystackStatus(status);
+  /* ---------- Get provider-processing cutoff ---------- */
 
-    return ["failed", "reversed"].includes(normalizedStatus);
-  }
+  static getProcessingCutoff({ currentTime, olderThanMinutes }) {
+    const normalizedCurrentTime = WithdrawalReversalCronService.normalizeCurrentTime(currentTime);
 
-  /* ---------- Check successful Paystack transfer status ---------- */
-  static isSuccessfulTransferStatus(status) {
-    const normalizedStatus = WithdrawalReversalCronService.normalizePaystackStatus(status);
-
-    return normalizedStatus === "success";
-  }
-
-  /* ---------- Check pending Paystack transfer status ---------- */
-  static isPendingTransferStatus(status) {
-    const normalizedStatus = WithdrawalReversalCronService.normalizePaystackStatus(status);
-
-    return ["pending", "otp", "processing", "queued"].includes(normalizedStatus);
-  }
-
-  /* ---------- Get Paystack transfer reference from withdrawal transaction ---------- */
-  static getPaystackTransferReference(withdrawalTransaction) {
-    return (
-      WithdrawalReversalCronService.cleanString(
-        withdrawalTransaction.metadata?.paystackTransferReference
-      ) ||
-      WithdrawalReversalCronService.cleanString(withdrawalTransaction.paystackReference) ||
-      null
+    const normalizedOlderThanMinutes = WithdrawalReversalCronService.normalizePositiveInteger(
+      olderThanMinutes,
+      "Withdrawal reconciliation age"
     );
-  }
 
-  /* ---------- Get Paystack transfer code from withdrawal transaction ---------- */
-  static getPaystackTransferCode(withdrawalTransaction) {
-    return (
-      WithdrawalReversalCronService.cleanString(withdrawalTransaction.paystackTransferCode) ||
-      WithdrawalReversalCronService.cleanString(
-        withdrawalTransaction.metadata?.paystackTransferCode
-      ) ||
-      null
-    );
-  }
+    const offset = normalizedOlderThanMinutes * 60 * 1000;
 
-  /* ---------- Verify Paystack transfer by reference ---------- */
-  static async verifyTransferByReference(reference) {
-    const cleanReference = WithdrawalReversalCronService.cleanString(reference);
-
-    if (!cleanReference) {
-      throw new Error("Paystack transfer reference is required.");
+    if (!Number.isSafeInteger(offset)) {
+      throw new Error("Withdrawal reconciliation age is too large.");
     }
 
-    const response = await PaystackService.request({
-      method: "get",
-      path: `/transfer/verify/${encodeURIComponent(cleanReference)}`,
+    return new Date(normalizedCurrentTime.getTime() - offset);
+  }
+
+  /* ---------- Find old provider-processing withdrawals ---------- */
+
+  static async findProcessingWithdrawalsForReview({
+    olderThanMinutes = 30,
+
+    limit = 50,
+
+    currentTime = new Date(),
+  } = {}) {
+    const normalizedLimit = WithdrawalReversalCronService.normalizePositiveInteger(
+      limit,
+      "Withdrawal reconciliation limit"
+    );
+
+    const cutoffDate = WithdrawalReversalCronService.getProcessingCutoff({
+      currentTime,
+
+      olderThanMinutes,
     });
 
-    return response.data;
-  }
-
-  /* ---------- Fetch Paystack transfer by transfer code ---------- */
-  static async fetchTransferByCode(transferCode) {
-    const cleanTransferCode = WithdrawalReversalCronService.cleanString(transferCode);
-
-    if (!cleanTransferCode) {
-      throw new Error("Paystack transfer code is required.");
-    }
-
-    const response = await PaystackService.request({
-      method: "get",
-      path: `/transfer/${encodeURIComponent(cleanTransferCode)}`,
-    });
-
-    return response.data;
-  }
-
-  /* ---------- Get Paystack transfer status for withdrawal ---------- */
-  static async getPaystackTransferStatus(withdrawalTransaction) {
-    const transferReference =
-      WithdrawalReversalCronService.getPaystackTransferReference(withdrawalTransaction);
-
-    const transferCode =
-      WithdrawalReversalCronService.getPaystackTransferCode(withdrawalTransaction);
-
-    if (transferReference) {
-      const transfer =
-        await WithdrawalReversalCronService.verifyTransferByReference(transferReference);
-
-      return {
-        transfer,
-        lookupType: "reference",
-        lookupValue: transferReference,
-        status: WithdrawalReversalCronService.normalizePaystackStatus(transfer.status),
-      };
-    }
-
-    if (transferCode) {
-      const transfer = await WithdrawalReversalCronService.fetchTransferByCode(transferCode);
-
-      return {
-        transfer,
-        lookupType: "transfer_code",
-        lookupValue: transferCode,
-        status: WithdrawalReversalCronService.normalizePaystackStatus(transfer.status),
-      };
-    }
-
-    throw new Error("Withdrawal has no Paystack transfer reference or transfer code.");
-  }
-
-  /* ---------- Find old processing withdrawals for review ---------- */
-  static async findProcessingWithdrawalsForReview({ olderThanMinutes = 30, limit = 50 } = {}) {
-    const cutoffDate = WithdrawalReversalCronService.getDateBeforeMinutes(olderThanMinutes);
-
+    /*
+     * processingStartedAt is the durable provider-boundary clock.
+     *
+     * Do not fall back to createdAt.
+     *
+     * A withdrawal may remain pending locally for some time before provider
+     * submission begins. Its creation time must not make a fresh provider
+     * attempt look stale.
+     */
     return Transaction.find({
       type: "withdrawal",
+
       purpose: "withdrawal",
+
+      direction: "debit",
+
       paymentRail: "paystack_transfer",
+
       provider: "paystack",
+
       status: "processing",
 
-      $or: [
-        {
-          "metadata.providerSubmissionAt": {
-            $lte: cutoffDate,
-          },
-        },
-        {
-          createdAt: {
-            $lte: cutoffDate,
-          },
-        },
-      ],
+      processingStartedAt: {
+        $ne: null,
+
+        $lte: cutoffDate,
+      },
     })
+      .select("_id processingStartedAt")
       .sort({
-        createdAt: 1,
+        processingStartedAt: 1,
+
+        _id: 1,
       })
-      .limit(limit);
+      .limit(normalizedLimit)
+      .lean();
   }
 
-  /* ---------- Process one withdrawal transaction ---------- */
+  /* ---------- Process one withdrawal reconciliation ---------- */
+
   static async processWithdrawal(withdrawalTransaction, options = {}) {
-    const transactionId = String(withdrawalTransaction._id);
+    const transactionId = String(withdrawalTransaction?._id || "").trim();
 
-    if (withdrawalTransaction.type !== "withdrawal") {
-      return {
-        transactionId,
-        skipped: true,
-        reason: "Transaction is not a withdrawal.",
-      };
+    if (!transactionId) {
+      throw new Error("Withdrawal Transaction ID is required for reconciliation.");
     }
 
-    if (withdrawalTransaction.status !== "processing") {
-      return {
-        transactionId,
-        skipped: true,
-        reason: "Withdrawal is not processing.",
-      };
-    }
-
-    const existingPaystackStatus = WithdrawalReversalCronService.normalizePaystackStatus(
-      withdrawalTransaction.paystackStatus
+    const currentTime = WithdrawalReversalCronService.normalizeCurrentTime(
+      options.currentTime || new Date()
     );
 
-    if (WithdrawalReversalCronService.isFailedTransferStatus(existingPaystackStatus)) {
-      const reversalResult = await WalletWithdrawalService.reverseFailedWithdrawal({
-        withdrawalTransactionId: withdrawalTransaction._id,
-        reversalReason:
-          withdrawalTransaction.reversalReason ||
-          "Paystack transfer failed or was reversed. Wallet balance reversed by cron.",
-        metadata: {
-          source: "withdrawal_reversal_cron",
-          paystackStatus: existingPaystackStatus,
-          reversalTrigger: "stored_paystack_status",
-        },
-      });
+    /*
+     * PaystackTransferService owns provider reconciliation.
+     *
+     * It:
+     *
+     * - verifies the deterministic Transfer reference;
+     * - performs controlled SAME-reference recovery after provider 404;
+     * - validates the returned provider Transfer;
+     * - records provider Transfer codes; and
+     * - delegates terminal wallet state to WalletWithdrawalService.
+     *
+     * This cron must never issue an independent blind Transfer POST or release
+     * a wallet reservation from an ambiguous provider result.
+     */
+    const reconciliationResult = await PaystackTransferService.reconcileWithdrawalTransfer({
+      withdrawalTransactionId: transactionId,
 
+      currentTime,
+    });
+
+    const transaction = reconciliationResult?.transaction || null;
+
+    const status = String(transaction?.status || "")
+      .trim()
+      .toLowerCase();
+
+    const providerStatus =
+      WithdrawalReversalCronService.normalizeProviderStatus(
+        reconciliationResult?.outcome?.rawStatus ||
+          reconciliationResult?.outcome?.status ||
+          transaction?.paystackStatus
+      ) || null;
+
+    if (status === "completed") {
       return {
         transactionId,
-        reversed: true,
-        reversalTransactionId: String(reversalResult.transaction._id),
-        trigger: "stored_paystack_status",
-      };
-    }
 
-    const paystackResult =
-      await WithdrawalReversalCronService.getPaystackTransferStatus(withdrawalTransaction);
-
-    if (WithdrawalReversalCronService.isSuccessfulTransferStatus(paystackResult.status)) {
-      if (options.completeSuccessfulTransfers === false) {
-        return {
-          transactionId,
-          skipped: true,
-          reason: "Paystack transfer is successful, but completion by cron is disabled.",
-          paystackStatus: paystackResult.status,
-        };
-      }
-
-      const completedResult = await WalletWithdrawalService.markWithdrawalCompleted({
-        withdrawalTransactionId: withdrawalTransaction._id,
-        metadata: {
-          source: "withdrawal_reversal_cron",
-          paystackStatus: paystackResult.status,
-          paystackLookupType: paystackResult.lookupType,
-          paystackLookupValue: paystackResult.lookupValue,
-          providerCompletedByCronAt: new Date(),
-        },
-      });
-
-      return {
-        transactionId,
         completed: true,
-        completedTransactionId: String(completedResult.transaction._id),
-        paystackStatus: paystackResult.status,
+
+        terminalStatus: status,
+
+        providerStatus,
+
+        recoverySubmitted: reconciliationResult?.recoverySubmitted === true,
+
+        idempotent: reconciliationResult?.idempotent === true,
       };
     }
 
-    if (WithdrawalReversalCronService.isFailedTransferStatus(paystackResult.status)) {
-      const reversalReason =
-        paystackResult.transfer?.reason ||
-        paystackResult.transfer?.failure_reason ||
-        "Paystack transfer failed or was reversed. Wallet balance reversed by cron.";
-
-      const reversalResult = await WalletWithdrawalService.reverseFailedWithdrawal({
-        withdrawalTransactionId: withdrawalTransaction._id,
-        reversalReason,
-        metadata: {
-          source: "withdrawal_reversal_cron",
-          paystackStatus: paystackResult.status,
-          paystackLookupType: paystackResult.lookupType,
-          paystackLookupValue: paystackResult.lookupValue,
-          providerReversalByCronAt: new Date(),
-        },
-      });
-
+    /*
+     * WalletWithdrawalService now terminates failed/reversed provider
+     * withdrawals on the SAME withdrawal Transaction.
+     *
+     * "reversed" here is only the cron result classification meaning the
+     * reserved value was released. There is no second reversal Transaction.
+     */
+    if (status === "failed") {
       return {
         transactionId,
+
         reversed: true,
-        reversalTransactionId: String(reversalResult.transaction._id),
-        paystackStatus: paystackResult.status,
+
+        reservationReleased: true,
+
+        terminalStatus: status,
+
+        providerStatus,
+
+        recoverySubmitted: reconciliationResult?.recoverySubmitted === true,
+
+        idempotent: reconciliationResult?.idempotent === true,
       };
     }
 
-    if (WithdrawalReversalCronService.isPendingTransferStatus(paystackResult.status)) {
+    /*
+     * A terminal status may appear if another worker or webhook completed the
+     * lifecycle after this cron selected the processing candidate.
+     */
+    if (["cancelled", "reversed"].includes(status)) {
       return {
         transactionId,
+
+        skipped: true,
+
+        terminal: true,
+
+        terminalStatus: status,
+
+        providerStatus,
+
+        reason: `Withdrawal is already ${status}.`,
+
+        idempotent: reconciliationResult?.idempotent === true,
+      };
+    }
+
+    /*
+     * Pending / OTP / unresolved provider state keeps the wallet reservation
+     * intact.
+     */
+    if (status === "processing") {
+      return {
+        transactionId,
+
         pending: true,
-        paystackStatus: paystackResult.status,
-        reason: "Paystack transfer is still pending.",
+
+        terminalStatus: null,
+
+        providerStatus,
+
+        requiresOtp: reconciliationResult?.requiresOtp === true,
+
+        unresolved: reconciliationResult?.unresolved === true,
+
+        recoverySubmitted: reconciliationResult?.recoverySubmitted === true,
+
+        sameReferenceRecovery: reconciliationResult?.sameReferenceRecovery === true,
+
+        reason: reconciliationResult?.reason || "Paystack withdrawal Transfer is still unresolved.",
       };
     }
 
     return {
       transactionId,
+
       skipped: true,
-      paystackStatus: paystackResult.status,
-      reason: "Paystack transfer status is not actionable.",
+
+      terminalStatus: status || null,
+
+      providerStatus,
+
+      reason:
+        reconciliationResult?.reason ||
+        "Withdrawal reconciliation did not produce an actionable processing state.",
     };
   }
 
-  /* ---------- Run withdrawal reversal cron pass ---------- */
-  static async run({ olderThanMinutes = 30, limit = 50, completeSuccessfulTransfers = true } = {}) {
+  /* ---------- Run withdrawal reconciliation cron pass ---------- */
+
+  static async run({
+    olderThanMinutes = 30,
+
+    limit = 50,
+
+    currentTime = new Date(),
+  } = {}) {
+    const normalizedCurrentTime = WithdrawalReversalCronService.normalizeCurrentTime(currentTime);
+
     const withdrawals = await WithdrawalReversalCronService.findProcessingWithdrawalsForReview({
       olderThanMinutes,
+
       limit,
+
+      currentTime: normalizedCurrentTime,
     });
 
     const results = {
       checked: withdrawals.length,
+
       reversed: 0,
+
       completed: 0,
+
       pending: 0,
+
+      recoverySubmitted: 0,
+
       skipped: 0,
+
       failed: 0,
+
       items: [],
     };
 
@@ -308,9 +308,13 @@ class WithdrawalReversalCronService {
         const result = await WithdrawalReversalCronService.processWithdrawal(
           withdrawalTransaction,
           {
-            completeSuccessfulTransfers,
+            currentTime: normalizedCurrentTime,
           }
         );
+
+        if (result.recoverySubmitted) {
+          results.recoverySubmitted += 1;
+        }
 
         if (result.reversed) {
           results.reversed += 1;
@@ -328,26 +332,37 @@ class WithdrawalReversalCronService {
 
         const failedResult = {
           transactionId: String(withdrawalTransaction._id),
+
           failed: true,
-          errorMessage: error.message || "Withdrawal cron processing failed.",
+
+          errorMessage: error.message || "Withdrawal reconciliation failed.",
         };
 
         results.items.push(failedResult);
 
-        logger.error("Withdrawal reversal cron item failed:", {
+        logger.error("Withdrawal reconciliation cron item failed:", {
           transactionId: failedResult.transactionId,
+
           error: error.message,
+
           stack: error.stack,
         });
       }
     }
 
-    logger.info("Withdrawal reversal cron completed.", {
+    logger.info("Withdrawal reconciliation cron completed.", {
       checked: results.checked,
+
       reversed: results.reversed,
+
       completed: results.completed,
+
       pending: results.pending,
+
+      recoverySubmitted: results.recoverySubmitted,
+
       skipped: results.skipped,
+
       failed: results.failed,
     });
 

@@ -675,6 +675,13 @@ function validateAttemptAudit(document) {
     );
   }
 
+  if (hasAttempts && !document.processingStartedAt) {
+    document.invalidate(
+      "processingStartedAt",
+      "A settlement batch with processing attempts requires processingStartedAt."
+    );
+  }
+
   if (
     document.processingStartedAt &&
     document.lastAttemptAt &&
@@ -710,7 +717,7 @@ shiftSettlementBatchSchema.pre(
 
     /* ─────────────────────────────── PAYOUT CYCLE ─────────────────────────────── */
 
-    if (this.payoutDate && Number.isSafeInteger(this.payoutWeekday)) {
+    if (isValidLocalDateString(this.payoutDate) && Number.isSafeInteger(this.payoutWeekday)) {
       const actualWeekday = getWeekdayForLocalDate(this.payoutDate);
 
       if (actualWeekday !== this.payoutWeekday) {
@@ -730,6 +737,31 @@ shiftSettlementBatchSchema.pre(
       );
     }
 
+    if (
+      isValidLocalDateString(this.payoutDate) &&
+      isValidTimeZone(this.timeZone) &&
+      this.scheduledFor instanceof Date &&
+      !Number.isNaN(this.scheduledFor.getTime())
+    ) {
+      const dateParts = new Intl.DateTimeFormat("en-US", {
+        timeZone: this.timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).formatToParts(this.scheduledFor);
+
+      const localDateParts = Object.fromEntries(dateParts.map(({ type, value }) => [type, value]));
+
+      const scheduledLocalDate = `${localDateParts.year}-${localDateParts.month}-${localDateParts.day}`;
+
+      if (scheduledLocalDate !== this.payoutDate) {
+        this.invalidate(
+          "scheduledFor",
+          "scheduledFor must fall on payoutDate in the batch's snapshotted timeZone."
+        );
+      }
+    }
+
     /* ─────────────────────────────── LINES / COMPONENT RESERVATIONS ─────────────────────────────── */
 
     const uniqueOccurrenceIds = new Set();
@@ -741,6 +773,11 @@ shiftSettlementBatchSchema.pre(
     const lineProfessionalPayValues = [];
 
     for (const line of this.lines || []) {
+      if (!line) {
+        this.invalidate("lines", "Settlement lines cannot contain null entries.");
+        continue;
+      }
+
       const lineIdentityKey = buildSettlementLineIdentityKey(line);
 
       if (settlementLineIdentityKeys.has(lineIdentityKey)) {
@@ -855,6 +892,9 @@ shiftSettlementBatchSchema.pre(
 
           "A cancelled settlement batch must release its occurrence-component reservation keys."
         );
+      } else {
+        // Omit the indexed field entirely once its reservations are surrendered.
+        this.releaseKeys = undefined;
       }
     } else {
       const releaseKeysMatch =

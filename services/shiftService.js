@@ -4,7 +4,14 @@ const ShiftCreationService = require("./shifts/shiftCreationService");
 const ShiftQueryService = require("./shifts/shiftQueryService");
 const ShiftViewService = require("./shifts/shiftViewService");
 
-const { createShiftError } = require("./shifts/helpers/shiftServiceHelpers");
+const { createServiceError } = require("./helpers/serviceErrorHelper");
+
+function createShiftError(options) {
+  return createServiceError({
+    ...options,
+    name: "ShiftServiceError",
+  });
+}
 
 class ShiftService {
   /* ─────────────────────────────── CREATE SHIFT ─────────────────────────────── */
@@ -89,9 +96,17 @@ class ShiftService {
 
     const currency = ShiftService.resolveCreatedShiftCurrency(publicResult);
 
+    const viewPermissions = ShiftQueryService.buildEmployerShiftViewPermissions(
+      options.employerContext
+    );
+
     /*
      * employerWallet is intentionally used only to build the payment
      * review and is not exposed directly in the public creation result.
+     *
+     * The presentation permission bundle is derived from the already
+     * authoritative employerContext. This facade does not recalculate
+     * employer roles or financial authority.
      */
     const paymentReview = ShiftViewService.buildShiftPaymentReview({
       shift: publicResult.shift,
@@ -103,6 +118,8 @@ class ShiftService {
       currency,
 
       currentTime: options.currentTime || new Date(),
+
+      permissions: viewPermissions,
     });
 
     return {
@@ -130,4 +147,3 @@ class ShiftService {
 }
 
 module.exports = ShiftService;
-a;

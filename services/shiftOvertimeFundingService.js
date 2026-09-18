@@ -22,9 +22,6 @@ const SHIFT_OVERTIME_FUNDING_SERVICE_ERROR_NAME = "ShiftOvertimeFundingServiceEr
 
 const MILLISECONDS_PER_HOUR = 60 * 60 * 1000;
 
-const DEFAULT_OVERTIME_TOPUP_DEADLINE_HOURS = 24;
-const DEFAULT_OVERTIME_TOPUP_RESTRICTION_GRACE_HOURS = 72;
-
 const DEFAULT_PROCESSING_BATCH_LIMIT = 100;
 const MAX_PROCESSING_BATCH_LIMIT = 500;
 
@@ -55,7 +52,6 @@ const OVERTIME_TOPUP_ALLOWED_PAYMENT_RAILS = Object.freeze(["wallet_balance", "p
  *
  * - OT request creation;
  * - employer OT approval/rejection;
- * - professional OT appeal;
  * - admin OT adjudication;
  * - OT professional-pay pricing;
  * - OT platform-fee earning/pricing;
@@ -139,6 +135,17 @@ class ShiftOvertimeFundingService {
   }
 
   static async transaction(options = {}, callback) {
+    if (
+      options.session &&
+      (typeof options.session.inTransaction !== "function" || !options.session.inTransaction())
+    ) {
+      throw ShiftOvertimeFundingService.createError({
+        message: "A supplied overtime funding session must have an active transaction.",
+        code: "ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
     return runWithOptionalTransaction(options, callback);
   }
 
@@ -158,7 +165,11 @@ class ShiftOvertimeFundingService {
   }
 
   static normalizeDate(value, fieldName = "date") {
-    const date = value instanceof Date ? new Date(value.getTime()) : new Date(value || Date.now());
+    const supported =
+      value instanceof Date ||
+      typeof value === "number" ||
+      (typeof value === "string" && value.trim() !== "");
+    const date = supported ? new Date(value) : new Date(NaN);
 
     if (Number.isNaN(date.getTime())) {
       throw ShiftOvertimeFundingService.createError({
@@ -172,6 +183,9 @@ class ShiftOvertimeFundingService {
 
   static normalizePositiveAmount(value, fieldName) {
     try {
+      if (!Number.isSafeInteger(value) || value <= 0) {
+        throw new TypeError("A positive safe integer is required.");
+      }
       return money.normalizePositiveMinorUnitAmount(value, fieldName);
     } catch (error) {
       throw ShiftOvertimeFundingService.createError({
@@ -185,6 +199,9 @@ class ShiftOvertimeFundingService {
 
   static normalizeNonNegativeAmount(value, fieldName) {
     try {
+      if (!Number.isSafeInteger(value) || value < 0) {
+        throw new TypeError("A non-negative safe integer is required.");
+      }
       return money.normalizeMinorUnitAmount(value ?? 0, fieldName);
     } catch (error) {
       throw ShiftOvertimeFundingService.createError({
@@ -278,9 +295,7 @@ class ShiftOvertimeFundingService {
   }
 
   static getOvertimeTopUpDeadlineHours(settings) {
-    const hours = Number(
-      settings?.overtimeTopUpDeadlineHours ?? DEFAULT_OVERTIME_TOPUP_DEADLINE_HOURS
-    );
+    const hours = settings?.overtimeTopUpDeadlineHours;
 
     if (!Number.isSafeInteger(hours) || hours <= 0) {
       throw ShiftOvertimeFundingService.createError({
@@ -294,9 +309,7 @@ class ShiftOvertimeFundingService {
   }
 
   static getOvertimeTopUpRestrictionGraceHours(settings) {
-    const hours = Number(
-      settings?.overtimeTopUpRestrictionGraceHours ?? DEFAULT_OVERTIME_TOPUP_RESTRICTION_GRACE_HOURS
-    );
+    const hours = settings?.overtimeTopUpRestrictionGraceHours;
 
     if (!Number.isSafeInteger(hours) || hours <= 0) {
       throw ShiftOvertimeFundingService.createError({
@@ -338,7 +351,7 @@ class ShiftOvertimeFundingService {
     const normalizedShiftId = ShiftOvertimeFundingService.normalizeObjectId(shiftId, "shift ID");
 
     const query = Shift.findById(normalizedShiftId).select(
-      "referenceCode business countryCode currency"
+      "referenceCode business branch countryCode currency occurrenceCount requiredProfessionals"
     );
 
     if (session) {
@@ -385,11 +398,31 @@ class ShiftOvertimeFundingService {
       overtime.status !== "approved" ||
       !overtime.approvedAt ||
       !overtime.approvedBy ||
-      !overtime.decisionSource
+      !["employer", "admin"].includes(overtime.decisionSource)
     ) {
       throw ShiftOvertimeFundingService.createError({
         message: "Overtime funding may only be established after final overtime approval.",
         code: "OVERTIME_ENTITLEMENT_NOT_FINAL",
+        statusCode: 409,
+      });
+    }
+
+    ShiftOvertimeFundingService.normalizeDate(overtime.approvedAt, "overtime approval time");
+
+    if (
+      !Number.isSafeInteger(overtime.approvedMinutes) ||
+      overtime.approvedMinutes <= 0 ||
+      !Number.isSafeInteger(overtime.requestedMinutes) ||
+      overtime.approvedMinutes > overtime.requestedMinutes ||
+      (overtime.decisionSource === "employer" &&
+        overtime.approvedMinutes !== overtime.requestedMinutes) ||
+      (overtime.decisionSource === "admin" &&
+        (overtime.adminDecision !== "approved" ||
+          String(overtime.adminDecidedBy || "") !== String(overtime.approvedBy)))
+    ) {
+      throw ShiftOvertimeFundingService.createError({
+        message: "The final overtime decision audit is inconsistent.",
+        code: "OVERTIME_APPROVAL_AUDIT_INVALID",
         statusCode: 409,
       });
     }
@@ -495,7 +528,7 @@ class ShiftOvertimeFundingService {
       });
     }
 
-    if (fundingRequirement <= 0) {
+    if (!Number.isSafeInteger(fundingRequirement) || fundingRequirement <= 0) {
       throw ShiftOvertimeFundingService.createError({
         message: "The final overtime funding requirement must be greater than zero.",
         code: "INVALID_OVERTIME_FUNDING_REQUIREMENT",
@@ -514,6 +547,34 @@ class ShiftOvertimeFundingService {
     const { fundingRequirement } = ShiftOvertimeFundingService.getFundingRequirement(occurrence);
 
     const overtime = occurrence.overtime || {};
+
+    const deadline = ShiftOvertimeFundingService.normalizeDate(
+      overtime.topUpDeadlineAt,
+      "overtime top-up deadline"
+    );
+    const approvedAt = ShiftOvertimeFundingService.normalizeDate(
+      overtime.approvedAt,
+      "overtime approval time"
+    );
+
+    if (
+      deadline <= approvedAt ||
+      (overtime.topUpOverdueAt &&
+        ShiftOvertimeFundingService.normalizeDate(
+          overtime.topUpOverdueAt,
+          "overtime overdue time"
+        ).getTime() !== deadline.getTime()) ||
+      (occurrence.overtimeSettlement?.status &&
+        occurrence.overtimeSettlement.status !== "not_due") ||
+      occurrence.overtimeSettlement?.payoutTransaction ||
+      occurrence.overtimeSettlement?.settlementBatch
+    ) {
+      throw ShiftOvertimeFundingService.createError({
+        message: "Unfunded overtime has inconsistent timing or settlement execution state.",
+        code: "OVERTIME_TOPUP_AUTHORITY_INCOMPLETE",
+        statusCode: 500,
+      });
+    }
 
     if (overtime.topUpPaid === true || overtime.topUpPaidAt || occurrence.topUpTransaction) {
       throw ShiftOvertimeFundingService.createError({
@@ -538,16 +599,24 @@ class ShiftOvertimeFundingService {
       );
     } catch (error) {
       if (error?.name === SHIFT_OVERTIME_FUNDING_SERVICE_ERROR_NAME) {
+        const diagnosticTopUpAmount =
+          Number.isSafeInteger(overtime.topUpAmount) && overtime.topUpAmount >= 0
+            ? overtime.topUpAmount
+            : null;
+
+        const diagnosticTopUpRequired =
+          Number.isSafeInteger(occurrence.topUpRequired) && occurrence.topUpRequired >= 0
+            ? occurrence.topUpRequired
+            : null;
+
         throw ShiftOvertimeFundingService.createError({
           message: "The approved overtime top-up obligation is incomplete or inconsistent.",
           code: "OVERTIME_TOPUP_AUTHORITY_INCOMPLETE",
           statusCode: 500,
           details: {
             expectedAmount: fundingRequirement,
-
-            topUpAmount: Number(overtime.topUpAmount || 0),
-
-            topUpRequired: Number(occurrence.topUpRequired || 0),
+            topUpAmount: diagnosticTopUpAmount,
+            topUpRequired: diagnosticTopUpRequired,
           },
           cause: error,
         });
@@ -636,18 +705,16 @@ class ShiftOvertimeFundingService {
 
     const { fundingRequirement } = ShiftOvertimeFundingService.getFundingRequirement(occurrence);
 
-    const settings = await ShiftOvertimeFundingService.getPlatformSettings(session);
-
-    const deadlineHours = ShiftOvertimeFundingService.getOvertimeTopUpDeadlineHours(settings);
-
-    const expectedDeadline = new Date(approvedAt.getTime() + deadlineHours * MILLISECONDS_PER_HOUR);
-
     const existingHasFundingAuthority = Boolean(
-      Number(overtime.topUpAmount || 0) > 0 ||
+      ShiftOvertimeFundingService.normalizeNonNegativeAmount(overtime.topUpAmount, "topUpAmount") >
+        0 ||
       overtime.topUpDeadlineAt ||
       overtime.topUpPaid === true ||
       overtime.topUpPaidAt ||
-      Number(occurrence.topUpRequired || 0) > 0 ||
+      ShiftOvertimeFundingService.normalizeNonNegativeAmount(
+        occurrence.topUpRequired,
+        "topUpRequired"
+      ) > 0 ||
       occurrence.topUpTransaction ||
       overtime.topUpOverdueAt ||
       overtime.restrictionTriggeredAt
@@ -660,10 +727,19 @@ class ShiftOvertimeFundingService {
         !occurrence.topUpTransaction &&
         !overtime.topUpOverdueAt &&
         !overtime.restrictionTriggeredAt &&
-        Number(overtime.topUpAmount || 0) === fundingRequirement &&
-        Number(occurrence.topUpRequired || 0) === fundingRequirement &&
+        ShiftOvertimeFundingService.normalizeNonNegativeAmount(
+          overtime.topUpAmount,
+          "topUpAmount"
+        ) === fundingRequirement &&
+        ShiftOvertimeFundingService.normalizeNonNegativeAmount(
+          occurrence.topUpRequired,
+          "topUpRequired"
+        ) === fundingRequirement &&
         overtime.topUpDeadlineAt &&
-        new Date(overtime.topUpDeadlineAt).getTime() === expectedDeadline.getTime();
+        ShiftOvertimeFundingService.normalizeDate(
+          overtime.topUpDeadlineAt,
+          "stored overtime top-up deadline"
+        ) > approvedAt;
 
       if (!matchesUnfundedAuthority) {
         throw ShiftOvertimeFundingService.createError({
@@ -679,10 +755,18 @@ class ShiftOvertimeFundingService {
       return {
         occurrence,
         fundingRequirement,
-        topUpDeadlineAt: expectedDeadline,
+        topUpDeadlineAt: overtime.topUpDeadlineAt,
         idempotent: true,
       };
     }
+
+    const settings = await ShiftOvertimeFundingService.getPlatformSettings(session);
+
+    const deadlineHours = ShiftOvertimeFundingService.getOvertimeTopUpDeadlineHours(settings);
+
+    const expectedDeadline = new Date(approvedAt.getTime() + deadlineHours * MILLISECONDS_PER_HOUR);
+
+    ShiftOvertimeFundingService.normalizeDate(expectedDeadline, "overtime top-up deadline");
 
     occurrence.set("overtime.topUpAmount", fundingRequirement);
 
@@ -728,7 +812,10 @@ class ShiftOvertimeFundingService {
         occurrence.overtime?.status !== "approved" ||
         occurrence.overtime?.topUpPaid === true ||
         occurrence.topUpTransaction ||
-        Number(occurrence.topUpRequired || 0) <= 0
+        ShiftOvertimeFundingService.normalizeNonNegativeAmount(
+          occurrence.topUpRequired,
+          "topUpRequired"
+        ) <= 0
       ) {
         return {
           occurrence,
@@ -771,6 +858,11 @@ class ShiftOvertimeFundingService {
 
       const restrictionEligibleAt = new Date(
         new Date(occurrence.overtime.topUpOverdueAt).getTime() + graceHours * MILLISECONDS_PER_HOUR
+      );
+
+      ShiftOvertimeFundingService.normalizeDate(
+        restrictionEligibleAt,
+        "restriction eligibility time"
       );
 
       return {
@@ -878,6 +970,10 @@ class ShiftOvertimeFundingService {
           error: null,
         });
       } catch (error) {
+        if (options.session) {
+          throw error;
+        }
+
         logger.error(
           `Unable to mark overtime top-up overdue for occurrence ${candidate._id}: ${error.message}`
         );
@@ -928,7 +1024,10 @@ class ShiftOvertimeFundingService {
         occurrence.overtime?.status !== "approved" ||
         occurrence.overtime?.topUpPaid === true ||
         occurrence.topUpTransaction ||
-        Number(occurrence.topUpRequired || 0) <= 0
+        ShiftOvertimeFundingService.normalizeNonNegativeAmount(
+          occurrence.topUpRequired,
+          "topUpRequired"
+        ) <= 0
       ) {
         return {
           occurrence,
@@ -971,6 +1070,11 @@ class ShiftOvertimeFundingService {
 
       const restrictionEligibleAt = new Date(
         new Date(occurrence.overtime.topUpOverdueAt).getTime() + graceHours * MILLISECONDS_PER_HOUR
+      );
+
+      ShiftOvertimeFundingService.normalizeDate(
+        restrictionEligibleAt,
+        "restriction eligibility time"
       );
 
       if (now < restrictionEligibleAt) {
@@ -1047,6 +1151,8 @@ class ShiftOvertimeFundingService {
 
     const overdueThreshold = new Date(now.getTime() - graceHours * MILLISECONDS_PER_HOUR);
 
+    ShiftOvertimeFundingService.normalizeDate(overdueThreshold, "restriction processing threshold");
+
     const query = ShiftOccurrence.find({
       "overtime.requested": true,
 
@@ -1100,6 +1206,10 @@ class ShiftOvertimeFundingService {
           error: null,
         });
       } catch (error) {
+        if (options.session) {
+          throw error;
+        }
+
         logger.error(
           `Unable to trigger overtime top-up restriction for occurrence ${candidate._id}: ${error.message}`
         );
@@ -1131,14 +1241,20 @@ class ShiftOvertimeFundingService {
 
   /* ─────────────────────────────── TOP-UP TRANSACTION VERIFICATION ─────────────────────────────── */
 
-  static async getVerifiedTopUpTransaction({ occurrence, transactionId, session }) {
+  static async getVerifiedTopUpTransaction({
+    occurrence,
+    transactionId,
+    session,
+    allowFunded = false,
+  }) {
     const normalizedTransactionId = ShiftOvertimeFundingService.normalizeObjectId(
       transactionId,
       "top-up transaction ID"
     );
 
-    const { fundingRequirement } =
-      ShiftOvertimeFundingService.assertOutstandingFundingState(occurrence);
+    const { fundingRequirement } = allowFunded
+      ? ShiftOvertimeFundingService.getFundingRequirement(occurrence)
+      : ShiftOvertimeFundingService.assertOutstandingFundingState(occurrence);
 
     const transaction = await Transaction.findById(normalizedTransactionId)
       .select(
@@ -1151,6 +1267,8 @@ class ShiftOvertimeFundingService {
           "wallet",
           "paymentRail",
           "provider",
+          "countryCode",
+          "currency",
           "completedAt",
           "shift",
           "shiftOccurrence",
@@ -1168,7 +1286,21 @@ class ShiftOvertimeFundingService {
 
     const shift = await ShiftOvertimeFundingService.getShift(occurrence.shift, session);
 
-    if (String(shift.business) !== String(occurrence.business)) {
+    if (
+      String(shift._id) !== String(occurrence.shift) ||
+      String(shift.business) !== String(occurrence.business) ||
+      String(shift.branch) !== String(occurrence.branch) ||
+      shift.countryCode !== occurrence.countryCode ||
+      shift.currency !== occurrence.currency ||
+      !Number.isSafeInteger(occurrence.slotNumber) ||
+      occurrence.slotNumber < 1 ||
+      !Number.isSafeInteger(shift.requiredProfessionals) ||
+      occurrence.slotNumber > shift.requiredProfessionals ||
+      !Number.isSafeInteger(occurrence.sequenceNumber) ||
+      occurrence.sequenceNumber < 1 ||
+      !Number.isSafeInteger(shift.occurrenceCount) ||
+      occurrence.sequenceNumber > shift.occurrenceCount
+    ) {
       throw ShiftOvertimeFundingService.createError({
         message:
           "Occurrence business does not match the parent Shift during overtime funding verification.",
@@ -1217,6 +1349,9 @@ class ShiftOvertimeFundingService {
       transaction.purpose === OVERTIME_TOPUP_TRANSACTION_PURPOSE &&
       transaction.direction === "credit" &&
       transaction.status === "completed" &&
+      transaction.countryCode === shift.countryCode &&
+      transaction.currency === shift.currency &&
+      (transaction.paymentRail !== "paystack_checkout" || transaction.provider === "paystack") &&
       OVERTIME_TOPUP_ALLOWED_PAYMENT_RAILS.includes(transaction.paymentRail) &&
       transactionAmount === fundingRequirement &&
       String(transaction.wallet || "") === String(escrowWallet._id) &&
@@ -1365,6 +1500,28 @@ class ShiftOvertimeFundingService {
           });
         }
 
+        const verified = await ShiftOvertimeFundingService.getVerifiedTopUpTransaction({
+          occurrence,
+          transactionId,
+          session,
+          allowFunded: true,
+        });
+
+        if (
+          occurrence.topUpRequired !== 0 ||
+          occurrence.overtime.topUpAmount !== verified.fundingRequirement ||
+          ShiftOvertimeFundingService.normalizeDate(
+            occurrence.overtime.topUpPaidAt,
+            "overtime payment time"
+          ).getTime() !== verified.fundedAt.getTime()
+        ) {
+          throw ShiftOvertimeFundingService.createError({
+            message: "Stored overtime funding does not match the completed transaction.",
+            code: "OVERTIME_FUNDED_STATE_CONFLICT",
+            statusCode: 409,
+          });
+        }
+
         const platformFeeResult = await ShiftPlatformFeeService.collectOvertimePlatformFee(
           {
             occurrenceId: occurrence._id,
@@ -1387,7 +1544,7 @@ class ShiftOvertimeFundingService {
           await ShiftOvertimeFundingService.handoffFundedOvertimeToSettlement({
             occurrence,
 
-            readyAt: now,
+            readyAt: now >= verified.fundedAt ? now : verified.fundedAt,
 
             payoutPolicy,
 
@@ -1455,7 +1612,7 @@ class ShiftOvertimeFundingService {
       const settlementResult = await ShiftOvertimeFundingService.handoffFundedOvertimeToSettlement({
         occurrence,
 
-        readyAt: now,
+        readyAt: collectionTime,
 
         payoutPolicy,
 
@@ -1534,6 +1691,11 @@ class ShiftOvertimeFundingService {
       restrictionEligibleAt = new Date(
         new Date(overtime.topUpOverdueAt).getTime() + graceHours * MILLISECONDS_PER_HOUR
       );
+
+      ShiftOvertimeFundingService.normalizeDate(
+        restrictionEligibleAt,
+        "restriction eligibility time"
+      );
     }
 
     return {
@@ -1543,15 +1705,27 @@ class ShiftOvertimeFundingService {
 
       approved,
 
-      professionalPay: Number(occurrence.overtimeProfessionalPay || 0),
+      professionalPay: ShiftOvertimeFundingService.normalizeNonNegativeAmount(
+        occurrence.overtimeProfessionalPay,
+        "overtimeProfessionalPay"
+      ),
 
-      platformFee: Number(occurrence.overtimePlatformFee || 0),
+      platformFee: ShiftOvertimeFundingService.normalizeNonNegativeAmount(
+        occurrence.overtimePlatformFee,
+        "overtimePlatformFee"
+      ),
 
       fundingRequirement,
 
-      topUpAmount: Number(overtime.topUpAmount || 0),
+      topUpAmount: ShiftOvertimeFundingService.normalizeNonNegativeAmount(
+        overtime.topUpAmount,
+        "topUpAmount"
+      ),
 
-      topUpRequired: Number(occurrence.topUpRequired || 0),
+      topUpRequired: ShiftOvertimeFundingService.normalizeNonNegativeAmount(
+        occurrence.topUpRequired,
+        "topUpRequired"
+      ),
 
       topUpDeadlineAt: overtime.topUpDeadlineAt || null,
 
@@ -1570,7 +1744,10 @@ class ShiftOvertimeFundingService {
       activeRestriction: Boolean(
         approved &&
         overtime.topUpPaid !== true &&
-        Number(occurrence.topUpRequired || 0) > 0 &&
+        ShiftOvertimeFundingService.normalizeNonNegativeAmount(
+          occurrence.topUpRequired,
+          "topUpRequired"
+        ) > 0 &&
         !occurrence.topUpTransaction &&
         overtime.restrictionTriggeredAt
       ),

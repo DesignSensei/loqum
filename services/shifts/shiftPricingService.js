@@ -2,7 +2,7 @@
 
 const money = require("../../utils/money");
 
-const { FINANCIAL_RATE_SCALE } = require("../constants/shiftPosting");
+const { FINANCIAL_RATE_SCALE } = require("../../constants/shiftPosting");
 
 const { createServiceError } = require("../helpers/serviceErrorHelper");
 
@@ -18,13 +18,18 @@ function createShiftError(options) {
   });
 }
 
+/**
+ * Calculates one position/date's BASE pricing from a supplied applied rate.
+ * Schedule aggregation covers dates; creation aggregation covers all slots.
+ * Rate entitlement, subscription lookup and OT approval belong to their callers.
+ * All authoritative monetary arithmetic is delegated to utils/money.js.
+ */
 class ShiftPricingService {
   /* ─────────────────────────────── HOURLY RATE ─────────────────────────────── */
 
   static normalizeHourlyRateToMinorUnit(value) {
-    const cleanValue = String(value ?? "")
-      .trim()
-      .replace(/,/g, "");
+    const inputValue =
+      typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
 
     /*
      * Shift posting accepts a positive major-unit hourly rate
@@ -35,13 +40,17 @@ class ShiftPricingService {
      *
      * Do not convert the input to Number first.
      */
-    if (!/^\d+(\.\d{1,2})?$/.test(cleanValue)) {
+    // Accept plain digits or correctly grouped thousands, never silently
+    // reinterpret malformed inputs such as "1,2" as a different amount.
+    if (!/^(?:\d+|[1-9]\d{0,2}(?:,\d{3})+)(?:\.\d{1,2})?$/.test(inputValue)) {
       throw createShiftError({
         message: "Enter a valid hourly rate.",
 
         code: "INVALID_HOURLY_RATE",
       });
     }
+
+    const cleanValue = inputValue.replace(/,/g, "");
 
     let hourlyRate;
 
@@ -138,7 +147,7 @@ class ShiftPricingService {
       });
     }
 
-    const lateCancellationWindowMinutes = Number(policy.lateCancellationWindowMinutes);
+    const lateCancellationWindowMinutes = policy.lateCancellationWindowMinutes;
 
     if (!Number.isSafeInteger(lateCancellationWindowMinutes) || lateCancellationWindowMinutes < 0) {
       throw createShiftError({
@@ -151,7 +160,7 @@ class ShiftPricingService {
     }
 
     const lateCancellationProfessionalPayRate = ShiftPricingService.normalizeFinancialRate(
-      Number(policy.lateCancellationProfessionalPayRate),
+      policy.lateCancellationProfessionalPayRate,
 
       "lateCancellationProfessionalPayRate",
 
@@ -163,7 +172,7 @@ class ShiftPricingService {
     );
 
     const activeWorkCancellationMinimumPayRate = ShiftPricingService.normalizeFinancialRate(
-      Number(policy.activeWorkCancellationMinimumPayRate),
+      policy.activeWorkCancellationMinimumPayRate,
 
       "activeWorkCancellationMinimumPayRate",
 
@@ -207,7 +216,7 @@ class ShiftPricingService {
     scheduledMinutes,
 
     platformFeeRate,
-  }) {
+  } = {}) {
     if (!Number.isSafeInteger(hourlyRate) || hourlyRate <= 0) {
       throw createShiftError({
         message: "Hourly rate must be a positive whole number in minor units.",
@@ -235,6 +244,9 @@ class ShiftPricingService {
         statusCode: 500,
       }
     );
+
+    // platformFeeRate retains its existing API name. For posting, callers
+    // supply the applied BASE rate, not an OT rate or a fresh settings lookup.
 
     /*
      * AUTHORITATIVE POSTING-TIME PRICING
@@ -380,6 +392,17 @@ class ShiftPricingService {
 
         statusCode: 500,
       });
+    }
+
+    // Validate every entry, including sparse-array holes, before delegating.
+    for (let index = 0; index < values.length; index += 1) {
+      if (!Number.isSafeInteger(values[index]) || values[index] < 0) {
+        throw createShiftError({
+          message: `${fieldName} contains an invalid amount.`,
+          code: `INVALID_${normalizeFieldCode(fieldName)}`,
+          statusCode: 500,
+        });
+      }
     }
 
     try {

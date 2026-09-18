@@ -14,6 +14,45 @@ const money = require("../utils/money");
 const { badgeClass, formatStatus } = require("../utils/statusHelper");
 
 const TRANSACTIONS_PER_PAGE = 25;
+const EMPLOYER_BILLING_URL = "/employer/billing";
+const RECENT_TRANSACTIONS_ANCHOR = "#recent-transactions";
+
+const TRANSACTION_FILTER_DEFINITIONS = Object.freeze([
+  Object.freeze({
+    value: "all",
+    label: "All transactions",
+  }),
+
+  Object.freeze({
+    value: "money_added",
+    label: "Money added",
+  }),
+
+  Object.freeze({
+    value: "money_used",
+    label: "Money used",
+  }),
+
+  Object.freeze({
+    value: "refunds",
+    label: "Refunds",
+  }),
+
+  Object.freeze({
+    value: "withdrawals",
+    label: "Withdrawals",
+  }),
+
+  Object.freeze({
+    value: "pending",
+    label: "Pending",
+  }),
+
+  Object.freeze({
+    value: "failed",
+    label: "Failed",
+  }),
+]);
 
 class EmployerBillingService {
   /* ---------- Get employer profile for logged-in user ---------- */
@@ -23,8 +62,21 @@ class EmployerBillingService {
       throw new Error("User ID is required.");
     }
 
+    /*
+     * A supplied/preloaded profile is only a lookup hint.
+     * Do not trust it until its ownership is verified.
+     */
     if (employerProfile?._id) {
-      return employerProfile;
+      const verifiedEmployerProfile = await EmployerProfile.findOne({
+        _id: employerProfile._id,
+        user: userId,
+      });
+
+      if (!verifiedEmployerProfile) {
+        throw new Error("Employer profile does not belong to the current user.");
+      }
+
+      return verifiedEmployerProfile;
     }
 
     const foundEmployerProfile = await EmployerProfile.findOne({
@@ -100,7 +152,6 @@ class EmployerBillingService {
       outstanding_charge: "Outstanding charge",
       outstanding_settlement: "Outstanding settlement",
       withdrawal: "Withdrawal",
-      withdrawal_reversal: "Withdrawal reversal",
       dispute_refund: "Dispute refund",
       cancellation_fee: "Cancellation fee",
       penalty_debit: "Penalty debit",
@@ -115,8 +166,8 @@ class EmployerBillingService {
 
   static getTransactionPurposeLabel(purpose) {
     const purposeMap = {
-      employer_wallet_funding: "Employer wallet funding",
-      shift_escrow_funding: "Shift protected-fund deposit",
+      wallet_topup: "Employer wallet funding",
+      shift_base_funding: "Shift protected-fund deposit",
       shift_overtime_topup: "Shift overtime top-up",
       expired_unfilled_refund: "Expired unfilled occurrence refund",
       unused_occurrence_balance_refund: "Unused occurrence balance refund",
@@ -126,8 +177,7 @@ class EmployerBillingService {
       final_shift_reconciliation_refund: "Final Shift reconciliation refund",
       shift_refund: "Shift refund",
       weekly_professional_payout: "Weekly professional payout",
-      employer_withdrawal: "Employer withdrawal",
-      employer_withdrawal_reversal: "Employer withdrawal reversal",
+      withdrawal: "Employer withdrawal",
     };
 
     return purposeMap[purpose] || formatStatus(purpose || "transaction");
@@ -140,6 +190,7 @@ class EmployerBillingService {
       wallet_balance: "Wallet balance",
       paystack_checkout: "Checkout payment",
       paystack_dva: "Bank transfer",
+      paystack_refund: "Paystack refund",
       paystack_transfer: "Bank payout",
       internal_transfer: "Wallet transfer",
       platform_wallet: "Platform wallet",
@@ -148,6 +199,123 @@ class EmployerBillingService {
     };
 
     return railMap[paymentRail] || "-";
+  }
+
+  /* ---------- Transaction filter helpers ---------- */
+
+  static normalizeTransactionFilter(value) {
+    const normalized = String(value || "all")
+      .trim()
+      .toLowerCase();
+
+    return TRANSACTION_FILTER_DEFINITIONS.some((definition) => definition.value === normalized)
+      ? normalized
+      : "all";
+  }
+
+  static getTransactionFilterLabel(value) {
+    const normalized = EmployerBillingService.normalizeTransactionFilter(value);
+
+    return (
+      TRANSACTION_FILTER_DEFINITIONS.find((definition) => definition.value === normalized)?.label ||
+      "All transactions"
+    );
+  }
+
+  static buildTransactionQueryFilter(transactionFilter) {
+    switch (EmployerBillingService.normalizeTransactionFilter(transactionFilter)) {
+      case "money_added":
+        return {
+          direction: "credit",
+          type: {
+            $in: ["wallet_funding", "adjustment", "credit_purchase"],
+          },
+        };
+
+      case "money_used":
+        return {
+          direction: "debit",
+        };
+
+      case "refunds":
+        return {
+          direction: "credit",
+          type: {
+            $in: ["shift_refund", "dispute_refund"],
+          },
+        };
+
+      case "withdrawals":
+        return {
+          type: {
+            $in: ["withdrawal", "withdrawal_reversal"],
+          },
+        };
+
+      case "pending":
+        return {
+          status: {
+            $in: ["pending", "processing"],
+          },
+        };
+
+      case "failed":
+        return {
+          status: {
+            $in: ["failed", "reversed", "cancelled"],
+          },
+        };
+
+      default:
+        return {};
+    }
+  }
+
+  static buildTransactionsUrl({ filter = "all", page = 1 } = {}) {
+    const normalizedFilter = EmployerBillingService.normalizeTransactionFilter(filter);
+
+    const normalizedPage = Math.max(Number.parseInt(page, 10) || 1, 1);
+
+    const params = new URLSearchParams();
+
+    if (normalizedFilter !== "all") {
+      params.set("transactionFilter", normalizedFilter);
+    }
+
+    if (normalizedPage > 1) {
+      params.set("transactionsPage", String(normalizedPage));
+    }
+
+    const query = params.toString();
+
+    return (
+      (query ? `${EMPLOYER_BILLING_URL}?${query}` : EMPLOYER_BILLING_URL) +
+      RECENT_TRANSACTIONS_ANCHOR
+    );
+  }
+
+  static buildTransactionFiltersView(selectedFilter = "all") {
+    const normalizedFilter = EmployerBillingService.normalizeTransactionFilter(selectedFilter);
+
+    return {
+      selectedValue: normalizedFilter,
+
+      selectedLabel: EmployerBillingService.getTransactionFilterLabel(normalizedFilter),
+
+      hasActiveFilters: normalizedFilter !== "all",
+
+      options: TRANSACTION_FILTER_DEFINITIONS.map((definition) => ({
+        value: definition.value,
+
+        label: definition.label,
+
+        active: definition.value === normalizedFilter,
+
+        url: EmployerBillingService.buildTransactionsUrl({
+          filter: definition.value,
+        }),
+      })),
+    };
   }
 
   /* ---------- Get employer occurrence payments that need attention ---------- */
@@ -533,6 +701,12 @@ class EmployerBillingService {
 
     const shiftsFunded = walletActivitySummary.shiftsFunded ?? 0;
 
+    const maximumExternalTopupBalance =
+      wallet.maximumExternalTopupBalance === null ||
+      wallet.maximumExternalTopupBalance === undefined
+        ? null
+        : wallet.maximumExternalTopupBalance;
+
     return {
       id: String(wallet._id),
 
@@ -599,14 +773,21 @@ class EmployerBillingService {
 
       shiftsFundedDisplay: EmployerBillingService.formatAmount(shiftsFunded, currency),
 
-      maximumBalance: wallet.maximumBalance,
+      maximumBalance: maximumExternalTopupBalance,
+
+      maximumExternalTopupBalance,
 
       minimumWithdrawalAmount: wallet.minimumWithdrawalAmount,
 
       maximumBalanceDisplay:
-        wallet.maximumBalance === null || wallet.maximumBalance === undefined
+        maximumExternalTopupBalance === null
           ? null
-          : EmployerBillingService.formatAmount(wallet.maximumBalance, currency),
+          : EmployerBillingService.formatAmount(maximumExternalTopupBalance, currency),
+
+      maximumExternalTopupBalanceDisplay:
+        maximumExternalTopupBalance === null
+          ? null
+          : EmployerBillingService.formatAmount(maximumExternalTopupBalance, currency),
 
       minimumWithdrawalAmountDisplay:
         wallet.minimumWithdrawalAmount === null || wallet.minimumWithdrawalAmount === undefined
@@ -850,12 +1031,18 @@ class EmployerBillingService {
 
   /* ---------- Get paginated wallet transactions ---------- */
 
-  static async getRecentTransactions({ walletId, page = 1 }) {
+  static async getRecentTransactions({ walletId, page = 1, transactionFilter = "all" }) {
     const perPage = TRANSACTIONS_PER_PAGE;
+
+    const selectedFilter = EmployerBillingService.normalizeTransactionFilter(transactionFilter);
+
+    const filters = EmployerBillingService.buildTransactionFiltersView(selectedFilter);
 
     if (!walletId) {
       return {
         transactions: [],
+
+        filters,
 
         pagination: {
           currentPage: 1,
@@ -878,6 +1065,10 @@ class EmployerBillingService {
 
           nextPage: null,
 
+          previousUrl: null,
+
+          nextUrl: null,
+
           pages: [],
 
           hasPagination: false,
@@ -887,11 +1078,13 @@ class EmployerBillingService {
 
     const requestedPage = Math.max(Number.parseInt(page, 10) || 1, 1);
 
-    const filter = {
+    const queryFilter = {
       wallet: walletId,
+
+      ...EmployerBillingService.buildTransactionQueryFilter(selectedFilter),
     };
 
-    const totalTransactions = await Transaction.countDocuments(filter);
+    const totalTransactions = await Transaction.countDocuments(queryFilter);
 
     const totalPages = Math.max(Math.ceil(totalTransactions / perPage), 1);
 
@@ -899,7 +1092,7 @@ class EmployerBillingService {
 
     const skip = (currentPage - 1) * perPage;
 
-    const transactions = await Transaction.find(filter)
+    const transactions = await Transaction.find(queryFilter)
       .populate({
         path: "shift",
 
@@ -926,10 +1119,30 @@ class EmployerBillingService {
 
     const endItem = totalTransactions > 0 ? skip + transactions.length : 0;
 
+    const previousPage = currentPage > 1 ? currentPage - 1 : null;
+
+    const nextPage = currentPage < totalPages ? currentPage + 1 : null;
+
+    const pages = EmployerBillingService.buildPaginationPages({
+      currentPage,
+
+      totalPages,
+    }).map((pageItem) => ({
+      ...pageItem,
+
+      url: EmployerBillingService.buildTransactionsUrl({
+        filter: selectedFilter,
+
+        page: pageItem.page,
+      }),
+    }));
+
     return {
       transactions: transactions.map((transaction) =>
         EmployerBillingService.buildTransactionView(transaction)
       ),
+
+      filters,
 
       pagination: {
         currentPage,
@@ -944,19 +1157,33 @@ class EmployerBillingService {
 
         endItem,
 
-        hasPreviousPage: currentPage > 1,
+        hasPreviousPage: previousPage !== null,
 
-        hasNextPage: currentPage < totalPages,
+        hasNextPage: nextPage !== null,
 
-        previousPage: currentPage > 1 ? currentPage - 1 : null,
+        previousPage,
 
-        nextPage: currentPage < totalPages ? currentPage + 1 : null,
+        nextPage,
 
-        pages: EmployerBillingService.buildPaginationPages({
-          currentPage,
+        previousUrl:
+          previousPage === null
+            ? null
+            : EmployerBillingService.buildTransactionsUrl({
+                filter: selectedFilter,
 
-          totalPages,
-        }),
+                page: previousPage,
+              }),
+
+        nextUrl:
+          nextPage === null
+            ? null
+            : EmployerBillingService.buildTransactionsUrl({
+                filter: selectedFilter,
+
+                page: nextPage,
+              }),
+
+        pages,
 
         hasPagination: totalPages > 1,
       },
@@ -978,6 +1205,8 @@ class EmployerBillingService {
 
         bankCode: null,
 
+        paystackBankCode: null,
+
         verificationStatus: "not_added",
 
         statusLabel: "Not added",
@@ -988,12 +1217,50 @@ class EmployerBillingService {
 
         canWithdraw: false,
 
-        message:
-          "Add a withdrawal bank account to receive eligible wallet withdrawals when withdrawals become available.",
+        message: "Add a withdrawal bank account to withdraw eligible wallet funds.",
 
         supportMessage:
-          "Wallet withdrawals are not available yet because payment provider setup is still pending.",
+          "A verified Paystack-ready withdrawal bank account is required before you can withdraw funds.",
       };
+    }
+
+    const accountNumber = EmployerBillingService.cleanAccountNumber(bankAccount.accountNumber);
+
+    const accountName = EmployerBillingService.cleanString(bankAccount.accountName);
+
+    const paystackBankCode = EmployerBillingService.cleanString(bankAccount.paystackBankCode);
+
+    const isVerified = bankAccount.verificationStatus === "verified";
+
+    const isActive = bankAccount.isActive !== false;
+
+    /*
+     * Match WalletWithdrawalService / PaystackTransferService readiness.
+     *
+     * A Paystack recipient code is deliberately not required here because the
+     * Transfer service creates and persists the recipient lazily when needed.
+     */
+    const canWithdraw = Boolean(
+      isActive && isVerified && accountNumber && accountName && paystackBankCode
+    );
+
+    let message = "Your withdrawal bank account has been saved and is awaiting verification.";
+
+    let supportMessage =
+      "Verify your withdrawal bank account before requesting a wallet withdrawal.";
+
+    if (isVerified && !canWithdraw) {
+      message =
+        "Your withdrawal bank account is verified but is missing required Paystack payout details.";
+
+      supportMessage =
+        "Update the withdrawal account so the account number, account name, and Paystack bank code are available.";
+    }
+
+    if (canWithdraw) {
+      message = "Your withdrawal bank account is verified and ready for wallet withdrawals.";
+
+      supportMessage = "Eligible wallet funds can be withdrawn to this account.";
     }
 
     return {
@@ -1005,7 +1272,9 @@ class EmployerBillingService {
 
       bankName: bankAccount.bankName || "-",
 
-      bankCode: bankAccount.bankCode || null,
+      bankCode: paystackBankCode,
+
+      paystackBankCode,
 
       verificationStatus: bankAccount.verificationStatus,
 
@@ -1015,13 +1284,11 @@ class EmployerBillingService {
 
       canAddAccount: false,
 
-      // Keep this false until Paystack transfer access is ready.
-      canWithdraw: false,
+      canWithdraw,
 
-      message: "Your withdrawal bank account has been saved for future wallet withdrawals.",
+      message,
 
-      supportMessage:
-        "Wallet withdrawals are not available yet because payment provider setup is still pending.",
+      supportMessage,
     };
   }
 
@@ -1050,18 +1317,20 @@ class EmployerBillingService {
 
   static async getActiveEmployerBankAccount(
     employerProfileId,
-    { includeAccountNumber = false } = {}
+    { includeAccountNumber = false, session = null } = {}
   ) {
     let query = BankAccount.findOne({
       ownerType: "employer",
-
       employer: employerProfileId,
-
       isActive: true,
     });
 
     if (includeAccountNumber) {
-      query = query.select("+accountNumber");
+      query = query.select("+accountNumber +paystackBankCode");
+    }
+
+    if (session) {
+      query = query.session(session);
     }
 
     return query.lean();
@@ -1077,8 +1346,11 @@ class EmployerBillingService {
     accountName,
     paystackBankCode = null,
     replaceExisting = false,
+    currentTime = new Date(),
   }) {
     const profile = await EmployerBillingService.getEmployerProfileForUser(userId, employerProfile);
+
+    const normalizedCurrentTime = EmployerBillingService.normalizeCurrentTime(currentTime);
 
     const cleanAccountNumber = EmployerBillingService.cleanAccountNumber(accountNumber);
 
@@ -1096,33 +1368,13 @@ class EmployerBillingService {
       throw new Error("Account number must be 10 digits.");
     }
 
-    const existingAccount = await EmployerBillingService.getActiveEmployerBankAccount(profile._id);
-
-    if (existingAccount && !replaceExisting) {
-      throw new Error("A withdrawal bank account has already been added.");
-    }
-
-    if (existingAccount && replaceExisting) {
-      await BankAccount.updateOne(
-        {
-          _id: existingAccount._id,
-
-          ownerType: "employer",
-
-          employer: profile._id,
-
-          isActive: true,
-        },
-        {
-          $set: {
-            isActive: false,
-
-            deactivatedAt: new Date(),
-          },
-        }
-      );
-    }
-
+    /*
+     * Complete external verification BEFORE changing the
+     * currently active account.
+     *
+     * A Paystack/network failure here must leave the existing
+     * withdrawal account untouched.
+     */
     let verificationProvider = "manual";
 
     let verificationStatus = "pending";
@@ -1136,7 +1388,7 @@ class EmployerBillingService {
         accountNumber: cleanAccountNumber,
       });
 
-      cleanAccountName = resolvedAccount.accountName;
+      cleanAccountName = EmployerBillingService.cleanString(resolvedAccount.accountName);
 
       const withdrawalBankSetup = await BankProviderService.getWithdrawalBankSetup();
 
@@ -1144,13 +1396,17 @@ class EmployerBillingService {
         (bank) => String(bank.paystackBankCode || bank.value || "").trim() === cleanPaystackBankCode
       );
 
-      cleanBankName = selectedBank?.name || cleanBankName;
+      if (!selectedBank) {
+        throw new Error("Selected withdrawal bank is not supported.");
+      }
+
+      cleanBankName = EmployerBillingService.cleanString(selectedBank.name) || cleanBankName;
 
       verificationProvider = "paystack";
 
       verificationStatus = "verified";
 
-      verifiedAt = new Date();
+      verifiedAt = normalizedCurrentTime;
     }
 
     if (!cleanBankName) {
@@ -1161,45 +1417,109 @@ class EmployerBillingService {
       throw new Error("Account name is required.");
     }
 
-    const bankAccount = await BankAccount.create({
-      ownerType: "employer",
+    /*
+     * Only after the new account details are ready do we
+     * enter the database transaction.
+     *
+     * Deactivation of the old account and creation of the
+     * replacement now commit or roll back together.
+     */
+    return WalletService.runWithOptionalTransaction({}, async (session) => {
+      const existingAccount = await EmployerBillingService.getActiveEmployerBankAccount(
+        profile._id,
+        {
+          session,
+        }
+      );
 
-      employer: profile._id,
+      if (existingAccount && !replaceExisting) {
+        throw new Error("A withdrawal bank account has already been added.");
+      }
 
-      professional: null,
+      if (existingAccount && replaceExisting) {
+        const deactivationResult = await BankAccount.updateOne(
+          {
+            _id: existingAccount._id,
 
-      bankName: cleanBankName,
+            ownerType: "employer",
 
-      accountNumber: cleanAccountNumber,
+            employer: profile._id,
 
-      accountName: cleanAccountName,
+            isActive: true,
+          },
+          {
+            $set: {
+              isActive: false,
 
-      paystackBankCode: cleanPaystackBankCode,
+              deactivatedAt: normalizedCurrentTime,
+            },
+          },
+          {
+            session,
+          }
+        );
 
-      paystackRecipientCode: null,
+        if (deactivationResult.modifiedCount !== 1) {
+          throw new Error(
+            "The active withdrawal bank account changed while the replacement was being saved. Please try again."
+          );
+        }
+      }
 
-      verificationProvider,
+      const bankAccount = new BankAccount({
+        ownerType: "employer",
 
-      verificationStatus,
+        employer: profile._id,
 
-      verifiedAt,
+        professional: null,
 
-      isActive: true,
+        bankName: cleanBankName,
+
+        accountNumber: cleanAccountNumber,
+
+        accountName: cleanAccountName,
+
+        paystackBankCode: cleanPaystackBankCode,
+
+        paystackRecipientCode: null,
+
+        verificationProvider,
+
+        verificationStatus,
+
+        verifiedAt,
+
+        isActive: true,
+      });
+
+      await bankAccount.save({
+        session,
+      });
+
+      return {
+        outcome: "saved",
+
+        bankAccountId: String(bankAccount._id),
+
+        replaced: Boolean(existingAccount),
+
+        message: existingAccount
+          ? "Withdrawal bank account replaced successfully."
+          : "Withdrawal bank account saved successfully.",
+      };
     });
-
-    return {
-      outcome: "saved",
-
-      bankAccountId: String(bankAccount._id),
-
-      message: "Withdrawal bank account saved successfully.",
-    };
   }
 
   /* ---------- Remove employer withdrawal bank account ---------- */
 
-  static async removeEmployerWithdrawalAccount({ userId, employerProfile = null }) {
+  static async removeEmployerWithdrawalAccount({
+    userId,
+    employerProfile = null,
+    currentTime = new Date(),
+  }) {
     const profile = await EmployerBillingService.getEmployerProfileForUser(userId, employerProfile);
+
+    const normalizedCurrentTime = EmployerBillingService.normalizeCurrentTime(currentTime);
 
     const existingAccount = await EmployerBillingService.getActiveEmployerBankAccount(profile._id);
 
@@ -1207,7 +1527,7 @@ class EmployerBillingService {
       throw new Error("No active withdrawal bank account was found.");
     }
 
-    await BankAccount.updateOne(
+    const result = await BankAccount.updateOne(
       {
         _id: existingAccount._id,
 
@@ -1221,10 +1541,16 @@ class EmployerBillingService {
         $set: {
           isActive: false,
 
-          deactivatedAt: new Date(),
+          deactivatedAt: normalizedCurrentTime,
         },
       }
     );
+
+    if (result.modifiedCount !== 1) {
+      throw new Error(
+        "The active withdrawal bank account changed while it was being removed. Please try again."
+      );
+    }
 
     return {
       outcome: "removed",
@@ -1239,6 +1565,7 @@ class EmployerBillingService {
     userId,
     employerProfile = null,
     transactionsPage = 1,
+    transactionFilter = "all",
     currentTime = new Date(),
   }) {
     const now = EmployerBillingService.normalizeCurrentTime(currentTime);
@@ -1266,6 +1593,8 @@ class EmployerBillingService {
         walletId: wallet._id,
 
         page: transactionsPage,
+
+        transactionFilter,
       }),
 
       EmployerBillingService.getWalletActivitySummary({
@@ -1322,10 +1651,14 @@ class EmployerBillingService {
 
       transactionsPagination: transactionResult.pagination,
 
+      transactionFilters: transactionResult.filters,
+
       hasTransactions: transactionResult.transactions.length > 0,
 
       emptyState: {
-        transactions: "No wallet transactions yet.",
+        transactions: transactionResult.filters?.hasActiveFilters
+          ? "No wallet transactions match the selected filter."
+          : "No wallet transactions yet.",
       },
     };
   }

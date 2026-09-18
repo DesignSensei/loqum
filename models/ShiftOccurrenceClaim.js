@@ -3,6 +3,7 @@
 const mongoose = require("mongoose");
 
 const { requiredUniqueEnumArrayField } = require("./helpers/schemaFields");
+
 const occurrenceEvidenceSchema = require("./helpers/occurrenceEvidenceSchema");
 
 const {
@@ -10,55 +11,64 @@ const {
   OCCURRENCE_CLAIM_STATUSES,
   OCCURRENCE_CLAIM_ISSUE_STATUSES,
   EMPLOYER_FINANCIAL_CLAIM_DECISIONS,
-  OCCURRENCE_CLAIM_APPEAL_STATUSES,
-  OCCURRENCE_CLAIM_REBUTTAL_STATUSES,
   ADMIN_FINANCIAL_CLAIM_DECISIONS,
-  OCCURRENCE_CLAIM_ESCALATION_REASONS,
+  OCCURRENCE_CLAIM_ADMIN_REVIEW_REASONS,
 } = require("../constants/shiftLifecycle");
 
 const { SETTLEMENT_BATCH_COMPONENTS } = require("../constants/shiftSettlement");
+
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ SNAPSHOT PROTECTION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 const FORBIDDEN_SNAPSHOT_AUTHORITY_FIELDS = Object.freeze([
   "finalProfessionalPay",
   "finalPlatformFee",
   "finalEmployerCharge",
+
   "baseEmployerCharge",
   "overtimeEmployerCharge",
 
   "baseProfessionalPay",
   "overtimeProfessionalPay",
+
   "basePlatformFee",
   "overtimePlatformFee",
+
   "topUpRequired",
 
   "baseSettlement",
   "overtimeSettlement",
+
   "basePlatformFeeAudit",
   "overtimePlatformFeeAudit",
+
   "platformFeeTransaction",
   "topUpTransaction",
 
   "refundableAmount",
   "refundedAmount",
+
   "refundStatus",
   "refundReason",
   "refundEligibleAt",
   "refundHeldAt",
   "refundHoldReason",
+
   "employerRefund",
   "refundBatch",
 
   "challengeWindowOpenedAt",
   "challengeDeadlineAt",
   "challengeWindowClosedAt",
+
   "challengeableSettlementComponents",
+
   "activeClaim",
   "activeDispute",
 
   "overtime",
 ]);
 
-/* ─────────────────────────────── HELPERS ─────────────────────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ HELPERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 const hasValue = (value) => {
   if (value === null || value === undefined) {
@@ -89,6 +99,7 @@ const normalizeComponents = (components) => {
 
 const sameComponents = (left, right) => {
   const normalizedLeft = normalizeComponents(left);
+
   const normalizedRight = normalizeComponents(right);
 
   return (
@@ -109,6 +120,7 @@ const normalizeIssueTypes = (types) => {
 
 const sameIssueTypes = (left, right) => {
   const normalizedLeft = normalizeIssueTypes(left);
+
   const normalizedRight = normalizeIssueTypes(right);
 
   return (
@@ -131,17 +143,19 @@ const optionalMinorUnitAmountField = () => ({
 
 const evidenceArrayField = ({ immutable = false } = {}) => ({
   type: [occurrenceEvidenceSchema],
+
   default: [],
+
   immutable,
 
   validate: {
     validator: (items) => Array.isArray(items) && items.length <= 10,
 
-    message: "A claim issue cannot contain more than 10 evidence items in one evidence set.",
+    message: "A claim issue cannot contain more than 10 evidence items.",
   },
 });
 
-/* ─────────────────────────────── STRUCTURED POSITIONS ─────────────────────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ STRUCTURED POSITIONS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 const attendanceCorrectionPositionSchema = new mongoose.Schema(
   {
@@ -168,10 +182,10 @@ const professionalIssueDetailsSchema = new mongoose.Schema(
     },
 
     /**
-     * Optional professional estimate for a BASE-pay complaint.
+     * Professional requested BASE amount.
      *
-     * It is not financial authority. Final BASE entitlement is always
-     * recalculated by the resolution/settlement services.
+     * This is a position only.
+     * It never becomes settlement authority.
      */
     expectedBaseProfessionalPay: optionalMinorUnitAmountField(),
   },
@@ -192,6 +206,11 @@ const employerCounterPositionSchema = new mongoose.Schema(
       default: null,
     },
 
+    /**
+     * Employer proposed BASE amount.
+     *
+     * Evidence/position only.
+     */
     proposedBaseProfessionalPay: optionalMinorUnitAmountField(),
   },
   {
@@ -214,8 +233,9 @@ const adminOutcomeSchema = new mongoose.Schema(
     finalBaseProfessionalPay: optionalMinorUnitAmountField(),
 
     /**
-     * Required when admin chooses adjusted and the final result cannot be
-     * fully expressed by the structured fields above.
+     * Used when admin establishes
+     * an outcome that cannot be represented
+     * only by structured fields.
      */
     adjustedOutcome: {
       type: String,
@@ -229,7 +249,7 @@ const adminOutcomeSchema = new mongoose.Schema(
   }
 );
 
-/* ─────────────────────────────── CLAIM ISSUE ─────────────────────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ CLAIM ISSUE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 const claimIssueSchema = new mongoose.Schema(
   {
@@ -243,22 +263,18 @@ const claimIssueSchema = new mongoose.Schema(
     },
 
     /**
-     * Service-derived immutable component scope for this individual issue.
+     * Stored BASE scope only.
      *
-     * The professional never submits backend component names directly.
-     *
-     * This issue-level scope is the only stored settlement-component scope
-     * authority on the claim.
-     *
-     * Live blocking scope is derived only from unresolved issues.
+     * Professional ordinary claims never modify
+     * overtime settlement authority.
      */
-    affectedSettlementComponents: requiredUniqueEnumArrayField({
+    challengedSettlementComponents: requiredUniqueEnumArrayField({
       values: SETTLEMENT_BATCH_COMPONENTS,
 
       immutable: true,
 
       message:
-        "Claim issue affectedSettlementComponents must contain one or more unique valid settlement components.",
+        "Claim issue challengedSettlementComponents must contain valid unique settlement components.",
     }),
 
     details: {
@@ -280,41 +296,6 @@ const claimIssueSchema = new mongoose.Schema(
       immutable: true,
     }),
 
-    // --- PROFESSIONAL REBUTTAL ---
-
-    rebuttalStatus: {
-      type: String,
-      enum: OCCURRENCE_CLAIM_REBUTTAL_STATUSES,
-      default: "not_available",
-      required: true,
-    },
-
-    rebuttalDeadlineAt: {
-      type: Date,
-      default: null,
-    },
-
-    rebuttedAt: {
-      type: Date,
-      default: null,
-    },
-
-    rebuttedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
-
-    rebuttalStatement: {
-      type: String,
-      trim: true,
-      minlength: 10,
-      maxlength: 2000,
-      default: null,
-    },
-
-    rebuttalEvidence: evidenceArrayField(),
-
     // --- ISSUE WORKFLOW ---
 
     status: {
@@ -326,6 +307,7 @@ const claimIssueSchema = new mongoose.Schema(
 
     // --- EMPLOYER REVIEW ---
 
+    /* Employer agrees or disagrees with the professional's submitted position. */
     employerDecision: {
       type: String,
       enum: [...EMPLOYER_FINANCIAL_CLAIM_DECISIONS, null],
@@ -351,11 +333,11 @@ const claimIssueSchema = new mongoose.Schema(
     },
 
     /**
-     * Used only when the employer rejects the professional's requested
-     * correction and proposes a different factual/financial position.
+     * Employer's alternative factual/financial
+     * position after rejecting the claim.
      *
-     * Empty counterPosition means the employer says the existing Loqum record
-     * should remain unchanged.
+     * This does not resolve the claim.
+     * It only records disagreement.
      */
     employerCounterPosition: {
       type: employerCounterPositionSchema,
@@ -364,43 +346,14 @@ const claimIssueSchema = new mongoose.Schema(
 
     employerEvidence: evidenceArrayField(),
 
-    // --- PROFESSIONAL APPEAL ---
-
-    appealStatus: {
-      type: String,
-      enum: OCCURRENCE_CLAIM_APPEAL_STATUSES,
-      default: "not_available",
-      required: true,
-    },
-
-    appealDeadlineAt: {
-      type: Date,
-      default: null,
-    },
-
-    appealedAt: {
-      type: Date,
-      default: null,
-    },
-
-    appealedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
-
-    appealStatement: {
-      type: String,
-      trim: true,
-      minlength: 10,
-      maxlength: 2000,
-      default: null,
-    },
-
-    appealEvidence: evidenceArrayField(),
-
     // --- ADMIN ESCALATION ---
 
+    /**
+     * Escalation means:
+     *
+     * "The parties did not reach agreement
+     * and admin authority is now required."
+     */
     escalatedAt: {
       type: Date,
       default: null,
@@ -408,7 +361,7 @@ const claimIssueSchema = new mongoose.Schema(
 
     escalationReason: {
       type: String,
-      enum: [...OCCURRENCE_CLAIM_ESCALATION_REASONS, null],
+      enum: [...OCCURRENCE_CLAIM_ADMIN_REVIEW_REASONS, null],
       default: null,
     },
 
@@ -465,12 +418,13 @@ const claimIssueSchema = new mongoose.Schema(
       default: null,
     },
   },
+
   {
     _id: true,
   }
 );
 
-/* ─────────────────────────────── CLAIM CASE ─────────────────────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ CLAIM CASE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 const shiftOccurrenceClaimSchema = new mongoose.Schema(
   {
@@ -541,28 +495,24 @@ const shiftOccurrenceClaimSchema = new mongoose.Schema(
       immutable: true,
     },
 
-    // --- IMMUTABLE ORIGINAL ISSUE SET ---
+    // --- ORIGINAL IMMUTABLE ISSUE SET ---
 
     /**
-     * Immutable list of ordinary issue types included in the professional's
-     * one original claim submission.
+     * The professional's original complaint scope.
      *
-     * This list prevents later addition/removal of issue types while allowing
-     * workflow fields inside each issue to evolve.
-     *
-     * It is not settlement-component scope.
+     * Cannot expand after submission.
      */
     submittedIssueTypes: requiredUniqueEnumArrayField({
       values: FINANCIAL_OCCURRENCE_CLAIM_TYPES,
 
       immutable: true,
 
-      message:
-        "submittedIssueTypes must contain one or more unique valid professional claim issue types.",
+      message: "submittedIssueTypes must contain valid unique professional claim types.",
     }),
 
     issues: {
       type: [claimIssueSchema],
+
       required: true,
 
       validate: [
@@ -600,15 +550,12 @@ const shiftOccurrenceClaimSchema = new mongoose.Schema(
       immutable: true,
     },
 
-    // --- SHARED OCCURRENCE CHALLENGE WINDOW SNAPSHOT ---
+    // --- CHALLENGE WINDOW SNAPSHOT ---
 
     /**
-     * Historical copy of the ShiftOccurrence-owned shared challenge window
-     * that permitted this original professional claim submission.
+     * Historical snapshot only.
      *
-     * Submitting this claim does not close the ShiftOccurrence challenge
-     * window. The employer may still use its unused ordinary dispute right
-     * before the shared deadline for a genuinely different issue.
+     * ShiftOccurrence owns live challenge authority.
      */
     challengeWindowOpenedAt: {
       type: Date,
@@ -625,9 +572,8 @@ const shiftOccurrenceClaimSchema = new mongoose.Schema(
     // --- EMPLOYER RESPONSE CLOCK ---
 
     /**
-     * All issues are submitted together, so they share one employer response
-     * deadline. At expiry, only still-unresolved employer-review issues are
-     * escalated for employer non-response.
+     * Shared employer response deadline
+     * for all issues in this claim.
      */
     employerResponseDeadlineAt: {
       type: Date,
@@ -635,19 +581,21 @@ const shiftOccurrenceClaimSchema = new mongoose.Schema(
       immutable: true,
     },
 
-    // --- PRE-CLAIM FACT SNAPSHOT ---
+    // --- FACT SNAPSHOT ---
 
     /**
-     * Snapshot of challenge-relevant occurrence facts immediately before the
-     * professional claim is created.
+     * Evidence snapshot only.
      *
-     * This snapshot is evidential/restorative context only. It must never own
-     * settlement, platform-fee, refund, OT-decision, delinquency or challenge-
-     * window authority.
+     * Never owns:
+     * - settlement authority
+     * - refund authority
+     * - overtime authority
      */
     lifecycleSnapshot: {
       type: mongoose.Schema.Types.Mixed,
+
       required: true,
+
       immutable: true,
 
       validate: {
@@ -661,45 +609,39 @@ const shiftOccurrenceClaimSchema = new mongoose.Schema(
           );
         },
 
-        message:
-          "lifecycleSnapshot must contain only challenge-relevant occurrence facts and must not contain settlement, platform-fee, refund, overtime, delinquency, employer-charge, legacy final or challenge-window authority fields.",
+        message: "lifecycleSnapshot may only contain challenge-relevant facts.",
       },
     },
 
-    // --- CASE WORKFLOW STATUS ---
+    // --- CASE WORKFLOW ---
 
     /**
-     * Case status is intentionally coarse.
+     * Coarse case status.
      *
-     * active:
-     * At least one issue is unresolved.
-     *
-     * resolved:
-     * Every issue is finally resolved.
-     *
-     * withdrawn:
-     * The professional withdrew the untouched claim before employer action.
+     * Individual issue status owns workflow.
      */
     status: {
       type: String,
+
       enum: OCCURRENCE_CLAIM_STATUSES,
+
       default: "active",
+
       required: true,
     },
 
     // --- REFUND RELATIONSHIP ---
 
     /**
-     * EmployerRefund relates only to scheduled/base allocation.
+     * Optional reference only.
      *
-     * The relationship is valid only when at least one submitted claim issue
-     * affects BASE.
-     *
-     * There is no case-level component-scope authority.
+     * Refund lifecycle remains owned by EmployerRefund.
      */
     employerRefund: {
       type: mongoose.Schema.Types.ObjectId,
+
       ref: "EmployerRefund",
+
       default: null,
     },
 
@@ -707,33 +649,92 @@ const shiftOccurrenceClaimSchema = new mongoose.Schema(
 
     resolvedAt: {
       type: Date,
+
       default: null,
     },
 
     withdrawnAt: {
       type: Date,
+
       default: null,
     },
 
     withdrawnBy: {
       type: mongoose.Schema.Types.ObjectId,
+
       ref: "User",
+
       default: null,
     },
 
     withdrawalReason: {
       type: String,
+
       trim: true,
+
       maxlength: 500,
+
       default: null,
     },
   },
+
   {
     timestamps: true,
   }
 );
 
-/* ─────────────────────────────── ISSUE VALIDATION HELPERS ─────────────────────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ VALIDATION HELPERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+
+function validateClaimLifecycleDates(claim) {
+  if (
+    claim.submittedAt &&
+    claim.challengeWindowOpenedAt &&
+    claim.submittedAt < claim.challengeWindowOpenedAt
+  ) {
+    claim.invalidate("submittedAt", "Claim submission cannot precede the challenge window.");
+  }
+
+  if (
+    claim.submittedAt &&
+    claim.challengeDeadlineAt &&
+    claim.submittedAt >= claim.challengeDeadlineAt
+  ) {
+    claim.invalidate(
+      "submittedAt",
+      "Claim submission must occur strictly before the challenge deadline."
+    );
+  }
+
+  if (
+    claim.challengeDeadlineAt &&
+    claim.challengeWindowOpenedAt &&
+    claim.challengeDeadlineAt <= claim.challengeWindowOpenedAt
+  ) {
+    claim.invalidate(
+      "challengeDeadlineAt",
+      "Challenge deadline must be later than challenge window opening."
+    );
+  }
+
+  if (
+    claim.employerResponseDeadlineAt &&
+    claim.submittedAt &&
+    claim.employerResponseDeadlineAt < claim.submittedAt
+  ) {
+    claim.invalidate(
+      "employerResponseDeadlineAt",
+      "Employer response deadline cannot be before claim submission."
+    );
+  }
+
+  if (claim.resolvedAt && claim.submittedAt && claim.resolvedAt < claim.submittedAt) {
+    claim.invalidate("resolvedAt", "Claim cannot resolve before submission.");
+  }
+
+  if (claim.withdrawnAt && claim.submittedAt && claim.withdrawnAt < claim.submittedAt) {
+    claim.invalidate("withdrawnAt", "Claim cannot be withdrawn before submission.");
+  }
+}
 
 function hasAttendancePosition(position) {
   return Boolean(position?.correctedCheckInAt || position?.correctedCheckOutAt);
@@ -792,10 +793,40 @@ function validateAdminOutcome(claim, outcome, pathPrefix) {
   }
 }
 
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ISSUE VALIDATION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+
+function validateIssueLifecycleDates(claim, issue, pathPrefix) {
+  const timestamps = ["employerDecidedAt", "escalatedAt", "adminDecidedAt", "resolvedAt"];
+
+  for (const fieldName of timestamps) {
+    if (issue[fieldName] && claim.submittedAt && issue[fieldName] < claim.submittedAt) {
+      claim.invalidate(`${pathPrefix}.${fieldName}`, `${fieldName} cannot precede submission.`);
+    }
+  }
+
+  const orderedPairs = [
+    ["employerDecidedAt", "escalatedAt"],
+    ["escalatedAt", "adminDecidedAt"],
+    ["employerDecidedAt", "resolvedAt"],
+    ["adminDecidedAt", "resolvedAt"],
+  ];
+
+  for (const [earlierField, laterField] of orderedPairs) {
+    if (issue[earlierField] && issue[laterField] && issue[laterField] < issue[earlierField]) {
+      claim.invalidate(
+        `${pathPrefix}.${laterField}`,
+        `${laterField} cannot precede ${earlierField}.`
+      );
+    }
+  }
+}
+
 function validateClaimIssue(claim, issue, index) {
   const pathPrefix = `issues.${index}`;
 
-  const affectedComponents = normalizeComponents(issue.affectedSettlementComponents);
+  validateIssueLifecycleDates(claim, issue, pathPrefix);
+
+  const affectedComponents = normalizeComponents(issue.challengedSettlementComponents);
 
   const details = issue.details || {};
 
@@ -813,29 +844,10 @@ function validateClaimIssue(claim, issue, index) {
     issue.employerDecidedBy,
   ]);
 
-  const employerCounterPosition = issue.employerCounterPosition || null;
-
-  const hasCounterPosition = hasEmployerCounterPosition(employerCounterPosition);
-
-  const hasProfessionalEvidence = Array.isArray(issue.evidence) && issue.evidence.length > 0;
+  const hasCounterPosition = hasEmployerCounterPosition(issue.employerCounterPosition);
 
   const hasEmployerEvidence =
     Array.isArray(issue.employerEvidence) && issue.employerEvidence.length > 0;
-
-  const hasAppealSubmission =
-    hasAny([issue.appealedAt, issue.appealedBy, issue.appealStatement]) ||
-    (Array.isArray(issue.appealEvidence) && issue.appealEvidence.length > 0);
-
-  const hasRebuttalSubmission =
-    hasAny([issue.rebuttedAt, issue.rebuttedBy, issue.rebuttalStatement]) ||
-    (Array.isArray(issue.rebuttalEvidence) && issue.rebuttalEvidence.length > 0);
-
-  if (issue.appealStatus !== "not_available" && issue.rebuttalStatus !== "not_available") {
-    claim.invalidate(
-      `${pathPrefix}.appealStatus`,
-      "An issue cannot have both appeal and rebuttal lifecycles active."
-    );
-  }
 
   const hasEscalationAudit = hasAny([
     issue.escalatedAt,
@@ -854,35 +866,39 @@ function validateClaimIssue(claim, issue, index) {
 
   const hasAdminEvidence = Array.isArray(issue.adminEvidence) && issue.adminEvidence.length > 0;
 
-  const adminOutcome = issue.adminOutcome || null;
+  const hasStructuredAdminOutcome = hasAdminOutcome(issue.adminOutcome);
 
-  const hasStructuredAdminOutcome = hasAdminOutcome(adminOutcome);
-
-  /* ─────────────────────────────── TYPE / COMPONENT SCOPE ─────────────────────────────── */
+  /*
+   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ TYPE / SCOPE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  */
 
   if (!FINANCIAL_OCCURRENCE_CLAIM_TYPES.includes(issue.type)) {
-    claim.invalidate(`${pathPrefix}.type`, "Professional claim issue type is invalid.");
+    claim.invalidate(`${pathPrefix}.type`, "Invalid professional claim issue type.");
   }
 
-  if (affectedComponents.length === 0) {
+  if (!sameComponents(affectedComponents, ["base"])) {
     claim.invalidate(
-      `${pathPrefix}.affectedSettlementComponents`,
-      "Each professional claim issue must affect at least one settlement component."
+      `${pathPrefix}.challengedSettlementComponents`,
+      "Professional claims may only affect BASE settlement."
     );
   }
+
+  /*
+   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ PROFESSIONAL DETAILS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  */
 
   if (issue.type === "attendance_correction") {
     if (!hasAttendanceCorrection) {
       claim.invalidate(
         `${pathPrefix}.details.attendanceCorrection`,
-        "attendance_correction requires a corrected check-in time, corrected checkout time, or both."
+        "Attendance correction requires corrected attendance facts."
       );
     }
 
     if (hasExpectedBasePay) {
       claim.invalidate(
         `${pathPrefix}.details.expectedBaseProfessionalPay`,
-        "attendance_correction cannot also contain an expected BASE-pay amount."
+        "Attendance correction cannot contain BASE amount request."
       );
     }
 
@@ -894,378 +910,93 @@ function validateClaimIssue(claim, issue, index) {
     );
   }
 
-  if (issue.type === "payment_calculation") {
-    if (hasAttendanceCorrection) {
-      claim.invalidate(
-        `${pathPrefix}.details.attendanceCorrection`,
-        "payment_calculation cannot contain attendance-correction timestamps."
-      );
-    }
-
-    if (!sameComponents(affectedComponents, ["base"])) {
-      claim.invalidate(
-        `${pathPrefix}.affectedSettlementComponents`,
-        "payment_calculation is a BASE claim and must affect only the base settlement component."
-      );
-    }
+  if (issue.type !== "attendance_correction" && hasAttendanceCorrection) {
+    claim.invalidate(
+      `${pathPrefix}.details.attendanceCorrection`,
+      "Only attendance correction issues may contain attendance facts."
+    );
   }
 
-  if (issue.type === "employer_fault") {
-    if (hasAttendanceCorrection) {
-      claim.invalidate(
-        `${pathPrefix}.details.attendanceCorrection`,
-        "employer_fault cannot contain attendance-correction timestamps."
-      );
-    }
-
-    if (!affectedComponents.includes("base")) {
-      claim.invalidate(
-        `${pathPrefix}.affectedSettlementComponents`,
-        "employer_fault must affect BASE entitlement and cannot be used as an overtime-only claim."
-      );
-    }
-  }
-
-  /* ─────────────────────────────── EMPLOYER REVIEW ─────────────────────────────── */
+  /*
+   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ EMPLOYER REVIEW â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  */
 
   if (hasEmployerDecision) {
     if (!issue.employerDecisionReason || !issue.employerDecidedAt || !issue.employerDecidedBy) {
       claim.invalidate(
-        `${pathPrefix}.employerDecidedAt`,
-        "An employer issue decision requires a reason, decision time and deciding user."
+        `${pathPrefix}.employerDecision`,
+        "Employer decision requires reason, timestamp and user."
       );
     }
   } else if (hasEmployerDecisionAudit || hasCounterPosition || hasEmployerEvidence) {
     claim.invalidate(
       `${pathPrefix}.employerDecision`,
-      "Employer decision audit, counter-position or evidence requires an employer decision."
-    );
-  }
-
-  if (issue.employerDecidedAt && claim.submittedAt && issue.employerDecidedAt < claim.submittedAt) {
-    claim.invalidate(
-      `${pathPrefix}.employerDecidedAt`,
-      "The employer cannot decide an issue before the claim is submitted."
-    );
-  }
-
-  if (
-    issue.employerDecidedAt &&
-    claim.employerResponseDeadlineAt &&
-    issue.employerDecidedAt >= claim.employerResponseDeadlineAt
-  ) {
-    claim.invalidate(
-      `${pathPrefix}.employerDecidedAt`,
-      "The employer decision must be recorded before employerResponseDeadlineAt."
+      "Employer response data requires employer decision."
     );
   }
 
   if (issue.employerDecision === "approved" && hasCounterPosition) {
     claim.invalidate(
       `${pathPrefix}.employerCounterPosition`,
-      "Employer approval accepts the professional's requested issue outcome and cannot contain a different counter-position."
+      "Approved claims cannot contain employer counter-position."
     );
   }
 
   if (hasCounterPosition) {
-    if (!hasProfessionalEvidence) {
+    if (
+      issue.type === "attendance_correction" &&
+      hasValue(issue.employerCounterPosition.proposedBaseProfessionalPay)
+    ) {
       claim.invalidate(
-        `${pathPrefix}.employerCounterPosition`,
-        "An employer counter-position requires the professional's original claim issue to contain supporting evidence."
-      );
-    }
-
-    if (!hasEmployerEvidence) {
-      claim.invalidate(
-        `${pathPrefix}.employerEvidence`,
-        "An employer counter-position requires supporting employer evidence."
+        `${pathPrefix}.employerCounterPosition.proposedBaseProfessionalPay`,
+        "Attendance counter-positions must contain attendance facts, not a direct BASE amount."
       );
     }
 
     validateAttendancePosition(
       claim,
-      employerCounterPosition,
+      issue.employerCounterPosition,
       `${pathPrefix}.employerCounterPosition`,
       "Employer"
     );
 
     if (
       issue.type !== "attendance_correction" &&
-      (employerCounterPosition.correctedCheckInAt || employerCounterPosition.correctedCheckOutAt)
+      (issue.employerCounterPosition.correctedCheckInAt ||
+        issue.employerCounterPosition.correctedCheckOutAt)
     ) {
       claim.invalidate(
         `${pathPrefix}.employerCounterPosition`,
-        "Employer attendance counter-position is only valid for an attendance_correction issue."
-      );
-    }
-
-    if (
-      issue.type === "attendance_correction" &&
-      hasValue(employerCounterPosition.proposedBaseProfessionalPay)
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.employerCounterPosition.proposedBaseProfessionalPay`,
-        "attendance_correction employer counter-position must state attendance facts, not a replacement BASE-pay amount."
+        "Employer attendance position only applies to attendance correction."
       );
     }
   }
 
-  /* ─────────────────────────────── APPEAL ─────────────────────────────── */
-
-  if (issue.appealStatus === "not_available") {
-    if (issue.appealDeadlineAt || hasAppealSubmission) {
-      claim.invalidate(
-        `${pathPrefix}.appealStatus`,
-        "An unavailable issue appeal cannot contain an appeal deadline or appeal submission."
-      );
-    }
-  }
-
-  if (["available", "submitted", "expired", "resolved"].includes(issue.appealStatus)) {
-    if (
-      issue.employerDecision !== "rejected" ||
-      !issue.appealDeadlineAt ||
-      !issue.employerDecidedAt
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.appealStatus`,
-        `${issue.appealStatus} issue appeal status requires an employer rejection and appeal deadline.`
-      );
-    }
-
-    if (
-      issue.appealDeadlineAt &&
-      issue.employerDecidedAt &&
-      issue.appealDeadlineAt <= issue.employerDecidedAt
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.appealDeadlineAt`,
-        "Issue appeal deadline must be later than the employer rejection."
-      );
-    }
-  }
-
-  if (issue.appealStatus !== "not_available" && hasCounterPosition) {
-    claim.invalidate(
-      `${pathPrefix}.appealStatus`,
-      "A claim issue with an employer counter-position cannot use the professional appeal lifecycle."
-    );
-  }
-
-  if (issue.appealStatus === "available") {
-    if (hasAppealSubmission) {
-      claim.invalidate(
-        `${pathPrefix}.appealStatus`,
-        "An available issue appeal cannot already contain submitted appeal details."
-      );
-    }
-
-    if (
-      hasEscalationAudit ||
-      hasAdminDecision ||
-      hasAdminDecisionAudit ||
-      hasStructuredAdminOutcome ||
-      hasAdminEvidence
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.appealStatus`,
-        "An available issue appeal cannot already contain escalation or admin-resolution data."
-      );
-    }
-  }
-
-  if (issue.appealStatus === "submitted") {
-    if (!issue.appealedAt || !issue.appealedBy || !issue.appealStatement) {
-      claim.invalidate(
-        `${pathPrefix}.appealStatus`,
-        "A submitted issue appeal requires appeal time, appealing user and appeal statement."
-      );
-    }
-
-    if (issue.appealedAt && issue.employerDecidedAt && issue.appealedAt < issue.employerDecidedAt) {
-      claim.invalidate(
-        `${pathPrefix}.appealedAt`,
-        "An issue appeal cannot be submitted before the employer decision."
-      );
-    }
-
-    if (issue.appealedAt && issue.appealDeadlineAt && issue.appealedAt >= issue.appealDeadlineAt) {
-      claim.invalidate(
-        `${pathPrefix}.appealedAt`,
-        "An issue appeal must be submitted before appealDeadlineAt."
-      );
-    }
-  }
-
-  if (issue.appealStatus === "expired") {
-    if (hasAppealSubmission) {
-      claim.invalidate(
-        `${pathPrefix}.appealStatus`,
-        "An expired issue appeal cannot contain submitted appeal details."
-      );
-    }
-
-    if (
-      hasEscalationAudit ||
-      hasAdminDecision ||
-      hasAdminDecisionAudit ||
-      hasStructuredAdminOutcome ||
-      hasAdminEvidence
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.appealStatus`,
-        "An unappealed employer rejection cannot contain admin-escalation data."
-      );
-    }
-  }
-
-  if (issue.appealStatus === "resolved") {
-    if (!issue.appealedAt || !issue.appealedBy || !issue.appealStatement || !hasAdminDecision) {
-      claim.invalidate(
-        `${pathPrefix}.appealStatus`,
-        "A resolved issue appeal requires a submitted professional appeal and final admin decision."
-      );
-    }
-  }
-
-  /* ─────────────────────────────── REBUTTAL ─────────────────────────────── */
-
-  if (issue.rebuttalStatus === "not_available") {
-    if (issue.rebuttalDeadlineAt || hasRebuttalSubmission) {
-      claim.invalidate(
-        `${pathPrefix}.rebuttalStatus`,
-        "An unavailable issue rebuttal cannot contain a rebuttal deadline or rebuttal submission."
-      );
-    }
-  }
-
-  if (["available", "submitted", "expired", "resolved"].includes(issue.rebuttalStatus)) {
-    if (
-      issue.employerDecision !== "rejected" ||
-      !hasCounterPosition ||
-      !issue.rebuttalDeadlineAt ||
-      !issue.employerDecidedAt
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.rebuttalStatus`,
-        `${issue.rebuttalStatus} issue rebuttal status requires employer rejection, counter-position and rebuttal deadline.`
-      );
-    }
-
-    if (
-      issue.rebuttalDeadlineAt &&
-      issue.employerDecidedAt &&
-      issue.rebuttalDeadlineAt <= issue.employerDecidedAt
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.rebuttalDeadlineAt`,
-        "Issue rebuttal deadline must be later than employer counter-position."
-      );
-    }
-  }
-
-  if (issue.rebuttalStatus === "available") {
-    if (hasRebuttalSubmission) {
-      claim.invalidate(
-        `${pathPrefix}.rebuttalStatus`,
-        "An available issue rebuttal cannot already contain submitted rebuttal details."
-      );
-    }
-  }
-
-  if (issue.rebuttalStatus === "submitted") {
-    if (!issue.rebuttedAt || !issue.rebuttedBy || !issue.rebuttalStatement) {
-      claim.invalidate(
-        `${pathPrefix}.rebuttalStatus`,
-        "A submitted issue rebuttal requires rebuttal time, submitting user and rebuttal statement."
-      );
-    }
-
-    if (
-      issue.rebuttedAt &&
-      issue.rebuttalDeadlineAt &&
-      issue.rebuttedAt >= issue.rebuttalDeadlineAt
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.rebuttedAt`,
-        "An issue rebuttal must be submitted before rebuttalDeadlineAt."
-      );
-    }
-  }
-
-  if (issue.rebuttalStatus === "expired") {
-    if (hasRebuttalSubmission) {
-      claim.invalidate(
-        `${pathPrefix}.rebuttalStatus`,
-        "An expired issue rebuttal cannot contain submitted rebuttal details."
-      );
-    }
-  }
-
-  if (issue.rebuttalStatus === "resolved") {
-    if (!issue.rebuttedAt || !issue.rebuttedBy || !issue.rebuttalStatement || !hasAdminDecision) {
-      claim.invalidate(
-        `${pathPrefix}.rebuttalStatus`,
-        "A resolved issue rebuttal requires submitted professional rebuttal and final admin decision."
-      );
-    }
-  }
-
-  if (issue.rebuttedAt && issue.employerDecidedAt && issue.rebuttedAt < issue.employerDecidedAt) {
-    claim.invalidate(
-      `${pathPrefix}.rebuttedAt`,
-      "An issue rebuttal cannot be submitted before the employer decision."
-    );
-  }
-
-  /* ─────────────────────────────── ESCALATION ─────────────────────────────── */
+  /*
+   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ESCALATION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  */
 
   if (hasEscalationAudit) {
     if (!issue.escalatedAt || !issue.escalationReason) {
       claim.invalidate(
         `${pathPrefix}.escalationReason`,
-        "Issue escalation requires escalatedAt and escalationReason."
+        "Escalation requires a timestamp and reason."
+      );
+    }
+
+    if (issue.escalationReason !== "employer_non_response" && !issue.escalatedBy) {
+      claim.invalidate(
+        `${pathPrefix}.escalatedBy`,
+        "An escalation other than employer non-response requires a user."
       );
     }
   }
 
-  if (issue.escalatedAt && claim.submittedAt && issue.escalatedAt < claim.submittedAt) {
-    claim.invalidate(
-      `${pathPrefix}.escalatedAt`,
-      "An issue cannot be escalated before the claim is submitted."
-    );
-  }
-
-  if (issue.escalationReason === "professional_appeal") {
-    if (
-      issue.employerDecision !== "rejected" ||
-      !["submitted", "resolved"].includes(issue.appealStatus) ||
-      !issue.appealedAt ||
-      !issue.appealStatement
-    ) {
+  if (issue.escalationReason === "employer_disagreement") {
+    if (issue.employerDecision !== "rejected") {
       claim.invalidate(
         `${pathPrefix}.escalationReason`,
-        "Professional-appeal escalation requires an employer rejection and submitted professional appeal."
-      );
-    }
-
-    if (issue.escalatedAt && issue.appealedAt && issue.escalatedAt < issue.appealedAt) {
-      claim.invalidate(
-        `${pathPrefix}.escalatedAt`,
-        "Professional-appeal escalation cannot predate the appeal."
-      );
-    }
-  }
-
-  if (issue.escalationReason === "employer_counter_position") {
-    if (
-      issue.employerDecision !== "rejected" ||
-      !hasCounterPosition ||
-      !["submitted", "expired", "resolved"].includes(issue.rebuttalStatus)
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.escalationReason`,
-        "Employer counter-position escalation requires an employer rejection, supported counter-position and a submitted, expired or resolved professional rebuttal lifecycle."
+        "Employer disagreement requires an audited rejection."
       );
     }
   }
@@ -1274,24 +1005,18 @@ function validateClaimIssue(claim, issue, index) {
     if (
       hasEmployerDecision ||
       !claim.employerResponseDeadlineAt ||
-      !issue.escalatedAt ||
       issue.escalatedAt < claim.employerResponseDeadlineAt
     ) {
       claim.invalidate(
         `${pathPrefix}.escalationReason`,
-        "Employer non-response escalation requires no employer decision and an expired employer response deadline."
-      );
-    }
-
-    if (issue.appealStatus !== "not_available") {
-      claim.invalidate(
-        `${pathPrefix}.appealStatus`,
-        "Employer non-response escalation cannot create a professional appeal."
+        "Employer non-response requires expired response window."
       );
     }
   }
 
-  /* ─────────────────────────────── ADMIN DECISION ─────────────────────────────── */
+  /*
+   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ADMIN DECISION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  */
 
   if (hasAdminDecision) {
     if (
@@ -1301,550 +1026,196 @@ function validateClaimIssue(claim, issue, index) {
       !issue.escalatedAt ||
       !issue.escalationReason
     ) {
-      claim.invalidate(
-        `${pathPrefix}.adminDecidedAt`,
-        "An admin issue decision requires escalation, reason, decision time and deciding user."
-      );
+      claim.invalidate(`${pathPrefix}.adminDecision`, "Admin decision requires escalation audit.");
     }
   } else if (hasAdminDecisionAudit || hasStructuredAdminOutcome) {
-    claim.invalidate(
-      `${pathPrefix}.adminDecision`,
-      "Admin decision audit or final outcome requires an admin decision."
-    );
+    claim.invalidate(`${pathPrefix}.adminDecision`, "Admin outcome requires admin decision.");
   }
 
   if (hasAdminEvidence && !issue.escalatedAt) {
-    claim.invalidate(
-      `${pathPrefix}.adminEvidence`,
-      "Admin evidence may only be recorded after the issue has been escalated for admin review."
-    );
+    claim.invalidate(`${pathPrefix}.adminEvidence`, "Admin evidence requires escalation.");
   }
 
-  if (issue.adminDecidedAt && issue.escalatedAt && issue.adminDecidedAt < issue.escalatedAt) {
+  if (hasAdminDecision && issue.status !== "resolved") {
     claim.invalidate(
-      `${pathPrefix}.adminDecidedAt`,
-      "Admin cannot decide an issue before escalation."
-    );
-  }
-
-  validateAdminOutcome(claim, adminOutcome, `${pathPrefix}.adminOutcome`);
-
-  if (issue.adminDecision === "adjusted" && !hasStructuredAdminOutcome) {
-    claim.invalidate(
-      `${pathPrefix}.adminOutcome`,
-      "An adjusted admin decision requires a recorded final adjusted outcome."
-    );
-  }
-
-  if (issue.adminDecision === "adjusted" && issue.type === "attendance_correction") {
-    if (!adminOutcome?.finalCheckInAt && !adminOutcome?.finalCheckOutAt) {
-      claim.invalidate(
-        `${pathPrefix}.adminOutcome`,
-        "An adjusted attendance_correction requires final authoritative check-in, checkout, or both."
-      );
-    }
-
-    if (hasValue(adminOutcome?.finalBaseProfessionalPay)) {
-      claim.invalidate(
-        `${pathPrefix}.adminOutcome.finalBaseProfessionalPay`,
-        "An attendance_correction establishes attendance facts; BASE pay must be recalculated from those facts."
-      );
-    }
-  }
-
-  if (
-    issue.adminDecision === "adjusted" &&
-    issue.type === "payment_calculation" &&
-    !hasValue(adminOutcome?.finalBaseProfessionalPay)
-  ) {
-    claim.invalidate(
-      `${pathPrefix}.adminOutcome.finalBaseProfessionalPay`,
-      "An adjusted payment_calculation requires the final authoritative BASE professional-pay amount."
-    );
-  }
-
-  if (issue.adminDecision !== "adjusted" && hasStructuredAdminOutcome) {
-    claim.invalidate(
-      `${pathPrefix}.adminOutcome`,
-      "Only an adjusted admin decision may contain replacement authoritative facts or values."
-    );
-  }
-
-  if (
-    issue.type !== "attendance_correction" &&
-    adminOutcome &&
-    (adminOutcome.finalCheckInAt || adminOutcome.finalCheckOutAt)
-  ) {
-    claim.invalidate(
-      `${pathPrefix}.adminOutcome`,
-      "Admin attendance outcome fields are only valid for an attendance_correction issue."
+      `${pathPrefix}.adminDecision`,
+      "A final admin decision requires resolved issue status."
     );
   }
 
   if (issue.adminDecision === "approve_employer" && !hasCounterPosition) {
     claim.invalidate(
       `${pathPrefix}.adminDecision`,
-      "approve_employer requires an employer counter-position on the claim issue."
+      "Approving the employer position requires a recorded counter-position."
     );
   }
 
-  /* ─────────────────────────────── ISSUE STATUS ─────────────────────────────── */
+  if (hasAdminDecision && issue.adminDecision !== "adjusted" && issue.adminOutcome != null) {
+    claim.invalidate(
+      `${pathPrefix}.adminOutcome`,
+      "Only an adjusted decision may contain an admin outcome."
+    );
+  }
+
+  if (issue.adminDecision === "adjusted") {
+    if (!hasStructuredAdminOutcome) {
+      claim.invalidate(
+        `${pathPrefix}.adminOutcome`,
+        "An adjusted decision requires a final outcome."
+      );
+    }
+
+    const outcome = issue.adminOutcome || {};
+    const hasFinalAttendance = Boolean(outcome.finalCheckInAt || outcome.finalCheckOutAt);
+    const hasFinalBasePay = hasValue(outcome.finalBaseProfessionalPay);
+
+    if (issue.type === "attendance_correction") {
+      if (!hasFinalAttendance || hasFinalBasePay) {
+        claim.invalidate(
+          `${pathPrefix}.adminOutcome`,
+          "Adjusted attendance requires final attendance facts, without a direct BASE amount."
+        );
+      }
+    } else if (hasFinalAttendance) {
+      claim.invalidate(
+        `${pathPrefix}.adminOutcome`,
+        "Only attendance correction may contain final attendance facts."
+      );
+    }
+
+    if (issue.type === "payment_calculation" && !hasFinalBasePay) {
+      claim.invalidate(
+        `${pathPrefix}.adminOutcome.finalBaseProfessionalPay`,
+        "An adjusted payment calculation requires final BASE professional pay."
+      );
+    }
+  }
+
+  validateAdminOutcome(claim, issue.adminOutcome, `${pathPrefix}.adminOutcome`);
+
+  /*
+   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ISSUE STATUS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  */
 
   if (issue.status === "awaiting_employer_review") {
     if (
       hasEmployerDecision ||
-      hasEmployerDecisionAudit ||
       hasCounterPosition ||
       hasEmployerEvidence ||
-      issue.appealStatus !== "not_available" ||
-      hasAppealSubmission ||
       hasEscalationAudit ||
       hasAdminDecision ||
-      hasAdminDecisionAudit ||
-      hasStructuredAdminOutcome ||
-      hasAdminEvidence ||
       issue.resolvedAt
     ) {
       claim.invalidate(
         `${pathPrefix}.status`,
-        "awaiting_employer_review cannot contain employer decision, appeal, escalation, admin resolution or finalization data."
-      );
-    }
-  }
-
-  if (issue.status === "awaiting_professional_appeal") {
-    if (
-      issue.employerDecision !== "rejected" ||
-      issue.appealStatus !== "available" ||
-      !issue.appealDeadlineAt
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.status`,
-        "awaiting_professional_appeal requires employer rejection and an available appeal."
-      );
-    }
-
-    if (
-      hasAppealSubmission ||
-      hasEscalationAudit ||
-      hasAdminDecision ||
-      hasAdminDecisionAudit ||
-      hasStructuredAdminOutcome ||
-      hasAdminEvidence ||
-      issue.resolvedAt
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.status`,
-        "awaiting_professional_appeal cannot contain submitted appeal, escalation, admin resolution or finalization data."
-      );
-    }
-  }
-
-  if (issue.status === "awaiting_professional_rebuttal") {
-    if (
-      issue.employerDecision !== "rejected" ||
-      !hasCounterPosition ||
-      issue.rebuttalStatus !== "available" ||
-      !issue.rebuttalDeadlineAt
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.status`,
-        "awaiting_professional_rebuttal requires employer counter-position and available rebuttal."
-      );
-    }
-
-    if (
-      issue.appealStatus !== "not_available" ||
-      hasAppealSubmission ||
-      hasRebuttalSubmission ||
-      hasEscalationAudit ||
-      hasAdminDecision ||
-      hasAdminDecisionAudit ||
-      hasStructuredAdminOutcome ||
-      hasAdminEvidence ||
-      issue.resolvedAt
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.status`,
-        "awaiting_professional_rebuttal cannot contain submitted rebuttal, escalation, admin resolution or finalization data."
+        "Awaiting employer review cannot contain later workflow data."
       );
     }
   }
 
   if (issue.status === "awaiting_admin_review") {
     if (!issue.escalatedAt || !issue.escalationReason) {
+      claim.invalidate(`${pathPrefix}.status`, "Admin review requires escalation.");
+    }
+
+    if (hasAdminDecision || hasAdminDecisionAudit || hasStructuredAdminOutcome) {
       claim.invalidate(
         `${pathPrefix}.status`,
-        "awaiting_admin_review requires an escalated issue."
-      );
-    }
-
-    if (issue.escalationReason === "professional_appeal" && issue.appealStatus !== "submitted") {
-      claim.invalidate(
-        `${pathPrefix}.appealStatus`,
-        "A professionally appealed issue awaiting admin review must have submitted appeal status."
-      );
-    }
-
-    if (
-      issue.escalationReason === "employer_non_response" &&
-      issue.appealStatus !== "not_available"
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.appealStatus`,
-        "Employer non-response issue awaiting admin review cannot have an appeal lifecycle."
-      );
-    }
-
-    if (
-      issue.escalationReason === "employer_counter_position" &&
-      !["submitted", "expired"].includes(issue.rebuttalStatus)
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.rebuttalStatus`,
-        "Employer counter-position issue awaiting admin review must have submitted or expired rebuttal status."
-      );
-    }
-
-    if (
-      issue.escalationReason !== "employer_counter_position" &&
-      issue.rebuttalStatus !== "not_available"
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.rebuttalStatus`,
-        "Only employer_counter_position escalation may use the rebuttal lifecycle."
-      );
-    }
-
-    if (
-      hasAdminDecision ||
-      hasAdminDecisionAudit ||
-      hasStructuredAdminOutcome ||
-      issue.resolvedAt
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.status`,
-        "awaiting_admin_review cannot contain a final admin outcome or resolvedAt."
+        "An issue awaiting admin review cannot contain a final admin decision or outcome."
       );
     }
   }
 
   if (issue.status === "resolved") {
     if (!issue.resolvedAt) {
-      claim.invalidate(`${pathPrefix}.resolvedAt`, "A resolved claim issue requires resolvedAt.");
+      claim.invalidate(`${pathPrefix}.resolvedAt`, "Resolved issue requires resolvedAt.");
     }
 
-    const resolvedByEmployerApproval =
-      issue.employerDecision === "approved" &&
-      issue.employerDecisionReason &&
-      issue.employerDecidedAt &&
-      issue.employerDecidedBy &&
-      issue.appealStatus === "not_available" &&
-      issue.rebuttalStatus === "not_available" &&
-      !hasEscalationAudit &&
-      !hasAdminDecision;
-
-    const resolvedByUnappealedEmployerRejection =
-      issue.employerDecision === "rejected" &&
-      issue.employerDecisionReason &&
-      issue.employerDecidedAt &&
-      issue.employerDecidedBy &&
-      !hasCounterPosition &&
-      issue.appealStatus === "expired" &&
-      issue.appealDeadlineAt &&
-      issue.rebuttalStatus === "not_available" &&
-      !hasAppealSubmission &&
-      !hasEscalationAudit;
+    const resolvedByEmployer =
+      issue.employerDecision === "approved" && !issue.escalatedAt && !issue.adminDecision;
 
     const resolvedByAdmin =
       hasAdminDecision &&
-      issue.adminDecisionReason &&
-      issue.adminDecidedAt &&
-      issue.adminDecidedBy &&
       issue.escalatedAt &&
       issue.escalationReason &&
-      issue.escalationReason !== "employer_counter_position";
-
-    const resolvedByEmployerCounterPositionAdmin =
-      issue.escalationReason === "employer_counter_position" &&
-      ["resolved", "expired"].includes(issue.rebuttalStatus) &&
-      hasAdminDecision &&
-      issue.adminDecisionReason &&
       issue.adminDecidedAt &&
       issue.adminDecidedBy &&
-      issue.escalatedAt;
+      (issue.adminDecision !== "adjusted" || hasStructuredAdminOutcome);
 
-    if (
-      !resolvedByEmployerApproval &&
-      !resolvedByUnappealedEmployerRejection &&
-      !resolvedByAdmin &&
-      !resolvedByEmployerCounterPositionAdmin
-    ) {
+    if (!resolvedByEmployer && !resolvedByAdmin) {
       claim.invalidate(
         `${pathPrefix}.status`,
-        "A resolved claim issue requires employer approval, an unappealed employer rejection or a final admin decision."
-      );
-    }
-
-    if (issue.escalationReason === "professional_appeal" && issue.appealStatus !== "resolved") {
-      claim.invalidate(
-        `${pathPrefix}.appealStatus`,
-        "A professionally appealed issue must have resolved appeal status after the admin decision."
-      );
-    }
-
-    if (
-      issue.escalationReason === "employer_non_response" &&
-      issue.appealStatus !== "not_available"
-    ) {
-      claim.invalidate(
-        `${pathPrefix}.appealStatus`,
-        "Employer non-response resolution cannot contain a professional appeal."
+        "Resolved issue requires employer approval or admin decision."
       );
     }
   } else if (issue.resolvedAt) {
-    claim.invalidate(
-      `${pathPrefix}.resolvedAt`,
-      "resolvedAt may only be set when the claim issue status is resolved."
-    );
-  }
-
-  /* ─────────────────────────────── DATE ORDERING ─────────────────────────────── */
-
-  if (issue.resolvedAt && claim.submittedAt && issue.resolvedAt < claim.submittedAt) {
-    claim.invalidate(
-      `${pathPrefix}.resolvedAt`,
-      "Issue resolvedAt cannot be earlier than claim submittedAt."
-    );
-  }
-
-  if (issue.resolvedAt && issue.employerDecidedAt && issue.resolvedAt < issue.employerDecidedAt) {
-    claim.invalidate(
-      `${pathPrefix}.resolvedAt`,
-      "Issue resolvedAt cannot be earlier than the employer decision."
-    );
-  }
-
-  if (issue.resolvedAt && issue.adminDecidedAt && issue.resolvedAt < issue.adminDecidedAt) {
-    claim.invalidate(
-      `${pathPrefix}.resolvedAt`,
-      "Issue resolvedAt cannot be earlier than the admin decision."
-    );
+    claim.invalidate(`${pathPrefix}.resolvedAt`, "resolvedAt only applies to resolved issues.");
   }
 }
 
-/* ─────────────────────────────── CASE VALIDATION ─────────────────────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ CASE VALIDATION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 shiftOccurrenceClaimSchema.pre("validate", function validateShiftOccurrenceClaim() {
+  validateClaimLifecycleDates(this);
+
   const issues = Array.isArray(this.issues) ? this.issues : [];
 
   const submittedIssueTypes = normalizeIssueTypes(this.submittedIssueTypes);
 
   const actualIssueTypes = normalizeIssueTypes(issues.map((issue) => issue?.type));
 
-  /**
-   * Derived only for validation.
-   *
-   * This is not stored on the case.
-   *
-   * Original submitted component scope can always be reconstructed from all
-   * issues, while live scope is reconstructed from unresolved issues only.
-   */
-  const submittedIssueComponents = SETTLEMENT_BATCH_COMPONENTS.filter((component) =>
-    issues.some((issue) =>
-      normalizeComponents(issue?.affectedSettlementComponents).includes(component)
-    )
-  );
-
-  const hasWithdrawalAudit = hasAny([this.withdrawnAt, this.withdrawnBy, this.withdrawalReason]);
-
-  /* ─────────────────────────────── ORIGINAL ISSUE SET ─────────────────────────────── */
-
-  if (submittedIssueTypes.length === 0) {
-    this.invalidate(
-      "submittedIssueTypes",
-      "A professional claim must contain at least one submitted ordinary issue type."
-    );
-  }
+  issues.forEach((issue, index) => validateClaimIssue(this, issue, index));
 
   if (!sameIssueTypes(submittedIssueTypes, actualIssueTypes)) {
-    this.invalidate(
-      "issues",
-      "The claim issues must exactly match the immutable submittedIssueTypes set."
-    );
+    this.invalidate("issues", "Issues must match submitted issue types.");
   }
 
-  issues.forEach((issue, index) => {
-    validateClaimIssue(this, issue, index);
-  });
-
-  /*
-   * EmployerRefund is a BASE-only relationship.
-   *
-   * There is deliberately no persisted case-level component union.
-   */
-  if (this.employerRefund && !submittedIssueComponents.includes("base")) {
-    this.invalidate(
-      "employerRefund",
-      "A claim with no BASE-affecting issue cannot own a scheduled/base EmployerRefund relationship."
-    );
+  if (this.status === "active" && !issues.some((issue) => issue.status !== "resolved")) {
+    this.invalidate("status", "Active claim requires unresolved issues.");
   }
 
-  /* ─────────────────────────────── SHARED CHALLENGE WINDOW ─────────────────────────────── */
-
-  if (
-    this.challengeWindowOpenedAt &&
-    this.challengeDeadlineAt &&
-    this.challengeDeadlineAt <= this.challengeWindowOpenedAt
-  ) {
-    this.invalidate(
-      "challengeDeadlineAt",
-      "challengeDeadlineAt must be later than challengeWindowOpenedAt."
-    );
-  }
-
-  if (
-    this.submittedAt &&
-    this.challengeWindowOpenedAt &&
-    this.submittedAt < this.challengeWindowOpenedAt
-  ) {
-    this.invalidate(
-      "submittedAt",
-      "A professional claim cannot be submitted before the shared occurrence challenge window opens."
-    );
-  }
-
-  /**
-   * At the deadline the ordinary submission right has expired.
-   */
-  if (
-    this.submittedAt &&
-    this.challengeDeadlineAt &&
-    this.submittedAt >= this.challengeDeadlineAt
-  ) {
-    this.invalidate(
-      "submittedAt",
-      "A professional claim must be submitted strictly before challengeDeadlineAt."
-    );
-  }
-
-  /* ─────────────────────────────── EMPLOYER RESPONSE CLOCK ─────────────────────────────── */
-
-  if (
-    this.employerResponseDeadlineAt &&
-    this.submittedAt &&
-    this.employerResponseDeadlineAt <= this.submittedAt
-  ) {
-    this.invalidate(
-      "employerResponseDeadlineAt",
-      "employerResponseDeadlineAt must be later than submittedAt."
-    );
-  }
-
-  /* ─────────────────────────────── CASE STATUS ─────────────────────────────── */
-
-  const unresolvedIssues = issues.filter((issue) => issue?.status !== "resolved");
-
-  const resolvedIssues = issues.filter((issue) => issue?.status === "resolved");
-
-  if (this.status === "active") {
-    if (unresolvedIssues.length === 0) {
-      this.invalidate("status", "An active claim must contain at least one unresolved issue.");
-    }
-
-    if (this.resolvedAt || hasWithdrawalAudit) {
-      this.invalidate(
-        "status",
-        "An active claim cannot contain case resolution or withdrawal audit."
-      );
-    }
+  if (this.status === "resolved" && issues.some((issue) => issue.status !== "resolved")) {
+    this.invalidate("status", "Resolved claim requires all issues resolved.");
   }
 
   if (this.status === "resolved") {
-    if (issues.length === 0 || resolvedIssues.length !== issues.length) {
-      this.invalidate("status", "A resolved claim requires every submitted issue to be resolved.");
-    }
-
     if (!this.resolvedAt) {
       this.invalidate("resolvedAt", "A resolved claim requires resolvedAt.");
     }
 
-    if (hasWithdrawalAudit) {
-      this.invalidate("status", "A resolved claim cannot also contain withdrawal details.");
-    }
-
-    const latestIssueResolution = issues.reduce((latest, issue) => {
-      if (!issue?.resolvedAt) {
-        return latest;
-      }
-
-      if (!latest || issue.resolvedAt > latest) {
-        return issue.resolvedAt;
-      }
-
-      return latest;
-    }, null);
-
-    if (latestIssueResolution && this.resolvedAt && this.resolvedAt < latestIssueResolution) {
-      this.invalidate(
-        "resolvedAt",
-        "Claim resolvedAt cannot be earlier than the latest issue resolution."
-      );
+    if (issues.some((issue) => issue.resolvedAt && this.resolvedAt < issue.resolvedAt)) {
+      this.invalidate("resolvedAt", "Claim resolution cannot precede issue resolution.");
     }
   } else if (this.resolvedAt) {
-    this.invalidate("resolvedAt", "resolvedAt may only be set when claim status is resolved.");
+    this.invalidate("resolvedAt", "resolvedAt may only be recorded on a resolved claim.");
   }
+
+  const withdrawalFields = ["withdrawnAt", "withdrawnBy", "withdrawalReason"];
 
   if (this.status === "withdrawn") {
-    if (!this.withdrawnAt || !this.withdrawnBy || !this.withdrawalReason) {
-      this.invalidate(
-        "withdrawnAt",
-        "A withdrawn claim requires withdrawal time, user and reason."
-      );
+    for (const fieldName of withdrawalFields) {
+      if (!hasValue(this[fieldName])) {
+        this.invalidate(fieldName, `A withdrawn claim requires ${fieldName}.`);
+      }
     }
 
-    if (this.resolvedAt) {
-      this.invalidate("status", "A withdrawn claim cannot also be resolved.");
-    }
-
-    /**
-     * Withdrawal is allowed only before the employer has acted on any issue
-     * and before any appeal/admin path has started.
-     */
-    const hasStartedIssueAdjudication = issues.some(
-      (issue) =>
-        issue?.status !== "awaiting_employer_review" ||
-        hasValue(issue?.employerDecision) ||
-        issue?.employerDecidedAt ||
-        issue?.appealStatus !== "not_available" ||
-        issue?.rebuttalStatus !== "not_available" ||
-        issue?.escalatedAt ||
-        hasValue(issue?.adminDecision) ||
-        issue?.resolvedAt
-    );
-
-    if (hasStartedIssueAdjudication) {
+    // Withdrawal preserves untouched submissions; it does not erase responses.
+    if (issues.some((issue) => issue.status !== "awaiting_employer_review")) {
       this.invalidate(
         "status",
-        "A professional claim may be withdrawn only before employer review or adjudication begins."
+        "A claim cannot be withdrawn after its issues progress beyond employer review."
       );
     }
-  } else if (hasWithdrawalAudit) {
-    this.invalidate("withdrawnAt", "Withdrawal details require claim status withdrawn.");
-  }
-
-  /* ─────────────────────────────── CASE DATE ORDERING ─────────────────────────────── */
-
-  if (this.resolvedAt && this.submittedAt && this.resolvedAt < this.submittedAt) {
-    this.invalidate("resolvedAt", "resolvedAt cannot be earlier than submittedAt.");
-  }
-
-  if (this.withdrawnAt && this.submittedAt && this.withdrawnAt < this.submittedAt) {
-    this.invalidate("withdrawnAt", "withdrawnAt cannot be earlier than submittedAt.");
+  } else {
+    for (const fieldName of withdrawalFields) {
+      if (hasValue(this[fieldName])) {
+        this.invalidate(fieldName, `${fieldName} may only be recorded on a withdrawn claim.`);
+      }
+    }
   }
 });
 
-/* ─────────────────────────────── INDEXES ─────────────────────────────── */
+/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ INDEXES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 
 shiftOccurrenceClaimSchema.index(
   {
@@ -1864,11 +1235,6 @@ shiftOccurrenceClaimSchema.index(
   }
 );
 
-/**
- * One original professional claim case per occurrence.
- *
- * Multiple ordinary professional issues are carried inside this one case.
- */
 shiftOccurrenceClaimSchema.index(
   {
     occurrence: 1,
@@ -1888,8 +1254,6 @@ shiftOccurrenceClaimSchema.index({
   professional: 1,
   status: 1,
   "issues.status": 1,
-  "issues.appealDeadlineAt": 1,
-  "issues.rebuttalDeadlineAt": 1,
 });
 
 shiftOccurrenceClaimSchema.index({
@@ -1899,14 +1263,8 @@ shiftOccurrenceClaimSchema.index({
   "issues.escalatedAt": 1,
 });
 
-/**
- * Issue-level component scope is the only stored component-scope authority.
- *
- * Combining it with issue status supports unresolved-component queries without
- * reintroducing a case-level aggregate field.
- */
 shiftOccurrenceClaimSchema.index({
-  "issues.affectedSettlementComponents": 1,
+  "issues.challengedSettlementComponents": 1,
   "issues.status": 1,
   status: 1,
 });

@@ -6,6 +6,14 @@ const logger = require("../utils/logger");
 
 const EMPLOYER_SHIFTS_URL = "/employer/shifts";
 
+const SHIFT_FUNDING_PENDING_ERROR_CODES = new Set([
+  "PAYSTACK_SHIFT_FUNDING_INTEGRITY_CONFLICT",
+  "PAYSTACK_SHIFT_RECONCILIATION_REQUIRED",
+  "SHIFT_FUNDING_APPLICATION_PENDING",
+  "PAYSTACK_SHIFT_FUNDING_APPLICATION_PENDING",
+  "PAYSTACK_FUNDING_APPLICATION_PENDING",
+]);
+
 /* ─────────────────────────────── HELPERS ─────────────────────────────── */
 
 function cleanString(value) {
@@ -54,6 +62,12 @@ function buildManageShiftsRedirect({
 }
 
 function getFailedPaymentRedirectStatus(error) {
+  const errorCode = cleanString(error?.code);
+
+  if (errorCode && SHIFT_FUNDING_PENDING_ERROR_CODES.has(errorCode)) {
+    return "pending";
+  }
+
   const paystackStatus = String(error?.details?.paystackStatus || "")
     .trim()
     .toLowerCase();

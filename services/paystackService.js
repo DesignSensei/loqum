@@ -92,7 +92,15 @@ class PaystackService {
   /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
 
   static cleanString(value) {
-    const cleaned = String(value || "").trim();
+    if (value === null || value === undefined) return null;
+    if (typeof value !== "string" && !(typeof value === "number" && Number.isSafeInteger(value))) {
+      throw PaystackService.createPaystackError({
+        message: "Expected text or a safe integer identifier.",
+        code: "INVALID_PAYSTACK_TEXT",
+        statusCode: 400,
+      });
+    }
+    const cleaned = String(value).trim();
 
     return cleaned || null;
   }
@@ -103,6 +111,87 @@ class PaystackService {
       .trim();
 
     return cleaned || null;
+  }
+
+  /* Provider amounts may be decimal digit strings, but never coerced booleans or blanks. */
+  static normalizeProviderAmount(value, { required = false } = {}) {
+    if (value === null || value === undefined) {
+      if (!required) return null;
+    } else if (
+      (typeof value === "number" || (typeof value === "string" && /^\d+$/.test(value))) &&
+      Number.isSafeInteger(Number(value)) &&
+      Number(value) >= 0
+    ) {
+      return Number(value);
+    }
+
+    throw PaystackService.createPaystackError({
+      message: "Paystack returned a missing or invalid monetary amount.",
+      code: "INVALID_PAYSTACK_PROVIDER_AMOUNT",
+      statusCode: 502,
+    });
+  }
+
+  static normalizeProviderId(value) {
+    if (value === null || value === undefined) return null;
+    if (
+      (typeof value === "number" && Number.isSafeInteger(value) && value > 0) ||
+      (typeof value === "string" && /^[1-9]\d*$/.test(value))
+    ) {
+      return String(value);
+    }
+    throw PaystackService.createPaystackError({
+      message: "Paystack returned an invalid or unsafe provider ID.",
+      code: "INVALID_PAYSTACK_PROVIDER_ID",
+      statusCode: 502,
+    });
+  }
+
+  static normalizeProviderBoolean(value) {
+    if (value === null || value === undefined) return null;
+    if (value === true || value === 1) return true;
+    if (value === false || value === 0) return false;
+    throw PaystackService.createPaystackError({
+      message: "Paystack returned an invalid boolean value.",
+      code: "INVALID_PAYSTACK_PROVIDER_BOOLEAN",
+      statusCode: 502,
+    });
+  }
+
+  static assertProviderList(value) {
+    if (!Array.isArray(value)) {
+      throw PaystackService.createPaystackError({
+        message: "Paystack returned an invalid list response.",
+        code: "INVALID_PAYSTACK_LIST_RESPONSE",
+        statusCode: 502,
+      });
+    }
+    return value;
+  }
+
+  static assertRefundIdentity(
+    refund,
+    { id = null, transaction = null, amount = null, currency = null } = {}
+  ) {
+    const transactionMatches =
+      !transaction ||
+      refund.transaction?.id === transaction ||
+      refund.transaction?.reference === transaction;
+    if (
+      !refund.id ||
+      !refund.status ||
+      (id && refund.id !== id) ||
+      !transactionMatches ||
+      (amount !== null && refund.amount !== amount) ||
+      (currency && refund.currency !== currency)
+    ) {
+      throw PaystackService.createPaystackError({
+        message: "Paystack refund response does not match the requested instruction.",
+        code: "PAYSTACK_REFUND_IDENTITY_MISMATCH",
+        statusCode: 502,
+        providerResponse: refund.raw,
+      });
+    }
   }
 
   static normalizeEmail(value) {
@@ -130,7 +219,7 @@ class PaystackService {
   }
 
   static normalizeAmount(value) {
-    const amount = Number(value);
+    const amount = value;
 
     if (!Number.isSafeInteger(amount) || amount <= 0) {
       throw PaystackService.createPaystackError({
@@ -144,7 +233,7 @@ class PaystackService {
   }
 
   static normalizeOptionalAmount(value) {
-    if (value === null || value === undefined || value === "") {
+    if (value === null || value === undefined) {
       return null;
     }
 
@@ -351,9 +440,9 @@ class PaystackService {
       return null;
     }
 
-    if (traceKey.length > 200) {
+    if (traceKey.length > 200 || /[|\r\n]/.test(traceKey)) {
       throw PaystackService.createPaystackError({
-        message: "Paystack refund trace key is too long.",
+        message: "Paystack refund trace key is too long or contains reserved separators.",
         code: "PAYSTACK_REFUND_TRACE_KEY_TOO_LONG",
         statusCode: 400,
       });
@@ -695,12 +784,19 @@ class PaystackService {
         data,
         params,
         timeout: 30000,
+        maxRedirects: 0,
       });
 
       if (!response.data || response.data.status !== true) {
         throw PaystackService.createPaystackError({
           message: response.data?.message || "Paystack request failed.",
-          code: "PAYSTACK_PROVIDER_REJECTED_REQUEST",
+          code:
+            response.data?.status === false &&
+            response.status >= 200 &&
+            response.status < 500 &&
+            ![408, 409, 425, 429].includes(response.status)
+              ? "PAYSTACK_PROVIDER_REJECTED_REQUEST"
+              : "INVALID_PAYSTACK_RESPONSE",
           statusCode: 502,
           providerStatusCode: response.status || null,
           providerResponse: response.data || null,
@@ -723,8 +819,14 @@ class PaystackService {
 
       throw PaystackService.createPaystackError({
         message,
-        code:
-          error.code === "ECONNABORTED" ? "PAYSTACK_REQUEST_TIMEOUT" : "PAYSTACK_REQUEST_FAILED",
+        code: ["ECONNABORTED", "ETIMEDOUT"].includes(error.code)
+          ? "PAYSTACK_REQUEST_TIMEOUT"
+          : providerResponse?.status === false &&
+              error.response?.status >= 400 &&
+              error.response?.status < 500 &&
+              ![408, 409, 425, 429].includes(error.response.status)
+            ? "PAYSTACK_PROVIDER_REJECTED_REQUEST"
+            : "PAYSTACK_REQUEST_FAILED",
         statusCode: 502,
         providerStatusCode: error.response?.status || null,
         providerResponse,
@@ -851,15 +953,15 @@ class PaystackService {
     }
 
     return {
-      id: transaction.id !== null && transaction.id !== undefined ? String(transaction.id) : null,
+      id: PaystackService.normalizeProviderId(transaction.id),
 
       reference: returnedReference,
 
       status: PaystackService.cleanString(transaction.status),
 
-      amount: Number(transaction.amount),
+      amount: PaystackService.normalizeProviderAmount(transaction.amount, { required: true }),
 
-      currency: PaystackService.normalizeCurrency(transaction.currency),
+      currency: PaystackService.normalizeCurrency(transaction.currency, ""),
 
       channel: PaystackService.cleanString(transaction.channel),
 
@@ -871,7 +973,7 @@ class PaystackService {
 
       gatewayResponse: PaystackService.cleanString(transaction.gateway_response),
 
-      fees: Number.isFinite(Number(transaction.fees)) ? Number(transaction.fees) : null,
+      fees: PaystackService.normalizeProviderAmount(transaction.fees),
 
       customerEmail: PaystackService.cleanString(transaction.customer?.email),
 
@@ -895,10 +997,6 @@ class PaystackService {
       "Paystack refund merchant note"
     );
 
-    if (normalizedMerchantNote) {
-      return normalizedMerchantNote;
-    }
-
     const normalizedTraceKey = PaystackService.normalizeTraceKey(idempotencyKey);
 
     const normalizedMetadata = PaystackService.normalizeMetadata(metadata);
@@ -911,7 +1009,7 @@ class PaystackService {
       normalizedMetadata.employerRefundLineReference
     );
 
-    const parts = ["Loqum employer refund"];
+    const parts = [normalizedMerchantNote || "Loqum employer refund"];
 
     if (batchReference) {
       parts.push(`batch=${batchReference}`);
@@ -925,7 +1023,10 @@ class PaystackService {
       parts.push(`key=${normalizedTraceKey}`);
     }
 
-    return parts.join(" | ");
+    return PaystackService.normalizeOptionalNote(
+      parts.join(" | "),
+      "Paystack refund merchant note"
+    );
   }
 
   static normalizeRefundRecord(value) {
@@ -941,16 +1042,11 @@ class PaystackService {
     const transaction =
       value.transaction && typeof value.transaction === "object"
         ? {
-            id:
-              value.transaction.id !== null && value.transaction.id !== undefined
-                ? String(value.transaction.id)
-                : null,
+            id: PaystackService.normalizeProviderId(value.transaction.id),
 
             reference: PaystackService.cleanString(value.transaction.reference),
 
-            amount: Number.isFinite(Number(value.transaction.amount))
-              ? Number(value.transaction.amount)
-              : null,
+            amount: PaystackService.normalizeProviderAmount(value.transaction.amount),
 
             currency: PaystackService.cleanString(value.transaction.currency)
               ? PaystackService.normalizeCurrency(value.transaction.currency)
@@ -962,7 +1058,7 @@ class PaystackService {
           }
         : value.transaction !== null && value.transaction !== undefined
           ? {
-              id: String(value.transaction),
+              id: PaystackService.normalizeProviderId(value.transaction),
               reference: null,
               amount: null,
               currency: null,
@@ -974,17 +1070,15 @@ class PaystackService {
     const status = PaystackService.cleanString(value.status);
 
     return {
-      id: value.id !== null && value.id !== undefined ? String(value.id) : null,
+      id: PaystackService.normalizeProviderId(value.id),
 
       transaction,
 
       status: status ? status.toLowerCase() : null,
 
-      amount: Number.isFinite(Number(value.amount)) ? Number(value.amount) : null,
+      amount: PaystackService.normalizeProviderAmount(value.amount),
 
-      deductedAmount: Number.isFinite(Number(value.deducted_amount))
-        ? Number(value.deducted_amount)
-        : null,
+      deductedAmount: PaystackService.normalizeProviderAmount(value.deducted_amount),
 
       currency: PaystackService.cleanString(value.currency)
         ? PaystackService.normalizeCurrency(value.currency)
@@ -1004,10 +1098,7 @@ class PaystackService {
 
       expectedAt: value.expected_at || value.expectedAt || null,
 
-      fullyDeducted:
-        value.fully_deducted === null || value.fully_deducted === undefined
-          ? null
-          : Boolean(value.fully_deducted),
+      fullyDeducted: PaystackService.normalizeProviderBoolean(value.fully_deducted),
 
       bankReference: PaystackService.cleanString(value.bank_reference),
 
@@ -1107,6 +1198,12 @@ class PaystackService {
       });
     }
 
+    PaystackService.assertRefundIdentity(refund, {
+      transaction: normalizedTransaction,
+      amount: normalizedAmount,
+      currency: normalizedCurrency,
+    });
+
     return {
       ...refund,
 
@@ -1125,7 +1222,9 @@ class PaystackService {
       path: `/refund/${encodeURIComponent(normalizedRefundId)}`,
     });
 
-    return PaystackService.normalizeRefundRecord(response.data);
+    const refund = PaystackService.normalizeRefundRecord(response.data);
+    PaystackService.assertRefundIdentity(refund, { id: normalizedRefundId });
+    return refund;
   }
 
   static async listRefunds({
@@ -1189,7 +1288,7 @@ class PaystackService {
       params,
     });
 
-    const records = Array.isArray(response.data) ? response.data : [];
+    const records = PaystackService.assertProviderList(response.data);
 
     return {
       refunds: records.map((record) => PaystackService.normalizeRefundRecord(record)),
@@ -1310,25 +1409,80 @@ class PaystackService {
       transactionId = verifiedTransaction.id;
     }
 
-    const result = await PaystackService.listRefunds({
-      transaction: transactionId,
-      currency,
-      perPage,
-      page: 1,
+    const pageSize = PaystackService.normalizePositiveInteger(perPage, "refunds per page", {
+      defaultValue: 50,
     });
-
+    const normalizedCurrency = PaystackService.normalizeOptionalCurrency(currency);
     const marker = `key=${normalizedTraceKey}`;
+    const matches = new Map();
+    let lastMeta = null;
 
-    const refund =
-      result.refunds.find((item) => String(item.merchantNote || "").includes(marker)) || null;
+    // Scan every page before accepting a unique match. A cap is an error, not "not found".
+    for (let page = 1; page <= 100; page += 1) {
+      const result = await PaystackService.listRefunds({
+        transaction: transactionId,
+        currency: normalizedCurrency,
+        perPage: pageSize,
+        page,
+      });
+      lastMeta = result.meta;
 
-    return {
-      found: Boolean(refund),
-      refund,
-      transactionId,
-      traceKey: normalizedTraceKey,
-      meta: result.meta,
-    };
+      for (const refund of result.refunds) {
+        const noteParts = String(refund.merchantNote || "")
+          .split("|")
+          .map((part) => part.trim());
+        if (!noteParts.includes(marker)) continue;
+
+        PaystackService.assertRefundIdentity(refund, {
+          transaction: transactionId,
+          currency: normalizedCurrency,
+        });
+        matches.set(refund.id, refund);
+        if (matches.size > 1) {
+          throw PaystackService.createPaystackError({
+            message:
+              "Multiple Paystack refunds share this Loqum trace key; investigate before retrying.",
+            code: "PAYSTACK_REFUND_TRACE_AMBIGUOUS",
+            statusCode: 502,
+          });
+        }
+      }
+
+      const pageCount = result.meta?.pageCount;
+      const hasPageCount = pageCount !== null && pageCount !== undefined;
+      if (
+        hasPageCount &&
+        (!Number.isSafeInteger(pageCount) ||
+          pageCount < 0 ||
+          (pageCount === 0 && result.refunds.length > 0))
+      ) {
+        throw PaystackService.createPaystackError({
+          message: "Paystack returned invalid refund pagination metadata.",
+          code: "INVALID_PAYSTACK_REFUND_PAGINATION",
+          statusCode: 502,
+        });
+      }
+
+      if (
+        (hasPageCount && page >= pageCount) ||
+        (!hasPageCount && result.refunds.length < pageSize)
+      ) {
+        const refund = matches.values().next().value || null;
+        return {
+          found: Boolean(refund),
+          refund,
+          transactionId,
+          traceKey: normalizedTraceKey,
+          meta: lastMeta,
+        };
+      }
+    }
+
+    throw PaystackService.createPaystackError({
+      message: "Refund reconciliation exceeded its pagination limit; the search is incomplete.",
+      code: "PAYSTACK_REFUND_LOOKUP_PAGINATION_LIMIT",
+      statusCode: 502,
+    });
   }
 
   /* ─────────────────────────────── TRANSFER RECIPIENTS / TRANSFERS ─────────────────────────────── */
@@ -1351,7 +1505,7 @@ class PaystackService {
         : {};
 
     return {
-      id: value.id === null || value.id === undefined ? null : String(value.id),
+      id: PaystackService.normalizeProviderId(value.id),
 
       recipientCode,
 
@@ -1367,14 +1521,9 @@ class PaystackService {
         ? PaystackService.normalizeCurrency(value.currency)
         : null,
 
-      active: value.active === null || value.active === undefined ? null : Boolean(value.active),
+      active: PaystackService.normalizeProviderBoolean(value.active),
 
-      isDeleted:
-        value.is_deleted !== undefined
-          ? Boolean(value.is_deleted)
-          : value.isDeleted !== undefined
-            ? Boolean(value.isDeleted)
-            : null,
+      isDeleted: PaystackService.normalizeProviderBoolean(value.is_deleted ?? value.isDeleted),
 
       accountNumber: PaystackService.cleanString(details.account_number || details.accountNumber),
 
@@ -1415,7 +1564,7 @@ class PaystackService {
       );
 
       if (value.recipient.id !== null && value.recipient.id !== undefined) {
-        recipientId = String(value.recipient.id);
+        recipientId = PaystackService.normalizeProviderId(value.recipient.id);
       }
     } else if (value.recipient !== null && value.recipient !== undefined) {
       const rawRecipient = String(value.recipient).trim();
@@ -1428,11 +1577,11 @@ class PaystackService {
     }
 
     return {
-      id: value.id === null || value.id === undefined ? null : String(value.id),
+      id: PaystackService.normalizeProviderId(value.id),
 
       domain: PaystackService.cleanString(value.domain),
 
-      amount: Number.isFinite(Number(value.amount)) ? Number(value.amount) : null,
+      amount: PaystackService.normalizeProviderAmount(value.amount),
 
       currency: PaystackService.cleanString(value.currency)
         ? PaystackService.normalizeCurrency(value.currency)
@@ -1604,6 +1753,15 @@ class PaystackService {
       });
     }
 
+    if (transfer.recipientCode && transfer.recipientCode !== normalizedRecipient) {
+      throw PaystackService.createPaystackError({
+        message: "Paystack returned an unexpected Transfer recipient.",
+        code: "PAYSTACK_TRANSFER_RECIPIENT_MISMATCH",
+        statusCode: 502,
+        providerResponse: response.data,
+      });
+    }
+
     if (transfer.reference !== normalizedReference) {
       throw PaystackService.createPaystackError({
         message: "Paystack returned an unexpected Transfer reference.",
@@ -1613,7 +1771,7 @@ class PaystackService {
       });
     }
 
-    if (transfer.amount !== null && transfer.amount !== normalizedAmount) {
+    if (transfer.amount !== normalizedAmount) {
       throw PaystackService.createPaystackError({
         message: "Paystack returned an unexpected Transfer amount.",
         code: "PAYSTACK_TRANSFER_AMOUNT_MISMATCH",
@@ -1622,7 +1780,7 @@ class PaystackService {
       });
     }
 
-    if (transfer.currency && transfer.currency !== normalizedCurrency) {
+    if (transfer.currency !== normalizedCurrency) {
       throw PaystackService.createPaystackError({
         message: "Paystack returned an unexpected Transfer currency.",
         code: "PAYSTACK_TRANSFER_CURRENCY_MISMATCH",
@@ -1690,7 +1848,7 @@ class PaystackService {
       });
     }
 
-    if (transfer.transferCode && transfer.transferCode !== normalizedTransferCode) {
+    if (transfer.transferCode !== normalizedTransferCode) {
       throw PaystackService.createPaystackError({
         message: "Paystack returned an unexpected Transfer code after OTP finalization.",
         code: "PAYSTACK_TRANSFER_CODE_MISMATCH",
@@ -1814,7 +1972,7 @@ class PaystackService {
       });
     }
 
-    const id = value.id === null || value.id === undefined ? null : String(value.id);
+    const id = PaystackService.normalizeProviderId(value.id);
 
     const code = PaystackService.cleanString(value.code);
 
@@ -1831,17 +1989,11 @@ class PaystackService {
 
       gateway: PaystackService.cleanString(value.gateway),
 
-      payWithBank:
-        value.pay_with_bank === null || value.pay_with_bank === undefined
-          ? null
-          : Boolean(value.pay_with_bank),
+      payWithBank: PaystackService.normalizeProviderBoolean(value.pay_with_bank),
 
-      active: value.active === null || value.active === undefined ? null : Boolean(value.active),
+      active: PaystackService.normalizeProviderBoolean(value.active),
 
-      isDeleted:
-        value.is_deleted === null || value.is_deleted === undefined
-          ? null
-          : Boolean(value.is_deleted),
+      isDeleted: PaystackService.normalizeProviderBoolean(value.is_deleted),
 
       country: PaystackService.cleanString(value.country),
 
@@ -1912,7 +2064,7 @@ class PaystackService {
       params,
     });
 
-    const records = Array.isArray(response.data) ? response.data : [];
+    const records = PaystackService.assertProviderList(response.data);
 
     return {
       banks: records.map((record) => PaystackService.normalizeBankRecord(record)),
@@ -1951,6 +2103,7 @@ class PaystackService {
 
     const normalizedCurrency = PaystackService.normalizeCurrency(currency);
 
+    const seenCursors = new Set();
     let nextCursor = null;
     let pageCount = 0;
 
@@ -2015,6 +2168,14 @@ class PaystackService {
       }
 
       nextCursor = PaystackService.cleanString(result.meta?.next);
+      if (nextCursor && seenCursors.has(nextCursor)) {
+        throw PaystackService.createPaystackError({
+          message: "Paystack repeated a bank-list cursor.",
+          code: "PAYSTACK_BANK_CURSOR_REPEATED",
+          statusCode: 502,
+        });
+      }
+      if (nextCursor) seenCursors.add(nextCursor);
     } while (nextCursor);
 
     throw PaystackService.createPaystackError({

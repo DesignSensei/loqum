@@ -1,6 +1,8 @@
 // controllers/professionalShiftClaimController.js
 
 const ShiftOccurrenceClaimService = require("../services/shiftOccurrenceClaimService");
+const ShiftOccurrenceDisputeService = require("../services/shiftOccurrenceDisputeService");
+const ShiftCasePageService = require("../services/shiftCasePageService");
 
 const logger = require("../utils/logger");
 
@@ -17,9 +19,11 @@ function setNoStoreHeaders(res) {
 function isOperationalServiceError(error) {
   return [
     "ShiftOccurrenceClaimServiceError",
+    "ShiftOccurrenceDisputeServiceError",
     "ShiftRefundServiceError",
     "ShiftOccurrenceReconciliationServiceError",
     "ShiftOccurrenceResolutionServiceError",
+    "ShiftSettlementServiceError",
     "ProfessionalShiftClaimControllerError",
   ].includes(error?.name);
 }
@@ -40,7 +44,7 @@ function handleJsonError({ res, error, logContext, fallbackMessage, fallbackCode
   if (statusCode >= 500) {
     logger.error(`${logContext}:`, error);
   } else {
-    logger.warn(`${logContext} rejected: ` + `${error.code || "UNKNOWN"} - ` + `${error.message}`);
+    logger.warn(`${logContext} rejected: ${error.code || "UNKNOWN"} - ${error.message}`);
   }
 
   const response = {
@@ -80,7 +84,19 @@ function getIdempotencyKey(req) {
   return String(req.get("Idempotency-Key") || req.body?.idempotencyKey || "").trim();
 }
 
-function getClaimAffectedSettlementComponents(claim) {
+function toId(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === "object" && value._id) {
+    return String(value._id);
+  }
+
+  return String(value);
+}
+
+function getClaimChallengedSettlementComponents(claim) {
   if (!claim || !Array.isArray(claim.issues)) {
     return [];
   }
@@ -88,11 +104,15 @@ function getClaimAffectedSettlementComponents(claim) {
   return [
     ...new Set(
       claim.issues.flatMap((issue) =>
-        Array.isArray(issue.affectedSettlementComponents) ? issue.affectedSettlementComponents : []
+        Array.isArray(issue.challengedSettlementComponents)
+          ? issue.challengedSettlementComponents
+          : []
       )
     ),
   ];
 }
+
+/* ─────────────────────────────── CLAIM RESPONSE ─────────────────────────────── */
 
 function buildClaimIssueResponse(issue) {
   if (!issue) {
@@ -100,12 +120,12 @@ function buildClaimIssueResponse(issue) {
   }
 
   return {
-    id: issue._id ? String(issue._id) : null,
+    id: toId(issue._id),
 
     type: issue.type,
 
-    affectedSettlementComponents: Array.isArray(issue.affectedSettlementComponents)
-      ? [...issue.affectedSettlementComponents]
+    challengedSettlementComponents: Array.isArray(issue.challengedSettlementComponents)
+      ? [...issue.challengedSettlementComponents]
       : [],
 
     details: issue.details || null,
@@ -122,41 +142,17 @@ function buildClaimIssueResponse(issue) {
 
     employerDecidedAt: issue.employerDecidedAt || null,
 
-    employerDecidedBy: issue.employerDecidedBy ? String(issue.employerDecidedBy) : null,
+    employerDecidedBy: toId(issue.employerDecidedBy),
 
     employerCounterPosition: issue.employerCounterPosition || null,
 
     employerEvidence: Array.isArray(issue.employerEvidence) ? [...issue.employerEvidence] : [],
 
-    appealStatus: issue.appealStatus || "not_available",
-
-    appealDeadlineAt: issue.appealDeadlineAt || null,
-
-    appealedAt: issue.appealedAt || null,
-
-    appealedBy: issue.appealedBy ? String(issue.appealedBy) : null,
-
-    appealStatement: issue.appealStatement || null,
-
-    appealEvidence: Array.isArray(issue.appealEvidence) ? [...issue.appealEvidence] : [],
-
-    rebuttalStatus: issue.rebuttalStatus || "not_available",
-
-    rebuttalDeadlineAt: issue.rebuttalDeadlineAt || null,
-
-    rebuttedAt: issue.rebuttedAt || null,
-
-    rebuttedBy: issue.rebuttedBy ? String(issue.rebuttedBy) : null,
-
-    rebuttalStatement: issue.rebuttalStatement || null,
-
-    rebuttalEvidence: Array.isArray(issue.rebuttalEvidence) ? [...issue.rebuttalEvidence] : [],
-
     escalatedAt: issue.escalatedAt || null,
 
     escalationReason: issue.escalationReason || null,
 
-    escalatedBy: issue.escalatedBy ? String(issue.escalatedBy) : null,
+    escalatedBy: toId(issue.escalatedBy),
 
     escalationNotes: issue.escalationNotes || null,
 
@@ -166,7 +162,7 @@ function buildClaimIssueResponse(issue) {
 
     adminDecidedAt: issue.adminDecidedAt || null,
 
-    adminDecidedBy: issue.adminDecidedBy ? String(issue.adminDecidedBy) : null,
+    adminDecidedBy: toId(issue.adminDecidedBy),
 
     adminOutcome: issue.adminOutcome || null,
 
@@ -182,17 +178,19 @@ function buildClaimResponse(claim) {
   }
 
   return {
-    id: String(claim._id),
+    id: toId(claim._id),
 
     referenceCode: claim.referenceCode,
 
-    shiftId: claim.shift ? String(claim.shift) : null,
+    shiftId: toId(claim.shift),
 
-    occurrenceId: claim.occurrence ? String(claim.occurrence) : null,
+    occurrenceId: toId(claim.occurrence),
 
     submittedIssueTypes: Array.isArray(claim.submittedIssueTypes)
       ? [...claim.submittedIssueTypes]
       : [],
+
+    challengedSettlementComponents: getClaimChallengedSettlementComponents(claim),
 
     issues: Array.isArray(claim.issues)
       ? claim.issues.map((issue) => buildClaimIssueResponse(issue))
@@ -208,17 +206,146 @@ function buildClaimResponse(claim) {
 
     employerResponseDeadlineAt: claim.employerResponseDeadlineAt || null,
 
-    employerRefundId: claim.employerRefund ? String(claim.employerRefund) : null,
+    employerRefundId: toId(claim.employerRefund),
 
     resolvedAt: claim.resolvedAt || null,
 
     withdrawnAt: claim.withdrawnAt || null,
 
-    withdrawnBy: claim.withdrawnBy ? String(claim.withdrawnBy) : null,
+    withdrawnBy: toId(claim.withdrawnBy),
 
     withdrawalReason: claim.withdrawalReason || null,
   };
 }
+
+/* ─────────────────────────────── DISPUTE RESPONSE ─────────────────────────────── */
+
+function buildDisputeIssueResponse(issue) {
+  if (!issue) {
+    return null;
+  }
+
+  return {
+    id: toId(issue._id),
+
+    type: issue.type,
+
+    affectedSettlementComponents: Array.isArray(issue.affectedSettlementComponents)
+      ? [...issue.affectedSettlementComponents]
+      : [],
+
+    details: issue.details || null,
+
+    statement: issue.statement || null,
+
+    evidence: Array.isArray(issue.evidence) ? [...issue.evidence] : [],
+
+    status: issue.status,
+
+    professionalResponseStatement: issue.professionalResponseStatement || null,
+
+    professionalCounterPosition: issue.professionalCounterPosition || null,
+
+    professionalResponseEvidence: Array.isArray(issue.professionalResponseEvidence)
+      ? [...issue.professionalResponseEvidence]
+      : [],
+
+    professionalRespondedAt: issue.professionalRespondedAt || null,
+
+    professionalRespondedBy: toId(issue.professionalRespondedBy),
+
+    professionalResponseExpiredAt: issue.professionalResponseExpiredAt || null,
+
+    adminReviewStartedAt: issue.adminReviewStartedAt || null,
+
+    adminDecision: issue.adminDecision || null,
+
+    adminDecisionReason: issue.adminDecisionReason || null,
+
+    adminDecidedAt: issue.adminDecidedAt || null,
+
+    adminDecidedBy: toId(issue.adminDecidedBy),
+
+    adminOutcome: issue.adminOutcome || null,
+
+    adminEvidence: Array.isArray(issue.adminEvidence) ? [...issue.adminEvidence] : [],
+
+    resolvedAt: issue.resolvedAt || null,
+  };
+}
+
+function getDisputeAffectedSettlementComponents(dispute) {
+  if (!dispute || !Array.isArray(dispute.issues)) {
+    return [];
+  }
+
+  return [
+    ...new Set(
+      dispute.issues.flatMap((issue) =>
+        Array.isArray(issue.affectedSettlementComponents) ? issue.affectedSettlementComponents : []
+      )
+    ),
+  ];
+}
+
+function getRemainingProfessionalResponseIssueIds(dispute) {
+  if (!dispute || !Array.isArray(dispute.issues)) {
+    return [];
+  }
+
+  return dispute.issues
+    .filter((issue) => issue?.status === "awaiting_professional_response")
+    .map((issue) => toId(issue?._id))
+    .filter(Boolean);
+}
+
+function buildDisputeResponse(dispute) {
+  if (!dispute) {
+    return null;
+  }
+
+  return {
+    id: toId(dispute._id),
+
+    referenceCode: dispute.referenceCode,
+
+    shiftId: toId(dispute.shift),
+
+    occurrenceId: toId(dispute.occurrence),
+
+    submittedIssueTypes: Array.isArray(dispute.submittedIssueTypes)
+      ? [...dispute.submittedIssueTypes]
+      : [],
+
+    affectedSettlementComponents: getDisputeAffectedSettlementComponents(dispute),
+
+    issues: Array.isArray(dispute.issues)
+      ? dispute.issues.map((issue) => buildDisputeIssueResponse(issue))
+      : [],
+
+    status: dispute.status,
+
+    submittedAt: dispute.submittedAt || null,
+
+    challengeWindowOpenedAt: dispute.challengeWindowOpenedAt || null,
+
+    challengeDeadlineAt: dispute.challengeDeadlineAt || null,
+
+    professionalResponseDeadlineAt: dispute.professionalResponseDeadlineAt || null,
+
+    employerRefundId: toId(dispute.employerRefund),
+
+    resolvedAt: dispute.resolvedAt || null,
+
+    withdrawnAt: dispute.withdrawnAt || null,
+
+    withdrawnBy: toId(dispute.withdrawnBy),
+
+    withdrawalReason: dispute.withdrawalReason || null,
+  };
+}
+
+/* ─────────────────────────────── OCCURRENCE RESPONSE ─────────────────────────────── */
 
 function buildOccurrenceResponse(occurrence) {
   if (!occurrence) {
@@ -226,9 +353,11 @@ function buildOccurrenceResponse(occurrence) {
   }
 
   return {
-    id: String(occurrence._id),
+    id: toId(occurrence._id),
 
     referenceCode: occurrence.referenceCode,
+
+    slotNumber: Number(occurrence.slotNumber || 0),
 
     sequenceNumber: Number(occurrence.sequenceNumber || 0),
 
@@ -246,17 +375,127 @@ function buildOccurrenceResponse(occurrence) {
 
     refundStatus: occurrence.refundStatus,
 
-    activeClaimId: occurrence.activeClaim ? String(occurrence.activeClaim) : null,
+    activeClaimId: toId(occurrence.activeClaim),
 
-    activeDisputeId: occurrence.activeDispute ? String(occurrence.activeDispute) : null,
+    activeDisputeId: toId(occurrence.activeDispute),
   };
 }
+
+/* ─────────────────────────────── CASES PAGE ─────────────────────────────── */
+
+exports.getCases = async (req, res, next) => {
+  try {
+    const casesView = await ShiftCasePageService.getProfessionalCasesPageData({
+      professionalId: getProfessionalProfileId(req),
+
+      type: req.query.type,
+
+      status: req.query.status,
+
+      page: req.query.page,
+    });
+
+    setNoStoreHeaders(res);
+
+    return res.render("professional/cases/index", {
+      layout: "layouts/app-layout",
+
+      title: casesView.pageTitle,
+
+      breadcrumbs: [
+        {
+          label: "Home",
+          url: "/professional/dashboard",
+        },
+        {
+          label: "Cases",
+          url: null,
+        },
+      ],
+
+      csrfToken: req.csrfToken(),
+
+      casesView,
+
+      scripts: '<script src="/js/cases.js"></script>',
+    });
+  } catch (error) {
+    logger.error("Professional cases page error:", error);
+
+    return next(error);
+  }
+};
+
+/* ─────────────────────────────── RESPOND TO EMPLOYER DISPUTE ─────────────────────────────── */
+
+exports.respondToDispute = async (req, res) => {
+  try {
+    const result = await ShiftOccurrenceDisputeService.submitProfessionalResponse({
+      disputeId: req.params.disputeId,
+
+      issueId: req.params.issueId,
+
+      professionalId: getProfessionalProfileId(req),
+
+      submittedByUserId: req.user._id,
+
+      statement: req.body.statement,
+
+      counterPosition: req.body.counterPosition === undefined ? null : req.body.counterPosition,
+
+      evidence: req.body.evidence === undefined ? [] : req.body.evidence,
+
+      currentTime: new Date(),
+    });
+
+    setNoStoreHeaders(res);
+
+    return res.status(200).json({
+      success: true,
+
+      message:
+        result?.idempotent === true
+          ? "Your response has already been submitted."
+          : "Your response has been submitted for admin review.",
+
+      submitted: result?.submitted === true,
+
+      idempotent: result?.idempotent === true,
+
+      finalAdminReviewRequired: result?.finalAdminReviewRequired === true,
+
+      remainingProfessionalResponseIssueIds: Array.isArray(
+        result?.remainingProfessionalResponseIssueIds
+      )
+        ? [...result.remainingProfessionalResponseIssueIds]
+        : getRemainingProfessionalResponseIssueIds(result?.dispute),
+
+      dispute: buildDisputeResponse(result?.dispute),
+
+      issue: buildDisputeIssueResponse(result?.issue),
+
+      occurrence: buildOccurrenceResponse(result?.occurrence),
+    });
+  } catch (error) {
+    return handleJsonError({
+      res,
+
+      error,
+
+      logContext: "Professional employer-dispute response",
+
+      fallbackMessage: "Your response could not be submitted. Please try again.",
+
+      fallbackCode: "OCCURRENCE_DISPUTE_PROFESSIONAL_RESPONSE_FAILED",
+    });
+  }
+};
 
 /* ─────────────────────────────── SUBMIT CLAIM ─────────────────────────────── */
 
 /**
- * One occurrence claim case may contain multiple financial issues.
- * Issue validation and settlement scope are service-owned.
+ * One occurrence claim case may contain multiple ordinary financial/factual
+ * issues. Validation and settlement scope remain service-owned.
  */
 exports.submitClaim = async (req, res) => {
   try {
@@ -284,9 +523,9 @@ exports.submitClaim = async (req, res) => {
         ? [...result.claim.submittedIssueTypes]
         : [];
 
-    const affectedSettlementComponents = Array.isArray(result?.affectedSettlementComponents)
-      ? [...result.affectedSettlementComponents]
-      : getClaimAffectedSettlementComponents(result?.claim);
+    const challengedSettlementComponents = Array.isArray(result?.challengedSettlementComponents)
+      ? [...result.challengedSettlementComponents]
+      : getClaimChallengedSettlementComponents(result?.claim);
 
     setNoStoreHeaders(res);
 
@@ -304,7 +543,7 @@ exports.submitClaim = async (req, res) => {
 
       submittedIssueTypes,
 
-      affectedSettlementComponents,
+      challengedSettlementComponents,
 
       employerResponseDeadlineAt:
         result?.employerResponseDeadlineAt || result?.claim?.employerResponseDeadlineAt || null,
@@ -328,126 +567,11 @@ exports.submitClaim = async (req, res) => {
   }
 };
 
-/* ─────────────────────────────── SUBMIT APPEAL ─────────────────────────────── */
-
-/**
- * Appeal applies to one rejected issue without an employer counter-position.
- */
-exports.submitAppeal = async (req, res) => {
-  try {
-    const professionalProfileId = getProfessionalProfileId(req);
-
-    const result = await ShiftOccurrenceClaimService.submitAppeal({
-      claimId: req.params.claimId,
-
-      issueId: req.params.issueId,
-
-      professionalId: professionalProfileId,
-
-      submittedByUserId: req.user._id,
-
-      statement: req.body.statement,
-
-      evidence: req.body.evidence === undefined ? [] : req.body.evidence,
-
-      currentTime: new Date(),
-    });
-
-    setNoStoreHeaders(res);
-
-    return res.status(200).json({
-      success: true,
-
-      message: "Your appeal has been submitted for review.",
-
-      submitted: result?.submitted === true,
-
-      issueStatus: result?.issueStatus || result?.issue?.status || null,
-
-      finalAdminReviewRequired: result?.finalAdminReviewRequired === true,
-
-      claim: buildClaimResponse(result?.claim),
-
-      issue: buildClaimIssueResponse(result?.issue),
-    });
-  } catch (error) {
-    return handleJsonError({
-      res,
-
-      error,
-
-      logContext: "Professional occurrence claim appeal",
-
-      fallbackMessage: "Your appeal could not be submitted. Please try again.",
-
-      fallbackCode: "OCCURRENCE_CLAIM_APPEAL_FAILED",
-    });
-  }
-};
-
-/* ─────────────────────────────── SUBMIT REBUTTAL ─────────────────────────────── */
-
-/**
- * Rebuttal applies to one rejected issue with an employer counter-position.
- */
-exports.submitRebuttal = async (req, res) => {
-  try {
-    const professionalProfileId = getProfessionalProfileId(req);
-
-    const result = await ShiftOccurrenceClaimService.submitRebuttal({
-      claimId: req.params.claimId,
-
-      issueId: req.params.issueId,
-
-      professionalId: professionalProfileId,
-
-      submittedByUserId: req.user._id,
-
-      statement: req.body.statement,
-
-      evidence: req.body.evidence === undefined ? [] : req.body.evidence,
-
-      currentTime: new Date(),
-    });
-
-    setNoStoreHeaders(res);
-
-    return res.status(200).json({
-      success: true,
-
-      message: "Your response has been submitted for review.",
-
-      submitted: result?.submitted === true,
-
-      issueStatus: result?.issueStatus || result?.issue?.status || null,
-
-      rebuttalStatus: result?.rebuttalStatus || result?.issue?.rebuttalStatus || null,
-
-      finalAdminReviewRequired: result?.finalAdminReviewRequired === true,
-
-      claim: buildClaimResponse(result?.claim),
-
-      issue: buildClaimIssueResponse(result?.issue),
-    });
-  } catch (error) {
-    return handleJsonError({
-      res,
-
-      error,
-
-      logContext: "Professional occurrence claim rebuttal",
-
-      fallbackMessage: "Your response could not be submitted. Please try again.",
-
-      fallbackCode: "OCCURRENCE_CLAIM_REBUTTAL_FAILED",
-    });
-  }
-};
-
 /* ─────────────────────────────── WITHDRAW CLAIM ─────────────────────────────── */
 
 /**
- * Withdrawal applies to the entire claim case and consumes the original claim right.
+ * Withdrawal applies to the whole claim case and consumes the original claim
+ * right. Restoration/finalization consequences remain service-owned.
  */
 exports.withdrawClaim = async (req, res) => {
   try {

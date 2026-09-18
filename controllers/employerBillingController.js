@@ -86,7 +86,10 @@ exports.getBilling = async (req, res, next) => {
     const billingView = await EmployerBillingService.getEmployerBillingPageData({
       userId: req.user._id,
       employerProfile,
+
       transactionsPage: req.query.transactionsPage,
+
+      transactionFilter: req.query.transactionFilter,
     });
 
     return res.render("employer/billing/index", {

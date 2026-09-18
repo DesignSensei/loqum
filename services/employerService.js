@@ -674,7 +674,7 @@ class EmployerService {
         roleTitle: shift.roleTitle || "-",
         branchName: shift.branch?.name || "-",
         startDateLabel: this.formatDate(shift.startTime),
-        hourlyRateFormatted: this.formatMoney(shift.hourlyRate ?? 0),
+        hourlyRateFormatted: this.formatMinorUnitMoney(shift.hourlyRate ?? 0),
         totalApplications: shift.totalApplications ?? 0,
         status,
         statusLabel: formatStatus(status),
@@ -831,10 +831,6 @@ class EmployerService {
       month: "short",
       year: "numeric",
     });
-  }
-
-  static formatMoney(value) {
-    return Number(value || 0).toLocaleString();
   }
 
   static formatMinorUnitMoney(value) {

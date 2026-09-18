@@ -9,8 +9,6 @@ const logger = require("../utils/logger");
 const DEFAULT_INTERVAL_MINUTES = 5;
 
 const DEFAULT_CLAIM_EMPLOYER_REVIEW_LIMIT = 100;
-const DEFAULT_CLAIM_APPEAL_LIMIT = 100;
-const DEFAULT_CLAIM_REBUTTAL_LIMIT = 100;
 
 const DEFAULT_DISPUTE_PROFESSIONAL_RESPONSE_LIMIT = 100;
 
@@ -30,47 +28,25 @@ const MAX_OVERTIME_BATCH_LIMIT = 500;
  *
  * PROFESSIONAL CLAIM DEADLINES
  *
- * ShiftOccurrenceClaimService owns:
- *
- * - employer non-response escalation;
- * - professional appeal expiry; and
- * - professional rebuttal expiry.
- *
- * Employer non-response:
+ * ShiftOccurrenceClaimService owns employer non-response escalation:
  *
  * employer response deadline expires
- * → unresolved employer-review issues escalate to admin
- *
- * Professional appeal expiry:
- *
- * employer rejection
- * → professional does not appeal before appealDeadlineAt
- * → ShiftOccurrenceClaimService finalizes the applicable rejected issue path
- *
- * Professional rebuttal expiry:
- *
- * employer supplied a counter-position
- * → professional does not rebut before rebuttalDeadlineAt
- * → issue escalates to admin
- *
- * Professional silence on a counter-position is NOT treated as acceptance of
- * the employer's position.
+ * -> unresolved employer-review issues escalate to admin review
  *
  * EMPLOYER DISPUTE DEADLINES
  *
- * ShiftOccurrenceDisputeService owns:
+ * ShiftOccurrenceDisputeService owns professional non-response escalation:
  *
  * professional response deadline expires
- * → unresolved employer-originated dispute issues escalate to admin
+ * -> unresolved employer-originated dispute issues escalate to admin review
  *
  * OVERTIME DEADLINES
  *
- * ShiftOvertimeService owns:
+ * ShiftOvertimeService owns employer non-response escalation:
  *
  * employer response deadline expires
- * → employer decision authority is lost
- * → OT moves to disputed
- * → admin review opens with employer_non_response
+ * -> employer decision authority is lost
+ * -> unresolved overtime moves to admin review with employer_non_response
  *
  * This scheduler does not:
  *
@@ -91,7 +67,7 @@ class ShiftCaseDeadlineScheduler {
   static intervalHandle = null;
   static isRunning = false;
 
-  /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
+  /* ------------------------------- NORMALIZATION ------------------------------- */
 
   static normalizeDate(value, fieldName = "current time") {
     const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
@@ -121,8 +97,6 @@ class ShiftCaseDeadlineScheduler {
 
   static normalizeRunOptions({
     claimEmployerReviewLimit = DEFAULT_CLAIM_EMPLOYER_REVIEW_LIMIT,
-    claimAppealLimit = DEFAULT_CLAIM_APPEAL_LIMIT,
-    claimRebuttalLimit = DEFAULT_CLAIM_REBUTTAL_LIMIT,
     disputeProfessionalResponseLimit = DEFAULT_DISPUTE_PROFESSIONAL_RESPONSE_LIMIT,
     overtimeEmployerResponseLimit = DEFAULT_OVERTIME_EMPLOYER_RESPONSE_LIMIT,
   } = {}) {
@@ -130,18 +104,6 @@ class ShiftCaseDeadlineScheduler {
       claimEmployerReviewLimit: ShiftCaseDeadlineScheduler.normalizePositiveInteger(
         claimEmployerReviewLimit,
         "claim employer-review limit",
-        MAX_CLAIM_BATCH_LIMIT
-      ),
-
-      claimAppealLimit: ShiftCaseDeadlineScheduler.normalizePositiveInteger(
-        claimAppealLimit,
-        "claim appeal limit",
-        MAX_CLAIM_BATCH_LIMIT
-      ),
-
-      claimRebuttalLimit: ShiftCaseDeadlineScheduler.normalizePositiveInteger(
-        claimRebuttalLimit,
-        "claim rebuttal limit",
         MAX_CLAIM_BATCH_LIMIT
       ),
 
@@ -159,7 +121,7 @@ class ShiftCaseDeadlineScheduler {
     };
   }
 
-  /* ─────────────────────────────── INTERVAL ─────────────────────────────── */
+  /* ------------------------------- INTERVAL ------------------------------- */
 
   static getIntervalMs(intervalMinutes = DEFAULT_INTERVAL_MINUTES) {
     const normalizedIntervalMinutes = ShiftCaseDeadlineScheduler.normalizePositiveInteger(
@@ -171,7 +133,7 @@ class ShiftCaseDeadlineScheduler {
     return normalizedIntervalMinutes * 60 * 1000;
   }
 
-  /* ─────────────────────────────── STEP EXECUTION ─────────────────────────────── */
+  /* ------------------------------- STEP EXECUTION ------------------------------- */
 
   static async runStep(stepName, callback) {
     try {
@@ -206,14 +168,12 @@ class ShiftCaseDeadlineScheduler {
       : 0;
   }
 
-  /* ─────────────────────────────── RUN ONCE ─────────────────────────────── */
+  /* ------------------------------- RUN ONCE ------------------------------- */
 
   static async runOnce({
     currentTime = new Date(),
 
     claimEmployerReviewLimit = DEFAULT_CLAIM_EMPLOYER_REVIEW_LIMIT,
-    claimAppealLimit = DEFAULT_CLAIM_APPEAL_LIMIT,
-    claimRebuttalLimit = DEFAULT_CLAIM_REBUTTAL_LIMIT,
 
     disputeProfessionalResponseLimit = DEFAULT_DISPUTE_PROFESSIONAL_RESPONSE_LIMIT,
 
@@ -240,8 +200,6 @@ class ShiftCaseDeadlineScheduler {
 
       const limits = ShiftCaseDeadlineScheduler.normalizeRunOptions({
         claimEmployerReviewLimit,
-        claimAppealLimit,
-        claimRebuttalLimit,
         disputeProfessionalResponseLimit,
         overtimeEmployerResponseLimit,
       });
@@ -268,22 +226,6 @@ class ShiftCaseDeadlineScheduler {
           })
       );
 
-      const claimAppealsStep = await ShiftCaseDeadlineScheduler.runStep("claim appeal expiry", () =>
-        ShiftOccurrenceClaimService.processExpiredAppealWindows({
-          currentTime: normalizedCurrentTime,
-          limit: limits.claimAppealLimit,
-        })
-      );
-
-      const claimRebuttalsStep = await ShiftCaseDeadlineScheduler.runStep(
-        "claim rebuttal expiry",
-        () =>
-          ShiftOccurrenceClaimService.processExpiredRebuttalWindows({
-            currentTime: normalizedCurrentTime,
-            limit: limits.claimRebuttalLimit,
-          })
-      );
-
       const disputeProfessionalResponsesStep = await ShiftCaseDeadlineScheduler.runStep(
         "dispute professional-response expiry",
         () =>
@@ -305,10 +247,6 @@ class ShiftCaseDeadlineScheduler {
       const claimEmployerReviews =
         ShiftCaseDeadlineScheduler.getStepResult(claimEmployerReviewsStep);
 
-      const claimAppeals = ShiftCaseDeadlineScheduler.getStepResult(claimAppealsStep);
-
-      const claimRebuttals = ShiftCaseDeadlineScheduler.getStepResult(claimRebuttalsStep);
-
       const disputeProfessionalResponses = ShiftCaseDeadlineScheduler.getStepResult(
         disputeProfessionalResponsesStep
       );
@@ -319,10 +257,6 @@ class ShiftCaseDeadlineScheduler {
 
       const steps = {
         claimEmployerReviews: claimEmployerReviewsStep,
-
-        claimAppeals: claimAppealsStep,
-
-        claimRebuttals: claimRebuttalsStep,
 
         disputeProfessionalResponses: disputeProfessionalResponsesStep,
 
@@ -341,8 +275,6 @@ class ShiftCaseDeadlineScheduler {
         currentTime: normalizedCurrentTime,
 
         claimEmployerReviews,
-        claimAppeals,
-        claimRebuttals,
 
         disputeProfessionalResponses,
 
@@ -363,22 +295,6 @@ class ShiftCaseDeadlineScheduler {
         claimEmployerReviewEscalatedIssues: claimEmployerReviews?.escalatedIssueCount || 0,
 
         claimEmployerReviewFailed: claimEmployerReviews?.failedCount || 0,
-
-        claimAppealInspected: claimAppeals?.inspectedCount || 0,
-
-        claimAppealResolvedClaims: claimAppeals?.resolvedClaimCount || 0,
-
-        claimAppealExpiredIssues: claimAppeals?.expiredIssueCount || 0,
-
-        claimAppealFailed: claimAppeals?.failedCount || 0,
-
-        claimRebuttalInspected: claimRebuttals?.inspectedCount || 0,
-
-        claimRebuttalEscalatedClaims: claimRebuttals?.escalatedClaimCount || 0,
-
-        claimRebuttalExpiredIssues: claimRebuttals?.expiredIssueCount || 0,
-
-        claimRebuttalFailed: claimRebuttals?.failedCount || 0,
 
         disputeResponseInspected: disputeProfessionalResponses?.inspectedCount || 0,
 
@@ -412,16 +328,12 @@ class ShiftCaseDeadlineScheduler {
     }
   }
 
-  /* ─────────────────────────────── START ─────────────────────────────── */
+  /* ------------------------------- START ------------------------------- */
 
   static start({
     intervalMinutes = DEFAULT_INTERVAL_MINUTES,
 
     claimEmployerReviewLimit = DEFAULT_CLAIM_EMPLOYER_REVIEW_LIMIT,
-
-    claimAppealLimit = DEFAULT_CLAIM_APPEAL_LIMIT,
-
-    claimRebuttalLimit = DEFAULT_CLAIM_REBUTTAL_LIMIT,
 
     disputeProfessionalResponseLimit = DEFAULT_DISPUTE_PROFESSIONAL_RESPONSE_LIMIT,
 
@@ -439,8 +351,6 @@ class ShiftCaseDeadlineScheduler {
 
     const runOptions = ShiftCaseDeadlineScheduler.normalizeRunOptions({
       claimEmployerReviewLimit,
-      claimAppealLimit,
-      claimRebuttalLimit,
       disputeProfessionalResponseLimit,
       overtimeEmployerResponseLimit,
     });
@@ -468,7 +378,7 @@ class ShiftCaseDeadlineScheduler {
     return ShiftCaseDeadlineScheduler.intervalHandle;
   }
 
-  /* ─────────────────────────────── STOP ─────────────────────────────── */
+  /* ------------------------------- STOP ------------------------------- */
 
   static stop() {
     if (!ShiftCaseDeadlineScheduler.intervalHandle) {

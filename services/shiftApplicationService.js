@@ -6,6 +6,7 @@ const Shift = require("../models/Shift");
 const ShiftOccurrence = require("../models/ShiftOccurrence");
 const ShiftApplication = require("../models/ShiftApplication");
 const ShiftAssignment = require("../models/ShiftAssignment");
+const ShiftAssignmentCase = require("../models/ShiftAssignmentCase");
 const ProfessionalProfile = require("../models/ProfessionalProfile");
 
 const ShiftAssignmentService = require("./shiftAssignmentService");
@@ -15,13 +16,10 @@ const {
   MAX_APPLICATION_ROUNDS,
   APPLICATION_STATUSES,
   ACTIVE_APPLICATION_STATUSES,
-  INITIAL_APPLICATION_PAYMENT_STATUS,
   REPLACEMENT_APPLICATION_PARENT_STATUSES,
   REPLACEMENT_APPLICATION_BLOCKED_PAYMENT_STATUSES,
-  ACTIVE_SINGLE_SHIFT_STATUSES,
   ACTIVE_OCCURRENCE_STATUSES,
   PROFESSIONAL_UNAVAILABLE_STATUSES,
-  REPLACEMENT_HIRING_STATUSES,
   MAX_APPLICATION_NOTE_LENGTH,
   MAX_REVIEW_NOTE_LENGTH,
   MAX_REASON_LENGTH,
@@ -62,10 +60,16 @@ class ShiftApplicationService {
   }
 
   static async runWithOptionalTransaction(options = {}, callback) {
+    if (options.session && !options.session.inTransaction()) {
+      throw this.createError({
+        message: "An active transaction is required for the supplied session.",
+        code: "APPLICATION_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
     return runWithOptionalTransaction(options, callback);
   }
-
-  /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
 
   static normalizeFieldCode(value) {
     return normalizeFieldCode(value);
@@ -210,14 +214,21 @@ class ShiftApplicationService {
       "professionalType",
       "scheduleMode",
       "occurrenceCount",
+      "requiredProfessionals",
+      "totalOccurrenceCount",
       "startTime",
       "endTime",
       "status",
       "paymentStatus",
-      "activeAssignment",
-      "assignedProfessional",
+      "fundedAmount",
+      "estimatedEmployerCharge",
+      "fundedAt",
+      "fundingMethod",
+      "fundingTransaction",
+      "publishedAt",
       "applicationRound",
-      "replacementHiring",
+      "hiringSummary",
+      "assignmentSummary",
       "occurrenceProgress",
       "totalApplications",
       "currentRoundApplications",
@@ -580,587 +591,508 @@ class ShiftApplicationService {
     shift,
     occurrenceId,
     requestedApplicationRound = null,
+    replacementForAssignmentId = null,
     session,
     now = new Date(),
   }) {
-    const normalizedOccurrenceId = ShiftApplicationService.normalizeObjectId(
-      occurrenceId,
-      "occurrence ID"
-    );
-
-    const occurrenceQuery = ShiftOccurrence.findOne({
-      _id: normalizedOccurrenceId,
-
+    const occurrence = await ShiftOccurrence.findOne({
+      _id: this.normalizeObjectId(occurrenceId, "occurrence ID"),
       shift: shift._id,
-    }).select(
-      [
-        "referenceCode",
-        "shift",
-        "business",
-        "branch",
-        "sequenceNumber",
-        "startTime",
-        "endTime",
-        "fillCutoffAt",
-        "unfilledFinalizationAt",
-        "assignmentStatus",
-        "assignedProfessional",
-        "assignment",
-        "assignedAt",
-        "status",
-        "attendanceStatus",
-        "settlementStatus",
-        "checkedInAt",
-        "checkedOutAt",
-        "checkInPinUsedAt",
-        "checkOutPinUsedAt",
-        "refundStatus",
-        "replacementRequiredAt",
-        "replacementForAssignment",
-        "replacementCase",
-        "replacementReasonCode",
-      ].join(" ")
-    );
+    }).session(session);
 
-    if (session) {
-      occurrenceQuery.session(session);
-    }
-
-    const occurrence = await occurrenceQuery;
-
-    if (!occurrence) {
-      throw ShiftApplicationService.createError({
-        message: "The replacement occurrence was not found.",
-
+    if (!occurrence)
+      throw this.createError({
+        message: "Replacement occurrence was not found.",
         code: "REPLACEMENT_OCCURRENCE_NOT_FOUND",
-
         statusCode: 404,
       });
-    }
 
-    ShiftApplicationService.assertOccurrenceTargetAvailable({
-      occurrence,
-
-      now,
-    });
-
-    if (shift.scheduleMode !== "multiple") {
-      throw ShiftApplicationService.createError({
-        message:
-          "Single-occurrence replacement hiring is only available within a multi-occurrence Shift.",
-
-        code: "OCCURRENCE_REPLACEMENT_NOT_AVAILABLE",
-
-        statusCode: 409,
-      });
-    }
-
-    const replacementQuery = ShiftAssignment.findOne({
-      _id: occurrence.replacementForAssignment,
-
-      shift: shift._id,
-
-      status: {
-        $in: REPLACEABLE_ASSIGNMENT_STATUSES,
-      },
-    }).select(
-      [
-        "shift",
-        "professional",
-        "status",
-        "occurrence",
-        "startSequence",
-        "plannedEndSequence",
-        "effectiveEndSequence",
-        "replacedByAssignment",
-        "assignedAt",
-      ].join(" ")
-    );
-
-    if (session) {
-      replacementQuery.session(session);
-    }
-
-    const replacementForAssignment = await replacementQuery;
-
-    if (!replacementForAssignment) {
-      throw ShiftApplicationService.createError({
-        message: "The assignment that previously owned this occurrence is not available.",
-
-        code: "OCCURRENCE_REPLACED_ASSIGNMENT_NOT_AVAILABLE",
-
-        statusCode: 409,
-      });
-    }
-
-    /*
-     * The current isolated-occurrence hiring round is tied to the current
-     * replacementRequiredAt.
-     *
-     * All applications created after that timestamp belong to the same
-     * occurrence hiring opportunity.
-     *
-     * If this occurrence is filled and later released again,
-     * replacementRequiredAt changes and the next application round advances.
-     */
-    const currentCycleQuery = ShiftApplication.findOne({
-      shift: shift._id,
-
-      occurrence: occurrence._id,
-
-      applicationType: "replacement",
-
-      createdAt: {
-        $gte: occurrence.replacementRequiredAt,
-      },
-    })
-      .select("applicationRound createdAt")
-      .sort({
-        applicationRound: -1,
-
-        createdAt: -1,
-      });
-
-    if (session) {
-      currentCycleQuery.session(session);
-    }
-
-    const currentCycleApplication = await currentCycleQuery;
-
-    let applicationRound;
-
-    if (currentCycleApplication) {
-      applicationRound = Number(currentCycleApplication.applicationRound);
-    } else {
-      const previousRoundQuery = ShiftApplication.findOne({
-        shift: shift._id,
-
-        occurrence: occurrence._id,
-
-        applicationType: "replacement",
-      })
-        .select("applicationRound")
-        .sort({
-          applicationRound: -1,
-
-          createdAt: -1,
-        });
-
-      if (session) {
-        previousRoundQuery.session(session);
-      }
-
-      const previousRoundApplication = await previousRoundQuery;
-
-      const previousRound = Number(previousRoundApplication?.applicationRound || 1);
-
-      applicationRound = Math.max(2, previousRound + 1);
-    }
+    this.assertOccurrenceTargetAvailable({ occurrence, now });
 
     if (
-      !Number.isSafeInteger(applicationRound) ||
-      applicationRound < 2 ||
-      applicationRound > MAX_APPLICATION_ROUNDS
+      replacementForAssignmentId &&
+      String(occurrence.replacementForAssignment) !== String(replacementForAssignmentId)
     ) {
-      throw ShiftApplicationService.createError({
-        message: "No further application round is available for this occurrence.",
-
-        code: "OCCURRENCE_APPLICATION_ROUND_LIMIT_REACHED",
-
+      throw this.createError({
+        message: "This occurrence now belongs to a different replacement opportunity.",
+        code: "STALE_REPLACEMENT_APPLICATION",
         statusCode: 409,
       });
     }
 
-    if (requestedApplicationRound !== null && requestedApplicationRound !== undefined) {
-      const normalizedRequestedRound = Number(requestedApplicationRound);
+    const previous = await ShiftAssignment.findOne({
+      _id: occurrence.replacementForAssignment,
+      shift: shift._id,
+    }).session(session);
 
-      if (
-        !Number.isSafeInteger(normalizedRequestedRound) ||
-        normalizedRequestedRound !== applicationRound
-      ) {
-        throw ShiftApplicationService.createError({
-          message: "This application belongs to an earlier occurrence replacement round.",
+    this.assertReplacementIdentity({ shift, previous, occurrences: [occurrence] });
 
-          code: "STALE_OCCURRENCE_APPLICATION_ROUND",
+    let assignmentCase = null;
 
-          statusCode: 409,
-
-          details: {
-            applicationRound: normalizedRequestedRound,
-
-            currentApplicationRound: applicationRound,
-          },
-        });
-      }
+    if (occurrence.replacementCase) {
+      assignmentCase = await this.loadReplacementCase({
+        shift,
+        previous,
+        caseId: occurrence.replacementCase,
+        session,
+      });
     }
+
+    const applicationRound = await this.resolveReplacementRound({
+      shift,
+      previous,
+      occurrence,
+      openedAt: occurrence.replacementRequiredAt,
+      requestedApplicationRound,
+      session,
+    });
 
     return {
       applicationType: "replacement",
-
       applicationRound,
-
       occurrence,
-
       isOccurrenceTargeted: true,
-
-      replacementForAssignment,
-
-      replacementCaseId: occurrence.replacementCase || null,
-
+      replacementForAssignment: previous,
+      replacementCaseId: assignmentCase?._id || null,
+      slotNumber: previous.slotNumber,
       startSequenceNumber: occurrence.sequenceNumber,
-
       endSequenceNumber: occurrence.sequenceNumber,
-
       expectedOccurrenceCount: 1,
+      replacementOpenedAt: occurrence.replacementRequiredAt,
     };
+  }
+
+  static assertReplacementIdentity({ shift, previous, occurrences }) {
+    if (
+      !previous ||
+      !Number.isSafeInteger(previous.slotNumber) ||
+      previous.slotNumber < 1 ||
+      previous.slotNumber > shift.requiredProfessionals ||
+      String(previous.business) !== String(shift.business) ||
+      String(previous.branch) !== String(shift.branch)
+    ) {
+      throw this.createError({
+        message: "The previous assignment context is invalid.",
+        code: "REPLACEMENT_ASSIGNMENT_CONTEXT_MISMATCH",
+        statusCode: 409,
+      });
+    }
+
+    for (const occurrence of occurrences) {
+      if (
+        occurrence.slotNumber !== previous.slotNumber ||
+        String(occurrence.business) !== String(shift.business) ||
+        String(occurrence.branch) !== String(shift.branch) ||
+        String(occurrence.replacementForAssignment) !== String(previous._id) ||
+        occurrence.sequenceNumber < previous.startSequence ||
+        occurrence.sequenceNumber > previous.plannedEndSequence
+      ) {
+        throw this.createError({
+          message: "Replacement occurrence does not match the prior assignment and slot.",
+          code: "REPLACEMENT_OCCURRENCE_CONTEXT_MISMATCH",
+          statusCode: 409,
+        });
+      }
+    }
+  }
+
+  static async loadReplacementCase({ shift, previous, caseId, session }) {
+    const assignmentCase = await ShiftAssignmentCase.findOne({
+      _id: caseId,
+      assignment: previous._id,
+      shift: shift._id,
+      business: shift.business,
+      branch: shift.branch,
+      professional: previous.professional,
+      status: { $in: ["replacement_requested", "resolved_exit"] },
+    }).session(session);
+
+    if (!assignmentCase)
+      throw this.createError({
+        message: "The case does not authorize replacement.",
+        code: "REPLACEMENT_CASE_NOT_AVAILABLE",
+        statusCode: 409,
+      });
+
+    return assignmentCase;
+  }
+
+  static async resolveReplacementRound({
+    shift,
+    previous,
+    occurrence = null,
+    openedAt,
+    requestedApplicationRound,
+    session,
+  }) {
+    if (!openedAt || !Number.isFinite(new Date(openedAt).getTime()))
+      throw this.createError({
+        message: "Replacement opening time is missing.",
+        code: "REPLACEMENT_OPENING_MISSING",
+        statusCode: 409,
+      });
+
+    const scope = {
+      shift: shift._id,
+      replacementForAssignment: previous._id,
+      occurrence: occurrence?._id || null,
+      applicationType: "replacement",
+    };
+
+    const current = await ShiftApplication.findOne({
+      ...scope,
+      createdAt: { $gte: openedAt },
+    })
+      .sort({ applicationRound: -1, createdAt: -1 })
+      .session(session);
+
+    let round = current?.applicationRound;
+
+    if (round == null) {
+      const previousApplication = await ShiftApplication.findOne(scope)
+        .sort({ applicationRound: -1, createdAt: -1 })
+        .session(session);
+
+      round = (previousApplication?.applicationRound || 1) + 1;
+    }
+
+    if (!Number.isSafeInteger(round) || round < 2 || round > MAX_APPLICATION_ROUNDS)
+      throw this.createError({
+        message: "No further application round is available for this opportunity.",
+        code: "REPLACEMENT_APPLICATION_ROUND_LIMIT_REACHED",
+        statusCode: 409,
+      });
+
+    if (requestedApplicationRound != null && Number(requestedApplicationRound) !== round)
+      throw this.createError({
+        message: "The application belongs to an earlier replacement round.",
+        code: "STALE_SHIFT_APPLICATION_ROUND",
+        statusCode: 409,
+      });
+
+    return round;
   }
 
   static async getApplicationRoundContext({
     shift,
     occurrenceId = null,
+    replacementForAssignmentId = null,
     requestedApplicationRound = null,
     session,
     now = new Date(),
   }) {
-    /*
-     * An explicit occurrence target means this is an isolated replacement
-     * opportunity.
-     *
-     * It does not use Shift.replacementHiring.
-     */
-    if (occurrenceId) {
-      return ShiftApplicationService.getOccurrenceReplacementRoundContext({
+    if (occurrenceId)
+      return this.getOccurrenceReplacementRoundContext({
         shift,
-
         occurrenceId,
-
+        replacementForAssignmentId,
         requestedApplicationRound,
-
         session,
+        now,
+      });
 
+    if (!replacementForAssignmentId) {
+      if (requestedApplicationRound != null && Number(requestedApplicationRound) !== 1)
+        throw this.createError({
+          message: "Tail replacement requires its prior assignment ID.",
+          code: "REPLACEMENT_ASSIGNMENT_ID_REQUIRED",
+        });
+
+      return {
+        applicationType: "initial",
+        applicationRound: 1,
+        occurrence: null,
+        isOccurrenceTargeted: false,
+        replacementForAssignment: null,
+        replacementCaseId: null,
+        slotNumber: null,
+        startSequenceNumber: 1,
+        endSequenceNumber: shift.occurrenceCount,
+        expectedOccurrenceCount: shift.occurrenceCount,
+      };
+    }
+
+    const previous = await ShiftAssignment.findOne({
+      _id: this.normalizeObjectId(replacementForAssignmentId, "replaced assignment ID"),
+      shift: shift._id,
+    }).session(session);
+
+    this.assertReplacementIdentity({ shift, previous, occurrences: [] });
+
+    if (!REPLACEABLE_ASSIGNMENT_STATUSES.includes(previous.status) || previous.replacedByAssignment)
+      throw this.createError({
+        message: "This assignment is not available for tail replacement.",
+        code: "REPLACED_ASSIGNMENT_NOT_AVAILABLE",
+        statusCode: 409,
+      });
+
+    const candidates = await ShiftOccurrence.find({
+      shift: shift._id,
+      slotNumber: previous.slotNumber,
+      replacementForAssignment: previous._id,
+      assignmentStatus: "replacement_required",
+      replacementCase: { $ne: null },
+      status: "scheduled",
+    })
+      .sort({ sequenceNumber: 1 })
+      .session(session);
+
+    const caseIds = [...new Set(candidates.map((o) => String(o.replacementCase)))];
+
+    if (caseIds.length !== 1)
+      throw this.createError({
+        message: "A unique case-authorized tail could not be resolved.",
+        code: "REPLACEMENT_OPPORTUNITY_NOT_AVAILABLE",
+        statusCode: 409,
+      });
+
+    const assignmentCase = await this.loadReplacementCase({
+      shift,
+      previous,
+      caseId: candidates[0].replacementCase,
+      session,
+    });
+
+    const range =
+      assignmentCase.status === "resolved_exit"
+        ? assignmentCase.resolution?.effectiveExitRange
+        : assignmentCase.exitProposal?.range;
+
+    const start = range?.replacementStartSequenceNumber;
+    const end = range?.replacementEndSequenceNumber;
+
+    if (
+      !Number.isSafeInteger(start) ||
+      !Number.isSafeInteger(end) ||
+      start < previous.startSequence ||
+      end !== previous.plannedEndSequence ||
+      start > end ||
+      range.replacementOccurrenceCount !== end - start + 1
+    )
+      throw this.createError({
+        message: "The case replacement range is invalid.",
+        code: "REPLACEMENT_CASE_RANGE_INVALID",
+        statusCode: 409,
+      });
+
+    const authorizationAnchor = await ShiftOccurrence.findOne({
+      shift: shift._id,
+      slotNumber: previous.slotNumber,
+      sequenceNumber: {
+        $gte: start,
+        $lte: end,
+      },
+      replacementForAssignment: previous._id,
+      replacementCase: assignmentCase._id,
+      replacementRequiredAt: {
+        $ne: null,
+      },
+    })
+      .sort({
+        sequenceNumber: 1,
+      })
+      .session(session);
+
+    if (!authorizationAnchor?.replacementRequiredAt)
+      throw this.createError({
+        message: "The replacement opportunity opening could not be resolved.",
+        code: "REPLACEMENT_OPENING_MISSING",
+        statusCode: 409,
+      });
+
+    const authorizedRoundContext = {
+      slotNumber: previous.slotNumber,
+      startSequenceNumber: start,
+      endSequenceNumber: end,
+      replacementForAssignment: previous,
+      replacementCaseId: assignmentCase._id,
+    };
+
+    const availableOccurrences = await ShiftOccurrence.find(
+      this.buildReplacementOccurrenceFilter({
+        shift,
+        roundContext: authorizedRoundContext,
+        now,
+      })
+    )
+      .sort({
+        sequenceNumber: 1,
+      })
+      .session(session);
+
+    this.assertReplacementIdentity({
+      shift,
+      previous,
+      occurrences: availableOccurrences,
+    });
+
+    if (!availableOccurrences.length)
+      throw this.createError({
+        message: "No case-authorized replacement work remains available.",
+        code: "REPLACEMENT_OPPORTUNITY_NOT_AVAILABLE",
+        statusCode: 409,
+      });
+
+    for (const occurrence of availableOccurrences) {
+      this.assertOccurrenceTargetAvailable({
+        occurrence,
         now,
       });
     }
 
-    const replacementHiringStatus = String(
-      shift.replacementHiring?.status || REPLACEMENT_HIRING_STATUSES.CLOSED
-    )
-      .trim()
-      .toLowerCase();
+    const availableSequences = new Set(
+      availableOccurrences.map((occurrence) => Number(occurrence.sequenceNumber))
+    );
 
-    if (replacementHiringStatus === REPLACEMENT_HIRING_STATUSES.OPEN) {
-      const applicationRound = Number(shift.replacementHiring?.applicationRound);
+    if (!availableSequences.has(end))
+      throw this.createError({
+        message: "The remaining replacement work no longer forms an assignable tail.",
+        code: "REPLACEMENT_OPPORTUNITY_NOT_CONTIGUOUS",
+        statusCode: 409,
+      });
 
-      const replacementForAssignmentId = shift.replacementHiring?.replacementForAssignment;
+    let executableStart = end;
 
-      const replacementCaseId = shift.replacementHiring?.assignmentCase;
-
-      if (
-        !Number.isSafeInteger(applicationRound) ||
-        applicationRound < 2 ||
-        applicationRound !== Number(shift.applicationRound)
-      ) {
-        throw ShiftApplicationService.createError({
-          message: "The replacement application round is not configured correctly.",
-
-          code: "INVALID_REPLACEMENT_APPLICATION_ROUND",
-
-          statusCode: 409,
-        });
-      }
-
-      if (!replacementForAssignmentId || !replacementCaseId) {
-        throw ShiftApplicationService.createError({
-          message: "The replacement hiring context is incomplete.",
-
-          code: "INCOMPLETE_REPLACEMENT_HIRING_CONTEXT",
-
-          statusCode: 409,
-        });
-      }
-
-      const replacementQuery = ShiftAssignment.findOne({
-        _id: replacementForAssignmentId,
-
-        shift: shift._id,
-
-        status: {
-          $in: REPLACEABLE_ASSIGNMENT_STATUSES,
-        },
-      }).select(
-        [
-          "shift",
-          "professional",
-          "status",
-          "occurrence",
-          "startSequence",
-          "plannedEndSequence",
-          "effectiveEndSequence",
-          "replacedByAssignment",
-          "assignedAt",
-        ].join(" ")
-      );
-
-      if (session) {
-        replacementQuery.session(session);
-      }
-
-      const replacementForAssignment = await replacementQuery;
-
-      if (!replacementForAssignment) {
-        throw ShiftApplicationService.createError({
-          message: "The assignment being replaced is not available for this hiring round.",
-
-          code: "REPLACED_ASSIGNMENT_NOT_AVAILABLE",
-
-          statusCode: 409,
-        });
-      }
-
-      if (replacementForAssignment.replacedByAssignment) {
-        throw ShiftApplicationService.createError({
-          message: "A replacement has already been recorded for this assignment.",
-
-          code: "ASSIGNMENT_ALREADY_REPLACED",
-
-          statusCode: 409,
-        });
-      }
-
-      if (
-        requestedApplicationRound !== null &&
-        requestedApplicationRound !== undefined &&
-        Number(requestedApplicationRound) !== applicationRound
-      ) {
-        throw ShiftApplicationService.createError({
-          message: "This application belongs to an earlier replacement round.",
-
-          code: "STALE_SHIFT_APPLICATION_ROUND",
-
-          statusCode: 409,
-        });
-      }
-
-      return {
-        applicationType: "replacement",
-
-        applicationRound,
-
-        occurrence: null,
-
-        isOccurrenceTargeted: false,
-
-        replacementForAssignment,
-
-        replacementCaseId,
-
-        startSequenceNumber: shift.replacementHiring.startSequenceNumber,
-
-        endSequenceNumber: shift.replacementHiring.endSequenceNumber,
-
-        expectedOccurrenceCount: shift.replacementHiring.occurrenceCount,
-      };
+    while (executableStart > start && availableSequences.has(executableStart - 1)) {
+      executableStart -= 1;
     }
+
+    if (availableOccurrences.some((occurrence) => occurrence.sequenceNumber < executableStart))
+      throw this.createError({
+        message: "The remaining replacement work is fragmented and cannot be assigned as one tail.",
+        code: "REPLACEMENT_OPPORTUNITY_NOT_CONTIGUOUS",
+        statusCode: 409,
+      });
+
+    const executableOccurrences = availableOccurrences.filter(
+      (occurrence) => occurrence.sequenceNumber >= executableStart
+    );
+
+    const expectedOccurrenceCount = end - executableStart + 1;
 
     if (
-      replacementHiringStatus === REPLACEMENT_HIRING_STATUSES.CLOSED &&
-      Number(shift.applicationRound || 1) === 1
-    ) {
-      return {
-        applicationType: "initial",
+      executableOccurrences.length !== expectedOccurrenceCount ||
+      executableOccurrences.some(
+        (occurrence, index) => occurrence.sequenceNumber !== executableStart + index
+      )
+    )
+      throw this.createError({
+        message: "The remaining replacement work is not a complete contiguous tail.",
+        code: "REPLACEMENT_OPPORTUNITY_NOT_CONTIGUOUS",
+        statusCode: 409,
+      });
 
-        applicationRound: 1,
+    const openedAt = authorizationAnchor.replacementRequiredAt;
 
-        occurrence: null,
-
-        isOccurrenceTargeted: false,
-
-        replacementForAssignment: null,
-
-        replacementCaseId: null,
-
-        startSequenceNumber: 1,
-
-        endSequenceNumber: Number(shift.occurrenceCount || 1),
-
-        expectedOccurrenceCount: Number(shift.occurrenceCount || 1),
-      };
-    }
-
-    throw ShiftApplicationService.createError({
-      message: "This engagement is not accepting applications in its current hiring round.",
-
-      code: "SHIFT_APPLICATION_ROUND_NOT_OPEN",
-
-      statusCode: 409,
-
-      details: {
-        applicationRound: Number(shift.applicationRound || 1),
-
-        replacementHiringStatus,
-      },
+    const applicationRound = await this.resolveReplacementRound({
+      shift,
+      previous,
+      openedAt,
+      requestedApplicationRound,
+      session,
     });
+
+    return {
+      applicationType: "replacement",
+      applicationRound,
+      occurrence: null,
+      isOccurrenceTargeted: false,
+      replacementForAssignment: previous,
+      replacementCaseId: assignmentCase._id,
+      slotNumber: previous.slotNumber,
+      startSequenceNumber: executableStart,
+      endSequenceNumber: end,
+      expectedOccurrenceCount,
+      replacementOpenedAt: openedAt,
+    };
   }
 
   static assertShiftAcceptingApplications({ shift, roundContext, now = new Date() }) {
-    const applicationType = roundContext.applicationType;
+    if (
+      !shift.publishedAt ||
+      !shift.fundedAt ||
+      !shift.fundingMethod ||
+      !shift.fundingTransaction ||
+      !Number.isSafeInteger(shift.fundedAmount) ||
+      shift.fundedAmount < shift.estimatedEmployerCharge ||
+      REPLACEMENT_APPLICATION_BLOCKED_PAYMENT_STATUSES.includes(shift.paymentStatus)
+    ) {
+      throw this.createError({
+        message: "Protected funding is not available for applications.",
+        code: "SHIFT_NOT_FUNDED_FOR_APPLICATIONS",
+        statusCode: 409,
+      });
+    }
 
-    const replacementHiringStatus = String(
-      shift.replacementHiring?.status || REPLACEMENT_HIRING_STATUSES.CLOSED
-    )
-      .trim()
-      .toLowerCase();
-
-    if (applicationType === "initial") {
+    if (roundContext.applicationType === "initial") {
       if (
         shift.status !== "open" ||
-        shift.assignedProfessional ||
-        shift.activeAssignment ||
-        replacementHiringStatus !== REPLACEMENT_HIRING_STATUSES.CLOSED ||
-        Number(shift.applicationRound || 1) !== 1
+        new Date(shift.startTime) <= now ||
+        shift.applicationRound !== 1 ||
+        Number(shift.hiringSummary?.initialAcceptedCount || 0) >= shift.requiredProfessionals
       ) {
-        throw ShiftApplicationService.createError({
-          message: "This shift is not accepting initial applications.",
-
+        throw this.createError({
+          message: "Initial hiring is not open.",
           code: "SHIFT_NOT_ACCEPTING_INITIAL_APPLICATIONS",
-
           statusCode: 409,
         });
       }
-
-      if (shift.paymentStatus !== INITIAL_APPLICATION_PAYMENT_STATUS) {
-        throw ShiftApplicationService.createError({
-          message: "This shift is not fully funded and cannot accept applications.",
-
-          code: "SHIFT_NOT_FUNDED_FOR_APPLICATIONS",
-
+    } else {
+      if (!REPLACEMENT_APPLICATION_PARENT_STATUSES.includes(shift.status))
+        throw this.createError({
+          message: "Replacement hiring is not available in this Shift state.",
+          code: "SHIFT_NOT_ACCEPTING_REPLACEMENT_APPLICATIONS",
           statusCode: 409,
         });
-      }
 
-      if (new Date(shift.startTime) <= now) {
-        throw ShiftApplicationService.createError({
-          message: "Applications are closed because the shift has already started.",
-
-          code: "SHIFT_APPLICATION_WINDOW_CLOSED",
-
-          statusCode: 409,
+      if (roundContext.occurrence)
+        this.assertOccurrenceTargetAvailable({
+          occurrence: roundContext.occurrence,
+          now,
         });
-      }
-
-      return shift;
-    }
-
-    if (applicationType !== "replacement") {
-      throw ShiftApplicationService.createError({
-        message: "The application type is invalid.",
-
-        code: "INVALID_APPLICATION_TYPE",
-      });
-    }
-
-    if (shift.scheduleMode !== "multiple") {
-      throw ShiftApplicationService.createError({
-        message: "A replacement application is not available for this shift.",
-
-        code: "REPLACEMENT_APPLICATION_NOT_AVAILABLE",
-
-        statusCode: 409,
-      });
-    }
-
-    if (!REPLACEMENT_APPLICATION_PARENT_STATUSES.includes(shift.status)) {
-      throw ShiftApplicationService.createError({
-        message: "This engagement is not accepting replacement applications.",
-
-        code: "SHIFT_NOT_ACCEPTING_REPLACEMENT_APPLICATIONS",
-
-        statusCode: 409,
-      });
-    }
-
-    if (REPLACEMENT_APPLICATION_BLOCKED_PAYMENT_STATUSES.includes(shift.paymentStatus)) {
-      throw ShiftApplicationService.createError({
-        message: "This engagement no longer has an active protected-funding state.",
-
-        code: "SHIFT_NOT_FUNDED_FOR_REPLACEMENT_APPLICATIONS",
-
-        statusCode: 409,
-      });
-    }
-
-    /*
-     * An isolated occurrence replacement is opened by the occurrence itself.
-     * It must not require or mutate parent Shift.replacementHiring.
-     */
-    if (roundContext.isOccurrenceTargeted) {
-      ShiftApplicationService.assertOccurrenceTargetAvailable({
-        occurrence: roundContext.occurrence,
-
-        now,
-      });
-
-      return shift;
-    }
-
-    if (replacementHiringStatus !== REPLACEMENT_HIRING_STATUSES.OPEN) {
-      throw ShiftApplicationService.createError({
-        message: "This engagement is not accepting replacement applications.",
-
-        code: "SHIFT_NOT_ACCEPTING_REPLACEMENT_APPLICATIONS",
-
-        statusCode: 409,
-      });
     }
 
     return shift;
   }
 
-  static buildReplacementOccurrenceFilter({ shift, now = new Date() }) {
+  static buildReplacementOccurrenceFilter({ shift, roundContext, now = new Date() }) {
     return {
       shift: shift._id,
-
+      slotNumber: roundContext.slotNumber,
       sequenceNumber: {
-        $gte: Number(shift.replacementHiring.startSequenceNumber),
-
-        $lte: Number(shift.replacementHiring.endSequenceNumber),
+        $gte: roundContext.startSequenceNumber,
+        $lte: roundContext.endSequenceNumber,
       },
-
+      replacementForAssignment: roundContext.replacementForAssignment._id,
+      replacementCase: roundContext.replacementCaseId,
       assignmentStatus: "replacement_required",
-
       assignedProfessional: null,
-
       assignment: null,
-
       assignedAt: null,
-
       status: "scheduled",
-
       attendanceStatus: "not_started",
-
       settlementStatus: "not_due",
-
       checkedInAt: null,
-
       checkedOutAt: null,
-
       checkInPinUsedAt: null,
-
       checkOutPinUsedAt: null,
-
-      replacementForAssignment: shift.replacementHiring.replacementForAssignment,
-
-      replacementCase: shift.replacementHiring.assignmentCase,
-
       refundStatus: "not_eligible",
-
       fillCutoffAt: {
         $gt: now,
       },
-
       endTime: {
         $gt: now,
       },
+      $or: [
+        {
+          unfilledFinalizationAt: null,
+        },
+        {
+          unfilledFinalizationAt: {
+            $gt: now,
+          },
+        },
+      ],
     };
   }
 
@@ -1216,187 +1148,130 @@ class ShiftApplicationService {
     session,
     now = new Date(),
   }) {
-    if (roundContext.isOccurrenceTargeted) {
-      const query = ShiftOccurrence.countDocuments(
-        ShiftApplicationService.buildOccurrenceTargetFilter({
+    const filter = roundContext.isOccurrenceTargeted
+      ? this.buildOccurrenceTargetFilter({
           shift,
-
           occurrence: roundContext.occurrence,
-
           now,
         })
-      );
-
-      if (session) {
-        query.session(session);
-      }
-
-      const eligibleCount = await query;
-
-      if (eligibleCount !== 1) {
-        throw ShiftApplicationService.createError({
-          message: "This occurrence is no longer available for replacement.",
-
-          code: "OCCURRENCE_REPLACEMENT_NOT_AVAILABLE",
-
-          statusCode: 409,
+      : this.buildReplacementOccurrenceFilter({
+          shift,
+          roundContext,
+          now,
         });
-      }
 
-      return 1;
-    }
-
-    const query = ShiftOccurrence.countDocuments(
-      ShiftApplicationService.buildReplacementOccurrenceFilter({
-        shift,
-
-        now,
+    const occurrences = await ShiftOccurrence.find(filter)
+      .sort({
+        sequenceNumber: 1,
       })
-    );
-
-    if (session) {
-      query.session(session);
-    }
-
-    const eligibleCount = await query;
-
-    if (eligibleCount <= 0) {
-      throw ShiftApplicationService.createError({
-        message: "No remaining occurrences are currently available for replacement.",
-
-        code: "REPLACEMENT_OCCURRENCES_NOT_AVAILABLE",
-
-        statusCode: 409,
-      });
-    }
-
-    const expectedOccurrenceCount = Number(shift.replacementHiring?.occurrenceCount || 0);
+      .session(session);
 
     if (
-      !Number.isSafeInteger(expectedOccurrenceCount) ||
-      expectedOccurrenceCount <= 0 ||
-      eligibleCount !== expectedOccurrenceCount
+      occurrences.length !== roundContext.expectedOccurrenceCount ||
+      occurrences.some(
+        (occurrence, index) =>
+          occurrence.sequenceNumber !== roundContext.startSequenceNumber + index
+      )
     ) {
-      throw ShiftApplicationService.createError({
-        message:
-          "Replacement availability is being reconciled. Please retry after the occurrence range is updated.",
-
-        code: "REPLACEMENT_OCCURRENCE_SUMMARY_STALE",
-
+      throw this.createError({
+        message: "The complete replacement range is no longer available.",
+        code: "REPLACEMENT_OCCURRENCES_NOT_AVAILABLE",
         statusCode: 409,
-
-        details: {
-          expectedOccurrenceCount,
-
-          eligibleOccurrenceCount: eligibleCount,
-        },
       });
     }
 
-    return eligibleCount;
-  }
+    this.assertReplacementIdentity({
+      shift,
+      previous: roundContext.replacementForAssignment,
+      occurrences,
+    });
 
-  /* ─────────────────────────────── SCHEDULE CONFLICTS ─────────────────────────────── */
-
-  static async getCandidateIntervals({ shift, roundContext, session, now = new Date() }) {
-    if (roundContext.isOccurrenceTargeted) {
-      const occurrence = roundContext.occurrence;
-
-      ShiftApplicationService.assertOccurrenceTargetAvailable({
+    for (const occurrence of occurrences) {
+      this.assertOccurrenceTargetAvailable({
         occurrence,
-
         now,
       });
-
-      return [
-        {
-          startTime: new Date(occurrence.startTime) < now ? now : occurrence.startTime,
-
-          endTime: occurrence.endTime,
-        },
-      ];
     }
 
-    const applicationType = roundContext.applicationType;
+    return occurrences.length;
+  }
 
-    if ((shift.scheduleMode || "single") === "single") {
-      if (new Date(shift.endTime) <= now) {
-        throw ShiftApplicationService.createError({
-          message: "This shift no longer has a remaining work interval.",
-
-          code: "SHIFT_HAS_NO_AVAILABLE_WORK_DATES",
-
-          statusCode: 409,
-        });
-      }
-
+  static async getCandidateIntervals({ shift, roundContext, session, now = new Date() }) {
+    if (roundContext.isOccurrenceTargeted)
       return [
         {
-          startTime:
-            applicationType === "replacement" && new Date(shift.startTime) < now
-              ? now
-              : shift.startTime,
-
-          endTime: shift.endTime,
+          startTime: roundContext.occurrence.startTime,
+          endTime: roundContext.occurrence.endTime,
         },
       ];
-    }
 
     const filter =
-      applicationType === "replacement"
-        ? ShiftApplicationService.buildReplacementOccurrenceFilter({
+      roundContext.applicationType === "replacement"
+        ? this.buildReplacementOccurrenceFilter({
             shift,
-
+            roundContext,
             now,
           })
         : {
             shift: shift._id,
-
             assignmentStatus: "unassigned",
-
             assignedProfessional: null,
-
             assignment: null,
-
-            assignedAt: null,
-
             status: "scheduled",
-
             attendanceStatus: "not_started",
-
             settlementStatus: "not_due",
-
-            endTime: {
+            refundStatus: "not_eligible",
+            fillCutoffAt: {
               $gt: now,
             },
           };
 
-    const query = ShiftOccurrence.find(filter).select("sequenceNumber startTime endTime").sort({
-      sequenceNumber: 1,
-    });
+    const occurrences = await ShiftOccurrence.find(filter)
+      .sort({
+        slotNumber: 1,
+        sequenceNumber: 1,
+      })
+      .session(session);
 
-    if (session) {
-      query.session(session);
-    }
-
-    const occurrences = await query.lean();
-
-    if (occurrences.length === 0) {
-      throw ShiftApplicationService.createError({
-        message: "No remaining work dates are available for this application.",
-
+    if (!occurrences.length)
+      throw this.createError({
+        message: "No work dates are available for this application.",
         code: "SHIFT_HAS_NO_AVAILABLE_WORK_DATES",
-
         statusCode: 409,
       });
+
+    if (roundContext.applicationType === "initial") {
+      const groups = new Map();
+
+      for (const occurrence of occurrences) {
+        if (!groups.has(occurrence.slotNumber)) {
+          groups.set(occurrence.slotNumber, []);
+        }
+
+        groups.get(occurrence.slotNumber).push(occurrence);
+      }
+
+      const complete = [...groups.values()].find(
+        (group) =>
+          group.length === shift.occurrenceCount &&
+          group.every((occurrence, index) => occurrence.sequenceNumber === index + 1)
+      );
+
+      if (!complete)
+        throw this.createError({
+          message: "No complete initial position remains.",
+          code: "INITIAL_ASSIGNMENT_CAPACITY_FILLED",
+          statusCode: 409,
+        });
+
+      return complete.map((occurrence) => ({
+        startTime: occurrence.startTime,
+        endTime: occurrence.endTime,
+      }));
     }
 
     return occurrences.map((occurrence) => ({
-      startTime:
-        applicationType === "replacement" && new Date(occurrence.startTime) < now
-          ? now
-          : occurrence.startTime,
-
+      startTime: occurrence.startTime,
       endTime: occurrence.endTime,
     }));
   }
@@ -1420,90 +1295,34 @@ class ShiftApplicationService {
     session,
     now = new Date(),
   }) {
-    const intervals = await ShiftApplicationService.getCandidateIntervals({
+    const intervals = await this.getCandidateIntervals({
       shift,
-
       roundContext,
-
       session,
-
       now,
     });
 
-    const overlapFilter = ShiftApplicationService.buildOverlapFilter(intervals);
-
-    const occurrenceQuery = ShiftOccurrence.findOne({
-      shift: {
-        $ne: shift._id,
-      },
-
+    const conflict = await ShiftOccurrence.findOne({
       assignedProfessional: professionalProfileId,
-
       assignmentStatus: "assigned",
-
       status: {
         $in: ACTIVE_OCCURRENCE_STATUSES,
       },
+      $or: this.buildOverlapFilter(intervals),
+    }).session(session);
 
-      $or: overlapFilter,
-    }).select(["shift", "referenceCode", "sequenceNumber", "startTime", "endTime"].join(" "));
-
-    const singleShiftQuery = Shift.findOne({
-      _id: {
-        $ne: shift._id,
-      },
-
-      scheduleMode: {
-        $ne: "multiple",
-      },
-
-      assignedProfessional: professionalProfileId,
-
-      status: {
-        $in: ACTIVE_SINGLE_SHIFT_STATUSES,
-      },
-
-      $or: overlapFilter,
-    }).select(["referenceCode", "startTime", "endTime"].join(" "));
-
-    if (session) {
-      occurrenceQuery.session(session);
-
-      singleShiftQuery.session(session);
-    }
-
-    const [conflictingOccurrence, conflictingSingleShift] = await Promise.all([
-      occurrenceQuery.lean(),
-
-      singleShiftQuery.lean(),
-    ]);
-
-    if (conflictingOccurrence || conflictingSingleShift) {
-      const conflict = conflictingOccurrence || conflictingSingleShift;
-
-      throw ShiftApplicationService.createError({
-        message: "This shift overlaps with work already assigned to you.",
-
+    if (conflict)
+      throw this.createError({
+        message: "This application overlaps with work already assigned to you.",
         code: "PROFESSIONAL_SHIFT_SCHEDULE_CONFLICT",
-
         statusCode: 409,
-
         details: {
-          conflictingShiftId: conflictingOccurrence
-            ? String(conflictingOccurrence.shift)
-            : String(conflictingSingleShift._id),
-
-          conflictingReferenceCode: conflict.referenceCode || null,
-
-          conflictingStartTime: conflict.startTime,
-
-          conflictingEndTime: conflict.endTime,
+          conflictingShiftId: String(conflict.shift),
+          conflictingOccurrenceId: String(conflict._id),
+          conflictingSlotNumber: conflict.slotNumber,
         },
       });
-    }
   }
-
-  /* ─────────────────────────────── APPLICATION CREATION ─────────────────────────────── */
 
   static buildMatchSnapshot(professional) {
     return {
@@ -1527,311 +1346,173 @@ class ShiftApplicationService {
   }
 
   static async createApplication(
-    { shiftId, professionalProfileId, occurrenceId = null, note = null },
+    {
+      shiftId,
+      professionalProfileId,
+      occurrenceId = null,
+      replacementForAssignmentId = null,
+      note = null,
+    },
     options = {}
   ) {
-    return ShiftApplicationService.runWithOptionalTransaction(
-      options,
-
-      async (session) => {
-        const now = new Date();
-
-        const [shift, professional] = await Promise.all([
-          ShiftApplicationService.getShift(shiftId, session),
-
-          ShiftApplicationService.getProfessional(professionalProfileId, session),
-        ]);
-
-        const roundContext = await ShiftApplicationService.getApplicationRoundContext({
-          shift,
-
-          occurrenceId,
-
-          session,
-
-          now,
-        });
-
-        ShiftApplicationService.assertShiftAcceptingApplications({
-          shift,
-
-          roundContext,
-
-          now,
-        });
-
-        ShiftApplicationService.assertProfessionalEligible({
-          professional,
-
-          shift,
-
-          now,
-        });
-
-        if (roundContext.applicationType === "replacement") {
-          await ShiftApplicationService.assertReplacementOccurrencesAvailable({
-            shift,
-
-            roundContext,
-
-            session,
-
-            now,
-          });
-        }
-
-        await ShiftApplicationService.assertNoConfirmedScheduleConflict({
-          shift,
-
-          roundContext,
-
-          professionalProfileId: professional._id,
-
-          session,
-
-          now,
-        });
-
-        const existingFilter = {
-          shift: shift._id,
-
-          professional: professional._id,
-
-          applicationRound: roundContext.applicationRound,
-
-          occurrence: roundContext.occurrence?._id || null,
-        };
-
-        const existingQuery = ShiftApplication.findOne(existingFilter);
-
-        if (session) {
-          existingQuery.session(session);
-        }
-
-        const existingApplication = await existingQuery;
-
-        if (existingApplication) {
-          if (ACTIVE_APPLICATION_STATUSES.includes(existingApplication.status)) {
-            return {
-              application: existingApplication,
-
-              shift,
-
-              occurrence: roundContext.occurrence || null,
-
-              applicationType: roundContext.applicationType,
-
-              applicationRound: roundContext.applicationRound,
-
-              isOccurrenceTargeted: roundContext.isOccurrenceTargeted,
-
-              created: false,
-
-              idempotent: true,
-            };
-          }
-
-          throw ShiftApplicationService.createError({
-            message: "You already submitted an application for this hiring opportunity.",
-
-            code: "SHIFT_APPLICATION_ALREADY_EXISTS",
-
-            statusCode: 409,
-
-            details: {
-              status: existingApplication.status,
-
-              applicationId: String(existingApplication._id),
-
-              occurrenceId: roundContext.occurrence?._id
-                ? String(roundContext.occurrence._id)
-                : null,
-            },
-          });
-        }
-
-        const application = new ShiftApplication({
-          shift: shift._id,
-
-          professional: professional._id,
-
-          occurrence: roundContext.occurrence?._id || null,
-
-          applicationType: roundContext.applicationType,
-
-          applicationRound: roundContext.applicationRound,
-
-          replacementForAssignment: roundContext.replacementForAssignment?._id || null,
-
-          status: "pending",
-
-          note: ShiftApplicationService.normalizeOptionalText(
-            note,
-            "Application note",
-            MAX_APPLICATION_NOTE_LENGTH
-          ),
-
-          matchSnapshot: ShiftApplicationService.buildMatchSnapshot(professional),
-        });
-
-        await application.save({
-          session,
-        });
-
-        const shiftCounterFilter = {
-          _id: shift._id,
-        };
-
-        let counterIncrement;
-
-        if (roundContext.applicationType === "initial") {
-          Object.assign(shiftCounterFilter, {
-            applicationRound: roundContext.applicationRound,
-
-            status: "open",
-
-            paymentStatus: INITIAL_APPLICATION_PAYMENT_STATUS,
-
-            activeAssignment: null,
-
-            assignedProfessional: null,
-
-            "replacementHiring.status": REPLACEMENT_HIRING_STATUSES.CLOSED,
-          });
-
-          counterIncrement = {
-            totalApplications: 1,
-
-            currentRoundApplications: 1,
-          };
-        } else if (roundContext.isOccurrenceTargeted) {
-          Object.assign(shiftCounterFilter, {
-            status: {
-              $in: REPLACEMENT_APPLICATION_PARENT_STATUSES,
-            },
-
-            paymentStatus: {
-              $nin: REPLACEMENT_APPLICATION_BLOCKED_PAYMENT_STATUSES,
-            },
-
-            "occurrenceProgress.replacementRequired": {
-              $gte: 1,
-            },
-          });
-
-          /*
-           * Do not increment currentRoundApplications here.
-           *
-           * Several occurrence-specific opportunities may be open under the
-           * same parent Shift and each has its own occurrence-local round.
-           */
-          counterIncrement = {
-            totalApplications: 1,
-          };
-        } else {
-          Object.assign(shiftCounterFilter, {
-            applicationRound: roundContext.applicationRound,
-
-            status: {
-              $in: REPLACEMENT_APPLICATION_PARENT_STATUSES,
-            },
-
-            paymentStatus: {
-              $nin: REPLACEMENT_APPLICATION_BLOCKED_PAYMENT_STATUSES,
-            },
-
-            "replacementHiring.status": REPLACEMENT_HIRING_STATUSES.OPEN,
-
-            "replacementHiring.applicationRound": roundContext.applicationRound,
-
-            "replacementHiring.assignmentCase": roundContext.replacementCaseId,
-
-            "replacementHiring.replacementForAssignment": roundContext.replacementForAssignment._id,
-          });
-
-          counterIncrement = {
-            totalApplications: 1,
-
-            currentRoundApplications: 1,
-          };
-        }
-
-        const shiftUpdate = await Shift.updateOne(
-          shiftCounterFilter,
-          {
-            $inc: counterIncrement,
+    return this.runWithOptionalTransaction(options, async (session) => {
+      const now = new Date();
+
+      const normalizedShiftId = this.normalizeObjectId(shiftId, "shift ID");
+
+      // Serialize hiring-opportunity reads and counters with assignment writes.
+      const shift = await Shift.findOneAndUpdate(
+        {
+          _id: normalizedShiftId,
+        },
+        {
+          $inc: {
+            __v: 1,
           },
-          {
-            session,
+        },
+        {
+          new: true,
+          session,
+        }
+      );
 
-            runValidators: true,
-          }
-        );
+      if (!shift)
+        throw this.createError({
+          message: "Shift was not found.",
+          code: "SHIFT_NOT_FOUND",
+          statusCode: 404,
+        });
 
-        if (shiftUpdate.modifiedCount !== 1) {
-          throw ShiftApplicationService.createError({
-            message: "The engagement stopped accepting applications before submission completed.",
+      const professional = await this.getProfessional(professionalProfileId, session);
 
-            code: "SHIFT_APPLICATION_CREATION_CONFLICT",
+      const roundContext = await this.getApplicationRoundContext({
+        shift,
+        occurrenceId,
+        replacementForAssignmentId,
+        session,
+        now,
+      });
 
+      this.assertShiftAcceptingApplications({
+        shift,
+        roundContext,
+        now,
+      });
+
+      this.assertProfessionalEligible({
+        professional,
+        shift,
+        now,
+      });
+
+      if (roundContext.applicationType === "replacement")
+        await this.assertReplacementOccurrencesAvailable({
+          shift,
+          roundContext,
+          session,
+          now,
+        });
+
+      await this.assertNoConfirmedScheduleConflict({
+        shift,
+        roundContext,
+        professionalProfileId: professional._id,
+        session,
+        now,
+      });
+
+      const scope = {
+        shift: shift._id,
+        professional: professional._id,
+        applicationType: roundContext.applicationType,
+        applicationRound: roundContext.applicationRound,
+        occurrence: roundContext.occurrence?._id || null,
+        replacementForAssignment: roundContext.replacementForAssignment?._id || null,
+      };
+
+      const existing = await ShiftApplication.findOne(scope).session(session);
+
+      if (existing) {
+        if (!ACTIVE_APPLICATION_STATUSES.includes(existing.status))
+          throw this.createError({
+            message: "You already applied for this opportunity.",
+            code: "SHIFT_APPLICATION_ALREADY_EXISTS",
             statusCode: 409,
           });
-        }
-
-        logger.info(
-          `${roundContext.applicationType} application ${application._id} created for shift ${shift.referenceCode} by professional ${professional._id}${
-            roundContext.occurrence
-              ? ` for occurrence ${roundContext.occurrence.referenceCode}`
-              : ""
-          }`
-        );
 
         return {
-          application,
-
+          application: existing,
           shift,
-
-          occurrence: roundContext.occurrence || null,
-
+          occurrence: roundContext.occurrence,
           applicationType: roundContext.applicationType,
-
           applicationRound: roundContext.applicationRound,
-
           isOccurrenceTargeted: roundContext.isOccurrenceTargeted,
-
-          created: true,
-
-          idempotent: false,
-
-          events: [
-            {
-              type: "shift_application_created",
-
-              shiftId: String(shift._id),
-
-              occurrenceId: roundContext.occurrence?._id
-                ? String(roundContext.occurrence._id)
-                : null,
-
-              applicationId: String(application._id),
-
-              professionalId: String(professional._id),
-
-              employerProfileId: String(shift.business),
-
-              applicationType: roundContext.applicationType,
-
-              applicationRound: roundContext.applicationRound,
-
-              isOccurrenceTargeted: roundContext.isOccurrenceTargeted,
-            },
-          ],
+          created: false,
+          idempotent: true,
         };
       }
-    );
-  }
 
-  /* ─────────────────────────────── PROFESSIONAL WITHDRAWAL ─────────────────────────────── */
+      const application = new ShiftApplication({
+        ...scope,
+        slotNumber: roundContext.slotNumber,
+        status: "pending",
+        note: this.normalizeOptionalText(note, "Application note", MAX_APPLICATION_NOTE_LENGTH),
+        matchSnapshot: this.buildMatchSnapshot(professional),
+      });
+
+      await application.save({
+        session,
+      });
+
+      const increment = {
+        totalApplications: 1,
+      };
+
+      if (roundContext.applicationType === "initial") {
+        increment.currentRoundApplications = 1;
+      }
+
+      await Shift.updateOne(
+        {
+          _id: shift._id,
+        },
+        {
+          $inc: increment,
+        },
+        {
+          session,
+          runValidators: true,
+        }
+      );
+
+      const updatedShift = await this.getShift(shift._id, session);
+
+      return {
+        application,
+        shift: updatedShift,
+        occurrence: roundContext.occurrence,
+        applicationType: roundContext.applicationType,
+        applicationRound: roundContext.applicationRound,
+        isOccurrenceTargeted: roundContext.isOccurrenceTargeted,
+        created: true,
+        idempotent: false,
+        events: [
+          {
+            type: "shift_application_created",
+            shiftId: String(shift._id),
+            occurrenceId: roundContext.occurrence?._id ? String(roundContext.occurrence._id) : null,
+            applicationId: String(application._id),
+            professionalId: String(professional._id),
+            employerProfileId: String(shift.business),
+            applicationType: roundContext.applicationType,
+            applicationRound: roundContext.applicationRound,
+            slotNumber: roundContext.slotNumber,
+            isOccurrenceTargeted: roundContext.isOccurrenceTargeted,
+          },
+        ],
+      };
+    });
+  }
 
   static async withdrawApplication(
     { applicationId, professionalProfileId, withdrawalReason = null },
@@ -2094,249 +1775,162 @@ class ShiftApplicationService {
     },
     options = {}
   ) {
-    return ShiftApplicationService.runWithOptionalTransaction(
-      options,
+    return this.runWithOptionalTransaction(options, async (session) => {
+      const now = this.normalizeCurrentTime(currentTime);
 
-      async (session) => {
-        const now = ShiftApplicationService.normalizeCurrentTime(currentTime);
+      const reviewedBy = this.normalizeObjectId(reviewedByUserId, "reviewed-by user ID");
 
-        const reviewedBy = ShiftApplicationService.normalizeObjectId(
-          reviewedByUserId,
-          "reviewed-by user ID"
-        );
+      const loaded = await this.getEmployerApplication({
+        applicationId,
+        employerProfileId,
+        employerContext,
+        session,
+      });
 
-        const { application, shift } = await ShiftApplicationService.getEmployerApplication({
-          applicationId,
+      // Assignment service uses the same parent/professional lock order.
+      const shift = await ShiftAssignmentService.lockShiftAndProfessional({
+        shiftId: loaded.shift._id,
+        professionalId: loaded.application.professional,
+        session,
+      });
 
-          employerProfileId,
+      const application = await this.getApplication({
+        applicationId,
+        session,
+      });
 
-          employerContext,
+      this.assertApplicationReviewable(application);
 
-          session,
+      const professional = await this.getProfessional(application.professional, session);
+
+      const roundContext = await this.getApplicationRoundContext({
+        shift,
+        occurrenceId: application.occurrence || null,
+        replacementForAssignmentId: application.replacementForAssignment || null,
+        requestedApplicationRound: application.applicationRound,
+        session,
+        now,
+      });
+
+      if (
+        application.applicationType !== roundContext.applicationType ||
+        (application.applicationType === "replacement" &&
+          application.slotNumber !== roundContext.slotNumber)
+      ) {
+        throw this.createError({
+          message: "Application does not match this opportunity.",
+          code: "STALE_REPLACEMENT_APPLICATION",
+          statusCode: 409,
         });
+      }
 
-        ShiftApplicationService.assertApplicationReviewable(application);
+      this.assertProfessionalEligible({
+        professional,
+        shift,
+        now,
+      });
 
-        const professional = await ShiftApplicationService.getProfessional(
-          application.professional,
-          session
-        );
+      this.assertShiftAcceptingApplications({
+        shift,
+        roundContext,
+        now,
+      });
 
-        const roundContext = await ShiftApplicationService.getApplicationRoundContext({
+      if (roundContext.applicationType === "replacement")
+        await this.assertReplacementOccurrencesAvailable({
           shift,
-
-          occurrenceId: application.occurrence || null,
-
-          requestedApplicationRound: application.applicationRound,
-
-          session,
-
-          now,
-        });
-
-        ShiftApplicationService.assertProfessionalEligible({
-          professional,
-
-          shift,
-
-          now,
-        });
-
-        ShiftApplicationService.assertShiftAcceptingApplications({
-          shift,
-
           roundContext,
-
+          session,
           now,
         });
 
-        const applicationType = String(application.applicationType || roundContext.applicationType)
-          .trim()
-          .toLowerCase();
+      await this.assertNoConfirmedScheduleConflict({
+        shift,
+        roundContext,
+        professionalProfileId: professional._id,
+        session,
+        now,
+      });
 
-        const applicationRound = Number(
-          application.applicationRound || roundContext.applicationRound
-        );
+      await this.assertBusinessCanCreateAssignment({
+        businessId: shift.business,
+        currentTime: now,
+        session,
+      });
 
-        if (
-          applicationType !== roundContext.applicationType ||
-          applicationRound !== roundContext.applicationRound
-        ) {
-          throw ShiftApplicationService.createError({
-            message: "This application belongs to an earlier application round.",
+      const payload = {
+        shiftId: shift._id,
+        professionalId: professional._id,
+        assignedByUserId: reviewedBy,
+        applicationId: application._id,
+        source: "application",
+        assignedAt: now,
+      };
 
-            code: "STALE_SHIFT_APPLICATION_ROUND",
-
-            statusCode: 409,
-
-            details: {
-              applicationType,
-
-              applicationRound,
-
-              currentApplicationType: roundContext.applicationType,
-
-              currentApplicationRound: roundContext.applicationRound,
-            },
-          });
-        }
-
-        const applicationOccurrenceId = application.occurrence
-          ? String(application.occurrence)
-          : null;
-
-        const currentOccurrenceId = roundContext.occurrence?._id
-          ? String(roundContext.occurrence._id)
-          : null;
-
-        if (applicationOccurrenceId !== currentOccurrenceId) {
-          throw ShiftApplicationService.createError({
-            message:
-              "This application no longer belongs to the active occurrence replacement request.",
-
-            code: "STALE_OCCURRENCE_REPLACEMENT_APPLICATION",
-
-            statusCode: 409,
-          });
-        }
-
-        if (applicationType === "replacement") {
-          const applicationReplacementForAssignment = application.replacementForAssignment
-            ? String(application.replacementForAssignment)
-            : null;
-
-          const currentReplacementForAssignment = roundContext.replacementForAssignment
-            ? String(roundContext.replacementForAssignment._id)
-            : null;
-
-          if (applicationReplacementForAssignment !== currentReplacementForAssignment) {
-            throw ShiftApplicationService.createError({
-              message: "This application no longer belongs to the active replacement request.",
-
-              code: "STALE_REPLACEMENT_APPLICATION",
-
-              statusCode: 409,
-            });
-          }
-
-          await ShiftApplicationService.assertReplacementOccurrencesAvailable({
-            shift,
-
-            roundContext,
-
-            session,
-
-            now,
-          });
-        }
-
-        await ShiftApplicationService.assertNoConfirmedScheduleConflict({
-          shift,
-
-          roundContext,
-
-          professionalProfileId: professional._id,
-
-          session,
-
-          now,
-        });
-
-        /*
-         * Accepting an application creates a new professional assignment and
-         * therefore a new employer obligation.
-         *
-         * Application-management authority was already established above.
-         * This separate business-level check answers only whether the business
-         * is currently allowed to create that new obligation.
-         *
-         * Keep this immediately before assignment creation so shortlist/reject
-         * remain available during delinquency while acceptance is blocked.
-         */
-        await ShiftApplicationService.assertBusinessCanCreateAssignment({
-          businessId: shift.business,
-
-          currentTime: now,
-
-          session,
-        });
-
-        const assignmentPayload = {
-          shiftId: shift._id,
-
-          professionalId: professional._id,
-
-          assignedByUserId: reviewedBy,
-
-          applicationId: application._id,
-
-          source: "application",
-
-          assignedAt: now,
-        };
-
-        const assignmentResult =
-          applicationType === "initial"
-            ? await ShiftAssignmentService.createInitialAssignment(assignmentPayload, {
+      const assignmentResult =
+        roundContext.applicationType === "initial"
+          ? await ShiftAssignmentService.createInitialAssignment(payload, {
+              session,
+            })
+          : await ShiftAssignmentService.createReplacementAssignment(
+              {
+                ...payload,
+                slotNumber: roundContext.slotNumber,
+                occurrenceId: roundContext.occurrence?._id || null,
+                replacesAssignmentId: roundContext.replacementForAssignment._id,
+                replacementCaseId: roundContext.replacementCaseId,
+                startSequenceNumber: roundContext.startSequenceNumber,
+                endSequenceNumber: roundContext.endSequenceNumber,
+              },
+              {
                 session,
-              })
-            : await ShiftAssignmentService.createReplacementAssignment(
-                {
-                  ...assignmentPayload,
+              }
+            );
 
-                  occurrenceId: roundContext.occurrence?._id || null,
+      application.status = "accepted";
+      application.slotNumber = assignmentResult.assignment.slotNumber;
+      application.acceptedAssignment = assignmentResult.assignment._id;
+      application.acceptedAt = now;
+      application.reviewedAt = now;
+      application.reviewedBy = reviewedBy;
 
-                  replacesAssignmentId: roundContext.replacementForAssignment._id,
+      application.employerPrivateNote = this.normalizeOptionalText(
+        employerPrivateNote,
+        "Employer private note",
+        MAX_REVIEW_NOTE_LENGTH
+      );
 
-                  replacementCaseId: roundContext.replacementCaseId || null,
+      await application.save({
+        session,
+      });
 
-                  startSequenceNumber: roundContext.startSequenceNumber,
+      let shouldCloseOpportunity = roundContext.applicationType === "replacement";
 
-                  endSequenceNumber: roundContext.endSequenceNumber,
-                },
-                {
-                  session,
-                }
-              );
+      if (!shouldCloseOpportunity) {
+        const assignedSlots = await ShiftAssignment.find({
+          shift: shift._id,
+          occurrence: null,
+          assignmentType: "initial",
+        }).session(session);
 
-        application.status = "accepted";
+        shouldCloseOpportunity =
+          new Set(assignedSlots.map((assignment) => assignment.slotNumber)).size >=
+          shift.requiredProfessionals;
+      }
 
-        application.acceptedAt = now;
+      let rejectedOtherApplicationCount = 0;
 
-        application.reviewedAt = now;
-
-        application.reviewedBy = reviewedBy;
-
-        application.employerPrivateNote = ShiftApplicationService.normalizeOptionalText(
-          employerPrivateNote,
-          "Employer private note",
-          MAX_REVIEW_NOTE_LENGTH
-        );
-
-        application.acceptedAssignment = assignmentResult.assignment._id;
-
-        await application.save({
-          session,
-        });
-
-        /*
-         * Reject competing applications only for the same hiring opportunity.
-         *
-         * For an isolated replacement, another occurrence under the same Shift
-         * must remain completely untouched.
-         */
-        const rejectedApplications = await ShiftApplication.updateMany(
+      if (shouldCloseOpportunity) {
+        const result = await ShiftApplication.updateMany(
           {
             _id: {
               $ne: application._id,
             },
-
             shift: shift._id,
-
-            occurrence: roundContext.occurrence?._id || null,
-
-            applicationRound,
-
+            applicationType: application.applicationType,
+            applicationRound: application.applicationRound,
+            occurrence: application.occurrence || null,
+            replacementForAssignment: application.replacementForAssignment || null,
             status: {
               $in: ACTIVE_APPLICATION_STATUSES,
             },
@@ -2344,246 +1938,184 @@ class ShiftApplicationService {
           {
             $set: {
               status: "rejected",
-
               rejectedAt: now,
-
               reviewedAt: now,
-
               reviewedBy,
-
               rejectedReason: OTHER_APPLICANT_SELECTED_REASON,
             },
           },
           {
             session,
-
             runValidators: true,
           }
         );
 
-        if (applicationType === "initial") {
-          const confirmationUpdate = await Shift.updateOne(
-            {
-              _id: shift._id,
+        rejectedOtherApplicationCount = result.modifiedCount;
+      }
 
-              activeAssignment: assignmentResult.assignment._id,
+      const acceptedShift = await this.getShift(shift._id, session);
 
-              assignedProfessional: professional._id,
+      const applicationType = application.applicationType;
+      const assignmentStatus = assignmentResult.assignment.status;
 
-              paymentStatus: INITIAL_APPLICATION_PAYMENT_STATUS,
-
-              status: "assigned",
-
-              applicationRound: 1,
-
-              "replacementHiring.status": REPLACEMENT_HIRING_STATUSES.CLOSED,
-            },
-            {
-              $set: {
-                status: "confirmed",
-              },
-            },
-            {
-              session,
-
-              runValidators: true,
-            }
-          );
-
-          if (confirmationUpdate.modifiedCount !== 1) {
-            throw ShiftApplicationService.createError({
-              message: "The assignment was created but shift confirmation could not be finalized.",
-
-              code: "SHIFT_APPLICATION_CONFIRMATION_CONFLICT",
-
-              statusCode: 409,
-            });
-          }
-        }
-
-        const assignmentStatus = String(assignmentResult.assignment.status);
-
-        let confirmationEventType;
-
-        if (applicationType === "initial") {
-          confirmationEventType = "shift_professional_confirmed";
-        } else if (roundContext.isOccurrenceTargeted) {
-          confirmationEventType =
-            assignmentStatus === "active"
+      const confirmationEventType =
+        applicationType === "initial"
+          ? "shift_professional_confirmed"
+          : roundContext.isOccurrenceTargeted
+            ? assignmentStatus === "active"
               ? "shift_occurrence_replacement_professional_activated"
-              : "shift_occurrence_replacement_professional_scheduled";
-        } else {
-          confirmationEventType =
-            assignmentStatus === "active"
+              : "shift_occurrence_replacement_professional_scheduled"
+            : assignmentStatus === "active"
               ? "shift_replacement_professional_activated"
               : "shift_replacement_professional_scheduled";
-        }
 
-        /*
-         * ShiftAssignmentService and initial confirmation may both mutate the
-         * parent Shift. Reload it inside the same transaction so callers receive
-         * the authoritative post-acceptance parent summary rather than the
-         * pre-assignment document loaded at the start of this method.
-         */
-        const acceptedShift = await ShiftApplicationService.getShift(shift._id, session);
+      const eventContext = {
+        shiftId: String(shift._id),
+        applicationId: String(application._id),
+        professionalId: String(professional._id),
+        assignmentId: String(assignmentResult.assignment._id),
+        slotNumber: application.slotNumber,
+        occurrenceId: application.occurrence ? String(application.occurrence) : null,
+        applicationType,
+        applicationRound: application.applicationRound,
+        isOccurrenceTargeted: roundContext.isOccurrenceTargeted,
+      };
 
-        const replacementScope =
+      logger.info(
+        `Application ${application._id} accepted for Shift ${shift.referenceCode}, slot ${application.slotNumber}.`
+      );
+
+      return {
+        application,
+        assignment: assignmentResult.assignment,
+        assignmentResult,
+        shift: acceptedShift,
+        occurrence: roundContext.occurrence,
+        applicationType,
+        replacementScope:
           applicationType === "replacement"
             ? roundContext.isOccurrenceTargeted
               ? "isolated"
               : "tail"
-            : null;
-
-        logger.info(
-          `${applicationType} application ${application._id} accepted for shift ${shift.referenceCode}; assignment ${assignmentResult.assignment.referenceCode} created`
-        );
-
-        return {
-          application,
-
-          assignment: assignmentResult.assignment,
-
-          assignmentResult,
-
-          shift: acceptedShift,
-
-          occurrence: roundContext.occurrence || null,
-
-          applicationType,
-
-          replacementScope,
-
-          applicationRound,
-
-          isOccurrenceTargeted: roundContext.isOccurrenceTargeted,
-
-          rejectedOtherApplicationCount: rejectedApplications.modifiedCount,
-
-          events: [
-            {
-              type: "shift_application_accepted",
-
-              shiftId: String(shift._id),
-
-              occurrenceId: roundContext.occurrence?._id
-                ? String(roundContext.occurrence._id)
-                : null,
-
-              applicationId: String(application._id),
-
-              professionalId: String(professional._id),
-
-              assignmentId: String(assignmentResult.assignment._id),
-
-              applicationType,
-
-              applicationRound,
-
-              isOccurrenceTargeted: roundContext.isOccurrenceTargeted,
-            },
-
-            {
-              type: confirmationEventType,
-
-              shiftId: String(shift._id),
-
-              occurrenceId: roundContext.occurrence?._id
-                ? String(roundContext.occurrence._id)
-                : null,
-
-              professionalId: String(professional._id),
-
-              assignmentId: String(assignmentResult.assignment._id),
-
-              assignmentStatus,
-            },
-          ],
-        };
-      }
-    );
+            : null,
+        applicationRound: application.applicationRound,
+        isOccurrenceTargeted: roundContext.isOccurrenceTargeted,
+        rejectedOtherApplicationCount,
+        events: [
+          {
+            type: "shift_application_accepted",
+            ...eventContext,
+          },
+          {
+            type: confirmationEventType,
+            ...eventContext,
+            assignmentStatus,
+          },
+        ],
+      };
+    });
   }
 
-  /* ─────────────────────────────── SYSTEM CLEANUP ─────────────────────────────── */
-
   static async expireOpenApplicationsForShift(
-    { shiftId, applicationRound = null, occurrenceId = undefined },
+    {
+      shiftId,
+      applicationRound = null,
+      occurrenceId = undefined,
+      replacementForAssignmentId = null,
+      applicationType = null,
+    },
     options = {}
   ) {
-    return ShiftApplicationService.runWithOptionalTransaction(
-      options,
+    return this.runWithOptionalTransaction(options, async (session) => {
+      const filter = {
+        shift: this.normalizeObjectId(shiftId, "shift ID"),
+        status: {
+          $in: ACTIVE_APPLICATION_STATUSES,
+        },
+      };
 
-      async (session) => {
-        const normalizedShiftId = ShiftApplicationService.normalizeObjectId(shiftId, "shift ID");
+      if (applicationRound != null) {
+        const round = Number(applicationRound);
 
-        const filter = {
-          shift: normalizedShiftId,
+        if (!Number.isSafeInteger(round) || round < 1 || round > MAX_APPLICATION_ROUNDS)
+          throw this.createError({
+            message: "Invalid application round.",
+            code: "INVALID_APPLICATION_ROUND",
+          });
 
-          status: {
-            $in: ACTIVE_APPLICATION_STATUSES,
-          },
-        };
+        filter.applicationRound = round;
+      }
 
-        if (applicationRound !== null && applicationRound !== undefined) {
-          const normalizedRound = Number(applicationRound);
+      if (applicationType != null) {
+        if (!["initial", "replacement"].includes(applicationType))
+          throw this.createError({
+            message: "Invalid application type.",
+            code: "INVALID_APPLICATION_TYPE",
+          });
 
-          if (
-            !Number.isSafeInteger(normalizedRound) ||
-            normalizedRound < 1 ||
-            normalizedRound > MAX_APPLICATION_ROUNDS
-          ) {
-            throw ShiftApplicationService.createError({
-              message: "Application round must be a positive whole number.",
+        filter.applicationType = applicationType;
+      }
 
-              code: "INVALID_APPLICATION_ROUND",
-            });
-          }
+      if (replacementForAssignmentId) {
+        if (applicationType === "initial")
+          throw this.createError({
+            message: "Initial cleanup cannot target a replacement.",
+            code: "INVALID_APPLICATION_CLEANUP_SCOPE",
+          });
 
-          filter.applicationRound = normalizedRound;
+        filter.applicationType = "replacement";
 
-          /*
-           * Existing round-based cleanup belongs to parent hiring.
-           *
-           * Do not let it catch an independent occurrence-targeted round that
-           * happens to use the same numeric round.
-           */
-          if (occurrenceId === undefined) {
-            filter.occurrence = null;
-          }
-        }
-
-        if (occurrenceId !== undefined) {
-          filter.occurrence =
-            occurrenceId === null
-              ? null
-              : ShiftApplicationService.normalizeObjectId(occurrenceId, "occurrence ID");
-        }
-
-        const result = await ShiftApplication.updateMany(
-          filter,
-          {
-            $set: {
-              status: "expired",
-
-              expiredAt: new Date(),
-            },
-          },
-          {
-            session,
-
-            runValidators: true,
-          }
+        filter.replacementForAssignment = this.normalizeObjectId(
+          replacementForAssignmentId,
+          "replaced assignment ID"
         );
 
-        return {
-          shiftId: String(normalizedShiftId),
-
-          occurrenceId:
-            filter.occurrence && occurrenceId !== undefined ? String(filter.occurrence) : null,
-
-          expiredApplicationCount: result.modifiedCount,
-        };
+        filter.occurrence = occurrenceId
+          ? this.normalizeObjectId(occurrenceId, "occurrence ID")
+          : null;
+      } else if (
+        occurrenceId ||
+        applicationType === "replacement" ||
+        Number(applicationRound) > 1
+      ) {
+        throw this.createError({
+          message: "Replacement cleanup requires the prior assignment ID.",
+          code: "REPLACEMENT_ASSIGNMENT_ID_REQUIRED",
+        });
+      } else if (
+        applicationRound != null ||
+        applicationType === "initial" ||
+        occurrenceId === null
+      ) {
+        filter.applicationType = "initial";
+        filter.occurrence = null;
+        filter.replacementForAssignment = null;
       }
-    );
+
+      // With no opportunity selectors, this remains explicit whole-Shift expiry.
+      const result = await ShiftApplication.updateMany(
+        filter,
+        {
+          $set: {
+            status: "expired",
+            expiredAt: new Date(),
+          },
+        },
+        {
+          session,
+          runValidators: true,
+        }
+      );
+
+      return {
+        shiftId: String(filter.shift),
+        occurrenceId: filter.occurrence ? String(filter.occurrence) : null,
+        replacementForAssignmentId: filter.replacementForAssignment
+          ? String(filter.replacementForAssignment)
+          : null,
+        expiredApplicationCount: result.modifiedCount,
+      };
+    });
   }
 
   static async cancelOpenApplicationsForShift({ shiftId }, options = {}) {

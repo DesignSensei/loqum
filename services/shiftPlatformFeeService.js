@@ -54,7 +54,7 @@ const PLATFORM_FEE_AMOUNT_PATH_BY_COMPONENT = Object.freeze({
  *
  * - professional BASE or OT entitlement;
  * - overtime employer approval/rejection;
- * - overtime appeals/admin adjudication;
+ * - overtime admin adjudication;
  * - overtime top-up establishment, deadlines or delinquency;
  * - professional payout approval/execution;
  * - employer refund authority/execution; or
@@ -79,7 +79,7 @@ const PLATFORM_FEE_AMOUNT_PATH_BY_COMPONENT = Object.freeze({
  *
  * Final approved OT earns:
  *
- *   overtimeProfessionalPay × fixed-point snapshotted platformFeeRate
+ *   overtimeProfessionalPay × fixed-point snapshotted overtimePlatformFeeRate
  *
  * The calculation is performed through utils/money.js using integer minor
  * units, a scaled rate, BigInt arithmetic and deterministic half-up rounding.
@@ -137,6 +137,18 @@ class ShiftPlatformFeeService {
   }
 
   static async transaction(options = {}, callback) {
+    if (
+      options.session &&
+      (typeof options.session.inTransaction !== "function" || !options.session.inTransaction())
+    ) {
+      throw ShiftPlatformFeeService.createError({
+        message:
+          "Platform-fee processing requires an active transaction when a session is supplied.",
+        code: "ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
     return runWithOptionalTransaction(options, callback);
   }
 
@@ -398,27 +410,25 @@ class ShiftPlatformFeeService {
       });
     }
 
-    const [escrowWallet, platformWallet] = await Promise.all([
-      WalletService.getEscrowWallet(
-        {
-          countryCode,
-          currency,
-        },
-        {
-          session,
-        }
-      ),
+    const escrowWallet = await WalletService.getEscrowWallet(
+      {
+        countryCode,
+        currency,
+      },
+      {
+        session,
+      }
+    );
 
-      WalletService.getPlatformWallet(
-        {
-          countryCode,
-          currency,
-        },
-        {
-          session,
-        }
-      ),
-    ]);
+    const platformWallet = await WalletService.getPlatformWallet(
+      {
+        countryCode,
+        currency,
+      },
+      {
+        session,
+      }
+    );
 
     if (!escrowWallet) {
       throw ShiftPlatformFeeService.createError({
@@ -633,7 +643,7 @@ class ShiftPlatformFeeService {
     const expectedFee = ShiftPlatformFeeService.calculateOvertimePlatformFee({
       professionalPay: overtimeProfessionalPay,
 
-      platformFeeRate: occurrence?.platformFeeRate,
+      platformFeeRate: occurrence?.overtimePlatformFeeRate,
     });
 
     const storedFee = ShiftPlatformFeeService.normalizeNonNegativeAmount(
@@ -901,6 +911,12 @@ class ShiftPlatformFeeService {
       };
     }
 
+    const platformFeeRate = ShiftPlatformFeeService.normalizePlatformFeeRate(
+      normalizedComponent === "base"
+        ? occurrence.basePlatformFeeRate
+        : occurrence.overtimePlatformFeeRate
+    );
+
     const transfer = await WalletService.transferBetweenWallets(
       {
         fromWalletId: wallets.escrowWallet._id,
@@ -955,7 +971,7 @@ class ShiftPlatformFeeService {
 
           feeAmount,
 
-          platformFeeRate: Number(occurrence.platformFeeRate || 0),
+          platformFeeRate,
 
           earnedAt: audit.earnedAt,
         },
@@ -1325,7 +1341,7 @@ class ShiftPlatformFeeService {
     const feeAmount = ShiftPlatformFeeService.calculateOvertimePlatformFee({
       professionalPay: overtimeProfessionalPay,
 
-      platformFeeRate: occurrence.platformFeeRate,
+      platformFeeRate: occurrence.overtimePlatformFeeRate,
     });
 
     const audit = occurrence.overtimePlatformFeeAudit || {};
@@ -1564,7 +1580,8 @@ class ShiftPlatformFeeService {
         "branch",
         "assignedProfessional",
         "assignment",
-        "platformFeeRate",
+        "basePlatformFeeRate",
+        "overtimePlatformFeeRate",
         "estimatedPlatformFee",
         "basePlatformFee",
         "basePlatformFeeAudit",

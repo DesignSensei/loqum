@@ -28,51 +28,41 @@ const {
 const {
   MAX_SHIFT_OCCURRENCES,
   MINUTES_PER_DAY,
-
   OCCURRENCE_ASSIGNMENT_STATUSES,
   EXPIRED_FROM_ASSIGNMENT_STATUSES,
-
   OCCURRENCE_STATUSES,
   OCCURRENCE_STATUSES_REQUIRING_ASSIGNMENT,
-
   ATTENDANCE_STATUSES,
   ATTENDANCE_STATUSES_REQUIRING_ASSIGNMENT,
   ATTENDANCE_OVERRIDE_TYPES,
   ATTENDANCE_OVERRIDE_REASONS,
-
   LATE_CHECKOUT_OPTIONS,
   LATE_CHECKOUT_REASONS,
   CHECKOUT_FALLBACK_REASONS,
-
   SETTLEMENT_STATUSES,
   SETTLEMENT_STATUSES_REQUIRING_ASSIGNMENT,
   SETTLEMENT_APPROVAL_SOURCES,
-
   REFUND_STATUSES,
   REFUND_STATUSES_REQUIRING_AMOUNT,
   REFUND_EXECUTION_STATUSES,
   REFUND_HOLD_REASONS,
   REFUND_REASONS,
-
   REPLACEMENT_REASON_CODES,
   REPLACEMENT_REASON_CODES_REQUIRING_DETAILS,
-
   OVERTIME_SOURCES,
   OVERTIME_STATUSES,
   OVERTIME_DECISION_SOURCES,
   OVERTIME_REJECTION_BASES,
   OVERTIME_ADMIN_REVIEW_REASONS,
   OVERTIME_ADMIN_DECISIONS,
-
   OCCURRENCE_EVIDENCE_TYPES,
   OCCURRENCE_EVIDENCE_SUBMITTER_ROLES,
-
   CANCELLATION_ACTORS,
   USER_CANCELLATION_ACTORS,
   ACTIVE_WORK_CANCELLATION_INITIATORS,
-
   OCCURRENCE_CANCELLATION_CODES,
   CANCELLATION_CODE_ACTORS,
+  BASE_PLATFORM_FEE_BENEFIT_SOURCES,
 } = require("../constants/shiftLifecycle");
 
 const {
@@ -102,7 +92,7 @@ function isSupportedFinancialRate(value) {
   }
 }
 
-const CHALLENGE_WINDOW_ALLOWED_OCCURRENCE_STATUSES = Object.freeze([
+const OCCURRENCE_STATUSES_ALLOWING_CHALLENGE_AUDIT = Object.freeze([
   "pending_settlement",
   "completed",
   "cancelled",
@@ -120,7 +110,7 @@ const OVERTIME_SETTLEMENT_EARNING_TYPES = Object.freeze(["overtime"]);
 
 const CHALLENGEABLE_SETTLEMENT_COMPONENTS = Object.freeze(["base", "overtime"]);
 
-/* ─────────────────────────────── CANCELLATION COMPENSATION ─────────────────────────────── */
+/* ───────────────────── CANCELLATION COMPENSATION ───────────────────── */
 
 const cancellationCompensationSchema = new mongoose.Schema(
   {
@@ -134,10 +124,8 @@ const cancellationCompensationSchema = new mongoose.Schema(
       default: 0,
       min: 0,
       max: 1,
-
       validate: {
         validator: isSupportedFinancialRate,
-
         message: "cancellationCompensation.rate must use the supported financial rate precision.",
       },
     },
@@ -146,29 +134,23 @@ const cancellationCompensationSchema = new mongoose.Schema(
       type: Number,
       default: null,
       min: 0,
-
       validate: {
         validator: (value) => value === null || Number.isSafeInteger(value),
-
         message: "cancellationCompensation.windowMinutes must be a whole number.",
       },
     },
 
-    professionalPay: minorUnitAmountField({
-      defaultValue: 0,
-    }),
+    professionalPay: minorUnitAmountField({ defaultValue: 0 }),
 
     calculatedAt: {
       type: Date,
       default: null,
     },
   },
-  {
-    _id: false,
-  }
+  { _id: false }
 );
 
-/* ─────────────────────────────── ACTIVE-WORK CANCELLATION ─────────────────────────────── */
+/* ───────────────────── ACTIVE-WORK CANCELLATION ───────────────────── */
 
 const activeWorkCancellationSchema = new mongoose.Schema(
   {
@@ -211,10 +193,8 @@ const activeWorkCancellationSchema = new mongoose.Schema(
       default: 0,
       min: 0,
       max: MINUTES_PER_DAY,
-
       validate: {
         validator: Number.isSafeInteger,
-
         message: "activeWorkCancellation.actualWorkedMinutes must be a whole number.",
       },
     },
@@ -224,38 +204,28 @@ const activeWorkCancellationSchema = new mongoose.Schema(
       default: 0,
       min: 0,
       max: 1,
-
       validate: {
         validator: isSupportedFinancialRate,
-
         message:
           "activeWorkCancellation.minimumProfessionalPayRate must use the supported financial rate precision.",
       },
     },
 
-    actualWorkedProfessionalPay: minorUnitAmountField({
-      defaultValue: 0,
-    }),
+    actualWorkedProfessionalPay: minorUnitAmountField({ defaultValue: 0 }),
 
-    minimumGuaranteedProfessionalPay: minorUnitAmountField({
-      defaultValue: 0,
-    }),
+    minimumGuaranteedProfessionalPay: minorUnitAmountField({ defaultValue: 0 }),
 
-    professionalPay: minorUnitAmountField({
-      defaultValue: 0,
-    }),
+    professionalPay: minorUnitAmountField({ defaultValue: 0 }),
 
     calculatedAt: {
       type: Date,
       default: null,
     },
   },
-  {
-    _id: false,
-  }
+  { _id: false }
 );
 
-/* ─────────────────────────────── PROFESSIONAL SETTLEMENT COMPONENT ─────────────────────────────── */
+/* ───────────────────── PROFESSIONAL SETTLEMENT COMPONENT ───────────────────── */
 
 const settlementComponentAuditSchema = new mongoose.Schema(
   {
@@ -272,9 +242,7 @@ const settlementComponentAuditSchema = new mongoose.Schema(
       default: null,
     },
 
-    professionalPay: minorUnitAmountField({
-      defaultValue: 0,
-    }),
+    professionalPay: minorUnitAmountField({ defaultValue: 0 }),
 
     approvedForReleaseAt: {
       type: Date,
@@ -320,12 +288,10 @@ const settlementComponentAuditSchema = new mongoose.Schema(
       default: null,
     },
   },
-  {
-    _id: false,
-  }
+  { _id: false }
 );
 
-/* ─────────────────────────────── PLATFORM FEE AUDIT ─────────────────────────────── */
+/* ───────────────────── PLATFORM FEE AUDIT ───────────────────── */
 
 const platformFeeAuditSchema = new mongoose.Schema(
   {
@@ -350,12 +316,10 @@ const platformFeeAuditSchema = new mongoose.Schema(
       default: null,
     },
   },
-  {
-    _id: false,
-  }
+  { _id: false }
 );
 
-/* ─────────────────────────────── OCCURRENCE EVIDENCE ─────────────────────────────── */
+/* ───────────────────── OCCURRENCE EVIDENCE ───────────────────── */
 
 const occurrenceEvidenceItemSchema = new mongoose.Schema(
   {
@@ -396,13 +360,39 @@ const occurrenceEvidenceItemSchema = new mongoose.Schema(
       required: true,
     },
   },
-  {
-    _id: false,
-  }
+  { _id: false }
 );
 
-/* ─────────────────────────────── SHIFT OCCURRENCE ─────────────────────────────── */
+/* ───────────────────── SHIFT OCCURRENCE ───────────────────── */
 
+/**
+ * One occurrence is one staffing slot on one work date.
+ *
+ * sequenceNumber identifies the shared date.
+ * slotNumber identifies the professional position.
+ *
+ * Generate all slot/date records before hiring, with independent attendance
+ * PINs. Monetary snapshots cover ONE professional on ONE date, never headcount.
+ *
+ * Replacement preserves this occurrence's identity, slot, schedule and funded
+ * allocation. Only untouched eligible work may change assignment ownership.
+ *
+ * Attendance, claims, overtime, payout and refund authority remain on this
+ * record. Assignment history explains ownership changes.
+ *
+ * Services must transactionally verify:
+ * - slotNumber <= Shift.requiredProfessionals;
+ * - sequenceNumber/date/schedule match the parent schedule;
+ * - business and branch match the parent;
+ * - assignment and replacementForAssignment belong to this shift and slot;
+ * - assignedProfessional matches the assignment and covered sequence range;
+ * - case, claim, dispute, refund and payout links target the correct occurrence
+ *   and professional;
+ * - reassignments preserve completed work, earned fees and historical audit.
+ *
+ * Use occurrence _id or shift + slotNumber + sequenceNumber for one record.
+ * A shift/date or shift/sequence query can now return multiple professionals.
+ */
 const shiftOccurrenceSchema = new mongoose.Schema(
   {
     // --- CORE IDENTITY ---
@@ -411,6 +401,16 @@ const shiftOccurrenceSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Shift",
       required: true,
+    },
+
+    slotNumber: {
+      type: Number,
+      required: true,
+      min: 1,
+      validate: {
+        validator: Number.isSafeInteger,
+        message: "slotNumber must be a positive safe integer.",
+      },
     },
 
     business: {
@@ -437,10 +437,8 @@ const shiftOccurrenceSchema = new mongoose.Schema(
       required: true,
       min: 1,
       max: MAX_SHIFT_OCCURRENCES,
-
       validate: {
         validator: Number.isSafeInteger,
-
         message: "sequenceNumber must be a whole number.",
       },
     },
@@ -509,10 +507,8 @@ const shiftOccurrenceSchema = new mongoose.Schema(
       type: String,
       trim: true,
       required: true,
-
       validate: {
         validator: isValidLocalDateString,
-
         message: "occurrenceDate must be a valid date in YYYY-MM-DD format.",
       },
     },
@@ -522,10 +518,8 @@ const shiftOccurrenceSchema = new mongoose.Schema(
       trim: true,
       maxlength: 100,
       required: true,
-
       validate: {
         validator: isValidTimeZone,
-
         message: "scheduleTimeZone must be a valid IANA timezone.",
       },
     },
@@ -546,10 +540,8 @@ const shiftOccurrenceSchema = new mongoose.Schema(
       required: true,
       min: 1,
       max: MINUTES_PER_DAY,
-
       validate: {
         validator: Number.isSafeInteger,
-
         message: "scheduledMinutes must be a whole number.",
       },
     },
@@ -565,10 +557,8 @@ const shiftOccurrenceSchema = new mongoose.Schema(
       default: 0,
       min: 0,
       max: MINUTES_PER_DAY,
-
       validate: {
         validator: Number.isSafeInteger,
-
         message: "breakDuration must be a whole number of minutes.",
       },
     },
@@ -612,8 +602,13 @@ const shiftOccurrenceSchema = new mongoose.Schema(
     },
 
     /**
-     * activeClaim and activeDispute may coexist when they concern genuinely
-     * different ordinary issues.
+     * Current unresolved case references only.
+     *
+     * activeClaim and activeDispute may coexist only when:
+     * - they concern different challengeable components/issues;
+     * - both remain inside the challenge window lifecycle.
+     *
+     * They must be cleared immediately after final resolution.
      */
     activeClaim: {
       type: mongoose.Schema.Types.ObjectId,
@@ -627,54 +622,92 @@ const shiftOccurrenceSchema = new mongoose.Schema(
       default: null,
     },
 
-    // --- PRICING SNAPSHOT ---
+    // --- PRICING SNAPSHOT: ONE POSITION, ONE DATE ---
 
     hourlyRate: requiredPositiveMinorUnitAmountField(),
 
-    platformFeeRate: {
+    /**
+     * Standard scheduled/base platform-fee rate in force when this occurrence's
+     * pricing was locked. Preserved even when a subscription benefit reduces
+     * the applied BASE rate.
+     */
+    standardBasePlatformFeeRate: {
       type: Number,
       required: true,
       min: 0,
       max: 1,
-
       validate: {
         validator: isSupportedFinancialRate,
-
-        message: "platformFeeRate must use the supported financial rate precision.",
+        message: "standardBasePlatformFeeRate must use the supported financial rate precision.",
       },
+    },
+
+    /**
+     * Actual scheduled/base platform-fee rate granted to this occurrence.
+     * estimatedPlatformFee is calculated from this immutable snapshot.
+     */
+    basePlatformFeeRate: {
+      type: Number,
+      required: true,
+      min: 0,
+      max: 1,
+      validate: {
+        validator: isSupportedFinancialRate,
+        message: "basePlatformFeeRate must use the supported financial rate precision.",
+      },
+    },
+
+    /**
+     * Separately locked overtime platform-fee rate.
+     * Subscription BASE discounts do not implicitly flow into overtime.
+     */
+    overtimePlatformFeeRate: {
+      type: Number,
+      required: true,
+      min: 0,
+      max: 1,
+      validate: {
+        validator: isSupportedFinancialRate,
+        message: "overtimePlatformFeeRate must use the supported financial rate precision.",
+      },
+    },
+
+    basePlatformFeeBenefitSource: {
+      type: String,
+      enum: BASE_PLATFORM_FEE_BENEFIT_SOURCES,
+      default: "standard",
+      required: true,
+    },
+
+    /**
+     * Audit provenance only. Explicit rate snapshots remain authoritative if
+     * the subscription or plan later expires or changes.
+     */
+    basePlatformFeeSubscription: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Subscription",
+      default: null,
     },
 
     estimatedProfessionalPay: requiredPositiveMinorUnitAmountField(),
 
-    estimatedPlatformFee: minorUnitAmountField({
-      required: true,
-    }),
+    estimatedPlatformFee: minorUnitAmountField({ required: true }),
 
     estimatedEmployerCharge: requiredPositiveMinorUnitAmountField(),
 
     // --- BASE / SCHEDULED FINANCIAL OUTCOME ---
 
-    baseProfessionalPay: minorUnitAmountField({
-      defaultValue: 0,
-    }),
+    baseProfessionalPay: minorUnitAmountField({ defaultValue: 0 }),
 
-    basePlatformFee: minorUnitAmountField({
-      defaultValue: 0,
-    }),
+    basePlatformFee: minorUnitAmountField({ defaultValue: 0 }),
 
     // --- OVERTIME FINANCIAL OUTCOME ---
 
-    overtimeProfessionalPay: minorUnitAmountField({
-      defaultValue: 0,
-    }),
+    overtimeProfessionalPay: minorUnitAmountField({ defaultValue: 0 }),
 
-    overtimePlatformFee: minorUnitAmountField({
-      defaultValue: 0,
-    }),
+    overtimePlatformFee: minorUnitAmountField({ defaultValue: 0 }),
 
-    topUpRequired: minorUnitAmountField({
-      defaultValue: 0,
-    }),
+    topUpRequired: minorUnitAmountField({ defaultValue: 0 }),
 
     // --- BILLABLE TIME ---
 
@@ -704,13 +737,9 @@ const shiftOccurrenceSchema = new mongoose.Schema(
 
     // --- EMPLOYER REFUND SUMMARY ---
 
-    refundableAmount: minorUnitAmountField({
-      defaultValue: 0,
-    }),
+    refundableAmount: minorUnitAmountField({ defaultValue: 0 }),
 
-    refundedAmount: minorUnitAmountField({
-      defaultValue: 0,
-    }),
+    refundedAmount: minorUnitAmountField({ defaultValue: 0 }),
 
     refundStatus: {
       type: String,
@@ -803,8 +832,6 @@ const shiftOccurrenceSchema = new mongoose.Schema(
       default: () => ({}),
     },
 
-    // --- PROFESSIONAL SETTLEMENT COMPLETION ---
-
     settledAt: {
       type: Date,
       default: null,
@@ -832,9 +859,8 @@ const shiftOccurrenceSchema = new mongoose.Schema(
 
     /**
      * Raw checkout audit.
-     *
-     * A late checkout is never rewritten back to scheduled endTime merely
-     * because the professional says the extra time was not worked overtime.
+     * Never move a late checkout back to scheduled endTime merely because
+     * the professional says the extra time was not worked overtime.
      */
     checkedOutAt: {
       type: Date,
@@ -871,7 +897,6 @@ const shiftOccurrenceSchema = new mongoose.Schema(
       type: String,
       required: true,
       select: false,
-
       match: [/^\d{4}$/, "checkInPin must contain exactly four digits."],
     },
 
@@ -879,7 +904,6 @@ const shiftOccurrenceSchema = new mongoose.Schema(
       type: String,
       required: true,
       select: false,
-
       match: [/^\d{4}$/, "checkOutPin must contain exactly four digits."],
     },
 
@@ -963,11 +987,7 @@ const shiftOccurrenceSchema = new mongoose.Schema(
         default: null,
       },
 
-      /**
-       * Populated only for normal_late_checkout.
-       *
-       * overtime_requested uses the dedicated overtime record instead.
-       */
+      // Only for normal_late_checkout. OT uses its dedicated record.
       reason: {
         type: String,
         enum: [...LATE_CHECKOUT_REASONS, null],
@@ -1056,10 +1076,8 @@ const shiftOccurrenceSchema = new mongoose.Schema(
       },
 
       /**
-       * Professional's factual account of the work said to have continued
-       * beyond the scheduled end time.
-       *
-       * This is required for both late_checkout_prompt and manual_request.
+       * Professional's factual account of work beyond scheduled endTime.
+       * Required for both late_checkout_prompt and manual_request.
        * Supporting documentary evidence remains optional.
        */
       requestStatement: {
@@ -1074,38 +1092,30 @@ const shiftOccurrenceSchema = new mongoose.Schema(
         default: [],
       },
 
-      /**
-       * Immutable OT duration originally requested by the professional.
-       */
+      // Immutable duration originally requested by the professional.
       requestedMinutes: {
         type: Number,
         default: null,
         min: 1,
         max: MINUTES_PER_DAY,
-
         validate: {
           validator: (value) => value === null || Number.isSafeInteger(value),
-
           message: "overtime.requestedMinutes must be a whole number.",
         },
       },
 
       /**
-       * Final payable OT duration.
-       *
+       * Final payable duration.
        * Employer approval accepts requestedMinutes exactly.
-       * Admin may establish a different evidence-supported duration when
-       * resolving an employer rejection or employer non-response.
+       * Admin may establish an adjusted duration supported by evidence.
        */
       approvedMinutes: {
         type: Number,
         default: null,
         min: 1,
         max: MINUTES_PER_DAY,
-
         validate: {
           validator: (value) => value === null || Number.isSafeInteger(value),
-
           message: "overtime.approvedMinutes must be a whole number.",
         },
       },
@@ -1117,17 +1127,11 @@ const shiftOccurrenceSchema = new mongoose.Schema(
       },
 
       /**
-       * Final OT decision authority.
+       * employer: employer approved the professional's request.
+       * admin: final adjudication after rejection or non-response.
        *
-       * employer:
-       * Employer approved the professional's request.
-       *
-       * admin:
-       * Admin made the final decision after employer rejection or employer
-       * non-response.
-       *
-       * Employer rejection itself is not a final decision, so decisionSource
-       * remains null while status is disputed.
+       * Employer rejection is not a final decision. decisionSource stays
+       * null while the request is disputed.
        */
       decisionSource: {
         type: String,
@@ -1145,17 +1149,11 @@ const shiftOccurrenceSchema = new mongoose.Schema(
         default: null,
       },
 
-      /**
-       * Historical employer response delinquency audit.
-       */
       employerResponseOverdueAt: {
         type: Date,
         default: null,
       },
 
-      /**
-       * Final positive OT approval audit.
-       */
       approvedAt: {
         type: Date,
         default: null,
@@ -1167,12 +1165,9 @@ const shiftOccurrenceSchema = new mongoose.Schema(
         default: null,
       },
 
-      // --- EMPLOYER OT REJECTION ---
+      // --- EMPLOYER OT POSITION ---
+      // Rejection moves the professional's request directly to admin review.
 
-      /**
-       * Employer rejection is an adverse factual position, not a final OT
-       * decision. A rejection moves the OT request directly to admin review.
-       */
       rejectedAt: {
         type: Date,
         default: null,
@@ -1198,18 +1193,16 @@ const shiftOccurrenceSchema = new mongoose.Schema(
       },
 
       /**
-       * Structured employer counter-position used only when the employer
-       * accepts that some OT was worked but disputes the requested duration.
+       * Used when the employer accepts that some OT was worked but disputes
+       * the professional's requested duration.
        */
       employerProposedMinutes: {
         type: Number,
         default: null,
         min: 1,
         max: MINUTES_PER_DAY,
-
         validate: {
           validator: (value) => value === null || Number.isSafeInteger(value),
-
           message: "overtime.employerProposedMinutes must be a whole number.",
         },
       },
@@ -1219,12 +1212,7 @@ const shiftOccurrenceSchema = new mongoose.Schema(
         default: [],
       },
 
-      /**
-       * Explicit employer declaration used when no supporting documentary
-       * evidence exists.
-       *
-       * It must be true only when rejectionEvidence is empty.
-       */
+      // Explicit declaration; true only when rejectionEvidence is empty.
       rejectionNoSupportingEvidence: {
         type: Boolean,
         default: false,
@@ -1243,11 +1231,7 @@ const shiftOccurrenceSchema = new mongoose.Schema(
         default: null,
       },
 
-      /**
-       * Supporting evidence added by an administrator while OT is under
-       * adjudication. System-owned occurrence facts remain authoritative in
-       * their own fields and do not need to be duplicated here.
-       */
+      // System-owned occurrence facts remain in their authoritative fields.
       adminEvidence: {
         type: [occurrenceEvidenceItemSchema],
         default: [],
@@ -1279,26 +1263,19 @@ const shiftOccurrenceSchema = new mongoose.Schema(
 
       // --- OT FUNDING / DELINQUENCY ---
 
-      topUpAmount: minorUnitAmountField({
-        defaultValue: 0,
-      }),
+      topUpAmount: minorUnitAmountField({ defaultValue: 0 }),
 
       topUpDeadlineAt: {
         type: Date,
         default: null,
       },
 
-      /**
-       * Historical and retained after payment.
-       */
+      // Historical delinquency timestamps remain after payment.
       topUpOverdueAt: {
         type: Date,
         default: null,
       },
 
-      /**
-       * Historical and retained after payment.
-       */
       restrictionTriggeredAt: {
         type: Date,
         default: null,
@@ -1365,12 +1342,10 @@ const shiftOccurrenceSchema = new mongoose.Schema(
       default: () => ({}),
     },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-/* ─────────────────────────────── VALIDATION HELPERS ─────────────────────────────── */
+/* ───────────────────── VALIDATION HELPERS ───────────────────── */
 
 function hasPlatformFeeAuditData(audit) {
   return Boolean(
@@ -1411,7 +1386,6 @@ function hasOvertimeFinancialData(document) {
 
 function validatePlatformFeeAudit(document, audit, pathPrefix, feeAmount) {
   const normalizedFeeAmount = amount(feeAmount);
-
   const hasAudit = hasPlatformFeeAuditData(audit);
 
   if (normalizedFeeAmount <= 0) {
@@ -1463,7 +1437,6 @@ function validatePlatformFeeAudit(document, audit, pathPrefix, feeAmount) {
 
 function validateSettlementComponentAudit(document, component, pathPrefix) {
   const status = component?.status || "not_due";
-
   const professionalPay = amount(component?.professionalPay);
 
   if (status === "not_due") {
@@ -1646,9 +1619,7 @@ function isOrdinaryChallengeWindowOpen(document) {
 
 function validateChallengeWindow(document) {
   const challengeComponents = getChallengeComponents(document);
-
   const hasActiveClaim = hasDocumentValue(document.activeClaim);
-
   const hasActiveDispute = hasDocumentValue(document.activeDispute);
 
   const hasWindowOpening = hasAll([document.challengeWindowOpenedAt, document.challengeDeadlineAt]);
@@ -1684,9 +1655,8 @@ function validateChallengeWindow(document) {
 
   /**
    * Claim/dispute submission does not close the shared clock.
-   *
-   * A submitted case becomes immutable in its own model. The shared
-   * challenge window closes only at or after challengeDeadlineAt.
+   * Submitted cases become immutable in their own models.
+   * The window closes only at or after challengeDeadlineAt.
    */
   if (
     document.challengeWindowClosedAt &&
@@ -1708,7 +1678,7 @@ function validateChallengeWindow(document) {
 
   if (
     hasAnyWindowAudit &&
-    !CHALLENGE_WINDOW_ALLOWED_OCCURRENCE_STATUSES.includes(document.status)
+    !OCCURRENCE_STATUSES_ALLOWING_CHALLENGE_AUDIT.includes(document.status)
   ) {
     document.invalidate(
       "challengeWindowOpenedAt",
@@ -1716,12 +1686,7 @@ function validateChallengeWindow(document) {
     );
   }
 
-  /**
-   * activeClaim and activeDispute may coexist.
-   *
-   * Whether the two cases concern genuinely different issues is enforced by
-   * the claim/dispute services, which can inspect both case documents.
-   */
+  // Services verify that coexisting claim/dispute cases concern different issues.
 
   if (document.challengeWindowClosedAt && challengeComponents.length > 0) {
     document.invalidate(
@@ -1738,13 +1703,9 @@ function validateChallengeWindow(document) {
   }
 
   /**
-   * An open time envelope may contain zero challengeable components.
-   *
-   * Example:
-   * both sides have already consumed their one original ordinary challenge
-   * rights, but challengeDeadlineAt has not yet arrived.
+   * An open time envelope may contain zero challengeable components after
+   * both sides consume their original ordinary challenge rights.
    */
-
   const overtimeSelectionConsumed = document.overtime?.requested === true;
 
   if (overtimeSelectionConsumed && challengeComponents.includes("overtime")) {
@@ -1852,10 +1813,21 @@ function validateSchedule(document) {
 function validateReplacementAndAssignment(document) {
   const assignmentStatus = document.assignmentStatus || "unassigned";
 
+  if (
+    document.assignment &&
+    document.replacementForAssignment &&
+    String(document.assignment._id || document.assignment) ===
+      String(document.replacementForAssignment._id || document.replacementForAssignment)
+  ) {
+    document.invalidate(
+      "assignment",
+      "A replacement occurrence must reference a different assignment from replacementForAssignment."
+    );
+  }
+
   const assignedValues = [document.assignedProfessional, document.assignment, document.assignedAt];
 
   const hasCompleteAssignment = hasAll(assignedValues);
-
   const hasAnyAssignment = hasAny(assignedValues);
 
   const replacementCoreValues = [
@@ -2075,16 +2047,61 @@ function validatePricing(document) {
   });
 
   const hourlyRate = amount(document.hourlyRate);
-
   const scheduledMinutes = Number(document.scheduledMinutes);
-
-  const platformFeeRate = Number(document.platformFeeRate);
-
+  const standardBasePlatformFeeRate = Number(document.standardBasePlatformFeeRate);
+  const basePlatformFeeRate = Number(document.basePlatformFeeRate);
+  const overtimePlatformFeeRate = Number(document.overtimePlatformFeeRate);
+  const benefitSource = String(document.basePlatformFeeBenefitSource || "standard");
   const estimatedProfessionalPay = amount(document.estimatedProfessionalPay);
-
   const estimatedPlatformFee = amount(document.estimatedPlatformFee);
-
   const baseProfessionalPay = amount(document.baseProfessionalPay);
+
+  if (benefitSource === "standard") {
+    if (document.basePlatformFeeSubscription) {
+      document.invalidate(
+        "basePlatformFeeSubscription",
+        "A standard BASE platform-fee rate cannot reference a subscription benefit."
+      );
+    }
+
+    if (
+      isSupportedFinancialRate(standardBasePlatformFeeRate) &&
+      isSupportedFinancialRate(basePlatformFeeRate) &&
+      basePlatformFeeRate !== standardBasePlatformFeeRate
+    ) {
+      document.invalidate(
+        "basePlatformFeeRate",
+        "Without a subscription benefit, the applied BASE platform-fee rate must equal the standard BASE rate."
+      );
+    }
+  }
+
+  if (benefitSource === "subscription") {
+    if (!document.basePlatformFeeSubscription) {
+      document.invalidate(
+        "basePlatformFeeSubscription",
+        "A subscription-discounted BASE platform-fee rate requires the granting subscription."
+      );
+    }
+
+    if (
+      isSupportedFinancialRate(standardBasePlatformFeeRate) &&
+      isSupportedFinancialRate(basePlatformFeeRate) &&
+      basePlatformFeeRate >= standardBasePlatformFeeRate
+    ) {
+      document.invalidate(
+        "basePlatformFeeRate",
+        "A subscription BASE platform-fee rate must be lower than the standard BASE rate."
+      );
+    }
+  }
+
+  if (!isSupportedFinancialRate(overtimePlatformFeeRate)) {
+    document.invalidate(
+      "overtimePlatformFeeRate",
+      "overtimePlatformFeeRate must use the supported financial rate precision."
+    );
+  }
 
   let expectedProfessionalPay = null;
 
@@ -2118,28 +2135,31 @@ function validatePricing(document) {
     );
   }
 
-  if (Number.isSafeInteger(expectedProfessionalPay) && isSupportedFinancialRate(platformFeeRate)) {
+  if (
+    Number.isSafeInteger(expectedProfessionalPay) &&
+    isSupportedFinancialRate(basePlatformFeeRate)
+  ) {
     let expectedPlatformFee = null;
 
     try {
       expectedPlatformFee = money.calculateMinorAmountFromRate({
         amountMinor: expectedProfessionalPay,
-        rate: platformFeeRate,
+        rate: basePlatformFeeRate,
         rateScale: FINANCIAL_RATE_SCALE,
-        fieldName: "Estimated occurrence platform fee",
-        rateFieldName: "Platform fee rate",
+        fieldName: "Estimated occurrence BASE platform fee",
+        rateFieldName: "BASE platform fee rate",
       });
     } catch (error) {
       document.invalidate(
         "estimatedPlatformFee",
-        "The estimated platform-fee calculation is invalid or too large."
+        "The estimated BASE platform-fee calculation is invalid or too large."
       );
     }
 
     if (Number.isSafeInteger(expectedPlatformFee) && estimatedPlatformFee !== expectedPlatformFee) {
       document.invalidate(
         "estimatedPlatformFee",
-        "estimatedPlatformFee must be calculated from estimatedProfessionalPay and platformFeeRate."
+        "estimatedPlatformFee must be calculated from estimatedProfessionalPay and basePlatformFeeRate."
       );
     }
   }
@@ -2182,15 +2202,11 @@ function validatePricing(document) {
 
 function validatePlatformFees(document, assignmentContext) {
   const baseFee = amount(document.basePlatformFee);
-
   const overtimeFee = amount(document.overtimePlatformFee);
-
   const baseAudit = document.basePlatformFeeAudit || {};
-
   const overtimeAudit = document.overtimePlatformFeeAudit || {};
 
   validatePlatformFeeAudit(document, baseAudit, "basePlatformFeeAudit", baseFee);
-
   validatePlatformFeeAudit(document, overtimeAudit, "overtimePlatformFeeAudit", overtimeFee);
 
   if (baseFee > 0 && baseFee !== amount(document.estimatedPlatformFee)) {
@@ -2201,10 +2217,8 @@ function validatePlatformFees(document, assignmentContext) {
   }
 
   /**
-   * BASE fee is protected by the original Shift funding.
-   *
-   * It cannot become an employer-outstanding debt. Its collection audit is
-   * nevertheless separate from professional payout authority.
+   * BASE fee is protected by original Shift funding.
+   * Fee collection audit is separate from professional payout authority.
    */
   if (baseAudit.outstandingAt) {
     document.invalidate(
@@ -2228,23 +2242,22 @@ function validatePlatformFees(document, assignmentContext) {
 
   if (overtime.status === "approved") {
     const overtimeProfessionalPay = amount(document.overtimeProfessionalPay);
-
-    const platformFeeRate = Number(document.platformFeeRate);
+    const overtimePlatformFeeRate = Number(document.overtimePlatformFeeRate);
 
     let expectedFee = null;
 
     if (
       Number.isSafeInteger(overtimeProfessionalPay) &&
       overtimeProfessionalPay > 0 &&
-      isSupportedFinancialRate(platformFeeRate)
+      isSupportedFinancialRate(overtimePlatformFeeRate)
     ) {
       try {
         expectedFee = money.calculateMinorAmountFromRate({
           amountMinor: overtimeProfessionalPay,
-          rate: platformFeeRate,
+          rate: overtimePlatformFeeRate,
           rateScale: FINANCIAL_RATE_SCALE,
           fieldName: "Overtime platform fee",
-          rateFieldName: "Platform fee rate",
+          rateFieldName: "Overtime platform fee rate",
         });
       } catch (error) {
         document.invalidate(
@@ -2257,7 +2270,7 @@ function validatePlatformFees(document, assignmentContext) {
     if (Number.isSafeInteger(expectedFee) && overtimeFee !== expectedFee) {
       document.invalidate(
         "overtimePlatformFee",
-        "Approved overtimePlatformFee must be calculated from overtimeProfessionalPay and platformFeeRate."
+        "Approved overtimePlatformFee must be calculated from overtimeProfessionalPay and overtimePlatformFeeRate."
       );
     }
 
@@ -2288,11 +2301,8 @@ function validatePlatformFees(document, assignmentContext) {
       }
 
       /**
-       * Collection problems must not become professional payout authority.
-       *
-       * Once the employer top-up is funded, fee collection is handled by the
-       * separate platform-fee service. Professional payout remains governed
-       * by the funded OT settlement component.
+       * Fee collection problems do not become professional payout authority.
+       * Funded OT settlement governs professional payout independently.
        */
       if (overtimeAudit.collectedAt && overtime.topUpPaid !== true) {
         document.invalidate(
@@ -2311,19 +2321,14 @@ function validatePlatformFees(document, assignmentContext) {
 
 function validateSettlementComponents(document) {
   const baseSettlement = document.baseSettlement || {};
-
   const overtimeSettlement = document.overtimeSettlement || {};
 
   validateSettlementComponentAudit(document, baseSettlement, "baseSettlement");
-
   validateSettlementComponentAudit(document, overtimeSettlement, "overtimeSettlement");
 
   const baseStatus = baseSettlement.status || "not_due";
-
   const overtimeStatus = overtimeSettlement.status || "not_due";
-
   const baseProfessionalPay = amount(document.baseProfessionalPay);
-
   const overtimeProfessionalPay = amount(document.overtimeProfessionalPay);
 
   if (baseStatus !== "not_due") {
@@ -2586,7 +2591,6 @@ function validateAttendance(document) {
 
 function validateAbsenceAndAttendanceReviewDetails(document) {
   const hasAbsenceExplanation = hasDocumentValue(document.absenceExplanation);
-
   const hasAbsenceExplainedAt = hasDocumentValue(document.absenceExplainedAt);
 
   if (hasAbsenceExplanation !== hasAbsenceExplainedAt) {
@@ -2847,10 +2851,8 @@ function validateAbsenceAndAttendanceReviewDetails(document) {
 
   /**
    * missed_checkin_review deliberately does not require activeClaim.
-   *
-   * "I did not work" → absence explanation workflow.
-   *
-   * "I worked" → attendance_correction claim.
+   * "I did not work" uses absence explanation.
+   * "I worked" uses an attendance_correction claim.
    */
 }
 
@@ -3003,17 +3005,11 @@ function validateOvertimeEvidenceItems(
 
 function validateOvertime(document) {
   const overtime = document.overtime || {};
-
   const overtimeProfessionalPay = amount(document.overtimeProfessionalPay);
-
   const overtimePlatformFee = amount(document.overtimePlatformFee);
-
   const topUpRequired = amount(document.topUpRequired);
-
   const topUpAmount = amount(overtime.topUpAmount);
-
   const requestedMinutes = Number(overtime.requestedMinutes || 0);
-
   const approvedMinutes = Number(overtime.approvedMinutes || 0);
 
   const requestEvidence = Array.isArray(overtime.requestEvidence) ? overtime.requestEvidence : [];
@@ -3648,9 +3644,8 @@ function validateOvertime(document) {
     }
 
     /**
-     * Attendance timing is an upper boundary, not proof that every minute was
-     * worked. Approval authority still comes from employer acceptance or admin
-     * adjudication of the parties' positions and evidence.
+     * Attendance provides an upper boundary, not proof that every minute
+     * was worked. Employer acceptance or admin adjudication authorizes pay.
      */
     const authoritativeAttendanceEnd = getAuthoritativeAttendanceEnd(document);
 
@@ -3702,22 +3697,21 @@ function validateOvertime(document) {
       );
     }
 
-    const platformFeeRate = Number(document.platformFeeRate);
-
+    const overtimePlatformFeeRate = Number(document.overtimePlatformFeeRate);
     let expectedPlatformFee = null;
 
     if (
       Number.isSafeInteger(expectedProfessionalPay) &&
       expectedProfessionalPay > 0 &&
-      isSupportedFinancialRate(platformFeeRate)
+      isSupportedFinancialRate(overtimePlatformFeeRate)
     ) {
       try {
         expectedPlatformFee = money.calculateMinorAmountFromRate({
           amountMinor: expectedProfessionalPay,
-          rate: platformFeeRate,
+          rate: overtimePlatformFeeRate,
           rateScale: FINANCIAL_RATE_SCALE,
           fieldName: "Approved overtime platform fee",
-          rateFieldName: "Platform fee rate",
+          rateFieldName: "Overtime platform fee rate",
         });
       } catch (error) {
         document.invalidate(
@@ -3730,7 +3724,7 @@ function validateOvertime(document) {
     if (Number.isSafeInteger(expectedPlatformFee) && overtimePlatformFee !== expectedPlatformFee) {
       document.invalidate(
         "overtimePlatformFee",
-        "Approved overtimePlatformFee must match overtimeProfessionalPay and platformFeeRate."
+        "Approved overtimePlatformFee must match overtimeProfessionalPay and overtimePlatformFeeRate."
       );
     }
 
@@ -3826,10 +3820,7 @@ function validateOvertime(document) {
       }
     }
 
-    /**
-     * Historical delinquency timestamps are intentionally retained after
-     * payment. Current restriction derives from unpaid outstanding state.
-     */
+    // Historical delinquency remains after payment.
     if (overtime.topUpOverdueAt) {
       if (!overtime.topUpDeadlineAt || overtime.topUpOverdueAt < overtime.topUpDeadlineAt) {
         document.invalidate(
@@ -3941,11 +3932,9 @@ function validateOvertime(document) {
 
 function validateSettlementState(document) {
   const baseSettlementStatus = document.baseSettlement?.status || "not_due";
-
   const overtimeSettlementStatus = document.overtimeSettlement?.status || "not_due";
 
   const baseProfessionalPay = amount(document.baseProfessionalPay);
-
   const overtimeProfessionalPay = amount(document.overtimeProfessionalPay);
 
   const hasActiveOrdinaryChallenge = Boolean(document.activeClaim || document.activeDispute);
@@ -3954,6 +3943,13 @@ function validateSettlementState(document) {
     document.invalidate(
       "settlementStatus",
       "An occurrence with an active ordinary financial challenge must use disputed settlementStatus."
+    );
+  }
+
+  if (hasActiveOrdinaryChallenge && baseSettlementStatus !== "not_due") {
+    document.invalidate(
+      "baseSettlement.status",
+      "BASE professional payout cannot proceed while an ordinary claim or employer dispute remains unresolved."
     );
   }
 
@@ -4031,7 +4027,6 @@ function validateSettlementState(document) {
 
   if (document.settlementStatus === "released") {
     const baseNeedsRelease = baseProfessionalPay > 0;
-
     const overtimeNeedsRelease = overtimeProfessionalPay > 0;
 
     if (!baseNeedsRelease && !overtimeNeedsRelease) {
@@ -4126,7 +4121,6 @@ function validateSettlementState(document) {
 
 function validateCancellationCompensation(document, assignmentContext) {
   const compensation = document.cancellationCompensation || {};
-
   const professionalPay = amount(compensation.professionalPay);
 
   const hasCompensationData =
@@ -4606,11 +4600,8 @@ function validateCancellation(document) {
 
 function validateRefundWorkflow(document) {
   const refundStatus = document.refundStatus || "not_eligible";
-
   const refundableAmount = amount(document.refundableAmount);
-
   const refundedAmount = amount(document.refundedAmount);
-
   const challengeComponents = getChallengeComponents(document);
 
   const baseStillChallengeable = Boolean(
@@ -4618,10 +4609,9 @@ function validateRefundWorkflow(document) {
   );
 
   /**
-   * Scheduled/base refund authority.
-   *
-   * BASE platform fee remains consumed once earned.
-   * OT is separately funded and is excluded completely.
+   * Refund authority covers this occurrence's scheduled allocation.
+   * Earned BASE platform fee remains consumed.
+   * OT is separately funded and excluded.
    */
   let expectedRefundableAmount = null;
 
@@ -4651,10 +4641,7 @@ function validateRefundWorkflow(document) {
     document.invalidate("refundedAmount", "refundedAmount cannot exceed refundableAmount.");
   }
 
-  /**
-   * Lifecycle facts may be saved before ShiftRefundService synchronizes the
-   * actual EmployerRefund obligation.
-   */
+  // Lifecycle facts may precede synchronization of the EmployerRefund obligation.
   if (refundStatus === "not_eligible") {
     if (
       refundableAmount !== 0 ||
@@ -4802,6 +4789,13 @@ function validateRefundWorkflow(document) {
 
   const refundReadyOrExecuting = ["eligible", ...REFUND_EXECUTION_STATUSES].includes(refundStatus);
 
+  if (refundReadyOrExecuting && (document.activeClaim || document.activeDispute)) {
+    document.invalidate(
+      "refundStatus",
+      "BASE refund cannot become eligible or execute while an ordinary claim or employer dispute remains unresolved."
+    );
+  }
+
   if (refundReadyOrExecuting && baseStillChallengeable) {
     document.invalidate(
       "refundStatus",
@@ -4922,73 +4916,62 @@ function validateRefundWorkflow(document) {
   }
 }
 
-/* ─────────────────────────────── OCCURRENCE VALIDATION ─────────────────────────────── */
+/* ───────────────────── OCCURRENCE VALIDATION ───────────────────── */
 
 shiftOccurrenceSchema.pre("validate", function validateShiftOccurrence() {
   const assignmentContext = validateReplacementAndAssignment(this);
 
   validateSchedule(this);
-
   validateChallengeWindow(this);
-
   validatePricing(this);
-
   validatePlatformFees(this, assignmentContext);
-
   validateSettlementComponents(this);
-
   validateAttendance(this);
-
   validateAbsenceAndAttendanceReviewDetails(this);
-
   validateExpiredUnfilled(this);
-
   validateOvertime(this);
-
   validateCancellationCompensation(this, assignmentContext);
-
   validateActiveWorkCancellation(this, assignmentContext);
-
   validateCancellation(this);
-
   validateSettlementState(this);
-
   validateRefundWorkflow(this);
 });
 
-/* ─────────────────────────────── INDEXES ─────────────────────────────── */
+/* ───────────────────── INDEXES ───────────────────── */
 
-shiftOccurrenceSchema.index(
-  {
-    referenceCode: 1,
-  },
-  {
-    unique: true,
-  }
-);
+shiftOccurrenceSchema.index({ referenceCode: 1 }, { unique: true });
 
+/**
+ * Multiple slots share the same sequence and work date.
+ * Each slot has exactly one record for that sequence/date.
+ */
 shiftOccurrenceSchema.index(
   {
     shift: 1,
+    slotNumber: 1,
     sequenceNumber: 1,
   },
-  {
-    unique: true,
-  }
+  { unique: true }
 );
 
 shiftOccurrenceSchema.index(
   {
     shift: 1,
+    slotNumber: 1,
     occurrenceDate: 1,
   },
-  {
-    unique: true,
-  }
+  { unique: true }
 );
 
 shiftOccurrenceSchema.index({
   shift: 1,
+  startTime: 1,
+});
+
+shiftOccurrenceSchema.index({
+  shift: 1,
+  slotNumber: 1,
+  assignmentStatus: 1,
   startTime: 1,
 });
 
@@ -5200,9 +5183,7 @@ shiftOccurrenceSchema.index({
 });
 
 /**
- * Employer delinquency authority query support.
- *
- * Historical restrictionTriggeredAt remains on the occurrence after payment.
+ * Historical restrictionTriggeredAt remains after payment.
  * Current restriction queries must also require unpaid/outstanding OT.
  */
 shiftOccurrenceSchema.index({
@@ -5214,7 +5195,14 @@ shiftOccurrenceSchema.index({
   topUpRequired: 1,
 });
 
-/* ─────────────────────────────── PROFESSIONAL PAYOUT INDEXES ─────────────────────────────── */
+/* ───────────────────── PROFESSIONAL PAYOUT INDEXES ───────────────────── */
+
+shiftOccurrenceSchema.index({
+  basePlatformFeeBenefitSource: 1,
+  basePlatformFeeSubscription: 1,
+  business: 1,
+  startTime: -1,
+});
 
 shiftOccurrenceSchema.index({
   assignedProfessional: 1,
@@ -5244,7 +5232,7 @@ shiftOccurrenceSchema.index({
   "overtimeSettlement.payoutTransaction": 1,
 });
 
-/* ─────────────────────────────── PLATFORM FEE INDEXES ─────────────────────────────── */
+/* ───────────────────── PLATFORM FEE INDEXES ───────────────────── */
 
 shiftOccurrenceSchema.index({
   business: 1,

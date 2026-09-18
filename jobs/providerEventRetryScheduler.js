@@ -244,6 +244,8 @@ class ProviderEventRetryScheduler {
 
       terminalFailed: [],
 
+      executionFailed: [],
+
       deferred: [],
 
       ignored: [],
@@ -403,20 +405,12 @@ class ProviderEventRetryScheduler {
          */
         logger.error(`Provider event ${providerEventRecordId} retry execution failed:`, error);
 
-        result.terminalFailed.push({
+        result.executionFailed.push({
           providerEventRecordId: String(providerEventRecordId),
-
-          eventName: null,
-
-          eventCategory: null,
-
-          retryCount: null,
 
           errorCode: error.code || "PROVIDER_EVENT_RETRY_EXECUTION_FAILED",
 
           errorMessage: error.message || "Provider event retry execution failed.",
-
-          schedulerLevelFailure: true,
         });
       }
     }
@@ -538,6 +532,8 @@ class ProviderEventRetryScheduler {
         rescheduled: processing.rescheduled?.length || 0,
 
         terminalFailed: processing.terminalFailed?.length || 0,
+
+        executionFailed: processing.executionFailed?.length || 0,
 
         deferred: processing.deferred?.length || 0,
 

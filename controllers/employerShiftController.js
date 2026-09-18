@@ -64,6 +64,12 @@ function setNoStoreHeaders(res) {
   });
 }
 
+function normalizePositiveCount(value, fallback = 1) {
+  const count = Number(value);
+
+  return Number.isSafeInteger(count) && count > 0 ? count : fallback;
+}
+
 function isOperationalError(error) {
   return [
     "EmployerShiftControllerError",
@@ -132,6 +138,8 @@ function buildOccurrenceLifecycleSummary(occurrence) {
 
     referenceCode: occurrence.referenceCode,
 
+    slotNumber: Number(occurrence.slotNumber || 0),
+
     sequenceNumber: Number(occurrence.sequenceNumber || 0),
 
     occurrenceDate: occurrence.occurrenceDate || null,
@@ -186,10 +194,100 @@ function getLifecycleRequestContext(req) {
   };
 }
 
+function buildShiftOccurrenceRefreshView(shift) {
+  if (!shift) {
+    return null;
+  }
+
+  return {
+    shiftId: shift.id,
+
+    referenceCode: shift.referenceCode,
+
+    status: shift.status,
+
+    displayStatus: shift.displayStatus,
+
+    statusLabel: shift.statusLabel,
+
+    statusBadgeClass: shift.statusBadgeClass,
+
+    paymentStatus: shift.paymentStatus,
+
+    paymentStatusLabel: shift.paymentStatusLabel,
+
+    paymentStatusBadgeClass: shift.paymentStatusBadgeClass,
+
+    scheduleMode: shift.scheduleMode,
+
+    occurrenceCount: shift.occurrenceCount,
+
+    occurrenceCountLabel: shift.occurrenceCountLabel,
+
+    scheduledDateCount: shift.scheduledDateCount,
+
+    scheduledDateCountLabel: shift.scheduledDateCountLabel,
+
+    requiredProfessionals: shift.requiredProfessionals,
+
+    requiredProfessionalsLabel: shift.requiredProfessionalsLabel,
+
+    totalOccurrenceCount: shift.totalOccurrenceCount,
+
+    totalOccurrenceCountLabel: shift.totalOccurrenceCountLabel,
+
+    occurrencesSectionTitle: shift.occurrencesSectionTitle,
+
+    selectedOccurrenceId: shift.selectedOccurrenceId,
+
+    selectedOccurrence: shift.selectedOccurrence,
+
+    attention: shift.attention,
+
+    actionRequired: shift.actionRequired,
+
+    actionRequiredCount: shift.actionRequiredCount,
+
+    parentAction: shift.parentAction,
+
+    staffingSummary: shift.staffingSummary,
+
+    occurrenceProgress: shift.occurrenceProgress,
+
+    settlementSummary: shift.settlementSummary,
+
+    paymentReview: shift.paymentReview,
+
+    financialSummary: shift.financialSummary,
+
+    fundingSummary: shift.fundingSummary,
+
+    initialFundingNotice: shift.initialFundingNotice,
+
+    needsPayment: shift.needsPayment,
+
+    canCompletePayment: shift.canCompletePayment,
+
+    canRetryPayment: shift.canRetryPayment,
+
+    paymentActionLabel: shift.paymentActionLabel,
+
+    lifecycleActions: shift.lifecycleActions,
+
+    pinPanel: shift.pinPanel,
+
+    casesUrl: shift.casesUrl,
+
+    occurrences: shift.occurrences,
+  };
+}
+
 /* ─────────────────────────────── MANAGE SHIFTS ─────────────────────────────── */
 
 exports.getManageShifts = async (req, res, next) => {
   try {
+    const currentTime = new Date();
+
     const shiftsView = await ShiftService.getEmployerShiftsPageData({
       userId: req.user._id,
 
@@ -200,6 +298,8 @@ exports.getManageShifts = async (req, res, next) => {
       status: req.query.status,
 
       page: req.query.page,
+
+      currentTime,
     });
 
     setNoStoreHeaders(res);
@@ -241,6 +341,8 @@ exports.getManageShifts = async (req, res, next) => {
 
 exports.getShiftDetails = async (req, res, next) => {
   try {
+    const currentTime = new Date();
+
     const shiftDetailsView = await ShiftService.getEmployerShiftDetailsPageData({
       userId: req.user._id,
 
@@ -251,6 +353,8 @@ exports.getShiftDetails = async (req, res, next) => {
       shiftId: req.params.shiftId,
 
       occurrenceId: req.query.occurrence,
+
+      currentTime,
     });
 
     const shift = shiftDetailsView.shift;
@@ -309,13 +413,34 @@ exports.postShift = async (req, res) => {
       shiftData: req.body,
     });
 
-    const scheduleMode = result.schedule?.scheduleMode || "single";
-    const occurrenceCount = Number(result.schedule?.occurrenceCount || 1);
+    const scheduleMode = result.schedule?.scheduleMode || result.shift?.scheduleMode || "single";
+
+    const occurrenceCount = normalizePositiveCount(
+      result.schedule?.occurrenceCount || result.shift?.occurrenceCount,
+      1
+    );
+
+    const requiredProfessionals = normalizePositiveCount(
+      result.schedule?.requiredProfessionals || result.shift?.requiredProfessionals,
+      1
+    );
+
+    const totalOccurrenceCount = normalizePositiveCount(
+      result.schedule?.totalOccurrenceCount ||
+        result.shift?.totalOccurrenceCount ||
+        result.occurrences?.length,
+      occurrenceCount * requiredProfessionals
+    );
+
+    const workDateLabel = occurrenceCount === 1 ? "work date" : "work dates";
+    const positionLabel =
+      requiredProfessionals === 1 ? "professional position" : "professional positions";
 
     const successMessage =
-      scheduleMode === "multiple"
+      scheduleMode === "multiple" || occurrenceCount > 1 || requiredProfessionals > 1
         ? `Shift engagement ${result.shift.referenceCode} ` +
-          `was created with ${occurrenceCount} scheduled shifts. ` +
+          `was created with ${occurrenceCount} ${workDateLabel} across ` +
+          `${requiredProfessionals} ${positionLabel}. ` +
           "Choose a payment method to publish it."
         : `Shift ${result.shift.referenceCode} was created. ` +
           "Choose a payment method to publish it.";
@@ -339,6 +464,10 @@ exports.postShift = async (req, res) => {
         scheduleMode,
 
         occurrenceCount,
+
+        requiredProfessionals,
+
+        totalOccurrenceCount,
 
         status: result.shift.status,
 
@@ -460,13 +589,19 @@ exports.initializeShiftCheckout = async (req, res) => {
 /* ─────────────────────────────── SHIFT OCCURRENCES ─────────────────────────────── */
 
 /**
- * Returns occurrence view data for one parent Shift.
+ * Returns the current employer-facing presentation state for one parent Shift.
+ *
+ * The response is built from ShiftViewService through ShiftService. The client
+ * receives prepared occurrence, attention, financial, payment and lifecycle
+ * presentation state and does not need to interpret domain lifecycle rules.
  *
  * This endpoint does not load or expose raw PIN values.
  * Attendance PIN retrieval remains in employerShiftAttendanceController.
  */
 exports.getShiftOccurrences = async (req, res) => {
   try {
+    const currentTime = new Date();
+
     const shiftDetailsView = await ShiftService.getEmployerShiftDetailsPageData({
       userId: req.user._id,
 
@@ -477,6 +612,8 @@ exports.getShiftOccurrences = async (req, res) => {
       shiftId: req.params.shiftId,
 
       occurrenceId: req.query.occurrence,
+
+      currentTime,
     });
 
     setNoStoreHeaders(res);
@@ -484,21 +621,7 @@ exports.getShiftOccurrences = async (req, res) => {
     return res.status(200).json({
       success: true,
 
-      data: {
-        shiftId: shiftDetailsView.shift.id,
-
-        referenceCode: shiftDetailsView.shift.referenceCode,
-
-        scheduleMode: shiftDetailsView.shift.scheduleMode,
-
-        occurrenceCount: shiftDetailsView.shift.occurrenceCount,
-
-        selectedOccurrenceId: shiftDetailsView.shift.selectedOccurrenceId,
-
-        lifecycleActions: shiftDetailsView.shift.lifecycleActions,
-
-        occurrences: shiftDetailsView.shift.occurrences,
-      },
+      data: buildShiftOccurrenceRefreshView(shiftDetailsView.shift),
     });
   } catch (error) {
     return handleJsonError({
@@ -615,6 +738,8 @@ exports.postCancelShift = async (req, res) => {
 
         details: {
           occurrenceId: activeOccurrenceId,
+
+          slotNumber: preview.firstAffectedOccurrence?.slotNumber || null,
 
           sequenceNumber: preview.firstAffectedOccurrence?.sequenceNumber || null,
 

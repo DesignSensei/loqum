@@ -24,11 +24,15 @@ const {
  * SHIFT ASSIGNMENT ARCHITECTURE:
  *
  * ShiftAssignment records one professional's responsibility for a defined
- * sequence range inside one parent Shift engagement.
+ * sequence range within one staffing slot of a parent Shift engagement.
+ *
+ * slotNumber identifies the position, not the professional. Replacement
+ * assignments inherit that slot; sequence numbers identify shared work dates.
+ * Each slot has its own occurrence stream and assignment history.
  *
  * Shift remains the public marketplace post.
  * ShiftOccurrence remains the authoritative operational and payout record
- * for each work date.
+ * for each slot and work date.
  *
  * STATUS LIFECYCLE:
  *
@@ -54,28 +58,42 @@ const {
  * REPLACEMENT:
  *
  * A replacement assignment always links to the prior assignment through
- * replacesAssignment.
+ * replacesAssignment and retains its slotNumber.
  *
  * Remaining-engagement replacement:
  * - occurrence is null
  * - replacementCase is required
  * - the prior assignment may move to ending/ended
- * - the replacement assignment may become the parent Shift's current assignment
+ * - the replacement assignment may become the slot's current assignment
  *
  * Single-occurrence replacement:
  * - occurrence identifies exactly one ShiftOccurrence
  * - replacementCase is optional
  * - the prior assignment remains the continuing engagement assignment
- * - the prior assignment is not marked replacedByAssignment merely because one
- *   occurrence is reassigned
- * - the isolated replacement assignment never becomes the parent Shift's current
- *   assignment
+ * - the prior assignment is not marked replacedByAssignment merely because
+ *   one occurrence is reassigned
+ * - the isolated replacement assignment never becomes the slot's current
+ *   continuing assignment
  *
  * FINANCIAL AUTHORITY:
  *
  * ShiftAssignment explains why a professional owns an occurrence.
  * ShiftOccurrence.assignedProfessional remains the authoritative payout
- * recipient for that specific work date.
+ * recipient for that specific slot and work date.
+ *
+ * SERVICE TRANSACTION REQUIREMENTS:
+ *
+ * - Verify slotNumber is within Shift.requiredProfessionals.
+ * - Verify business, branch, professional and accepted application links.
+ * - Verify the application, replaced assignment, case and occurrence belong
+ *   to the same shift and slot wherever those relationships apply.
+ * - Verify sequence ranges and dates against the slot occurrences.
+ * - Guard capacity, replacement eligibility and professional schedule conflicts.
+ * - Transfer occurrence ownership and reconcile parent summaries atomically.
+ *
+ * These cross-document rules cannot be enforced by document validation alone.
+ * Query updates must not bypass status validation or isCurrentAssignment
+ * derivation.
  */
 
 function nullableSequenceField({ min = 1, message }) {
@@ -96,7 +114,7 @@ function sameId(left, right) {
     return false;
   }
 
-  return String(left) === String(right);
+  return String(left._id || left) === String(right._id || right);
 }
 
 function hasAnyValue(values) {
@@ -120,6 +138,22 @@ const shiftAssignmentSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Shift",
       required: true,
+    },
+
+    /**
+     * Stable position within Shift.requiredProfessionals.
+     *
+     * Required explicitly; never default existing multi-position records to 1.
+     * A replacement retains the slot of the assignment it replaces.
+     */
+    slotNumber: {
+      type: Number,
+      required: true,
+      min: 1,
+      validate: {
+        validator: Number.isSafeInteger,
+        message: "slotNumber must be a positive safe integer.",
+      },
     },
 
     business: {
@@ -319,8 +353,8 @@ const shiftAssignmentSchema = new mongoose.Schema(
       // Derived from status and assignment scope.
       //
       // Ordinary assignments may be current while active or ending.
-      // Occurrence-targeted assignments are never the parent Shift's current
-      // engagement assignment.
+      // Occurrence-targeted assignments are never the slot's current
+      // continuing assignment.
     },
 
     assignedAt: {
@@ -417,13 +451,9 @@ shiftAssignmentSchema.pre("validate", function validateShiftAssignment() {
   const status = this.status || "scheduled";
 
   const isScheduled = status === "scheduled";
-
   const isActive = status === "active";
-
   const isEnding = status === "ending";
-
   const isEnded = status === "ended";
-
   const isCancelled = status === "cancelled";
 
   const hasOccurrenceTarget = hasDocumentValue(this.occurrence);
@@ -580,7 +610,6 @@ shiftAssignmentSchema.pre("validate", function validateShiftAssignment() {
   // --- ACTIVATION ---
 
   const hasActivatedAt = hasDocumentValue(this.activatedAt);
-
   const hasActivatedBy = hasDocumentValue(this.activatedBy);
 
   if (hasActivatedAt !== hasActivatedBy) {
@@ -594,18 +623,6 @@ shiftAssignmentSchema.pre("validate", function validateShiftAssignment() {
   }
 
   if (isActive || isEnding || isEnded) {
-    /*
-     * Preserve compatibility for assignments created before activatedAt and
-     * activatedBy were introduced.
-     */
-    if (!this.activatedAt && this.assignedAt) {
-      this.activatedAt = this.assignedAt;
-    }
-
-    if (!this.activatedBy && this.assignedBy) {
-      this.activatedBy = this.assignedBy;
-    }
-
     if (!this.activatedAt || !this.activatedBy) {
       this.invalidate("activatedAt", `${status} requires activatedAt and activatedBy.`);
     }
@@ -976,14 +993,20 @@ shiftAssignmentSchema.pre("validate", function validateShiftAssignment() {
 
 /* ─────────────────────────────── INDEXES ─────────────────────────────── */
 
+/**
+ * One current continuing assignment per slot.
+ *
+ * Different slots may have current assignments simultaneously.
+ * Occurrence-targeted assignments derive isCurrentAssignment as false.
+ */
 shiftAssignmentSchema.index(
   {
     shift: 1,
+    slotNumber: 1,
     isCurrentAssignment: 1,
   },
   {
     unique: true,
-
     partialFilterExpression: {
       isCurrentAssignment: true,
     },
@@ -991,19 +1014,22 @@ shiftAssignmentSchema.index(
 );
 
 /**
- * One ordinary scheduled engagement assignment per parent Shift.
+ * One ordinary scheduled engagement assignment per slot.
+ *
+ * A scheduled replacement may coexist with the slot's current assignment
+ * while waiting for its future responsibility range to begin.
  *
  * Occurrence-targeted assignments are excluded because they do not replace
- * the parent Shift's continuing assignment.
+ * the slot's continuing assignment.
  */
 shiftAssignmentSchema.index(
   {
     shift: 1,
+    slotNumber: 1,
     status: 1,
   },
   {
     unique: true,
-
     partialFilterExpression: {
       status: "scheduled",
       occurrence: null,
@@ -1014,8 +1040,11 @@ shiftAssignmentSchema.index(
 /**
  * A specific occurrence may have only one scheduled isolated assignment.
  *
- * Final transactional guards in the assignment service will still verify that
- * the occurrence has not already been assigned before acceptance commits.
+ * Each occurrence belongs to one slot, so its identity already scopes
+ * this constraint to that slot and date.
+ *
+ * Final transactional guards in the assignment service must still verify
+ * occurrence ownership and replacement eligibility before acceptance commits.
  */
 shiftAssignmentSchema.index(
   {
@@ -1024,7 +1053,6 @@ shiftAssignmentSchema.index(
   },
   {
     unique: true,
-
     partialFilterExpression: {
       status: "scheduled",
       occurrence: {
@@ -1034,13 +1062,15 @@ shiftAssignmentSchema.index(
   }
 );
 
+/**
+ * An accepted application may produce only one assignment.
+ */
 shiftAssignmentSchema.index(
   {
     application: 1,
   },
   {
     unique: true,
-
     partialFilterExpression: {
       application: {
         $type: "objectId",
@@ -1057,12 +1087,20 @@ shiftAssignmentSchema.index({
 
 shiftAssignmentSchema.index({
   shift: 1,
+  slotNumber: 1,
   startSequence: 1,
   plannedEndSequence: 1,
 });
 
 shiftAssignmentSchema.index({
   shift: 1,
+  status: 1,
+  startsAt: 1,
+});
+
+shiftAssignmentSchema.index({
+  shift: 1,
+  slotNumber: 1,
   status: 1,
   startsAt: 1,
 });

@@ -11,124 +11,23 @@ const {
 } = require("../constants/shiftApplication");
 
 /**
- * SHIFT APPLICATION MODEL
+ * Professionals apply once to the shared Shift for initial hiring.
+ * Initial applications have no slotNumber until acceptance. Acceptance binds
+ * each selected professional to one distinct position and ShiftAssignment.
  *
- * ShiftApplication records one professional's application for one hiring
- * opportunity belonging to a parent Shift engagement.
+ * Replacement applications target the prior assignment and its stable slot.
+ * occurrence is null for remaining-schedule replacement, or identifies one
+ * exact occurrence for isolated replacement. Rounds belong to that opportunity.
  *
- * APPLICATION AUTHORITY
+ * The service must transactionally verify slotNumber <= Shift.requiredProfessionals,
+ * matching Shift/slot/assignment/occurrence links, remaining capacity and schedule
+ * conflicts. Schema validation does not load those related documents.
  *
- * Every application belongs to one parent Shift.
- *
- * An application may additionally target one exact ShiftOccurrence when an
- * individual future occurrence has been reopened for isolated replacement.
- *
- * ShiftApplication does not own:
- *
- * - occurrence assignment state;
- * - attendance state;
- * - cancellation state;
- * - worked time;
- * - professional settlement;
- * - platform-fee accounting; or
- * - employer refunds.
- *
- * Those responsibilities belong to their occurrence-level authorities.
- *
- * HIRING OPPORTUNITY TYPES
- *
- * Initial engagement hiring:
- *
- * applicationType: initial
- * applicationRound: 1
- * occurrence: null
- *
- * Remaining-engagement replacement hiring:
- *
- * applicationType: replacement
- * applicationRound: 2 or greater
- * occurrence: null
- *
- * Isolated occurrence replacement:
- *
- * applicationType: replacement
- * applicationRound: 2 or greater
- * occurrence: <ShiftOccurrence._id>
- *
- * OCCURRENCE-TARGETED REPLACEMENT
- *
- * For an isolated replacement:
- *
- * - occurrence identifies the exact ShiftOccurrence being refilled;
- * - replacementForAssignment identifies the assignment that previously owned
- *   that occurrence;
- * - acceptance creates a replacement ShiftAssignment for that occurrence;
- * - only that occurrence changes professional ownership; and
- * - the continuing professional's main assignment and later occurrences remain
- *   unchanged.
- *
- * An isolated replacement assignment must not become the parent Shift's
- * continuing engagement assignment.
- *
- * APPLICATION ROUNDS
- *
- * Ordinary parent-level hiring and isolated occurrence hiring have independent
- * uniqueness scopes.
- *
- * This means two different replacement-required occurrences under the same
- * parent Shift may both independently use applicationRound 2.
- *
- * The occurrence itself distinguishes those opportunities.
- *
- * REPLACEMENT ASSIGNMENT
- *
- * replacementForAssignment identifies the previous ShiftAssignment whose
- * professional previously owned the work being replaced.
- *
- * It is required for every replacement application.
- *
- * ACCEPTED ASSIGNMENT
- *
- * acceptedAssignment identifies the ShiftAssignment created from this
- * application.
- *
- * It is set only after acceptance.
- *
- * ACCEPTANCE
- *
- * accepted means:
- *
- * - the employer selected the professional;
- * - the appropriate ShiftAssignment was created; and
- * - the relevant ShiftOccurrence record or records were assigned.
- *
- * It does not mean:
- *
- * - attendance completed;
- * - professional earnings were approved;
- * - money was released;
- * - platform fees were collected; or
- * - settlement completed.
- *
- * Parent Shift state is reconciled separately from authoritative occurrence
- * state. Replacement acceptance must never blindly force the parent Shift to
- * confirmed.
- *
- * SCHEDULE CONFLICTS
- *
- * Schedule-overlap enforcement belongs to ShiftApplicationService.
- *
- * It runs:
- *
- * 1. when the professional applies; and
- * 2. again transactionally when the employer accepts.
- *
- * For isolated replacement, only the targeted occurrence interval is tested.
- *
- * FUTURE CREDITS
+ * Acceptance does not complete attendance, approve earnings or release money.
+ * Accepted applications remain historical acceptance records after assignments
+ * end. Further coverage uses replacement hiring, not a second initial acceptance.
  *
  * Credits remain dormant while creditsEnabled is false in PlatformSettings.
- * The credit fields remain available for the future application-credit flow.
  */
 
 /* ─────────────────────────────── SCHEMA ─────────────────────────────── */
@@ -150,13 +49,11 @@ const shiftApplicationSchema = new mongoose.Schema(
     },
 
     /**
-     * null
-     *
+     * null:
      * - initial parent-Shift hiring; or
      * - remaining-engagement replacement hiring.
      *
-     * ObjectId
-     *
+     * ObjectId:
      * - isolated replacement for one exact ShiftOccurrence.
      *
      * Only replacement applications may target an occurrence.
@@ -165,6 +62,20 @@ const shiftApplicationSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "ShiftOccurrence",
       default: null,
+    },
+
+    /**
+     * Initial: null before acceptance; populated when a position is assigned.
+     * Replacement: required from submission and inherited from the prior assignment.
+     */
+    slotNumber: {
+      type: Number,
+      default: null,
+      min: 1,
+      validate: {
+        validator: (value) => value == null || Number.isSafeInteger(value),
+        message: "slotNumber must be a positive safe whole number when supplied.",
+      },
     },
 
     /* ─────────────────────────────── APPLICATION ROUND ─────────────────────────────── */
@@ -205,7 +116,6 @@ const shiftApplicationSchema = new mongoose.Schema(
 
     /**
      * Set only after application acceptance.
-     *
      * Identifies the ShiftAssignment created from this application.
      */
     acceptedAssignment: {
@@ -445,7 +355,7 @@ function sameId(left, right) {
     return false;
   }
 
-  return String(left) === String(right);
+  return String(left._id || left) === String(right._id || right);
 }
 
 function invalidateTerminalConflict(application, fieldName, message) {
@@ -501,6 +411,39 @@ shiftApplicationSchema.pre("validate", function validateShiftApplication() {
         "A replacement application must identify the assignment being replaced."
       );
     }
+  }
+
+  /* ─────────────────────────────── POSITION SCOPE ─────────────────────────────── */
+
+  const hasSlot = hasValue(this.slotNumber);
+
+  const validSlot = Number.isSafeInteger(this.slotNumber) && this.slotNumber > 0;
+
+  if (hasSlot && !validSlot) {
+    this.invalidate("slotNumber", "slotNumber must be a positive safe whole number.");
+  }
+
+  if (this.applicationType === "initial") {
+    if (this.status === "accepted" && !validSlot) {
+      this.invalidate(
+        "slotNumber",
+        "An accepted initial application must identify its assigned position."
+      );
+    }
+
+    if (this.status !== "accepted" && hasSlot) {
+      this.invalidate(
+        "slotNumber",
+        "An initial application is assigned a position only on acceptance."
+      );
+    }
+  }
+
+  if (this.applicationType === "replacement" && !validSlot) {
+    this.invalidate(
+      "slotNumber",
+      "A replacement application must identify the prior assignment's position."
+    );
   }
 
   /* ─────────────────────────────── ASSIGNMENT LINKS ─────────────────────────────── */
@@ -593,143 +536,26 @@ shiftApplicationSchema.pre("validate", function validateShiftApplication() {
 
   /* ─────────────────────────────── TERMINAL STATUS CONSISTENCY ─────────────────────────────── */
 
-  /*
-   * shortlistedAt may remain after later acceptance/rejection because it is
-   * historical review information.
-   *
-   * Conflicting terminal outcomes are not allowed.
-   */
+  // Preserve shortlisting history while rejecting conflicting terminal outcomes.
+  const terminalTimestamps = {
+    accepted: "acceptedAt",
+    rejected: "rejectedAt",
+    withdrawn: "withdrawnAt",
+    expired: "expiredAt",
+    cancelled: "cancelledAt",
+  };
 
-  if (this.status === "accepted") {
-    invalidateTerminalConflict(
-      this,
-      "rejectedAt",
-      "An accepted application cannot also be rejected."
-    );
-
-    invalidateTerminalConflict(
-      this,
-      "withdrawnAt",
-      "An accepted application cannot also be withdrawn."
-    );
-
-    invalidateTerminalConflict(
-      this,
-      "expiredAt",
-      "An accepted application cannot also be expired."
-    );
-
-    invalidateTerminalConflict(
-      this,
-      "cancelledAt",
-      "An accepted application cannot also be cancelled."
-    );
-  }
-
-  if (this.status === "rejected") {
-    invalidateTerminalConflict(
-      this,
-      "acceptedAt",
-      "A rejected application cannot also be accepted."
-    );
-
-    invalidateTerminalConflict(
-      this,
-      "withdrawnAt",
-      "A rejected application cannot also be withdrawn."
-    );
-
-    invalidateTerminalConflict(this, "expiredAt", "A rejected application cannot also be expired.");
-
-    invalidateTerminalConflict(
-      this,
-      "cancelledAt",
-      "A rejected application cannot also be cancelled."
-    );
-  }
-
-  if (this.status === "withdrawn") {
-    invalidateTerminalConflict(
-      this,
-      "acceptedAt",
-      "A withdrawn application cannot also be accepted."
-    );
-
-    invalidateTerminalConflict(
-      this,
-      "rejectedAt",
-      "A withdrawn application cannot also be rejected."
-    );
-
-    invalidateTerminalConflict(
-      this,
-      "expiredAt",
-      "A withdrawn application cannot also be expired."
-    );
-
-    invalidateTerminalConflict(
-      this,
-      "cancelledAt",
-      "A withdrawn application cannot also be cancelled."
-    );
-  }
-
-  if (this.status === "expired") {
-    invalidateTerminalConflict(
-      this,
-      "acceptedAt",
-      "An expired application cannot also be accepted."
-    );
-
-    invalidateTerminalConflict(
-      this,
-      "rejectedAt",
-      "An expired application cannot also be rejected."
-    );
-
-    invalidateTerminalConflict(
-      this,
-      "withdrawnAt",
-      "An expired application cannot also be withdrawn."
-    );
-
-    invalidateTerminalConflict(
-      this,
-      "cancelledAt",
-      "An expired application cannot also be cancelled."
-    );
-  }
-
-  if (this.status === "cancelled") {
-    invalidateTerminalConflict(
-      this,
-      "acceptedAt",
-      "A cancelled application cannot also be accepted."
-    );
-
-    invalidateTerminalConflict(
-      this,
-      "rejectedAt",
-      "A cancelled application cannot also be rejected."
-    );
-
-    invalidateTerminalConflict(
-      this,
-      "withdrawnAt",
-      "A cancelled application cannot also be withdrawn."
-    );
-
-    invalidateTerminalConflict(
-      this,
-      "expiredAt",
-      "A cancelled application cannot also be expired."
-    );
-  }
-
-  if (
-    !TERMINAL_APPLICATION_STATUSES.includes(this.status) &&
-    (this.acceptedAt || this.rejectedAt || this.withdrawnAt || this.expiredAt || this.cancelledAt)
-  ) {
+  if (TERMINAL_APPLICATION_STATUSES.includes(this.status)) {
+    for (const [status, field] of Object.entries(terminalTimestamps)) {
+      if (status !== this.status) {
+        invalidateTerminalConflict(
+          this,
+          field,
+          `A ${this.status} application cannot also contain ${field}.`
+        );
+      }
+    }
+  } else if (Object.values(terminalTimestamps).some((field) => hasValue(this[field]))) {
     this.invalidate(
       "status",
       "A non-terminal application cannot contain terminal status timestamps."
@@ -868,23 +694,7 @@ shiftApplicationSchema.pre("validate", function validateShiftApplication() {
 
 /* ─────────────────────────────── INDEXES ─────────────────────────────── */
 
-/**
- * ORDINARY PARENT-SHIFT HIRING
- *
- * One application per:
- *
- * - Shift
- * - professional
- * - application type
- * - application round
- *
- * occurrence must be null.
- *
- * This covers:
- *
- * - initial engagement hiring; and
- * - remaining-engagement replacement hiring.
- */
+// One initial application per professional per Shift, regardless of headcount.
 shiftApplicationSchema.index(
   {
     shift: 1,
@@ -893,40 +703,49 @@ shiftApplicationSchema.index(
     applicationRound: 1,
   },
   {
+    name: "unique_initial_application_per_professional",
     unique: true,
-
     partialFilterExpression: {
+      applicationType: "initial",
       occurrence: null,
     },
   }
 );
 
-/**
- * ISOLATED OCCURRENCE REPLACEMENT
- *
- * One application per:
- *
- * - Shift
- * - occurrence
- * - professional
- * - application type
- * - application round.
- *
- * Two different occurrences under the same parent Shift therefore do not
- * collide even when both are in applicationRound 2.
- */
+// Independent remaining-schedule opportunities for different prior assignments.
 shiftApplicationSchema.index(
   {
     shift: 1,
-    occurrence: 1,
+    replacementForAssignment: 1,
     professional: 1,
     applicationType: 1,
     applicationRound: 1,
   },
   {
+    name: "unique_tail_replacement_application",
     unique: true,
-
     partialFilterExpression: {
+      applicationType: "replacement",
+      occurrence: null,
+    },
+  }
+);
+
+// The occurrence and prior assignment identify the isolated replacement context.
+shiftApplicationSchema.index(
+  {
+    shift: 1,
+    occurrence: 1,
+    replacementForAssignment: 1,
+    professional: 1,
+    applicationType: 1,
+    applicationRound: 1,
+  },
+  {
+    name: "unique_isolated_replacement_application",
+    unique: true,
+    partialFilterExpression: {
+      applicationType: "replacement",
       occurrence: {
         $type: "objectId",
       },
@@ -934,46 +753,56 @@ shiftApplicationSchema.index(
   }
 );
 
-/**
- * ORDINARY PARENT-SHIFT ACCEPTANCE
- *
- * Only one application may be accepted for one ordinary hiring opportunity.
- */
+// Multiple initial acceptances are allowed, with one initial acceptance per slot.
 shiftApplicationSchema.index(
   {
     shift: 1,
+    slotNumber: 1,
+  },
+  {
+    name: "unique_initial_acceptance_per_slot",
+    unique: true,
+    partialFilterExpression: {
+      applicationType: "initial",
+      status: "accepted",
+    },
+  }
+);
+
+// One accepted applicant for each remaining-schedule replacement round.
+shiftApplicationSchema.index(
+  {
+    shift: 1,
+    replacementForAssignment: 1,
     applicationType: 1,
     applicationRound: 1,
   },
   {
+    name: "unique_tail_replacement_acceptance",
     unique: true,
-
     partialFilterExpression: {
+      applicationType: "replacement",
       status: "accepted",
       occurrence: null,
     },
   }
 );
 
-/**
- * ISOLATED OCCURRENCE ACCEPTANCE
- *
- * Only one application may be accepted for one occurrence-specific hiring
- * opportunity.
- */
+// One accepted applicant for each isolated replacement round.
 shiftApplicationSchema.index(
   {
     shift: 1,
     occurrence: 1,
+    replacementForAssignment: 1,
     applicationType: 1,
     applicationRound: 1,
   },
   {
+    name: "unique_isolated_replacement_acceptance",
     unique: true,
-
     partialFilterExpression: {
+      applicationType: "replacement",
       status: "accepted",
-
       occurrence: {
         $type: "objectId",
       },
@@ -981,16 +810,13 @@ shiftApplicationSchema.index(
   }
 );
 
-/**
- * One accepted application may create only one ShiftAssignment.
- */
+// One assignment cannot be linked as the result of two accepted applications.
 shiftApplicationSchema.index(
   {
     acceptedAssignment: 1,
   },
   {
     unique: true,
-
     partialFilterExpression: {
       acceptedAssignment: {
         $type: "objectId",
@@ -999,9 +825,6 @@ shiftApplicationSchema.index(
   }
 );
 
-/**
- * Employer review of one ordinary or occurrence-targeted hiring opportunity.
- */
 shiftApplicationSchema.index({
   shift: 1,
   occurrence: 1,
@@ -1011,23 +834,16 @@ shiftApplicationSchema.index({
   createdAt: -1,
 });
 
-/**
- * Efficient lookup of the current and previous isolated replacement cycles.
- *
- * ShiftApplicationService uses replacementRequiredAt plus createdAt to
- * determine the current occurrence-specific replacement round.
- */
+// Retrieve rounds within the exact replacement opportunity.
 shiftApplicationSchema.index({
   shift: 1,
+  replacementForAssignment: 1,
   occurrence: 1,
   applicationType: 1,
   applicationRound: -1,
   createdAt: -1,
 });
 
-/**
- * Replacement assignment context.
- */
 shiftApplicationSchema.index({
   replacementForAssignment: 1,
   occurrence: 1,
@@ -1035,44 +851,35 @@ shiftApplicationSchema.index({
   status: 1,
 });
 
-/**
- * General employer Shift application listing.
- */
+shiftApplicationSchema.index({
+  shift: 1,
+  slotNumber: 1,
+  status: 1,
+});
+
 shiftApplicationSchema.index({
   shift: 1,
   status: 1,
   createdAt: -1,
 });
 
-/**
- * Occurrence-targeted replacement lookup.
- */
 shiftApplicationSchema.index({
   occurrence: 1,
   status: 1,
   createdAt: -1,
 });
 
-/**
- * Professional application history.
- */
 shiftApplicationSchema.index({
   professional: 1,
   status: 1,
   createdAt: -1,
 });
 
-/**
- * General status lookup.
- */
 shiftApplicationSchema.index({
   status: 1,
   createdAt: -1,
 });
 
-/**
- * Employer review workflow.
- */
 shiftApplicationSchema.index({
   reviewedBy: 1,
   status: 1,
@@ -1087,9 +894,6 @@ shiftApplicationSchema.index({
   rejectedAt: 1,
 });
 
-/**
- * Future boosted-application sorting.
- */
 shiftApplicationSchema.index({
   "credits.isBoosted": 1,
   "credits.boostLevel": 1,

@@ -26,7 +26,8 @@ class PaystackWebhookService {
   /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
 
   static cleanString(value) {
-    const cleanValue = String(value || "").trim();
+    if (typeof value !== "string") return null;
+    const cleanValue = value.trim();
 
     return cleanValue || null;
   }
@@ -44,8 +45,12 @@ class PaystackWebhookService {
   }
 
   static normalizeCurrentTime(value) {
-    const currentTime =
-      value instanceof Date ? new Date(value.getTime()) : new Date(value || Date.now());
+    if (value === undefined) return new Date();
+    if (!(value instanceof Date) && typeof value !== "string" && typeof value !== "number") {
+      throw new Error("Paystack webhook current time is invalid.");
+    }
+
+    const currentTime = value instanceof Date ? new Date(value.getTime()) : new Date(value);
 
     if (Number.isNaN(currentTime.getTime())) {
       throw new Error("Paystack webhook current time is invalid.");
@@ -69,10 +74,14 @@ class PaystackWebhookService {
   /* ─────────────────────────────── SIGNATURE VERIFICATION ─────────────────────────────── */
 
   static getSignature(headers = {}) {
-    return (
-      PaystackWebhookService.cleanString(headers["x-paystack-signature"]) ||
-      PaystackWebhookService.cleanString(headers["X-Paystack-Signature"])
+    if (!headers || typeof headers !== "object" || Array.isArray(headers)) return null;
+
+    const entries = Object.entries(headers).filter(
+      ([name]) => name.toLowerCase() === "x-paystack-signature"
     );
+    if (entries.length !== 1 || typeof entries[0][1] !== "string") return null;
+
+    return PaystackWebhookService.normalizeSignature(entries[0][1]);
   }
 
   static normalizeSignature(value) {
@@ -95,31 +104,40 @@ class PaystackWebhookService {
     return normalizedSignature;
   }
 
-  static getSignaturePayload({ rawBody = null, payload = null }) {
-    /*
-     * Prefer the exact raw request bytes whenever
-     * the HTTP layer preserved them.
-     */
-    if (Buffer.isBuffer(rawBody)) {
-      return rawBody;
+  static getSignaturePayload({ rawBody = null }) {
+    if (Buffer.isBuffer(rawBody)) return Buffer.from(rawBody);
+    if (typeof rawBody === "string") return Buffer.from(rawBody, "utf8");
+
+    throw new Error("Preserve the raw request body before parsing the Paystack webhook.");
+  }
+
+  static parseVerifiedPayload(signaturePayload) {
+    const text = signaturePayload.toString("utf8");
+    if (!Buffer.from(text, "utf8").equals(signaturePayload)) {
+      throw new Error("Paystack webhook body is not valid UTF-8.");
     }
 
-    if (typeof rawBody === "string") {
-      return Buffer.from(rawBody, "utf8");
+    let payload;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new Error("Paystack webhook body is not valid JSON.");
     }
 
-    /*
-     * Paystack's Node webhook example also
-     * supports signing JSON.stringify(req.body).
-     *
-     * Raw body remains preferable because it
-     * preserves the exact request representation.
-     */
-    if (payload !== null && payload !== undefined) {
-      return Buffer.from(JSON.stringify(payload), "utf8");
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      Array.isArray(payload) ||
+      typeof payload.event !== "string" ||
+      !payload.event.trim() ||
+      !payload.data ||
+      typeof payload.data !== "object" ||
+      Array.isArray(payload.data)
+    ) {
+      throw new Error("Paystack webhook must contain an event name and data object.");
     }
 
-    throw new Error("Paystack webhook payload is required for signature verification.");
+    return payload;
   }
 
   static signaturesMatch(expectedSignature, receivedSignature) {
@@ -200,6 +218,11 @@ class PaystackWebhookService {
       const currency = PaystackWebhookService.cleanUpperString(countrySetting.currency);
 
       if (countryCode && currency) {
+        if (currencyCountryMap[currency] && currencyCountryMap[currency] !== countryCode) {
+          throw new Error(
+            `Currency ${currency} maps to multiple active countries; explicit country resolution is required.`
+          );
+        }
         currencyCountryMap[currency] = countryCode;
       }
     });
@@ -300,19 +323,11 @@ class PaystackWebhookService {
     const normalizedEventName = PaystackWebhookService.cleanLowerString(eventName);
 
     if (normalizedEventName === "transfer.success") {
-      return [
-        "withdrawal_transfer",
-        "employer_withdrawal_payout",
-        "professional_withdrawal_payout",
-      ];
+      return ["employer_withdrawal_payout", "professional_withdrawal_payout"];
     }
 
     if (["transfer.failed", "transfer.reversed"].includes(normalizedEventName)) {
-      return [
-        "transfer_reversal",
-        "employer_withdrawal_reversal",
-        "professional_withdrawal_reversal",
-      ];
+      return ["employer_withdrawal_reversal", "professional_withdrawal_reversal"];
     }
 
     return [];
@@ -384,12 +399,6 @@ class PaystackWebhookService {
     };
   }
 
-  static processorSupportsEmployerRefund() {
-    const categories = ProviderEventProcessorService?.eventCategories?.employerRefund;
-
-    return Array.isArray(categories) && categories.includes("employer_refund");
-  }
-
   /* ─────────────────────────────── EVENT NORMALIZATION ─────────────────────────────── */
 
   static async normalizePaystackEvent({ payload, rawHeaders = {} }, options = {}) {
@@ -402,6 +411,20 @@ class PaystackWebhookService {
 
       currencyCountryMap: PaystackWebhookService.buildCurrencyCountryMap(settings),
     });
+
+    const compatibility = PaystackWebhookService.assertNormalizedEventCompatibility({
+      normalizedEvent,
+    });
+    if (compatibility.eventName !== PaystackWebhookService.cleanLowerString(payload.event)) {
+      throw new Error("Normalized event name does not match the signed webhook event.");
+    }
+    if (
+      normalizedEvent.normalizedPayload != null &&
+      (typeof normalizedEvent.normalizedPayload !== "object" ||
+        Array.isArray(normalizedEvent.normalizedPayload))
+    ) {
+      throw new Error("Normalized provider payload must be an object.");
+    }
 
     const validated = PaystackWebhookService.validateNormalizedEventCountryCurrency({
       normalizedEvent,
@@ -447,7 +470,18 @@ class PaystackWebhookService {
     },
     options = {}
   ) {
+    if (options.session) {
+      throw new Error(
+        "Webhook ingestion must record its event independently; do not supply a session."
+      );
+    }
+    if (typeof processImmediately !== "boolean") {
+      throw new Error("processImmediately must be a boolean.");
+    }
+
     const normalizedCurrentTime = PaystackWebhookService.normalizeCurrentTime(currentTime);
+    // Keep verification and normalization tied to the same immutable byte snapshot.
+    const signaturePayload = PaystackWebhookService.getSignaturePayload({ rawBody });
 
     /*
      * SECURITY BOUNDARY:
@@ -461,8 +495,7 @@ class PaystackWebhookService {
      * webhook from being recorded.
      */
     const isVerified = PaystackWebhookService.verifySignature({
-      rawBody,
-      payload,
+      rawBody: signaturePayload,
       rawHeaders,
     });
 
@@ -489,9 +522,10 @@ class PaystackWebhookService {
      * trigger platform-setting lookups, normalization
      * and ProviderEvent persistence.
      */
+    const verifiedPayload = PaystackWebhookService.parseVerifiedPayload(signaturePayload);
     const normalizedEvent = await PaystackWebhookService.normalizePaystackEvent(
       {
-        payload,
+        payload: verifiedPayload,
         rawHeaders,
       },
       options
@@ -507,9 +541,8 @@ class PaystackWebhookService {
      * exist independently before ledger/refund work
      * begins.
      *
-     * If the caller explicitly supplies a session,
-     * that caller remains responsible for its
-     * transaction boundary.
+     * Supplied sessions are rejected above so downstream failure cannot
+     * roll back recording through an outer transaction.
      */
     const recordResult = await ProviderEventService.recordProviderEvent(
       {
@@ -522,26 +555,9 @@ class PaystackWebhookService {
       options
     );
 
-    const providerEvent = recordResult.providerEvent;
-
-    /*
-     * Protect against legacy ProviderEvent rows that
-     * may have been created before the verify-first
-     * rule was introduced.
-     */
-    if (!providerEvent.isVerified) {
-      return {
-        ...recordResult,
-
-        recorded: true,
-
-        isVerified: true,
-
-        processedImmediately: false,
-
-        skippedProcessingReason:
-          "A duplicate legacy ProviderEvent exists but is not verified. Manual reconciliation is required.",
-      };
+    const providerEvent = recordResult?.providerEvent;
+    if (!providerEvent?._id) {
+      throw new Error("Provider event recording did not return a persisted event ID.");
     }
 
     if (!processImmediately) {
@@ -553,32 +569,6 @@ class PaystackWebhookService {
         isVerified: true,
 
         processedImmediately: false,
-      };
-    }
-
-    /*
-     * During a staged deployment, do not allow an older
-     * ProviderEventProcessorService to mark a valid
-     * employer-refund event as ignored merely because
-     * its processor has not been deployed yet.
-     *
-     * The durable ProviderEvent remains pending and can
-     * be processed after the matching processor lands.
-     */
-    if (
-      normalizedEvent.eventCategory === "employer_refund" &&
-      !PaystackWebhookService.processorSupportsEmployerRefund()
-    ) {
-      return {
-        ...recordResult,
-
-        recorded: true,
-
-        isVerified: true,
-
-        processedImmediately: false,
-
-        skippedProcessingReason: "Employer refund provider-event processing is not aligned yet.",
       };
     }
 

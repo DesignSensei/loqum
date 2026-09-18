@@ -32,6 +32,13 @@ function createShiftError(options) {
   });
 }
 
+/**
+ * Builds the shared work-date schedule for ONE position.
+ * occurrenceCount and aggregatePricing cover dates, not staffing headcount.
+ * ShiftCreationService expands these blueprints across positions.
+ * platformFeeRate is the applied BASE rate supplied by the creation boundary;
+ * this service does not resolve subscription benefits or calculate overtime.
+ */
 class ShiftScheduleService {
   /* ─────────────────────────────── PUBLIC CONFIGURATION ─────────────────────────────── */
 
@@ -109,13 +116,27 @@ class ShiftScheduleService {
     });
   }
 
+  static parseInteger(value, fieldName) {
+    if (
+      !["number", "string"].includes(typeof value) ||
+      (typeof value === "string" && !/^-?\d+$/.test(value.trim())) ||
+      !Number.isSafeInteger(Number(value))
+    ) {
+      throw createShiftError({
+        message: `${fieldName} must be a whole number.`,
+        code: `INVALID_${normalizeFieldCode(fieldName)}`,
+      });
+    }
+    return Number(value);
+  }
+
   static normalizeOccurrenceCount(value, scheduleMode) {
     if (scheduleMode === "single") {
       if (value === null || value === undefined || value === "") {
         return 1;
       }
 
-      const occurrenceCount = Number(value);
+      const occurrenceCount = ShiftScheduleService.parseInteger(value, "occurrenceCount");
 
       if (!Number.isSafeInteger(occurrenceCount) || occurrenceCount !== 1) {
         throw createShiftError({
@@ -134,7 +155,7 @@ class ShiftScheduleService {
       });
     }
 
-    const occurrenceCount = Number(value);
+    const occurrenceCount = ShiftScheduleService.parseInteger(value, "occurrenceCount");
 
     if (
       !Number.isSafeInteger(occurrenceCount) ||
@@ -191,7 +212,7 @@ class ShiftScheduleService {
     const seenDays = new Set();
 
     for (const rawValue of rawValues) {
-      const day = Number(rawValue);
+      const day = ShiftScheduleService.parseInteger(rawValue, "repeatDay");
 
       if (!Number.isSafeInteger(day) || day < 0 || day > 6) {
         throw createShiftError({
@@ -211,7 +232,7 @@ class ShiftScheduleService {
       return 0;
     }
 
-    const breakDuration = Number(value);
+    const breakDuration = ShiftScheduleService.parseInteger(value, "breakDuration");
 
     if (
       !Number.isSafeInteger(breakDuration) ||
@@ -230,10 +251,12 @@ class ShiftScheduleService {
   /* ─────────────────────────────── LOCAL DATE / TIME ─────────────────────────────── */
 
   static parseDate(value, fieldName) {
-    const cleanValue = String(value ?? "").trim();
-
     const fieldCode = normalizeFieldCode(fieldName);
+    if (value instanceof Date) {
+      return ShiftScheduleService.assertWholeMinuteDate(value, fieldName);
+    }
 
+    const cleanValue = typeof value === "string" ? value.trim() : "";
     if (!cleanValue) {
       throw createShiftError({
         message: `${fieldName} is required.`,
@@ -241,42 +264,53 @@ class ShiftScheduleService {
       });
     }
 
-    const localDateTimeMatch = cleanValue.match(LOCAL_DATE_TIME_PATTERN);
-
-    if (localDateTimeMatch) {
-      const seconds = Number(localDateTimeMatch[3] || 0);
-
-      if (seconds !== 0) {
+    const localMatch = cleanValue.match(LOCAL_DATE_TIME_PATTERN);
+    if (localMatch) {
+      if (Number(localMatch[3] || 0) !== 0) {
         throw createShiftError({
           message: `${fieldName} must be specified in whole minutes.`,
           code: `INVALID_${fieldCode}`,
         });
       }
-
-      const localDate = ShiftScheduleService.normalizeLocalDate(localDateTimeMatch[1], fieldName);
-
-      const timeMinutes = ShiftScheduleService.parseLocalTimeMinutes(
-        localDateTimeMatch[2],
-        fieldName
-      );
-
       return ShiftScheduleService.buildDateTimeFromLocalSchedule({
-        localDate,
-        timeMinutes,
+        localDate: ShiftScheduleService.normalizeLocalDate(localMatch[1], fieldName),
+        timeMinutes: ShiftScheduleService.parseLocalTimeMinutes(localMatch[2], fieldName),
         timeZone: SHIFT_TIME_ZONE,
       });
     }
 
-    const parsedDate = new Date(cleanValue);
-
-    if (Number.isNaN(parsedDate.getTime())) {
+    // Offset-bearing ISO input is unambiguous; other formats must not fall
+    // through to host-timezone-dependent or lenient JavaScript date parsing.
+    const isoMatch = cleanValue.match(
+      /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?(Z|[+-]\d{2}:\d{2})$/
+    );
+    if (!isoMatch) {
       throw createShiftError({
-        message: `${fieldName} must be a valid date and time.`,
+        message: `${fieldName} must be a local YYYY-MM-DDTHH:mm time or an ISO timestamp with an explicit offset.`,
         code: `INVALID_${fieldCode}`,
       });
     }
 
-    return parsedDate;
+    ShiftScheduleService.normalizeLocalDate(isoMatch[1], fieldName);
+    ShiftScheduleService.parseLocalTimeMinutes(isoMatch[2], fieldName);
+    if (Number(isoMatch[3] || 0) !== 0 || Number(isoMatch[4] || 0) !== 0) {
+      throw createShiftError({
+        message: `${fieldName} must be specified in whole minutes.`,
+        code: `INVALID_${fieldCode}`,
+      });
+    }
+    return ShiftScheduleService.assertWholeMinuteDate(new Date(cleanValue), fieldName);
+  }
+
+  static assertWholeMinuteDate(value, fieldName) {
+    const date = new Date(value.getTime());
+    if (!Number.isFinite(date.getTime()) || date.getTime() % MILLISECONDS_PER_MINUTE !== 0) {
+      throw createShiftError({
+        message: `${fieldName} must be a valid date and time specified in whole minutes.`,
+        code: `INVALID_${normalizeFieldCode(fieldName)}`,
+      });
+    }
+    return date;
   }
 
   static normalizeLocalDate(value, fieldName) {
@@ -389,7 +423,7 @@ class ShiftScheduleService {
   static addDaysToLocalDate(localDate, daysToAdd) {
     const { year, month, day } = ShiftScheduleService.getLocalDateParts(localDate);
 
-    const normalizedDaysToAdd = Number(daysToAdd || 0);
+    const normalizedDaysToAdd = ShiftScheduleService.parseInteger(daysToAdd, "daysToAdd");
 
     if (!Number.isSafeInteger(normalizedDaysToAdd)) {
       throw createShiftError({
@@ -644,12 +678,22 @@ class ShiftScheduleService {
       });
     }
 
-    if (!Number.isSafeInteger(occurrenceCount) || occurrenceCount < 1) {
+    if (
+      !Number.isSafeInteger(occurrenceCount) ||
+      occurrenceCount < 1 ||
+      occurrenceCount > MAX_SHIFT_OCCURRENCES
+    ) {
       throw createShiftError({
         message: "Occurrence count must be a positive whole number.",
         code: "INVALID_OCCURRENCE_COUNT",
       });
     }
+
+    repeatDays = ShiftScheduleService.normalizeRepeatDays(repeatDays, "multiple");
+    firstOccurrenceDate = ShiftScheduleService.normalizeLocalDate(
+      firstOccurrenceDate,
+      "firstOccurrenceDate"
+    );
 
     const firstWeekday = ShiftScheduleService.getWeekdayForLocalDate(firstOccurrenceDate);
 
@@ -666,34 +710,35 @@ class ShiftScheduleService {
 
     let inspectedDays = 0;
 
-    while (occurrenceDates.length < occurrenceCount) {
+    while (
+      occurrenceDates.length < occurrenceCount &&
+      inspectedDays < MAX_GENERATION_LOOKAHEAD_DAYS
+    ) {
       const weekday = ShiftScheduleService.getWeekdayForLocalDate(currentDate);
-
       if (repeatDays.includes(weekday)) {
         occurrenceDates.push(currentDate);
       }
-
-      currentDate = ShiftScheduleService.addDaysToLocalDate(currentDate, 1);
-
       inspectedDays += 1;
-
-      if (inspectedDays > MAX_GENERATION_LOOKAHEAD_DAYS) {
-        throw createShiftError({
-          message:
-            "The selected repeat pattern could not generate the requested number of shifts within one year.",
-          code: "SHIFT_OCCURRENCE_GENERATION_LIMIT_EXCEEDED",
-          statusCode: 500,
-        });
+      if (occurrenceDates.length < occurrenceCount) {
+        currentDate = ShiftScheduleService.addDaysToLocalDate(currentDate, 1);
       }
+    }
+
+    if (occurrenceDates.length !== occurrenceCount) {
+      throw createShiftError({
+        message:
+          "The selected repeat pattern cannot generate the requested work dates within the supported lookahead.",
+        code: "SHIFT_OCCURRENCE_GENERATION_LIMIT_EXCEEDED",
+      });
     }
 
     return occurrenceDates;
   }
 
   static calculateScheduledTime(startTime, endTime) {
-    const normalizedStartTime = new Date(startTime);
+    const normalizedStartTime = ShiftScheduleService.parseDate(startTime, "startTime");
 
-    const normalizedEndTime = new Date(endTime);
+    const normalizedEndTime = ShiftScheduleService.parseDate(endTime, "endTime");
 
     if (Number.isNaN(normalizedStartTime.getTime()) || Number.isNaN(normalizedEndTime.getTime())) {
       throw createShiftError({
@@ -734,7 +779,7 @@ class ShiftScheduleService {
     return {
       scheduledMinutes,
 
-      scheduledHours: Number((scheduledMinutes / 60).toFixed(4)),
+      scheduledHours: scheduledMinutes / 60,
     };
   }
 
@@ -747,6 +792,11 @@ class ShiftScheduleService {
     breakDuration,
     currentTime = new Date(),
   }) {
+    ShiftScheduleService.assertShiftData(shiftData);
+    ShiftScheduleService.normalizeOccurrenceCount(shiftData.occurrenceCount, "single");
+    ShiftScheduleService.normalizeRepeatDays(shiftData.repeatDays, "single");
+    breakDuration = ShiftScheduleService.parseBreakDuration(breakDuration);
+
     const startTime = ShiftScheduleService.parseDate(shiftData.startTime, "startTime");
 
     const endTime = ShiftScheduleService.parseDate(shiftData.endTime, "endTime");
@@ -856,6 +906,9 @@ class ShiftScheduleService {
     breakDuration,
     currentTime = new Date(),
   }) {
+    ShiftScheduleService.assertShiftData(shiftData);
+    breakDuration = ShiftScheduleService.parseBreakDuration(breakDuration);
+
     const occurrenceCount = ShiftScheduleService.normalizeOccurrenceCount(
       shiftData.occurrenceCount,
       "multiple"
@@ -968,7 +1021,7 @@ class ShiftScheduleService {
 
         scheduledMinutes: scheduledMinutesPerOccurrence,
 
-        scheduledHours: Number((scheduledMinutesPerOccurrence / 60).toFixed(4)),
+        scheduledHours: scheduledMinutesPerOccurrence / 60,
 
         breakDuration,
 
@@ -1015,7 +1068,7 @@ class ShiftScheduleService {
 
       totalScheduledMinutes,
 
-      scheduledHours: Number((totalScheduledMinutes / 60).toFixed(4)),
+      scheduledHours: totalScheduledMinutes / 60,
 
       startTime: occurrenceBlueprints[0].startTime,
 
@@ -1023,6 +1076,15 @@ class ShiftScheduleService {
 
       occurrenceBlueprints,
     };
+  }
+
+  static assertShiftData(shiftData) {
+    if (!shiftData || typeof shiftData !== "object" || Array.isArray(shiftData)) {
+      throw createShiftError({
+        message: "Shift details are required.",
+        code: "SHIFT_DATA_REQUIRED",
+      });
+    }
   }
 
   static buildSchedule({
@@ -1033,6 +1095,8 @@ class ShiftScheduleService {
     breakDuration,
     currentTime = new Date(),
   }) {
+    scheduleMode = ShiftScheduleService.normalizeScheduleMode(scheduleMode);
+
     if (scheduleMode === "single") {
       const schedule = ShiftScheduleService.buildSingleSchedule({
         shiftData,

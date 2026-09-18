@@ -9,6 +9,8 @@ const ShiftAssignment = require("../models/ShiftAssignment");
 const PlatformSettingsService = require("./platformSettingsService");
 const ShiftSettlementService = require("./shiftSettlementService");
 const ShiftRefundService = require("./shiftRefundService");
+const ShiftOccurrenceCancellationService = require("./shiftOccurrenceCancellationService");
+const ShiftAssignmentCaseService = require("./shiftAssignmentCaseService");
 const ShiftApplicationService = require("./shiftApplicationService");
 const ShiftOccurrenceReconciliationService = require("./shiftOccurrenceReconciliationService");
 
@@ -126,6 +128,16 @@ class ShiftLifecycleService {
   }
 
   static async runWithOptionalTransaction(options = {}, callback) {
+    if (
+      options.session &&
+      (typeof options.session.inTransaction !== "function" || !options.session.inTransaction())
+    ) {
+      throw this.createError({
+        message: "An active transaction is required.",
+        code: "ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
     return runWithOptionalTransaction(options, callback);
   }
 
@@ -183,7 +195,11 @@ class ShiftLifecycleService {
   }
 
   static normalizeDate(value, fieldName = "date") {
-    const date = value instanceof Date ? new Date(value.getTime()) : new Date(value || Date.now());
+    const supported =
+      value instanceof Date ||
+      typeof value === "number" ||
+      (typeof value === "string" && value.trim() !== "");
+    const date = supported ? new Date(value) : new Date(NaN);
 
     if (Number.isNaN(date.getTime())) {
       throw ShiftLifecycleService.createError({
@@ -347,25 +363,43 @@ class ShiftLifecycleService {
   }
 
   static async getOccurrences({ shiftId, session = null }) {
-    const query = ShiftOccurrence.find({
-      shift: shiftId,
-    }).sort({
-      sequenceNumber: 1,
-      startTime: 1,
-    });
+    const shift = await this.getSystemShift({ shiftId, session });
+    const occurrences = await ShiftOccurrence.find({ shift: shift._id })
+      .sort({ sequenceNumber: 1, slotNumber: 1 })
+      .session(session);
 
-    if (session) {
-      query.session(session);
+    const expected = shift.occurrenceCount * shift.requiredProfessionals;
+
+    if (!Number.isSafeInteger(expected) || expected < 1 || occurrences.length !== expected) {
+      throw this.createError({
+        message: "The Shift occurrence count is inconsistent.",
+        code: "SHIFT_OCCURRENCE_COUNT_MISMATCH",
+        statusCode: 409,
+      });
     }
 
-    return query;
-  }
+    const seen = new Set();
+    for (const occurrence of occurrences) {
+      ShiftOccurrenceCancellationService.assertOccurrenceBelongsToShift({ shift, occurrence });
+      const key = `${occurrence.slotNumber}:${occurrence.sequenceNumber}`;
+      if (seen.has(key))
+        throw this.createError({
+          message: "Duplicate slot/date occurrence.",
+          code: "DUPLICATE_OCCURRENCE_POSITION",
+          statusCode: 409,
+        });
+      seen.add(key);
+    }
 
-  /* ─────────────────────────────── MONEY HELPERS ─────────────────────────────── */
+    return occurrences;
+  }
 
   static assertSafeNonNegativeAmount(value, fieldName) {
     try {
-      return money.normalizeMinorUnitAmount(value ?? 0, fieldName);
+      if (!Number.isSafeInteger(value) || value < 0)
+        throw new TypeError("Invalid minor-unit amount");
+
+      return money.normalizeMinorUnitAmount(value, fieldName);
     } catch (error) {
       throw ShiftLifecycleService.createError({
         message: `${fieldName} is invalid.`,
@@ -607,22 +641,12 @@ class ShiftLifecycleService {
     );
   }
 
-  static getActiveOccurrence(occurrences) {
-    const activeOccurrences = occurrences.filter(
+  static getActiveOccurrences(occurrences) {
+    return occurrences.filter(
       (occurrence) =>
         ShiftLifecycleService.isOccurrenceCheckedIn(occurrence) &&
         !["completed", "cancelled", "expired_unfilled", "no_show"].includes(occurrence.status)
     );
-
-    if (activeOccurrences.length > 1) {
-      throw ShiftLifecycleService.createError({
-        message: "More than one active occurrence was found for this engagement.",
-        code: "MULTIPLE_ACTIVE_OCCURRENCES_FOUND",
-        statusCode: 409,
-      });
-    }
-
-    return activeOccurrences[0] || null;
   }
 
   static getNextCancellableOccurrence(occurrences) {
@@ -901,8 +925,8 @@ class ShiftLifecycleService {
       });
     }
 
-    const checkedInAt = new Date(occurrence.checkedInAt);
-    const scheduledEndTime = new Date(occurrence.endTime);
+    const checkedInAt = this.normalizeDate(occurrence.checkedInAt, "check-in time");
+    const scheduledEndTime = this.normalizeDate(occurrence.endTime, "scheduled end time");
 
     if (Number.isNaN(checkedInAt.getTime()) || Number.isNaN(scheduledEndTime.getTime())) {
       throw ShiftLifecycleService.createError({
@@ -1086,291 +1110,105 @@ class ShiftLifecycleService {
   }
 
   static async buildCancellationPreview({ shift, occurrences, now }) {
-    if (shift.status === "cancelled") {
-      return ShiftLifecycleService.buildExistingCancellationView(shift);
-    }
-
-    if (shift.status === "completed") {
-      throw ShiftLifecycleService.createError({
-        message: "A completed engagement cannot be cancelled.",
-        code: "COMPLETED_SHIFT_CANNOT_BE_CANCELLED",
-        statusCode: 409,
-      });
-    }
-
-    if (shift.status === "disputed") {
-      throw ShiftLifecycleService.createError({
-        message: "This engagement is disputed and must be resolved through the dispute workflow.",
-        code: "DISPUTED_SHIFT_REQUIRES_REVIEW",
-        statusCode: 409,
-      });
-    }
-
-    if (shift.status === "no_show") {
-      throw ShiftLifecycleService.createError({
-        message: "This engagement is already in the no-show workflow.",
-        code: "NO_SHOW_SHIFT_REQUIRES_REVIEW",
-        statusCode: 409,
-      });
-    }
-
+    if (shift.status === "cancelled") return this.buildExistingCancellationView(shift);
     if (shift.status === "pending_funding") {
-      const affectedOccurrences = occurrences.filter(
-        (occurrence) => occurrence.status === "scheduled" && !occurrence.cancelledAt
-      );
-
-      const firstAffectedOccurrence = affectedOccurrences[0] || null;
-
       return {
         mode: "pending_funding_cancellation",
         alreadyFinalized: false,
         shiftId: String(shift._id),
-        referenceCode: shift.referenceCode,
-        scheduleMode: shift.scheduleMode,
-        firstAffectedOccurrence,
-        affectedOccurrences,
-        affectedOccurrenceCount: affectedOccurrences.length,
-        futureCancelledOccurrenceCount: Math.max(affectedOccurrences.length - 1, 0),
-        professionalCompensation: ShiftLifecycleService.buildMoneyView(0, shift.currency),
-        retainedPlatformFee: ShiftLifecycleService.buildMoneyView(0, shift.currency),
-        refund: ShiftLifecycleService.buildMoneyView(0, shift.currency),
-        message:
-          "This unpaid Shift will be cancelled. No refund is due because no protected funding was received.",
+        affectedOccurrences: occurrences,
+        affectedOccurrenceCount: occurrences.length,
+        professionalCompensation: this.buildMoneyView(0, shift.currency),
+        refund: this.buildMoneyView(0, shift.currency),
       };
     }
-
-    if (!EMPLOYER_CANCELLABLE_PARENT_STATUSES.includes(shift.status)) {
-      throw ShiftLifecycleService.createError({
-        message: "This Shift is not in a state that can be cancelled.",
+    if (![...EMPLOYER_CANCELLABLE_PARENT_STATUSES, "disputed", "no_show"].includes(shift.status)) {
+      throw this.createError({
+        message: "The parent cannot be cancelled in this state.",
         code: "SHIFT_NOT_CANCELLABLE",
         statusCode: 409,
-        details: {
-          status: shift.status,
-        },
       });
     }
-
-    const activeOccurrence = ShiftLifecycleService.getActiveOccurrence(occurrences);
-
-    if (activeOccurrence) {
-      const breakdown = ShiftLifecycleService.buildActiveWorkCancellationBreakdown({
+    const activeOccurrences = occurrences.filter((occurrence) =>
+      this.isOccurrenceCheckedIn(occurrence)
+    );
+    const scheduledOccurrences = occurrences.filter(
+      (occurrence) => occurrence.status === "scheduled"
+    );
+    const activeOutcomes = activeOccurrences.map((occurrence) => ({
+      occurrence,
+      ...this.buildActiveWorkCancellationBreakdown({ shift, occurrence, effectiveAt: now }),
+    }));
+    const outcomes = scheduledOccurrences.map((occurrence) => {
+      ShiftOccurrenceCancellationService.assertFutureUntouchedOccurrence({
+        occurrence,
+        currentTime: now,
+        allowedAssignmentStatuses: ["assigned", "unassigned", "replacement_required"],
+      });
+      const outcome = ShiftOccurrenceCancellationService.determineOccurrenceCancellationOutcome({
         shift,
-        occurrence: activeOccurrence,
-        effectiveAt: now,
+        occurrence,
+        fromParentCancellation: true,
+        cancelledBy: "employer",
+        parentCancellationCode: "employer_cancelled",
+        currentTime: now,
       });
-
-      const futureOccurrences = ShiftLifecycleService.getAffectedScheduledOccurrences(
-        occurrences,
-        Number(activeOccurrence.sequenceNumber) + 1
-      );
-
-      const futureOutcomes = futureOccurrences.map((occurrence) =>
-        ShiftLifecycleService.buildScheduledCancellationOutcome({
-          occurrence,
-        })
-      );
-
-      const futureRefundAmount = ShiftLifecycleService.addSafeAmounts(
-        futureOutcomes.map((outcome) => outcome.refundableAmount),
-        "future occurrence refund"
-      );
-
-      const futureRetainedPlatformFee = ShiftLifecycleService.addSafeAmounts(
-        futureOutcomes.map((outcome) => outcome.retainedBasePlatformFee),
-        "future retained platform fee"
-      );
-
-      const totalRefundAmount = ShiftLifecycleService.addSafeAmounts(
-        [breakdown.refundableAmount, futureRefundAmount],
-        "active-work cancellation total refund"
-      );
-
-      const totalRetainedPlatformFee = ShiftLifecycleService.addSafeAmounts(
-        [breakdown.retainedBasePlatformFee, futureRetainedPlatformFee],
-        "active-work cancellation retained platform fee"
-      );
-
       return {
-        mode: "active_work_cancellation",
-        alreadyFinalized: false,
-        shiftId: String(shift._id),
-        referenceCode: shift.referenceCode,
-        scheduleMode: shift.scheduleMode,
-        firstAffectedOccurrence: activeOccurrence,
-        affectedOccurrences: [activeOccurrence, ...futureOccurrences],
-        affectedOccurrenceCount: futureOccurrences.length + 1,
-        futureCancelledOccurrenceCount: futureOccurrences.length,
-        actualWorkedMinutes: breakdown.actualWorkedMinutes,
-        actualWorkedProfessionalPay: ShiftLifecycleService.buildMoneyView(
-          breakdown.actualWorkedProfessionalPay,
-          shift.currency
-        ),
-        minimumGuaranteedProfessionalPay: ShiftLifecycleService.buildMoneyView(
-          breakdown.minimumGuaranteedProfessionalPay,
-          shift.currency
-        ),
-        professionalCompensation: ShiftLifecycleService.buildMoneyView(
-          breakdown.professionalPay,
-          shift.currency
-        ),
-        retainedPlatformFee: ShiftLifecycleService.buildMoneyView(
-          totalRetainedPlatformFee,
-          shift.currency
-        ),
-        refund: ShiftLifecycleService.buildMoneyView(totalRefundAmount, shift.currency),
-        breakdown,
-        message:
-          "The professional has checked in. Use active-work cancellation for this occurrence.",
+        occurrence,
+        ...outcome,
+        compensation: {
+          applicable: outcome.compensationApplicable,
+          rate: outcome.compensationRate,
+          windowMinutes: outcome.compensationWindowMinutes,
+          professionalPay: outcome.professionalPay,
+        },
       };
-    }
-
-    const firstAffectedOccurrence = ShiftLifecycleService.getNextCancellableOccurrence(occurrences);
-
-    if (!firstAffectedOccurrence) {
-      throw ShiftLifecycleService.createError({
-        message: "No unresolved occurrence is available to cancel.",
+    });
+    const affectedOccurrences = [...activeOccurrences, ...scheduledOccurrences];
+    if (!affectedOccurrences.length) {
+      throw this.createError({
+        message: "No cancellable work remains.",
         code: "NO_CANCELLABLE_OCCURRENCE_FOUND",
         statusCode: 409,
       });
     }
-
-    const occurrenceStartTime = new Date(firstAffectedOccurrence.startTime);
-
-    if (Number.isNaN(occurrenceStartTime.getTime())) {
-      throw ShiftLifecycleService.createError({
-        message: "The first affected occurrence start time is invalid.",
-        code: "INVALID_OCCURRENCE_START_TIME",
-        statusCode: 500,
-      });
-    }
-
-    const millisecondsUntilStart = occurrenceStartTime.getTime() - now.getTime();
-
-    const policy = ShiftLifecycleService.assertCancellationPolicySnapshot(shift);
-
-    const protectedWindowMilliseconds =
-      policy.lateCancellationWindowMinutes * MILLISECONDS_PER_MINUTE;
-
-    const hasCompleteAssignment =
-      ShiftLifecycleService.hasCompleteAssignment(firstAffectedOccurrence);
-
-    let noShowDeadline = null;
-    let isPostStartGraceCancellation = false;
-
-    if (millisecondsUntilStart < 0) {
-      if (!hasCompleteAssignment) {
-        throw ShiftLifecycleService.createError({
-          message:
-            "This occurrence has started without a complete assignment. It must enter the unfilled-occurrence workflow.",
-          code: "SHIFT_CANCELLATION_REQUIRES_UNFILLED_REVIEW",
-          statusCode: 409,
-          details: {
-            occurrenceId: String(firstAffectedOccurrence._id),
-            sequenceNumber: firstAffectedOccurrence.sequenceNumber,
-            startTime: firstAffectedOccurrence.startTime,
-          },
-        });
-      }
-
-      const noShowGraceMinutes = await ShiftLifecycleService.getNoShowGraceMinutes();
-
-      noShowDeadline = ShiftLifecycleService.calculateNoShowDeadline({
-        occurrence: firstAffectedOccurrence,
-        noShowGraceMinutes,
-      });
-
-      if (!noShowDeadline || now >= noShowDeadline) {
-        throw ShiftLifecycleService.createError({
-          message:
-            "This occurrence has started without a recorded check-in and its grace period has passed. It must enter attendance or no-show review.",
-          code: "SHIFT_CANCELLATION_REQUIRES_ATTENDANCE_REVIEW",
-          statusCode: 409,
-          details: {
-            occurrenceId: String(firstAffectedOccurrence._id),
-            sequenceNumber: firstAffectedOccurrence.sequenceNumber,
-            startTime: firstAffectedOccurrence.startTime,
-            noShowDeadline,
-          },
-        });
-      }
-
-      isPostStartGraceCancellation = true;
-    }
-
-    const compensationApplies = Boolean(
-      hasCompleteAssignment &&
-      policy.lateCancellationProfessionalPayRate > 0 &&
-      (isPostStartGraceCancellation ||
-        (millisecondsUntilStart >= 0 && millisecondsUntilStart <= protectedWindowMilliseconds))
-    );
-
-    const professionalCompensation = compensationApplies
-      ? ShiftLifecycleService.buildLateCancellationCompensation({
-          shift,
-          occurrence: firstAffectedOccurrence,
-        })
-      : {
-          applicable: false,
-          rate: 0,
-          windowMinutes: null,
-          professionalPay: 0,
-        };
-
-    const affectedOccurrences = ShiftLifecycleService.getAffectedScheduledOccurrences(
-      occurrences,
-      firstAffectedOccurrence.sequenceNumber
-    );
-
-    const outcomes = affectedOccurrences.map((occurrence, index) =>
-      ShiftLifecycleService.buildScheduledCancellationOutcome({
-        occurrence,
-        professionalCompensation: index === 0 ? professionalCompensation : null,
-      })
-    );
-
-    const totalRefundAmount = ShiftLifecycleService.addSafeAmounts(
-      outcomes.map((outcome) => outcome.refundableAmount),
-      "cancellation total refund"
-    );
-
-    const totalRetainedPlatformFee = ShiftLifecycleService.addSafeAmounts(
-      outcomes.map((outcome) => outcome.retainedBasePlatformFee),
-      "cancellation retained platform fee"
-    );
-
-    const firstOutcome = outcomes[0];
-
+    const allOutcomes = [...activeOutcomes, ...outcomes];
     return {
-      mode: "cancellation",
+      mode: activeOccurrences.length ? "active_work_cancellation" : "cancellation",
       alreadyFinalized: false,
       shiftId: String(shift._id),
       referenceCode: shift.referenceCode,
       scheduleMode: shift.scheduleMode,
-      firstAffectedOccurrence,
+      firstAffectedOccurrence: affectedOccurrences[0],
       affectedOccurrences,
       affectedOccurrenceCount: affectedOccurrences.length,
-      futureCancelledOccurrenceCount: Math.max(affectedOccurrences.length - 1, 0),
-      millisecondsUntilStart,
-      minutesUntilStart: Math.ceil(millisecondsUntilStart / MILLISECONDS_PER_MINUTE),
-      noShowDeadline,
-      isPostStartGraceCancellation,
-      compensationApplicable: firstOutcome?.compensation?.applicable === true,
-      compensationRate: firstOutcome?.compensation?.rate || 0,
-      compensationWindowMinutes: firstOutcome?.compensation?.windowMinutes || null,
-      professionalCompensation: ShiftLifecycleService.buildMoneyView(
-        firstOutcome?.compensation?.professionalPay || 0,
-        shift.currency
-      ),
-      retainedPlatformFee: ShiftLifecycleService.buildMoneyView(
-        totalRetainedPlatformFee,
-        shift.currency
-      ),
-      refund: ShiftLifecycleService.buildMoneyView(totalRefundAmount, shift.currency),
+      futureCancelledOccurrenceCount: scheduledOccurrences.length,
+      activeOccurrences,
+      activeOutcomes,
       outcomes,
+      professionalCompensation: this.buildMoneyView(
+        this.addSafeAmounts(
+          allOutcomes.map((outcome) => outcome.professionalPay),
+          "cancellation compensation"
+        ),
+        shift.currency
+      ),
+      retainedPlatformFee: this.buildMoneyView(
+        this.addSafeAmounts(
+          allOutcomes.map((outcome) => outcome.retainedBasePlatformFee),
+          "retained fees"
+        ),
+        shift.currency
+      ),
+      refund: this.buildMoneyView(
+        this.addSafeAmounts(
+          allOutcomes.map((outcome) => outcome.refundableAmount),
+          "cancellation refunds"
+        ),
+        shift.currency
+      ),
       message:
-        firstOutcome?.compensation?.applicable === true
-          ? "The first affected occurrence qualifies for late-cancellation compensation. Later untouched occurrences do not receive additional compensation."
-          : "No professional cancellation compensation applies. Any unused protected occurrence allocation will enter the employer refund workflow.",
+        "This action ends all remaining engagement work. Each affected occurrence has its own outcome.",
     };
   }
 
@@ -1705,10 +1543,26 @@ class ShiftLifecycleService {
     const assignments = await assignmentQuery;
 
     const occurrenceBySequence = new Map(
-      occurrences.map((occurrence) => [Number(occurrence.sequenceNumber), occurrence])
+      occurrences.map((occurrence) => [
+        `${occurrence.slotNumber}:${occurrence.sequenceNumber}`,
+        occurrence,
+      ])
     );
 
-    for (const assignment of assignments) {
+    for (let assignment of assignments) {
+      if (assignment.openCase) {
+        const caseResult = await ShiftAssignmentCaseService.cancelCase(
+          {
+            caseId: assignment.openCase,
+            actor: { role: "system", userId: null },
+            reason,
+            currentTime: now,
+          },
+          { session }
+        );
+        assignment = caseResult.assignment;
+      }
+
       const startsAtOrAfterAffectedRange =
         Number(assignment.startSequence) >= Number(firstAffectedSequenceNumber);
 
@@ -1774,7 +1628,9 @@ class ShiftLifecycleService {
         });
       }
 
-      const finalOccurrence = occurrenceBySequence.get(effectiveEndSequence);
+      const finalOccurrence = occurrenceBySequence.get(
+        `${assignment.slotNumber}:${effectiveEndSequence}`
+      );
 
       if (!finalOccurrence) {
         throw ShiftLifecycleService.createError({
@@ -1818,24 +1674,12 @@ class ShiftLifecycleService {
 
   /* ─────────────────────────────── PARENT LIFECYCLE HELPERS ─────────────────────────────── */
 
-  static cancelReplacementHiring({ shift, actorUserId, reason, now }) {
-    if (!["open", "filled"].includes(shift.replacementHiring?.status)) {
-      return;
-    }
-
-    shift.replacementHiring.status = "cancelled";
-    shift.replacementHiring.cancelledAt = now;
-    shift.replacementHiring.cancelledBy = actorUserId || null;
-    shift.replacementHiring.cancellationReason = reason;
-    shift.replacementHiring.filledAt = null;
-    shift.replacementHiring.filledByAssignment = null;
+  static cancelReplacementHiring() {
+    return { replacementOpportunityReconciliationRequired: true };
   }
 
-  static clearParentAssignmentSummary(shift) {
-    shift.activeAssignment = null;
-    shift.assignedProfessional = null;
-    shift.assignedAt = null;
-    shift.assignedBy = null;
+  static clearParentAssignmentSummary() {
+    return { replacementOpportunityReconciliationRequired: true };
   }
 
   static setParentCancellationFacts({
@@ -1857,36 +1701,12 @@ class ShiftLifecycleService {
     shift.cancelledByUser = actor === "system" ? null : actorUserId;
     shift.cancellationReason = reason;
     shift.cancelledAt = cancelledAt;
-
     shift.cancellationSummary = {
-      firstAffectedOccurrence:
-        shift.scheduleMode === "multiple" ? firstAffectedOccurrence?._id || null : null,
-      firstAffectedSequenceNumber: firstAffectedOccurrence?.sequenceNumber || 1,
-      cancelledOccurrenceCount: Number(cancelledOccurrenceCount || 0),
+      firstAffectedOccurrence: firstAffectedOccurrence?._id || null,
+      firstAffectedSequenceNumber: firstAffectedOccurrence?.sequenceNumber || null,
+      cancelledOccurrenceCount,
       compensationApplicable: compensation?.applicable === true,
-      compensationRate: compensation?.applicable === true ? Number(compensation.rate || 0) : 0,
-      compensationWindowMinutes:
-        compensation?.applicable === true ? Number(compensation.windowMinutes) : null,
-      professional:
-        compensation?.applicable === true
-          ? firstAffectedOccurrence?.assignedProfessional || null
-          : null,
-      assignment:
-        compensation?.applicable === true ? firstAffectedOccurrence?.assignment || null : null,
-      professionalPay:
-        compensation?.applicable === true ? Number(compensation.professionalPay || 0) : 0,
-      calculatedAt: cancelledAt,
     };
-
-    ShiftLifecycleService.clearParentAssignmentSummary(shift);
-
-    ShiftLifecycleService.cancelReplacementHiring({
-      shift,
-      actorUserId: actor === "system" ? null : actorUserId,
-      reason,
-      now: cancelledAt,
-    });
-
     return shift;
   }
 
@@ -1897,55 +1717,30 @@ class ShiftLifecycleService {
     reason,
     effectiveAt,
     activeOccurrence,
+    activeOccurrences = [activeOccurrence],
     futureCancelledOccurrenceCount,
   }) {
-    shift.status = "cancelled";
-    shift.cancelledFromStatus = cancelledFromStatus;
-    shift.cancellationCode = "employer_cancelled";
-    shift.cancelledBy = "employer";
-    shift.cancelledByUser = actorUserId;
-    shift.cancellationReason = reason;
-    shift.cancelledAt = effectiveAt;
-
-    shift.cancellationSummary = {
-      firstAffectedOccurrence: shift.scheduleMode === "multiple" ? activeOccurrence._id : null,
-      firstAffectedSequenceNumber: activeOccurrence.sequenceNumber,
-      cancelledOccurrenceCount: Number(futureCancelledOccurrenceCount || 0),
-      compensationApplicable: false,
-      compensationRate: 0,
-      compensationWindowMinutes: null,
-      professional: null,
-      assignment: null,
-      professionalPay: 0,
-      calculatedAt: effectiveAt,
-    };
-
-    shift.activeWorkCancellation = {
-      occurred: true,
-      affectedOccurrence: activeOccurrence._id,
-      affectedSequenceNumber: activeOccurrence.sequenceNumber,
-      initiatedBy: "employer",
-      initiatedByUser: actorUserId,
-      reason,
-      requestedAt: effectiveAt,
-      effectiveAt,
-      futureCancelledOccurrenceCount: Number(futureCancelledOccurrenceCount || 0),
-      calculatedAt: effectiveAt,
-    };
-
-    ShiftLifecycleService.clearParentAssignmentSummary(shift);
-
-    ShiftLifecycleService.cancelReplacementHiring({
+    this.setParentCancellationFacts({
       shift,
+      cancelledFromStatus,
+      code: "employer_cancelled",
+      actor: "employer",
       actorUserId,
       reason,
-      now: effectiveAt,
+      cancelledAt: effectiveAt,
+      firstAffectedOccurrence: activeOccurrences[0],
+      cancelledOccurrenceCount: futureCancelledOccurrenceCount,
     });
-
+    shift.activeWorkCancellation = {
+      occurred: true,
+      affectedOccurrences: activeOccurrences.map((occurrence) => ({
+        occurrence: occurrence._id,
+        sequenceNumber: occurrence.sequenceNumber,
+      })),
+      effectiveAt,
+    };
     return shift;
   }
-
-  /* ─────────────────────────────── PENDING-FUNDING CANCELLATION ─────────────────────────────── */
 
   static async cancelPendingFundingShift(
     { shiftId, userId, employerProfileId, employerContext, reason, now = new Date() },
@@ -1977,7 +1772,10 @@ class ShiftLifecycleService {
         });
       }
 
-      if (Number(shift.fundedAmount || 0) !== 0) {
+      if (
+        this.assertSafeNonNegativeAmount(shift.fundedAmount, "funded amount") !== 0 ||
+        shift.fundingTransaction
+      ) {
         throw ShiftLifecycleService.createError({
           message: "A funded Shift cannot use the pending-funding cancellation action.",
           code: "PENDING_SHIFT_CONTAINS_FUNDS",
@@ -2017,6 +1815,7 @@ class ShiftLifecycleService {
       );
 
       for (const occurrence of affectedOccurrences) {
+        ShiftOccurrenceCancellationService.assertFundingDeadlineOccurrence(occurrence);
         ShiftLifecycleService.setOccurrenceCancellationFacts({
           occurrence,
           code: "employer_cancelled",
@@ -2107,7 +1906,10 @@ class ShiftLifecycleService {
         };
       }
 
-      if (Number(shift.fundedAmount || 0) !== 0) {
+      if (
+        this.assertSafeNonNegativeAmount(shift.fundedAmount, "funded amount") !== 0 ||
+        shift.fundingTransaction
+      ) {
         throw ShiftLifecycleService.createError({
           message: "The pending-funding Shift unexpectedly contains protected funding.",
           code: "PENDING_SHIFT_CONTAINS_FUNDS",
@@ -2147,6 +1949,7 @@ class ShiftLifecycleService {
       const reason = "The Shift expired because it was not funded before its scheduled start time.";
 
       for (const occurrence of affectedOccurrences) {
+        ShiftOccurrenceCancellationService.assertFundingDeadlineOccurrence(occurrence);
         ShiftLifecycleService.setOccurrenceCancellationFacts({
           occurrence,
           code: "funding_deadline_passed",
@@ -2463,7 +2266,7 @@ class ShiftLifecycleService {
       return "engagement_not_funded";
     }
 
-    if (["completed", "cancelled", "no_show"].includes(shift.status)) {
+    if (["completed", "cancelled"].includes(shift.status)) {
       return "parent_status_changed";
     }
 
@@ -2547,7 +2350,7 @@ class ShiftLifecycleService {
     );
 
     const overtimeEmployerCharge = ShiftLifecycleService.assertSafeNonNegativeAmount(
-      occurrence?.overtimeEmployerCharge,
+      occurrence?.overtime?.topUpAmount,
       "occurrence overtime employer charge"
     );
 
@@ -2672,25 +2475,6 @@ class ShiftLifecycleService {
       });
     }
 
-    const existingBaseEmployerCharge = ShiftLifecycleService.assertSafeNonNegativeAmount(
-      occurrence?.baseEmployerCharge,
-      "occurrence base employer charge"
-    );
-
-    if (existingBaseEmployerCharge !== retainedBasePlatformFee) {
-      throw ShiftLifecycleService.createError({
-        message:
-          "The unfilled occurrence BASE employer charge does not match its retained earned BASE platform fee.",
-        code: "UNFILLED_OCCURRENCE_BASE_CHARGE_CONFLICT",
-        statusCode: 500,
-        details: {
-          occurrenceId: String(occurrence._id),
-          existingBaseEmployerCharge,
-          retainedBasePlatformFee,
-        },
-      });
-    }
-
     const refundableAmount = estimatedEmployerCharge - retainedBasePlatformFee;
 
     if (!Number.isSafeInteger(refundableAmount) || refundableAmount < 0) {
@@ -2777,11 +2561,9 @@ class ShiftLifecycleService {
 
     occurrence.baseProfessionalPay = 0;
     occurrence.basePlatformFee = financialOutcome.retainedBasePlatformFee;
-    occurrence.baseEmployerCharge = financialOutcome.retainedBasePlatformFee;
 
     occurrence.overtimeProfessionalPay = 0;
     occurrence.overtimePlatformFee = 0;
-    occurrence.overtimeEmployerCharge = 0;
 
     occurrence.topUpRequired = 0;
     occurrence.topUpTransaction = null;
@@ -2803,45 +2585,9 @@ class ShiftLifecycleService {
     return financialOutcome;
   }
 
-  static isOccurrenceInParentReplacementTail({ shift, occurrence }) {
-    const replacementHiring = shift?.replacementHiring || {};
-
-    if (String(replacementHiring.status || "closed") !== "open") {
-      return false;
-    }
-
-    if (!replacementHiring.replacementForAssignment || !occurrence?.replacementForAssignment) {
-      return false;
-    }
-
-    if (
-      String(replacementHiring.replacementForAssignment) !==
-      String(occurrence.replacementForAssignment)
-    ) {
-      return false;
-    }
-
-    if (!replacementHiring.assignmentCase || !occurrence.replacementCase) {
-      return false;
-    }
-
-    if (String(replacementHiring.assignmentCase) !== String(occurrence.replacementCase)) {
-      return false;
-    }
-
-    const sequenceNumber = Number(occurrence.sequenceNumber);
-    const startSequenceNumber = Number(replacementHiring.startSequenceNumber);
-    const endSequenceNumber = Number(replacementHiring.endSequenceNumber);
-
-    if (
-      !Number.isSafeInteger(sequenceNumber) ||
-      !Number.isSafeInteger(startSequenceNumber) ||
-      !Number.isSafeInteger(endSequenceNumber)
-    ) {
-      return false;
-    }
-
-    return sequenceNumber >= startSequenceNumber && sequenceNumber <= endSequenceNumber;
+  static isOccurrenceInParentReplacementTail() {
+    // Replacement opportunities are assignment/occurrence scoped, never a parent tail.
+    return false;
   }
 
   static getParentReplacementTailOccurrences({ shift, occurrences }) {
@@ -2885,51 +2631,12 @@ class ShiftLifecycleService {
     return true;
   }
 
-  static updateParentReplacementHiringRange({ shift, remainingOccurrences }) {
-    ShiftLifecycleService.assertContiguousReplacementRange(remainingOccurrences);
-
-    if (!Array.isArray(remainingOccurrences) || remainingOccurrences.length === 0) {
-      throw ShiftLifecycleService.createError({
-        message: "At least one replacement occurrence is required to keep replacement hiring open.",
-        code: "EMPTY_REPLACEMENT_RANGE",
-        statusCode: 500,
-      });
-    }
-
-    const sortedOccurrences = [...remainingOccurrences].sort(
-      (left, right) => Number(left.sequenceNumber) - Number(right.sequenceNumber)
-    );
-
-    shift.replacementHiring.startSequenceNumber = Number(sortedOccurrences[0].sequenceNumber);
-    shift.replacementHiring.endSequenceNumber = Number(
-      sortedOccurrences[sortedOccurrences.length - 1].sequenceNumber
-    );
-    shift.replacementHiring.occurrenceCount = sortedOccurrences.length;
-
-    return shift;
+  static updateParentReplacementHiringRange() {
+    return { replacementOpportunityReconciliationRequired: true };
   }
 
-  static closeParentReplacementHiring(shift) {
-    shift.replacementHiring = {
-      status: "closed",
-      assignmentCase: null,
-      applicationRound: null,
-      replacementForAssignment: null,
-      startSequenceNumber: null,
-      endSequenceNumber: null,
-      occurrenceCount: 0,
-      reasonCode: null,
-      reasonDetails: null,
-      openedAt: null,
-      openedBy: null,
-      filledAt: null,
-      filledByAssignment: null,
-      cancelledAt: null,
-      cancelledBy: null,
-      cancellationReason: null,
-    };
-
-    return shift;
+  static closeParentReplacementHiring() {
+    return { replacementOpportunityReconciliationRequired: true };
   }
 
   static async reconcileReplacementHiringAfterUnfilledExpiration({
@@ -2940,78 +2647,44 @@ class ShiftLifecycleService {
     session,
   }) {
     if (expiredOccurrence.expiredFromAssignmentStatus !== "replacement_required") {
-      return {
-        parentReplacementTailAffected: false,
-        remainingReplacementOccurrenceCount: 0,
-        expiredOccurrenceApplicationCount: 0,
-        expiredParentApplicationCount: 0,
-      };
+      return { parentReplacementTailAffected: false, expiredOccurrenceApplicationCount: 0 };
     }
-
-    const isolatedApplicationResult = await ShiftLifecycleService.expireOpenApplications({
-      shiftId: shift._id,
-      occurrenceId: expiredOccurrence._id,
-      session,
-    });
-
-    const wasInParentReplacementTail = ShiftLifecycleService.isOccurrenceInParentReplacementTail({
-      shift,
-      occurrence: expiredOccurrence,
-    });
-
-    if (!wasInParentReplacementTail) {
-      return {
-        parentReplacementTailAffected: false,
-        remainingReplacementOccurrenceCount: 0,
-        expiredOccurrenceApplicationCount: Number(
-          isolatedApplicationResult?.expiredApplicationCount || 0
-        ),
-        expiredParentApplicationCount: 0,
-      };
-    }
-
-    const remainingTailOccurrences = ShiftLifecycleService.getParentReplacementTailOccurrences({
-      shift,
-      occurrences,
-    }).filter((occurrence) => String(occurrence._id) !== String(expiredOccurrence._id));
-
-    let expiredParentApplicationCount = 0;
-
-    if (remainingTailOccurrences.length > 0) {
-      ShiftLifecycleService.updateParentReplacementHiringRange({
-        shift,
-        remainingOccurrences: remainingTailOccurrences,
-      });
-    } else {
-      const applicationRound = shift.replacementHiring?.applicationRound ?? null;
-
-      if (applicationRound !== null && applicationRound !== undefined) {
-        const parentApplicationResult = await ShiftLifecycleService.expireOpenApplications({
+    const replacementForAssignmentId = expiredOccurrence.replacementForAssignment;
+    const isolated = await ShiftApplicationService.expireOpenApplicationsForShift(
+      {
+        shiftId: shift._id,
+        occurrenceId: expiredOccurrence._id,
+        replacementForAssignmentId,
+        applicationType: "replacement",
+      },
+      { session }
+    );
+    const remaining = occurrences.filter(
+      (occurrence) =>
+        String(occurrence._id) !== String(expiredOccurrence._id) &&
+        occurrence.slotNumber === expiredOccurrence.slotNumber &&
+        occurrence.status === "scheduled" &&
+        occurrence.assignmentStatus === "replacement_required" &&
+        String(occurrence.replacementForAssignment) === String(replacementForAssignmentId)
+    );
+    let tail = null;
+    if (!remaining.length) {
+      tail = await ShiftApplicationService.expireOpenApplicationsForShift(
+        {
           shiftId: shift._id,
-          applicationRound,
-          occurrenceId: undefined,
-          session,
-        });
-
-        expiredParentApplicationCount = Number(
-          parentApplicationResult?.expiredApplicationCount || 0
-        );
-      }
-
-      ShiftLifecycleService.closeParentReplacementHiring(shift);
+          occurrenceId: null,
+          replacementForAssignmentId,
+          applicationType: "replacement",
+        },
+        { session }
+      );
     }
-
-    await shift.save({
-      session,
-    });
-
     return {
-      parentReplacementTailAffected: true,
-      remainingReplacementOccurrenceCount: remainingTailOccurrences.length,
-      expiredOccurrenceApplicationCount: Number(
-        isolatedApplicationResult?.expiredApplicationCount || 0
-      ),
-      expiredParentApplicationCount,
+      parentReplacementTailAffected: false,
+      remainingReplacementOccurrenceCount: remaining.length,
+      expiredOccurrenceApplicationCount: isolated.expiredApplicationCount,
+      expiredParentApplicationCount: tail?.expiredApplicationCount || 0,
+      replacementOpportunityReconciliationRequired: true,
       currentTime,
     };
   }
@@ -3125,6 +2798,7 @@ class ShiftLifecycleService {
         currentTime: expirationDate,
       });
 
+      await targetOccurrence.save({ session });
       const refundResult = await ShiftLifecycleService.reevaluateRefundObligation({
         shift,
         occurrence: targetOccurrence,
@@ -3169,6 +2843,9 @@ class ShiftLifecycleService {
         expiredUnfilledAt: expirationDate,
         retainedBasePlatformFee: financialOutcome.retainedBasePlatformFee,
         refundableAmount: Number(refundResult?.amount ?? financialOutcome.refundableAmount),
+        refundResult,
+        reconciliationRequired: refundResult?.reconciliationRequired === true,
+        revalidationRequired: refundResult?.revalidationRequired === true,
         employerRefundId: refundResult?.employerRefund?._id
           ? String(refundResult.employerRefund._id)
           : null,
@@ -3279,214 +2956,15 @@ class ShiftLifecycleService {
 
   /* ─────────────────────────────── FUNDED ENGAGEMENT CANCELLATION ─────────────────────────────── */
 
-  static async cancelEngagement(
-    { shiftId, userId, employerProfileId, employerContext, reason, now = new Date() },
-    options = {}
-  ) {
-    const actorUserId = ShiftLifecycleService.normalizeObjectId(userId, "user ID");
-
-    const cancellationReason = ShiftLifecycleService.normalizeReason(reason);
-
-    const cancellationDate = ShiftLifecycleService.normalizeDate(now, "cancellation date");
-
-    return ShiftLifecycleService.runWithOptionalTransaction(options, async (session) => {
-      let shift = await ShiftLifecycleService.getEmployerShift({
-        shiftId,
-        employerProfileId,
-        employerContext,
-        session,
-      });
-
-      if (shift.status === "pending_funding") {
-        throw ShiftLifecycleService.createError({
-          message: "Use the pending-funding cancellation action for this unpaid Shift.",
-          code: "USE_PENDING_FUNDING_CANCELLATION",
-          statusCode: 409,
-        });
-      }
-
-      if (shift.status === "cancelled") {
-        return ShiftLifecycleService.buildExistingCancellationView(shift);
-      }
-
-      const occurrences = await ShiftLifecycleService.getOccurrences({
-        shiftId: shift._id,
-        session,
-      });
-
-      const preview = await ShiftLifecycleService.buildCancellationPreview({
-        shift,
-        occurrences,
-        now: cancellationDate,
-      });
-
-      if (preview.mode === "active_work_cancellation") {
-        throw ShiftLifecycleService.createError({
-          message:
-            "The professional has checked in. Use active-work cancellation for the active occurrence.",
-          code: "SHIFT_ALREADY_CHECKED_IN_USE_ACTIVE_WORK_CANCELLATION",
-          statusCode: 409,
-          details: {
-            occurrenceId: String(preview.firstAffectedOccurrence._id),
-            sequenceNumber: preview.firstAffectedOccurrence.sequenceNumber,
-          },
-        });
-      }
-
-      if (preview.mode !== "cancellation") {
-        throw ShiftLifecycleService.createError({
-          message: "This Shift cannot use the funded engagement cancellation action.",
-          code: "INVALID_SHIFT_CANCELLATION_MODE",
-          statusCode: 409,
-        });
-      }
-
-      const outcomes = preview.outcomes || [];
-      const firstOutcome = outcomes[0] || null;
-      const firstAffectedOccurrence = firstOutcome?.occurrence || null;
-
-      if (!firstAffectedOccurrence) {
-        throw ShiftLifecycleService.createError({
-          message: "No affected occurrence was found for cancellation.",
-          code: "CANCELLATION_OCCURRENCE_NOT_FOUND",
-          statusCode: 409,
-        });
-      }
-
-      const refundResults = [];
-
-      for (let index = 0; index < outcomes.length; index += 1) {
-        const outcome = outcomes[index];
-        const occurrence = outcome.occurrence;
-        const isFirstAffectedOccurrence = index === 0;
-
-        ShiftLifecycleService.setOccurrenceCancellationFacts({
-          occurrence,
-          code:
-            isFirstAffectedOccurrence && outcome.compensation.applicable
-              ? "late_employer_cancellation"
-              : "employer_cancelled",
-          actor: "employer",
-          actorUserId,
-          reason: cancellationReason,
-          now: cancellationDate,
-          compensation: outcome.compensation,
-        });
-
-        await occurrence.save({
-          session,
-        });
-
-        if (outcome.compensation.professionalPay > 0) {
-          await ShiftLifecycleService.establishBaseSettlementOutcome({
-            shift,
-            occurrence,
-            earningType: "cancellation_compensation",
-            professionalPay: outcome.compensation.professionalPay,
-            currentTime: cancellationDate,
-            session,
-          });
-        }
-
-        const refundResult = await ShiftLifecycleService.reevaluateRefundObligation({
-          shift,
-          occurrence,
-          reason: "occurrence_cancelled",
-          initiatedBy: {
-            role: "employer",
-            userId: actorUserId,
-          },
-          currentTime: cancellationDate,
-          session,
-        });
-
-        refundResults.push({
-          occurrenceId: String(occurrence._id),
-          amount: Number(refundResult.amount || 0),
-          employerRefundId: refundResult.employerRefund?._id
-            ? String(refundResult.employerRefund._id)
-            : null,
-          created: refundResult.created === true,
-          idempotent: refundResult.idempotent === true,
-        });
-      }
-
-      await ShiftLifecycleService.closeAssignments({
-        shift,
-        occurrences,
-        firstAffectedSequenceNumber: firstAffectedOccurrence.sequenceNumber,
-        finalResponsibleSequenceNumber: Number(firstAffectedOccurrence.sequenceNumber) - 1,
-        actor: "employer",
-        actorUserId,
-        reason: cancellationReason,
-        now: cancellationDate,
-        session,
-      });
-
-      const cancelledFromStatus = shift.status;
-
-      ShiftLifecycleService.setParentCancellationFacts({
-        shift,
-        cancelledFromStatus,
-        code: firstOutcome.compensation.applicable
-          ? "late_employer_cancellation"
-          : "employer_cancelled",
-        actor: "employer",
-        actorUserId,
-        reason: cancellationReason,
-        cancelledAt: cancellationDate,
-        firstAffectedOccurrence,
-        cancelledOccurrenceCount: outcomes.length,
-        compensation: firstOutcome.compensation,
-      });
-
-      await shift.save({
-        session,
-      });
-
-      const reconciliation = await ShiftLifecycleService.reconcileParentShift({
-        shiftId: shift._id,
-        currentTime: cancellationDate,
-        session,
-      });
-
-      const totalRefundAmount = ShiftLifecycleService.addSafeAmounts(
-        refundResults.map((result) => result.amount),
-        "engagement cancellation refund"
-      );
-
-      const retainedPlatformFee = ShiftLifecycleService.addSafeAmounts(
-        outcomes.map((outcome) => outcome.retainedBasePlatformFee),
-        "engagement cancellation retained platform fee"
-      );
-
-      logger.info(
-        `Shift ${shift.referenceCode} cancelled by employer user ${actorUserId}; ${outcomes.length} occurrence(s) affected`
-      );
-
-      return {
-        mode: "cancellation",
-        alreadyFinalized: false,
-        shiftId: String(shift._id),
-        referenceCode: shift.referenceCode,
-        status: reconciliation?.shift?.status || "cancelled",
-        cancelledAt: cancellationDate,
-        firstAffectedOccurrenceId: String(firstAffectedOccurrence._id),
-        firstAffectedSequenceNumber: firstAffectedOccurrence.sequenceNumber,
-        cancelledOccurrenceCount: outcomes.length,
-        compensationApplicable: firstOutcome.compensation.applicable,
-        professionalPay: firstOutcome.compensation.professionalPay,
-        retainedPlatformFee,
-        refundableAmount: totalRefundAmount,
-        refundResults,
-        currency: shift.currency,
-      };
-    });
+  static async cancelEngagement(payload, options = {}) {
+    return this.cancelFundedEngagement(payload, options, false);
   }
 
-  /* ─────────────────────────────── ACTIVE-WORK CANCELLATION ─────────────────────────────── */
+  static async cancelActiveOccurrenceWork(payload, options = {}) {
+    return this.cancelFundedEngagement(payload, options, true);
+  }
 
-  static async cancelActiveOccurrenceWork(
+  static async cancelFundedEngagement(
     {
       shiftId,
       occurrenceId = null,
@@ -3496,270 +2974,195 @@ class ShiftLifecycleService {
       reason,
       now = new Date(),
     },
-    options = {}
+    options = {},
+    allowActive = false
   ) {
-    const actorUserId = ShiftLifecycleService.normalizeObjectId(userId, "user ID");
-
-    const normalizedOccurrenceId = ShiftLifecycleService.normalizeObjectId(
-      occurrenceId,
-      "occurrence ID",
-      false
-    );
-
-    const cancellationReason = ShiftLifecycleService.normalizeReason(
-      reason,
-      "active-work cancellation reason"
-    );
-
-    if (cancellationReason.length < 10) {
-      throw ShiftLifecycleService.createError({
-        message: "The active-work cancellation reason must contain at least 10 characters.",
+    const actorUserId = this.normalizeObjectId(userId, "user ID");
+    const currentTime = this.normalizeDate(now, "cancellation date");
+    const cancellationReason = this.normalizeReason(reason);
+    if (allowActive && cancellationReason.length < 10) {
+      throw this.createError({
+        message: "Active-work cancellation requires a reason of at least 10 characters.",
         code: "ACTIVE_WORK_CANCELLATION_REASON_TOO_SHORT",
       });
     }
-
-    const requestedAt = ShiftLifecycleService.normalizeDate(now, "active-work cancellation date");
-
-    return ShiftLifecycleService.runWithOptionalTransaction(options, async (session) => {
-      let shift = await ShiftLifecycleService.getEmployerShift({
+    return this.runWithOptionalTransaction(options, async (session) => {
+      let shift = await this.getEmployerShift({
         shiftId,
         employerProfileId,
         employerContext,
         session,
       });
 
-      let occurrences = await ShiftLifecycleService.getOccurrences({
-        shiftId: shift._id,
-        session,
-      });
+      if (shift.status === "cancelled") return this.buildExistingCancellationView(shift);
 
-      const previouslyFinalizedOccurrence = occurrences.find(
-        (occurrence) => occurrence.activeWorkCancellation?.occurred === true
-      );
-
-      if (shift.status === "cancelled" && previouslyFinalizedOccurrence) {
-        return {
-          mode: "active_work_cancellation",
-          alreadyFinalized: true,
-          shiftId: String(shift._id),
-          referenceCode: shift.referenceCode,
-          status: shift.status,
-          occurrenceId: String(previouslyFinalizedOccurrence._id),
-          occurrenceReferenceCode: previouslyFinalizedOccurrence.referenceCode,
-          sequenceNumber: previouslyFinalizedOccurrence.sequenceNumber,
-          activeWorkCancellation: previouslyFinalizedOccurrence.activeWorkCancellation,
-        };
-      }
-
-      if (TERMINAL_PARENT_STATUSES.includes(shift.status)) {
-        throw ShiftLifecycleService.createError({
-          message: "This Shift is already in a terminal state.",
-          code: "SHIFT_ALREADY_TERMINAL",
+      if (shift.status === "pending_funding") {
+        throw this.createError({
+          message: "Use pending-funding cancellation.",
+          code: "USE_PENDING_FUNDING_CANCELLATION",
           statusCode: 409,
         });
       }
 
-      const activeOccurrence = ShiftLifecycleService.getActiveOccurrence(occurrences);
+      const occurrences = await this.getOccurrences({ shiftId: shift._id, session });
 
-      if (!activeOccurrence) {
-        throw ShiftLifecycleService.createError({
-          message: "No checked-in occurrence is available for active-work cancellation.",
-          code: "NO_ACTIVE_OCCURRENCE_FOUND",
+      const preview = await this.buildCancellationPreview({ shift, occurrences, now: currentTime });
+
+      if (!allowActive && preview.activeOccurrences.length) {
+        throw this.createError({
+          message: "Use active-work engagement cancellation.",
+          code: "SHIFT_ALREADY_CHECKED_IN_USE_ACTIVE_WORK_CANCELLATION",
           statusCode: 409,
         });
       }
 
       if (
-        normalizedOccurrenceId &&
-        String(activeOccurrence._id) !== String(normalizedOccurrenceId)
+        allowActive &&
+        (!preview.activeOccurrences.length ||
+          (occurrenceId &&
+            !preview.activeOccurrences.some(
+              (occurrence) => String(occurrence._id) === String(occurrenceId)
+            )))
       ) {
-        throw ShiftLifecycleService.createError({
-          message: "The selected occurrence is not the active checked-in occurrence.",
+        throw this.createError({
+          message: "The selected occurrence is not active.",
           code: "OCCURRENCE_IS_NOT_ACTIVE",
           statusCode: 409,
         });
       }
 
-      const breakdown = ShiftLifecycleService.buildActiveWorkCancellationBreakdown({
-        shift,
-        occurrence: activeOccurrence,
-        effectiveAt: requestedAt,
-      });
-
-      const futureOccurrences = ShiftLifecycleService.getAffectedScheduledOccurrences(
-        occurrences,
-        Number(activeOccurrence.sequenceNumber) + 1
-      );
-
-      const futureOutcomes = futureOccurrences.map((occurrence) =>
-        ShiftLifecycleService.buildScheduledCancellationOutcome({
-          occurrence,
-        })
-      );
-
-      ShiftLifecycleService.setOccurrenceActiveWorkCancellationFacts({
-        occurrence: activeOccurrence,
-        actor: "employer",
-        actorUserId,
-        reason: cancellationReason,
-        requestedAt,
-        effectiveAt: requestedAt,
-        breakdown,
-      });
-
-      await activeOccurrence.save({
-        session,
-      });
-
-      await ShiftLifecycleService.establishBaseSettlementOutcome({
-        shift,
-        occurrence: activeOccurrence,
-        earningType: "active_work_cancellation",
-        professionalPay: breakdown.professionalPay,
-        currentTime: requestedAt,
-        session,
-      });
-
       const refundResults = [];
-
-      const activeRefundResult = await ShiftLifecycleService.reevaluateRefundObligation({
-        shift,
-        occurrence: activeOccurrence,
-        reason: "unused_scheduled_time",
-        initiatedBy: {
-          role: "employer",
-          userId: actorUserId,
-        },
-        currentTime: requestedAt,
-        session,
-      });
-
-      refundResults.push({
-        occurrenceId: String(activeOccurrence._id),
-        amount: Number(activeRefundResult.amount || 0),
-        employerRefundId: activeRefundResult.employerRefund?._id
-          ? String(activeRefundResult.employerRefund._id)
-          : null,
-        created: activeRefundResult.created === true,
-        idempotent: activeRefundResult.idempotent === true,
-      });
-
-      for (const outcome of futureOutcomes) {
+      for (const outcome of preview.activeOutcomes) {
         const occurrence = outcome.occurrence;
-
-        ShiftLifecycleService.setOccurrenceCancellationFacts({
+        this.setOccurrenceActiveWorkCancellationFacts({
           occurrence,
-          code: "employer_cancelled",
           actor: "employer",
           actorUserId,
           reason: cancellationReason,
-          now: requestedAt,
-          compensation: null,
+          requestedAt: currentTime,
+          effectiveAt: currentTime,
+          breakdown: outcome,
         });
 
-        await occurrence.save({
-          session,
-        });
-
-        const refundResult = await ShiftLifecycleService.reevaluateRefundObligation({
+        await occurrence.save({ session });
+        const settlement = await this.establishBaseSettlementOutcome({
           shift,
           occurrence,
-          reason: "occurrence_cancelled",
-          initiatedBy: {
-            role: "employer",
-            userId: actorUserId,
-          },
-          currentTime: requestedAt,
+          earningType: "active_work_cancellation",
+          professionalPay: outcome.professionalPay,
+          currentTime,
           session,
         });
 
+        const freshOccurrence =
+          settlement.occurrence ||
+          (await this.getSystemOccurrence({
+            shiftId: shift._id,
+            occurrenceId: occurrence._id,
+            session,
+          }));
+        const refund = await this.reevaluateRefundObligation({
+          shift,
+          occurrence: freshOccurrence,
+          reason: "unused_scheduled_time",
+          initiatedBy: { role: "employer", userId: actorUserId },
+          currentTime,
+          session,
+        });
         refundResults.push({
+          ...refund,
           occurrenceId: String(occurrence._id),
-          amount: Number(refundResult.amount || 0),
-          employerRefundId: refundResult.employerRefund?._id
-            ? String(refundResult.employerRefund._id)
-            : null,
-          created: refundResult.created === true,
-          idempotent: refundResult.idempotent === true,
+          slotNumber: occurrence.slotNumber,
         });
       }
 
-      await ShiftLifecycleService.closeAssignments({
+      for (const outcome of preview.outcomes) {
+        const result =
+          await ShiftOccurrenceCancellationService.propagateParentCancellationToOccurrence(
+            {
+              shiftId: shift._id,
+              occurrenceId: outcome.occurrence._id,
+              parentCancellationCode: "employer_cancelled",
+              cancelledBy: "employer",
+              cancelledByUserId: actorUserId,
+              cancellationReason,
+              cancelledAt: currentTime,
+              reconcileParent: false,
+            },
+            { session }
+          );
+
+        refundResults.push({
+          ...result.refundResult,
+          amount: result.refundableAmount,
+          occurrenceId: String(outcome.occurrence._id),
+          slotNumber: outcome.occurrence.slotNumber,
+        });
+      }
+
+      const firstSequence = Math.min(
+        ...preview.affectedOccurrences.map((occurrence) => occurrence.sequenceNumber)
+      );
+
+      await this.closeAssignments({
         shift,
         occurrences,
-        firstAffectedSequenceNumber: Number(activeOccurrence.sequenceNumber) + 1,
-        finalResponsibleSequenceNumber: activeOccurrence.sequenceNumber,
-        effectiveEndAtOverride: requestedAt,
+        firstAffectedSequenceNumber: firstSequence + (preview.activeOccurrences.length ? 1 : 0),
+        finalResponsibleSequenceNumber: firstSequence - (preview.activeOccurrences.length ? 0 : 1),
+        effectiveEndAtOverride: preview.activeOccurrences.length ? currentTime : null,
         actor: "employer",
         actorUserId,
         reason: cancellationReason,
-        now: requestedAt,
+        now: currentTime,
         session,
       });
+      // Case closure refreshes the parent; reload before writing cancellation facts.
 
-      const cancelledFromStatus = shift.status;
+      shift = await this.getSystemShift({ shiftId: shift._id, session });
 
-      ShiftLifecycleService.setParentActiveWorkCancellationFacts({
+      this.setParentCancellationFacts({
         shift,
-        cancelledFromStatus,
+        cancelledFromStatus: shift.status,
+        code: "employer_cancelled",
+        actor: "employer",
         actorUserId,
         reason: cancellationReason,
-        effectiveAt: requestedAt,
-        activeOccurrence,
-        futureCancelledOccurrenceCount: futureOccurrences.length,
+        cancelledAt: currentTime,
+        firstAffectedOccurrence: preview.firstAffectedOccurrence,
+        cancelledOccurrenceCount: preview.outcomes.length,
+        compensation: {
+          applicable: preview.outcomes.some((outcome) => outcome.compensationApplicable),
+        },
       });
 
-      await shift.save({
-        session,
-      });
+      if (preview.activeOccurrences.length) {
+        shift.activeWorkCancellation = {
+          occurred: true,
+          effectiveAt: currentTime,
+          affectedOccurrences: preview.activeOccurrences.map((occurrence) => ({
+            occurrence: occurrence._id,
+            sequenceNumber: occurrence.sequenceNumber,
+          })),
+        };
+      }
+      await shift.save({ session });
 
-      const reconciliation = await ShiftLifecycleService.reconcileParentShift({
+      await this.expireOpenApplications({ shiftId: shift._id, session });
+      const reconciliation = await this.reconcileParentShift({
         shiftId: shift._id,
-        currentTime: requestedAt,
+        currentTime,
         session,
       });
-
-      const totalRefundAmount = ShiftLifecycleService.addSafeAmounts(
-        refundResults.map((result) => result.amount),
-        "active-work cancellation total refund"
-      );
-
-      const futureRetainedPlatformFee = ShiftLifecycleService.addSafeAmounts(
-        futureOutcomes.map((outcome) => outcome.retainedBasePlatformFee),
-        "future retained platform fee"
-      );
-
-      const retainedPlatformFee = ShiftLifecycleService.addSafeAmounts(
-        [breakdown.retainedBasePlatformFee, futureRetainedPlatformFee],
-        "active-work cancellation retained platform fee"
-      );
-
-      logger.info(
-        `Occurrence ${activeOccurrence.referenceCode} ended through active-work cancellation by employer user ${actorUserId}`
-      );
 
       return {
-        mode: "active_work_cancellation",
+        ...preview,
+        shift: reconciliation?.shift || shift,
         alreadyFinalized: false,
-        shiftId: String(shift._id),
-        referenceCode: shift.referenceCode,
-        occurrenceId: String(activeOccurrence._id),
-        occurrenceReferenceCode: activeOccurrence.referenceCode,
-        sequenceNumber: activeOccurrence.sequenceNumber,
         status: reconciliation?.shift?.status || "cancelled",
-        occurrenceStatus: "pending_settlement",
-        effectiveAt: requestedAt,
-        actualWorkedMinutes: breakdown.actualWorkedMinutes,
-        minimumProfessionalPayRate: breakdown.minimumProfessionalPayRate,
-        actualWorkedProfessionalPay: breakdown.actualWorkedProfessionalPay,
-        minimumGuaranteedProfessionalPay: breakdown.minimumGuaranteedProfessionalPay,
-        professionalPay: breakdown.professionalPay,
-        retainedPlatformFee,
-        activeOccurrenceRefundableAmount: breakdown.refundableAmount,
-        refundableAmount: totalRefundAmount,
+        cancelledAt: currentTime,
         refundResults,
-        futureCancelledOccurrenceCount: futureOccurrences.length,
-        currency: shift.currency,
+        reconciliationRequired: refundResults.some((result) => result.reconciliationRequired),
+        revalidationRequired: refundResults.some((result) => result.revalidationRequired),
       };
     });
   }

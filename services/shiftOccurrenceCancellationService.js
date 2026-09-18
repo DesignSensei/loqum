@@ -128,7 +128,21 @@ class ShiftOccurrenceCancellationService {
   }
 
   static async runWithOptionalTransaction(options = {}, callback) {
+    ShiftOccurrenceCancellationService.assertActiveSession(options.session, false);
     return runServiceTransaction(options, callback);
+  }
+
+  static assertActiveSession(session, required = true) {
+    if (
+      (!session && required) ||
+      (session && (typeof session.inTransaction !== "function" || !session.inTransaction()))
+    ) {
+      throw ShiftOccurrenceCancellationService.createError({
+        message: "Cancellation mutations require an active transaction.",
+        code: "ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
   }
 
   /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
@@ -165,7 +179,11 @@ class ShiftOccurrenceCancellationService {
   }
 
   static normalizeCurrentTime(value = new Date()) {
-    const currentTime = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+    const supported =
+      value instanceof Date ||
+      typeof value === "number" ||
+      (typeof value === "string" && value.trim() !== "");
+    const currentTime = supported ? new Date(value) : new Date(NaN);
 
     if (Number.isNaN(currentTime.getTime())) {
       throw ShiftOccurrenceCancellationService.createError({
@@ -178,7 +196,7 @@ class ShiftOccurrenceCancellationService {
   }
 
   static normalizeRequiredText(value, fieldName, maximumLength = 500) {
-    const normalized = String(value || "").trim();
+    const normalized = typeof value === "string" ? value.trim() : "";
 
     if (!normalized) {
       throw ShiftOccurrenceCancellationService.createError({
@@ -247,7 +265,10 @@ class ShiftOccurrenceCancellationService {
 
   static amount(value, fieldName = "Amount") {
     try {
-      return money.normalizeMinorUnitAmount(value ?? 0, fieldName);
+      if (!Number.isSafeInteger(value) || value < 0) {
+        throw new TypeError("A non-negative safe integer is required.");
+      }
+      return money.normalizeMinorUnitAmount(value, fieldName);
     } catch (error) {
       throw ShiftOccurrenceCancellationService.createError({
         message: `${fieldName} must be a non-negative whole number in minor units.`,
@@ -267,7 +288,10 @@ class ShiftOccurrenceCancellationService {
     }
 
     try {
-      return money.sumMinorUnitAmounts(values, fieldName);
+      const amounts = values.map((value) =>
+        ShiftOccurrenceCancellationService.amount(value, fieldName)
+      );
+      return money.sumMinorUnitAmounts(amounts, fieldName);
     } catch (error) {
       throw ShiftOccurrenceCancellationService.createError({
         message: `${fieldName} is invalid or too large.`,
@@ -389,6 +413,27 @@ class ShiftOccurrenceCancellationService {
   /* ─────────────────────────────── BASIC ASSERTIONS ─────────────────────────────── */
 
   static assertOccurrenceBelongsToShift({ shift, occurrence }) {
+    if (
+      !Number.isSafeInteger(shift.requiredProfessionals) ||
+      shift.requiredProfessionals < 1 ||
+      !Number.isSafeInteger(shift.occurrenceCount) ||
+      shift.occurrenceCount < 1 ||
+      !Number.isSafeInteger(occurrence.slotNumber) ||
+      occurrence.slotNumber < 1 ||
+      occurrence.slotNumber > shift.requiredProfessionals ||
+      !Number.isSafeInteger(occurrence.sequenceNumber) ||
+      occurrence.sequenceNumber < 1 ||
+      occurrence.sequenceNumber > shift.occurrenceCount ||
+      occurrence.currency !== shift.currency ||
+      occurrence.countryCode !== shift.countryCode
+    ) {
+      throw ShiftOccurrenceCancellationService.createError({
+        message: "Occurrence slot, sequence or currency does not match the parent Shift.",
+        code: "OCCURRENCE_CONTEXT_MISMATCH",
+        statusCode: 409,
+      });
+    }
+
     if (!ShiftOccurrenceCancellationService.sameId(occurrence.shift, shift._id)) {
       throw ShiftOccurrenceCancellationService.createError({
         message: "The occurrence does not belong to the supplied Shift.",
@@ -450,7 +495,11 @@ class ShiftOccurrenceCancellationService {
       });
     }
 
-    if (!shift.publishedAt || shift.paymentStatus === "unpaid") {
+    if (
+      !shift.publishedAt ||
+      !shift.paymentStatus ||
+      ["unpaid", "released", "refunded"].includes(shift.paymentStatus)
+    ) {
       throw ShiftOccurrenceCancellationService.createError({
         message: "Only a funded and published Shift may cancel one occurrence.",
         code: "SHIFT_NOT_FUNDED_OR_PUBLISHED",
@@ -511,6 +560,10 @@ class ShiftOccurrenceCancellationService {
 
   static occurrenceHasSettlementActivity(occurrence) {
     return Boolean(
+      ShiftOccurrenceCancellationService.amount(
+        occurrence.baseProfessionalPay,
+        "Base professional pay"
+      ) !== 0 ||
       occurrence.settlementStatus !== "not_due" ||
       occurrence.settledAt ||
       ShiftOccurrenceCancellationService.settlementComponentHasActivity(
@@ -627,7 +680,7 @@ class ShiftOccurrenceCancellationService {
       });
     }
 
-    const startTime = new Date(occurrence.startTime);
+    const startTime = ShiftOccurrenceCancellationService.normalizeCurrentTime(occurrence.startTime);
 
     if (Number.isNaN(startTime.getTime())) {
       throw ShiftOccurrenceCancellationService.createError({
@@ -813,6 +866,11 @@ class ShiftOccurrenceCancellationService {
     const hasAnyFeeAudit = Boolean(
       audit.earnedAt || audit.outstandingAt || audit.collectedAt || audit.collectionTransaction
     );
+
+    // A zero-fee pricing snapshot intentionally has no earning/collection audit.
+    if (estimatedPlatformFee === 0 && basePlatformFee === 0 && !hasAnyFeeAudit) {
+      return 0;
+    }
 
     if (audit.earnedAt) {
       if (basePlatformFee !== estimatedPlatformFee) {
@@ -1142,7 +1200,9 @@ class ShiftOccurrenceCancellationService {
     if (cancelledBy === "employer" && occurrence.assignmentStatus === "assigned") {
       const policy = ShiftOccurrenceCancellationService.getLateCancellationPolicy(shift);
 
-      const startTime = new Date(occurrence.startTime);
+      const startTime = ShiftOccurrenceCancellationService.normalizeCurrentTime(
+        occurrence.startTime
+      );
 
       if (Number.isNaN(startTime.getTime())) {
         throw ShiftOccurrenceCancellationService.createError({
@@ -1249,6 +1309,13 @@ class ShiftOccurrenceCancellationService {
   /* ─────────────────────────────── STATE APPLICATION ─────────────────────────────── */
 
   static clearRefundSummary(occurrence) {
+    if (ShiftOccurrenceCancellationService.occurrenceHasRefundAudit(occurrence)) {
+      throw ShiftOccurrenceCancellationService.createError({
+        message: "Existing refund audit cannot be cleared by cancellation.",
+        code: "OCCURRENCE_REFUND_ALREADY_ESTABLISHED",
+        statusCode: 409,
+      });
+    }
     occurrence.refundableAmount = 0;
     occurrence.refundedAmount = 0;
     occurrence.refundStatus = "not_eligible";
@@ -1454,12 +1521,23 @@ class ShiftOccurrenceCancellationService {
     cancelledBy,
     cancelledByUserId,
     cancellationAuditReason,
+    parentCancellationCode = null,
   }) {
     if (occurrence.status !== "cancelled") {
       return false;
     }
 
     return Boolean(
+      (parentCancellationCode
+        ? occurrence.cancellationCode === parentCancellationCode ||
+          (parentCancellationCode === "employer_cancelled" &&
+            occurrence.cancellationCode === "late_employer_cancellation")
+        : [
+            "employer_cancelled",
+            "late_employer_cancellation",
+            "admin_cancelled",
+            "system_cancelled",
+          ].includes(occurrence.cancellationCode)) &&
       occurrence.cancelledBy === cancelledBy &&
       ShiftOccurrenceCancellationService.sameNullableId(
         occurrence.cancelledByUser,
@@ -1518,7 +1596,9 @@ class ShiftOccurrenceCancellationService {
               occurrenceId: resolvedOccurrence._id,
               earningType: "cancellation_compensation",
               professionalPay,
-              currentTime,
+              currentTime: ShiftOccurrenceCancellationService.normalizeCurrentTime(
+                resolvedOccurrence.cancelledAt
+              ),
             },
             {
               session,
@@ -1634,6 +1714,8 @@ class ShiftOccurrenceCancellationService {
     },
     { session }
   ) {
+    ShiftOccurrenceCancellationService.assertActiveSession(session);
+
     if (!Array.isArray(allowedAssignmentStatuses) || allowedAssignmentStatuses.length === 0) {
       throw ShiftOccurrenceCancellationService.createError({
         message: "Allowed occurrence assignment statuses were not configured for cancellation.",
@@ -1657,6 +1739,7 @@ class ShiftOccurrenceCancellationService {
         cancelledBy,
         cancelledByUserId,
         cancellationAuditReason,
+        parentCancellationCode,
       })
     ) {
       return ShiftOccurrenceCancellationService.buildIdempotentResult({
@@ -1686,6 +1769,17 @@ class ShiftOccurrenceCancellationService {
       fromParentCancellation === true && parentCancellationCode === "funding_deadline_passed";
 
     if (isFundingDeadlinePropagation) {
+      if (
+        shift.paymentStatus !== "unpaid" ||
+        shift.fundingTransaction ||
+        ShiftOccurrenceCancellationService.amount(shift.fundedAmount, "Funded amount") !== 0
+      ) {
+        throw ShiftOccurrenceCancellationService.createError({
+          message: "Funding-deadline cancellation requires an unfunded parent Shift.",
+          code: "FUNDING_DEADLINE_PARENT_ALREADY_FUNDED",
+          statusCode: 409,
+        });
+      }
       ShiftOccurrenceCancellationService.assertFundingDeadlineOccurrence(occurrence);
     } else {
       ShiftOccurrenceCancellationService.assertFutureUntouchedOccurrence({

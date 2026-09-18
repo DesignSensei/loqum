@@ -1,0 +1,112 @@
+<!-- views/partials/cases/issue-card.ejs -->
+
+<%# ─────────────────────────────── ISSUE CARD ─────────────────────────────── %>
+
+<details class="border border-gray-300 rounded p-4" open>
+  <%# ─────────────────────────────── ISSUE HEADER ─────────────────────────────── %>
+
+  <summary class="d-flex flex-wrap align-items-center justify-content-between gap-3 cursor-pointer">
+    <span class="fw-bold text-gray-900"> <%= issue.type.label %> </span>
+
+    <span class="badge <%= issue.status.className %>"> <%= issue.status.label %> </span>
+  </summary>
+
+  <div class="pt-4">
+    <%# ─────────────────────────────── ISSUE SCOPE / EVIDENCE ─────────────────────────────── %> <%
+    if (issue.affectedSettlementComponents.length || issue.evidenceCount) { %>
+
+    <div class="d-flex flex-wrap gap-2 mb-3">
+      <% issue.affectedSettlementComponents.forEach((component) => { %>
+
+      <span class="badge badge-light-info"> <%= component.label %> </span>
+
+      <% }); %> <% if (issue.evidenceCount) { %>
+
+      <span class="badge badge-light-secondary">
+        <%= issue.evidenceCount %> evidence item<%= issue.evidenceCount === 1 ? "" : "s" %>
+      </span>
+
+      <% } %>
+    </div>
+
+    <% } %> <%# ─────────────────────────────── ORIGINAL POSITION ─────────────────────────────── %>
+
+    <div class="bg-light rounded p-4 mb-3">
+      <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Original statement</div>
+
+      <div class="text-gray-800 fs-6"><%= issue.statement || "No statement recorded." %></div>
+    </div>
+
+    <%# ─────────────────────────────── EMPLOYER DECISION ─────────────────────────────── %> <% if
+    (issue.employerDecision) { %>
+
+    <div class="mb-3">
+      <span class="fw-bold text-gray-700"> Employer decision: </span>
+
+      <span class="text-gray-700"> <%= issue.employerDecision.label %> </span>
+
+      <% if (issue.employerDecisionReason) { %>
+
+      <div class="text-gray-600 mt-1"><%= issue.employerDecisionReason %></div>
+
+      <% } %>
+    </div>
+
+    <% } %> <%# ─────────────────────────────── PROFESSIONAL RESPONSE
+    ─────────────────────────────── %> <% if (issue.professionalResponseStatement) { %>
+
+    <div class="mb-3">
+      <span class="fw-bold text-gray-700"> Professional response: </span>
+
+      <span class="text-gray-600"> <%= issue.professionalResponseStatement %> </span>
+    </div>
+
+    <% } %> <%# ─────────────────────────────── PROFESSIONAL APPEAL ───────────────────────────────
+    %> <% if (issue.appealStatement) { %>
+
+    <div class="mb-3">
+      <span class="fw-bold text-gray-700"> Professional appeal: </span>
+
+      <span class="text-gray-600"> <%= issue.appealStatement %> </span>
+    </div>
+
+    <% } %> <%# ─────────────────────────────── PROFESSIONAL REBUTTAL
+    ─────────────────────────────── %> <% if (issue.rebuttalStatement) { %>
+
+    <div class="mb-3">
+      <span class="fw-bold text-gray-700"> Professional rebuttal: </span>
+
+      <span class="text-gray-600"> <%= issue.rebuttalStatement %> </span>
+    </div>
+
+    <% } %> <%# ─────────────────────────────── ADMIN DECISION ─────────────────────────────── %> <%
+    if (issue.adminDecision) { %>
+
+    <div class="mb-3">
+      <span class="fw-bold text-gray-700"> Admin decision: </span>
+
+      <span class="text-gray-700"> <%= issue.adminDecision.label %> </span>
+
+      <% if (issue.adminDecisionReason) { %>
+
+      <div class="text-gray-600 mt-1"><%= issue.adminDecisionReason %></div>
+
+      <% } %>
+    </div>
+
+    <% } %> <%# ─────────────────────────────── CURRENT DEADLINE ─────────────────────────────── %>
+    <% if (issue.deadline) { %>
+
+    <div class="alert alert-warning py-3 px-4 mb-3">
+      Response deadline:
+
+      <strong> <%= issue.deadline.label %> </strong>
+    </div>
+
+    <% } %> <%# ─────────────────────────────── PROFESSIONAL ACTIONS ───────────────────────────────
+    %> <%- include("professional-actions", { issue, csrfToken }) %> <%#
+    ─────────────────────────────── EMPLOYER ACTIONS ─────────────────────────────── %> <%-
+    include("employer-actions", { issue, csrfToken }) %> <%# ─────────────────────────────── ADMIN
+    ACTIONS ─────────────────────────────── %> <%- include("admin-actions", { issue, csrfToken }) %>
+  </div>
+</details>

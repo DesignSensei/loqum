@@ -23,8 +23,8 @@ const mongoose = require("mongoose");
  * EMPLOYER REFUND FLOW:
  *
  * Paystack refund webhook received
- * → ProviderEvent recorded first
- * → refund event normalized
+ * → signature verified and refund event normalized
+ * → ProviderEvent recorded independently
  * → employer refund batch/line resolved
  * → EmployerRefundBatchService synchronizes provider refund state
  * → escrow ledger movement is written only when the provider refund is processed
@@ -56,10 +56,17 @@ const mongoose = require("mongoose");
  * processing attempt. Once the event leaves processing, the claim is cleared.
  */
 
-const isNonNegativeInteger = (value) => Number.isInteger(value) && value >= 0;
+const isNonNegativeInteger = (value) => Number.isSafeInteger(value) && value >= 0;
 
 const isOptionalNonNegativeInteger = (value) =>
   value === null || value === undefined || isNonNegativeInteger(value);
+
+const preserveNumericType = (value) => {
+  if (value !== null && value !== undefined && typeof value !== "number") {
+    throw new TypeError("Provider event numeric fields must be Numbers, not coerced values.");
+  }
+  return value;
+};
 
 const PAYSTACK_REFUND_EVENT_NAMES = Object.freeze([
   "refund.pending",
@@ -151,12 +158,6 @@ const providerEventSchema = new mongoose.Schema(
 
         "professional_withdrawal_payout",
         "professional_withdrawal_reversal",
-
-        // Legacy/general compatibility categories.
-        "wallet_funding",
-        "checkout_payment",
-        "withdrawal_transfer",
-        "transfer_reversal",
 
         "other",
       ],
@@ -252,6 +253,7 @@ const providerEventSchema = new mongoose.Schema(
 
     retryCount: {
       type: Number,
+      set: preserveNumericType,
       default: 0,
       min: 0,
       validate: {
@@ -270,6 +272,7 @@ const providerEventSchema = new mongoose.Schema(
 
     amount: {
       type: Number,
+      set: preserveNumericType,
       default: null,
       min: 0,
       validate: {
@@ -280,6 +283,7 @@ const providerEventSchema = new mongoose.Schema(
 
     providerFee: {
       type: Number,
+      set: preserveNumericType,
       default: null,
       min: 0,
       validate: {
@@ -290,6 +294,7 @@ const providerEventSchema = new mongoose.Schema(
 
     netAmount: {
       type: Number,
+      set: preserveNumericType,
       default: null,
       min: 0,
       validate: {
@@ -300,14 +305,18 @@ const providerEventSchema = new mongoose.Schema(
 
     countryCode: {
       type: String,
-      default: "NG",
+      default: null,
+      required: true,
+      match: /^[A-Z]{2}$/,
       uppercase: true,
       trim: true,
     },
 
     currency: {
       type: String,
-      default: "NGN",
+      default: null,
+      required: true,
+      match: /^[A-Z]{3}$/,
       uppercase: true,
       trim: true,
     },
@@ -605,17 +614,22 @@ providerEventSchema.pre("validate", function () {
     }
   }
 
-  if (!this.countryCode) {
-    this.countryCode = "NG";
+  if (!this.countryCode || !/^[A-Z]{2}$/.test(this.countryCode)) {
+    throw new Error("Provider event requires an explicit two-letter country code.");
+  }
+  if (!this.currency || !/^[A-Z]{3}$/.test(this.currency)) {
+    throw new Error("Provider event requires an explicit three-letter currency.");
   }
 
-  if (!this.currency) {
-    this.currency = "NGN";
+  // Empty optional IDs must not occupy the partial unique provider-event-ID index.
+  for (const field of [
+    "providerEventId",
+    "providerReference",
+    "providerRefundId",
+    "providerRefundReference",
+  ]) {
+    if (typeof this[field] === "string" && !this[field].trim()) this[field] = null;
   }
-
-  this.countryCode = String(this.countryCode).toUpperCase().trim();
-
-  this.currency = String(this.currency).toUpperCase().trim();
 
   if (!this.eventKey) {
     throw new Error("Provider event key is required.");
@@ -657,113 +671,142 @@ providerEventSchema.pre("validate", function () {
     throw new Error(`Unsupported Paystack employer refund event name: ${this.eventName}.`);
   }
 
-  if (this.isVerified && !this.verifiedAt) {
-    this.verifiedAt = new Date();
-  }
-
-  if (!this.isVerified) {
-    this.verifiedAt = null;
-  }
-
-  /*
-   * processingStartedAt is permanent audit history:
-   * the first time this event ever entered processing.
-   *
-   * lastProcessingStartedAt tracks the latest
-   * processing attempt.
-   *
-   * processingClaimId is different: it represents
-   * only the currently active processing owner.
-   */
-  if (this.status === "processing") {
-    const processingTime = new Date();
-
-    if (!this.processingStartedAt) {
-      this.processingStartedAt = processingTime;
-    }
-
-    if (!this.lastProcessingStartedAt) {
-      this.lastProcessingStartedAt = this.processingStartedAt || processingTime;
-    }
-
-    if (!this.processingClaimId) {
-      throw new Error("Processing provider event requires a processing claim ID.");
-    }
-  }
-
-  /*
-   * No worker owns the ProviderEvent after it leaves
-   * processing. The historical processing timestamps
-   * remain, but the active claim is invalidated.
-   */
-  if (this.status !== "processing") {
-    this.processingClaimId = null;
-  }
-
-  /*
-   * Backfill legacy records that have the original
-   * first-processing timestamp but no latest timestamp.
-   */
-  if (this.processingStartedAt && !this.lastProcessingStartedAt) {
-    this.lastProcessingStartedAt = this.processingStartedAt;
-  }
-
   if (
-    this.processingStartedAt &&
-    this.lastProcessingStartedAt &&
-    this.lastProcessingStartedAt.getTime() < this.processingStartedAt.getTime()
+    this.provider === "paystack" &&
+    PAYSTACK_REFUND_EVENT_NAMES.includes(this.eventName) &&
+    this.eventCategory !== "employer_refund"
   ) {
+    throw new Error("Paystack refund lifecycle events must use employer_refund category.");
+  }
+
+  // Services supply audit facts at the transition; validation never invents them.
+  if (this.isVerified && !this.verifiedAt) {
+    throw new Error("Verified provider event requires its verification time.");
+  }
+  if (!this.isVerified && this.verifiedAt) {
+    throw new Error("Unverified provider event cannot have a verification time.");
+  }
+  if (["processing", "processed"].includes(this.status) && this.isVerified !== true) {
+    throw new Error("Only verified provider events may enter processing or processed status.");
+  }
+
+  const hasFirstAttempt = Boolean(this.processingStartedAt);
+  const hasLatestAttempt = Boolean(this.lastProcessingStartedAt);
+
+  if (hasFirstAttempt !== hasLatestAttempt) {
+    throw new Error("First and latest provider processing timestamps must be supplied together.");
+  }
+
+  /*
+   * A ProviderEvent that has never entered processing
+   * must not contain processing history.
+   */
+  if (this.status === "received" && hasFirstAttempt) {
+    throw new Error("Received provider event cannot already contain processing history.");
+  }
+
+  /*
+   * Unverified events never enter processing.
+   *
+   * The only supported terminal state for an unverified
+   * event is failed, representing rejection before
+   * processing begins.
+   */
+  if (!this.isVerified && hasFirstAttempt) {
+    throw new Error("Unverified provider event cannot contain processing history.");
+  }
+
+  if (["processing", "processed", "ignored"].includes(this.status) && this.isVerified !== true) {
     throw new Error(
-      "Provider event latest processing start cannot be earlier than first processing start."
+      "Only verified provider events may enter processing, processed or ignored status."
     );
   }
 
-  if (this.status === "processed") {
-    if (!this.processedAt) {
-      this.processedAt = new Date();
-    }
+  /*
+   * These states can only be reached after a successful
+   * processing claim.
+   *
+   * A verified failed event also represents a failed
+   * processing attempt and must therefore retain its
+   * processing history.
+   */
+  const requiresProcessingHistory =
+    ["processing", "processed", "ignored"].includes(this.status) ||
+    (this.status === "failed" && this.isVerified === true);
 
-    this.failedAt = null;
-    this.failureReason = null;
-
-    this.ignoredAt = null;
-    this.ignoredReason = null;
-
-    this.nextRetryAt = null;
+  if (requiresProcessingHistory && !hasFirstAttempt) {
+    throw new Error("Provider event status requires processing history.");
   }
 
-  if (this.status !== "processed") {
-    this.processedAt = null;
+  if (this.status === "processing" && !this.processingClaimId) {
+    throw new Error("Processing provider event requires a processing claim ID.");
   }
 
-  if (this.status === "failed") {
-    if (!this.failedAt) {
-      this.failedAt = new Date();
-    }
-
-    if (!this.failureReason) {
-      this.failureReason = "Provider event processing failed.";
-    }
+  if (this.status !== "processing" && this.processingClaimId) {
+    throw new Error("A processing claim must be cleared when its attempt ends.");
   }
 
-  if (this.status !== "failed") {
-    this.failedAt = null;
-    this.failureReason = null;
+  const terminalFields = {
+    processed: ["processedAt", null],
+    failed: ["failedAt", "failureReason"],
+    ignored: ["ignoredAt", "ignoredReason"],
+  };
+  for (const [status, [dateField, reasonField]] of Object.entries(terminalFields)) {
+    if (this.status === status) {
+      if (!this[dateField] || (reasonField && !this[reasonField]?.trim())) {
+        throw new Error(`Provider event ${status} requires its timestamp and applicable reason.`);
+      }
+    } else if (this[dateField] || (reasonField && this[reasonField])) {
+      throw new Error(
+        `Provider event ${dateField} and reason must be cleared outside ${status} status.`
+      );
+    }
+  }
+  if (this.nextRetryAt && this.status !== "failed") {
+    throw new Error("Only failed provider events may have a next retry time.");
   }
 
-  if (this.status === "ignored") {
-    if (!this.ignoredAt) {
-      this.ignoredAt = new Date();
-    }
-
-    if (!this.ignoredReason) {
-      this.ignoredReason = "Provider event ignored.";
+  const dateFields = [
+    "receivedAt",
+    "verifiedAt",
+    "processingStartedAt",
+    "lastProcessingStartedAt",
+    "processedAt",
+    "failedAt",
+    "ignoredAt",
+    "nextRetryAt",
+  ];
+  for (const field of dateFields) {
+    const value = this[field];
+    if (value != null && (!(value instanceof Date) || !Number.isFinite(value.getTime()))) {
+      throw new Error(`Provider event ${field} must be a valid date.`);
     }
   }
+  const assertOrder = (earlier, later) => {
+    if (this[earlier] && this[later] && this[later].getTime() < this[earlier].getTime()) {
+      throw new Error(`Provider event ${later} cannot precede ${earlier}.`);
+    }
+  };
+  // Verification may precede recording. Processing must follow both.
+  assertOrder("receivedAt", "processingStartedAt");
+  assertOrder("verifiedAt", "processingStartedAt");
+  assertOrder("processingStartedAt", "lastProcessingStartedAt");
+  for (const field of ["processedAt", "failedAt", "ignoredAt"]) {
+    assertOrder("receivedAt", field);
+    assertOrder("lastProcessingStartedAt", field);
+  }
+  assertOrder("failedAt", "nextRetryAt");
 
-  if (this.status !== "ignored") {
-    this.ignoredAt = null;
-    this.ignoredReason = null;
+  for (const field of ["amount", "providerFee", "netAmount"]) {
+    if (!isOptionalNonNegativeInteger(this[field])) {
+      throw new Error(`Provider event ${field} must be a non-negative safe integer or null.`);
+    }
+  }
+  if (this.netAmount != null && (this.amount == null || this.providerFee == null)) {
+    throw new Error("Net amount requires both amount and provider fee.");
+  }
+  if (this.netAmount != null && this.netAmount !== this.amount - this.providerFee) {
+    throw new Error("Provider event net amount must equal amount minus provider fee.");
   }
 
   if (

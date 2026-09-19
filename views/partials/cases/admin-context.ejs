@@ -1,0 +1,363 @@
+<!-- views/partials/cases/admin-context.ejs -->
+
+<!-- Admin adjudication context -->
+
+<div class="border border-gray-300 rounded p-4 mt-4 mb-4">
+  <div class="fw-bold text-gray-900 mb-1">
+    Admin adjudication context
+  </div>
+
+  <div class="text-gray-500 fs-7 mb-4">
+    Review the parties' positions, the current authoritative BASE state,
+    and the issue history before recording a final decision.
+  </div>
+
+  <!-- Positions under review -->
+
+  <% if (issue.positions) { %>
+    <div class="mb-5">
+      <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-3">
+        Positions under review
+      </div>
+
+      <div class="row g-4">
+        <% ["professional", "employer"].forEach((role) => { %>
+          <% const position = issue.positions[role]; %>
+
+          <% if (
+            position &&
+            (
+              position.statement ||
+              position.decision ||
+              position.reason ||
+              position.position?.fields?.length ||
+              position.evidence?.length
+            )
+          ) { %>
+            <div class="col-lg-6">
+              <div class="border border-gray-300 rounded p-4 h-100">
+                <div class="fw-bold text-gray-800 mb-3">
+                  <%= position.label %>
+                </div>
+
+                <!-- Party decision -->
+
+                <% if (position.decision) { %>
+                  <div class="mb-3">
+                    <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">
+                      Decision
+                    </div>
+
+                    <div class="text-gray-700">
+                      <%= position.decision.label %>
+                    </div>
+                  </div>
+                <% } %>
+
+                <!-- Party statement -->
+
+                <% if (position.statement) { %>
+                  <div class="mb-3">
+                    <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">
+                      Statement
+                    </div>
+
+                    <div class="text-gray-700">
+                      <%= position.statement %>
+                    </div>
+                  </div>
+                <% } %>
+
+                <!-- Party reason -->
+
+                <% if (position.reason) { %>
+                  <div class="mb-3">
+                    <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">
+                      Reason
+                    </div>
+
+                    <div class="text-gray-700">
+                      <%= position.reason %>
+                    </div>
+                  </div>
+                <% } %>
+
+                <!-- Party position -->
+
+                <% if (position.position?.fields?.length) { %>
+                  <div class="mb-3">
+                    <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-2">
+                      Position
+                    </div>
+
+                    <div class="row g-3">
+                      <% position.position.fields.forEach((field) => { %>
+                        <div class="col-12">
+                          <div class="text-gray-500 fs-8 mb-1">
+                            <%= field.label %>
+                          </div>
+
+                          <div class="fw-semibold text-gray-800">
+                            <%= field.displayValue %>
+                          </div>
+                        </div>
+                      <% }); %>
+                    </div>
+                  </div>
+                <% } %>
+
+                <!-- Party evidence -->
+
+                <% if (position.evidence?.length) { %>
+                  <div>
+                    <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-2">
+                      Evidence
+                    </div>
+
+                    <div class="d-flex flex-column gap-2">
+                      <% position.evidence.forEach((evidence) => { %>
+                        <div class="bg-light rounded p-3">
+                          <div
+                            class="d-flex flex-wrap align-items-center gap-2 mb-1"
+                          >
+                            <% if (evidence.type) { %>
+                              <span class="badge badge-light">
+                                <%= evidence.type %>
+                              </span>
+                            <% } %>
+
+                            <% if (evidence.recordedAt) { %>
+                              <span class="text-gray-500 fs-8">
+                                <%= evidence.recordedAt.label %>
+                              </span>
+                            <% } %>
+                          </div>
+
+                          <% if (evidence.description) { %>
+                            <div class="text-gray-700 fs-7">
+                              <%= evidence.description %>
+                            </div>
+                          <% } %>
+
+                          <% if (evidence.reference) { %>
+                            <div class="text-gray-500 fs-8 mt-1">
+                              Reference: <%= evidence.reference %>
+                            </div>
+                          <% } %>
+                        </div>
+                      <% }); %>
+                    </div>
+                  </div>
+                <% } %>
+              </div>
+            </div>
+          <% } %>
+        <% }); %>
+      </div>
+    </div>
+  <% } %>
+
+  <!-- Current authoritative baseline -->
+
+  <% if (issue.decisionPreview) { %>
+    <div class="mb-5">
+      <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-3">
+        Current authoritative baseline
+      </div>
+
+      <div class="row g-3">
+        <!-- Base professional pay -->
+
+        <div class="col-md-6 col-xl-3">
+          <div class="text-gray-500 fs-8 mb-1">
+            BASE professional pay
+          </div>
+
+          <div class="fw-semibold text-gray-800">
+            <%= issue.decisionPreview.currentBaseProfessionalPayDisplay || "Not available" %>
+          </div>
+        </div>
+
+        <!-- Base platform fee -->
+
+        <div class="col-md-6 col-xl-3">
+          <div class="text-gray-500 fs-8 mb-1">
+            BASE platform fee
+          </div>
+
+          <div class="fw-semibold text-gray-800">
+            <%= issue.decisionPreview.currentBasePlatformFeeDisplay || "Not available" %>
+          </div>
+        </div>
+
+        <!-- Refundable amount -->
+
+        <div class="col-md-6 col-xl-3">
+          <div class="text-gray-500 fs-8 mb-1">
+            Refundable amount
+          </div>
+
+          <div class="fw-semibold text-gray-800">
+            <%= issue.decisionPreview.currentRefundableAmountDisplay || "Not available" %>
+          </div>
+        </div>
+
+        <!-- Base settlement status -->
+
+        <div class="col-md-6 col-xl-3">
+          <div class="text-gray-500 fs-8 mb-1">
+            BASE settlement status
+          </div>
+
+          <% if (issue.decisionPreview.currentBaseSettlementStatus) { %>
+            <span
+              class="badge <%= issue.decisionPreview.currentBaseSettlementStatus.className %>"
+            >
+              <%= issue.decisionPreview.currentBaseSettlementStatus.label %>
+            </span>
+          <% } else { %>
+            <div class="fw-semibold text-gray-800">
+              Not available
+            </div>
+          <% } %>
+        </div>
+      </div>
+
+      <% if (issue.decisionPreview.confirmationNote) { %>
+        <div class="text-gray-500 fs-8 mt-3">
+          <%= issue.decisionPreview.confirmationNote %>
+        </div>
+      <% } %>
+    </div>
+  <% } %>
+
+  <!-- Recorded admin adjudication -->
+
+  <% const adminPosition = issue.positions?.admin; %>
+
+  <% if (
+    adminPosition &&
+    (
+      adminPosition.position?.fields?.length ||
+      adminPosition.evidence?.length
+    )
+  ) { %>
+    <div class="mb-5">
+      <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-3">
+        Recorded admin adjudication
+      </div>
+
+      <div class="border border-gray-300 rounded p-4">
+        <!-- Final authoritative outcome -->
+
+        <% if (adminPosition.position?.fields?.length) { %>
+          <div class="<%= adminPosition.evidence?.length ? "mb-4" : "" %>">
+            <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-2">
+              Final authoritative outcome
+            </div>
+
+            <div class="row g-3">
+              <% adminPosition.position.fields.forEach((field) => { %>
+                <div class="col-md-6">
+                  <div class="text-gray-500 fs-8 mb-1">
+                    <%= field.label %>
+                  </div>
+
+                  <div class="fw-semibold text-gray-800">
+                    <%= field.displayValue %>
+                  </div>
+                </div>
+              <% }); %>
+            </div>
+          </div>
+        <% } %>
+
+        <!-- Admin evidence -->
+
+        <% if (adminPosition.evidence?.length) { %>
+          <div>
+            <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-2">
+              Admin evidence
+            </div>
+
+            <div class="d-flex flex-column gap-2">
+              <% adminPosition.evidence.forEach((evidence) => { %>
+                <div class="bg-light rounded p-3">
+                  <div
+                    class="d-flex flex-wrap align-items-center gap-2 mb-1"
+                  >
+                    <% if (evidence.type) { %>
+                      <span class="badge badge-light">
+                        <%= evidence.type %>
+                      </span>
+                    <% } %>
+
+                    <% if (evidence.recordedAt) { %>
+                      <span class="text-gray-500 fs-8">
+                        <%= evidence.recordedAt.label %>
+                      </span>
+                    <% } %>
+                  </div>
+
+                  <% if (evidence.description) { %>
+                    <div class="text-gray-700 fs-7">
+                      <%= evidence.description %>
+                    </div>
+                  <% } %>
+
+                  <% if (evidence.reference) { %>
+                    <div class="text-gray-500 fs-8 mt-1">
+                      Reference: <%= evidence.reference %>
+                    </div>
+                  <% } %>
+                </div>
+              <% }); %>
+            </div>
+          </div>
+        <% } %>
+      </div>
+    </div>
+  <% } %>
+
+  <!-- Issue timeline -->
+
+  <% if (issue.timeline?.length) { %>
+    <div>
+      <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-3">
+        Issue timeline
+      </div>
+
+      <div class="d-flex flex-column gap-3">
+        <% issue.timeline.forEach((entry) => { %>
+          <div class="border-start border-3 border-gray-300 ps-4">
+            <div
+              class="d-flex flex-wrap align-items-center justify-content-between gap-2"
+            >
+              <div class="fw-semibold text-gray-800">
+                <%= entry.label %>
+              </div>
+
+              <% if (entry.at) { %>
+                <div class="text-gray-500 fs-8">
+                  <%= entry.at.label %>
+                </div>
+              <% } %>
+            </div>
+
+            <% if (entry.actor) { %>
+              <div class="text-gray-500 fs-8 mt-1">
+                Actor: <%= entry.actor %>
+              </div>
+            <% } %>
+
+            <% if (entry.detail) { %>
+              <div class="text-gray-600 fs-7 mt-1">
+                <%= entry.detail %>
+              </div>
+            <% } %>
+          </div>
+        <% }); %>
+      </div>
+    </div>
+  <% } %>
+</div>

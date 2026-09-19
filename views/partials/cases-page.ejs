@@ -1,185 +1,150 @@
 <!-- views/partials/cases-page.ejs -->
 
-<%# ─────────────────────────────── PAGE HEADER ─────────────────────────────── %>
+<!-- SUMMARY CARDS -->
+
+<div class="row g-5 g-xl-8 mb-8">
+  <% casesView.summaryCards.forEach((card) => { %>
+    <div class="col-sm-6 col-lg-3">
+      <div class="card card-flush h-100">
+        <div
+          class="card-body d-flex flex-column justify-content-center align-items-center text-center"
+        >
+          <div class="symbol symbol-60px mb-5">
+            <span class="symbol-label <%= card.symbolClass %>">
+              <i class="ki-duotone <%= card.icon %> fs-2x <%= card.iconClass %>">
+                <% card.iconPaths.forEach((path) => { %>
+                  <span class="path<%= path %>"></span>
+                <% }); %>
+              </i>
+            </span>
+          </div>
+
+          <div class="fs-2 fw-bold <%= card.valueClass %>">
+            <%= card.value %>
+          </div>
+
+          <div class="fs-6 fw-semibold text-gray-700">
+            <%= card.label %>
+          </div>
+        </div>
+      </div>
+    </div>
+  <% }); %>
+</div>
+
+<!-- RESULTS HEADER / FILTER -->
 
 <div
-  class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-4 mb-6"
+  class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-3 mb-5"
 >
   <div>
-    <h1 class="fs-2hx fw-bold text-gray-900 mb-2">
-      <%= casesView.pageTitle %>
-    </h1>
+    <div class="fw-bold fs-4 text-gray-900">
+      <%= casesView.resultsHeader.title %>
+    </div>
 
-    <p class="text-gray-600 fs-6 mb-0">
-      <%= casesView.pageIntro %>
-    </p>
+    <div class="fs-7 text-muted">
+      <%= casesView.resultsHeader.subtitle %>
+    </div>
   </div>
 
-  <div class="d-flex flex-wrap gap-2">
-    <% casesView.filters.typeOptions.forEach((option) => { %>
+  <div class="d-flex align-items-center gap-2">
+    <% if (casesView.filters.clearAction.visible) { %>
       <a
-        href="<%= option.url %>"
-        class="btn btn-sm <%= option.className %>"
+        href="<%= casesView.filters.clearAction.url %>"
+        class="btn btn-sm <%= casesView.filters.clearAction.buttonClass %>"
       >
-        <%= option.label %>
+        <%= casesView.filters.clearAction.label %>
       </a>
-    <% }); %>
+    <% } %>
+
+    <div>
+      <button
+        type="button"
+        class="btn btn-sm btn-light btn-active-light-primary"
+        data-kt-menu-trigger="click"
+        data-kt-menu-placement="bottom-end"
+      >
+        <i class="ki-duotone ki-filter fs-3">
+          <span class="path1"></span>
+          <span class="path2"></span>
+        </i>
+
+        <%= casesView.filters.selectedLabel %>
+
+        <i class="ki-duotone ki-down fs-5 ms-1"></i>
+      </button>
+
+      <div
+        class="menu menu-sub menu-sub-dropdown menu-column menu-rounded menu-gray-600 menu-state-bg-light-primary fw-semibold fs-7 w-250px py-3"
+        data-kt-menu="true"
+      >
+        <% casesView.filters.options.forEach((option) => { %>
+          <div class="menu-item px-3">
+            <a
+              href="<%= option.url %>"
+              class="menu-link px-3 <%= option.active ? 'active' : '' %>"
+            >
+              <span class="menu-title">
+                <%= option.label %>
+              </span>
+            </a>
+          </div>
+        <% }); %>
+      </div>
+    </div>
   </div>
 </div>
 
-
-<%# ─────────────────────────────── CASE SUMMARY ─────────────────────────────── %>
-
-<div class="row g-4 mb-6">
-
-  <div class="col-6 col-xl-3">
-    <div class="card card-flush h-100">
-      <div class="card-body p-5">
-
-        <div class="text-gray-500 fw-semibold fs-7 mb-1">
-          Total cases
-        </div>
-
-        <div class="fs-2hx fw-bold text-gray-900">
-          <%= casesView.counts.total %>
-        </div>
-
-      </div>
-    </div>
-  </div>
-
-
-  <div class="col-6 col-xl-3">
-    <div class="card card-flush h-100">
-      <div class="card-body p-5">
-
-        <div class="text-gray-500 fw-semibold fs-7 mb-1">
-          Active
-        </div>
-
-        <div class="fs-2hx fw-bold text-primary">
-          <%= casesView.counts.active %>
-        </div>
-
-      </div>
-    </div>
-  </div>
-
-
-  <div class="col-6 col-xl-3">
-    <div class="card card-flush h-100">
-      <div class="card-body p-5">
-
-        <div class="text-gray-500 fw-semibold fs-7 mb-1">
-          Action needed on this page
-        </div>
-
-        <div class="fs-2hx fw-bold text-warning">
-          <%= casesView.counts.actionRequired %>
-        </div>
-
-      </div>
-    </div>
-  </div>
-
-
-  <div class="col-6 col-xl-3">
-    <div class="card card-flush h-100">
-      <div class="card-body p-5">
-
-        <div class="text-gray-500 fw-semibold fs-7 mb-1">
-          Resolved
-        </div>
-
-        <div class="fs-2hx fw-bold text-success">
-          <%= casesView.counts.resolved %>
-        </div>
-
-      </div>
-    </div>
-  </div>
-
-</div>
-
-
-<%# ─────────────────────────────── STATUS FILTER ─────────────────────────────── %>
-
-<div class="card card-flush mb-6">
-
-  <div class="card-body p-4 p-md-5">
-
-    <div class="d-flex flex-wrap align-items-center gap-2">
-
-      <span class="text-gray-700 fw-semibold me-2">
-        Status:
-      </span>
-
-      <% casesView.filters.statusOptions.forEach((option) => { %>
-        <a
-          href="<%= option.url %>"
-          class="badge <%= option.className %> fs-7 text-decoration-none"
-        >
-          <%= option.label %>
-        </a>
-      <% }); %>
-
-    </div>
-
-  </div>
-
-</div>
-
-
-<%# ─────────────────────────────── EMPTY STATE ─────────────────────────────── %>
-
-<% if (!casesView.cases.length) { %>
-
-  <div class="card card-flush">
-
-    <div class="card-body py-15 text-center">
-
-      <i class="ki-duotone ki-notepad-edit fs-3x text-gray-400 mb-4">
-        <span class="path1"></span>
-        <span class="path2"></span>
-        <span class="path3"></span>
-      </i>
-
-      <h2 class="fw-bold text-gray-800 mb-2">
-        No cases found
-      </h2>
-
-      <p class="text-gray-500 mb-0">
-        There are no cases matching the selected filters.
-      </p>
-
-    </div>
-
-  </div>
-
-<% } %>
-
-
-<%# ─────────────────────────────── CASE LIST ─────────────────────────────── %>
+<!-- CASES -->
 
 <% if (casesView.cases.length) { %>
-
-  <div class="d-flex flex-column gap-5">
-
+  <div class="d-flex flex-column gap-6">
     <% casesView.cases.forEach((caseItem) => { %>
-
       <%- include("cases/case-card", {
         caseItem,
         csrfToken
       }) %>
-
     <% }); %>
-
   </div>
+<% } else { %>
 
+  <!-- EMPTY STATE -->
+
+  <div class="card">
+    <div class="card-body py-15 text-center">
+      <div class="mb-5">
+        <i class="ki-duotone ki-notepad-edit fs-5x text-gray-400">
+          <span class="path1"></span>
+          <span class="path2"></span>
+          <span class="path3"></span>
+        </i>
+      </div>
+
+      <h3 class="fw-bold text-gray-900 mb-2">
+        No cases found
+      </h3>
+
+      <div class="text-muted fs-6 mb-6">
+        <% if (casesView.filters.hasActiveFilters) { %>
+          No cases match the filters you selected.
+        <% } else { %>
+          No cases are available yet.
+        <% } %>
+      </div>
+
+      <% if (casesView.filters.clearAction.visible) { %>
+        <a
+          href="<%= casesView.filters.clearAction.url %>"
+          class="btn btn-light-primary"
+        >
+          <%= casesView.filters.clearAction.label %>
+        </a>
+      <% } %>
+    </div>
+  </div>
 <% } %>
 
-
-<%# ─────────────────────────────── PAGINATION ─────────────────────────────── %>
+<!-- PAGINATION -->
 
 <%- include("cases/pagination", {
   pagination: casesView.pagination

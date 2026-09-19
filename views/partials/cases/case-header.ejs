@@ -1,34 +1,33 @@
 <!-- views/partials/cases/case-header.ejs -->
 
-<%# ─────────────────────────────── CASE IDENTITY ─────────────────────────────── %>
+<!-- Case identity -->
 
 <div class="card-header border-0 pt-5 pb-2">
   <div class="card-title d-flex flex-column align-items-start gap-2">
     <div class="d-flex flex-wrap align-items-center gap-2">
-      <%# Claim or employer dispute. %>
+      <!-- Case kind -->
 
       <span class="badge <%= caseItem.kind.className %>"> <%= caseItem.kind.label %> </span>
 
-      <%# Current overall case status. %>
+      <!-- Case status -->
 
       <span class="badge <%= caseItem.status.className %>"> <%= caseItem.status.label %> </span>
 
-      <%# Backend determines whether this audience currently needs to act. %> <% if
-      (caseItem.actions.required) { %>
+      <!-- Action required -->
 
+      <% if (caseItem.actions.required) { %>
       <span class="badge badge-light-warning"> Action required </span>
-
       <% } %>
     </div>
 
-    <%# Stable case reference shown to the user. %>
+    <!-- Case reference -->
 
     <span class="card-label fw-bold text-gray-900 fs-3"> <%= caseItem.referenceCode %> </span>
   </div>
 
-  <%# Submission time is already formatted by ShiftCasePageService. %>
+  <!-- Submission time -->
 
   <div class="card-toolbar text-gray-500 fs-7">
-    Submitted <%= caseItem.submittedAt ? caseItem.submittedAt.label : "Not available" %>
+    Submitted <%= caseItem.submittedAt?.label || "Not available" %>
   </div>
 </div>

@@ -3,7 +3,6 @@
 const mongoose = require("mongoose");
 
 const { requiredUniqueEnumArrayField } = require("./helpers/schemaFields");
-
 const occurrenceEvidenceSchema = require("./helpers/occurrenceEvidenceSchema");
 
 const {
@@ -17,7 +16,7 @@ const {
 
 const { SETTLEMENT_BATCH_COMPONENTS } = require("../constants/shiftSettlement");
 
-/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ SNAPSHOT PROTECTION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ───────────────────── SNAPSHOT PROTECTION ───────────────────── */
 
 const FORBIDDEN_SNAPSHOT_AUTHORITY_FIELDS = Object.freeze([
   "finalProfessionalPay",
@@ -68,7 +67,7 @@ const FORBIDDEN_SNAPSHOT_AUTHORITY_FIELDS = Object.freeze([
   "overtime",
 ]);
 
-/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ HELPERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ───────────────────── HELPERS ───────────────────── */
 
 const hasValue = (value) => {
   if (value === null || value === undefined) {
@@ -99,7 +98,6 @@ const normalizeComponents = (components) => {
 
 const sameComponents = (left, right) => {
   const normalizedLeft = normalizeComponents(left);
-
   const normalizedRight = normalizeComponents(right);
 
   return (
@@ -120,7 +118,6 @@ const normalizeIssueTypes = (types) => {
 
 const sameIssueTypes = (left, right) => {
   const normalizedLeft = normalizeIssueTypes(left);
-
   const normalizedRight = normalizeIssueTypes(right);
 
   return (
@@ -136,26 +133,22 @@ const optionalMinorUnitAmountField = () => ({
 
   validate: {
     validator: (value) => value === null || Number.isSafeInteger(value),
-
     message: "Amount must be a whole minor-unit value.",
   },
 });
 
 const evidenceArrayField = ({ immutable = false } = {}) => ({
   type: [occurrenceEvidenceSchema],
-
   default: [],
-
   immutable,
 
   validate: {
     validator: (items) => Array.isArray(items) && items.length <= 10,
-
     message: "A claim issue cannot contain more than 10 evidence items.",
   },
 });
 
-/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ STRUCTURED POSITIONS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ───────────────────── STRUCTURED POSITIONS ───────────────────── */
 
 const attendanceCorrectionPositionSchema = new mongoose.Schema(
   {
@@ -249,7 +242,7 @@ const adminOutcomeSchema = new mongoose.Schema(
   }
 );
 
-/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ CLAIM ISSUE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ───────────────────── CLAIM ISSUE ───────────────────── */
 
 const claimIssueSchema = new mongoose.Schema(
   {
@@ -270,9 +263,7 @@ const claimIssueSchema = new mongoose.Schema(
      */
     challengedSettlementComponents: requiredUniqueEnumArrayField({
       values: SETTLEMENT_BATCH_COMPONENTS,
-
       immutable: true,
-
       message:
         "Claim issue challengedSettlementComponents must contain valid unique settlement components.",
     }),
@@ -307,7 +298,7 @@ const claimIssueSchema = new mongoose.Schema(
 
     // --- EMPLOYER REVIEW ---
 
-    /* Employer agrees or disagrees with the professional's submitted position. */
+    // Employer agrees or disagrees with the professional's submitted position.
     employerDecision: {
       type: String,
       enum: [...EMPLOYER_FINANCIAL_CLAIM_DECISIONS, null],
@@ -418,13 +409,12 @@ const claimIssueSchema = new mongoose.Schema(
       default: null,
     },
   },
-
   {
     _id: true,
   }
 );
 
-/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ CLAIM CASE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ───────────────────── CLAIM CASE ───────────────────── */
 
 const shiftOccurrenceClaimSchema = new mongoose.Schema(
   {
@@ -504,15 +494,12 @@ const shiftOccurrenceClaimSchema = new mongoose.Schema(
      */
     submittedIssueTypes: requiredUniqueEnumArrayField({
       values: FINANCIAL_OCCURRENCE_CLAIM_TYPES,
-
       immutable: true,
-
       message: "submittedIssueTypes must contain valid unique professional claim types.",
     }),
 
     issues: {
       type: [claimIssueSchema],
-
       required: true,
 
       validate: [
@@ -593,9 +580,7 @@ const shiftOccurrenceClaimSchema = new mongoose.Schema(
      */
     lifecycleSnapshot: {
       type: mongoose.Schema.Types.Mixed,
-
       required: true,
-
       immutable: true,
 
       validate: {
@@ -622,11 +607,8 @@ const shiftOccurrenceClaimSchema = new mongoose.Schema(
      */
     status: {
       type: String,
-
       enum: OCCURRENCE_CLAIM_STATUSES,
-
       default: "active",
-
       required: true,
     },
 
@@ -639,9 +621,7 @@ const shiftOccurrenceClaimSchema = new mongoose.Schema(
      */
     employerRefund: {
       type: mongoose.Schema.Types.ObjectId,
-
       ref: "EmployerRefund",
-
       default: null,
     },
 
@@ -649,41 +629,33 @@ const shiftOccurrenceClaimSchema = new mongoose.Schema(
 
     resolvedAt: {
       type: Date,
-
       default: null,
     },
 
     withdrawnAt: {
       type: Date,
-
       default: null,
     },
 
     withdrawnBy: {
       type: mongoose.Schema.Types.ObjectId,
-
       ref: "User",
-
       default: null,
     },
 
     withdrawalReason: {
       type: String,
-
       trim: true,
-
       maxlength: 500,
-
       default: null,
     },
   },
-
   {
     timestamps: true,
   }
 );
 
-/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ VALIDATION HELPERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ───────────────────── VALIDATION HELPERS ───────────────────── */
 
 function validateClaimLifecycleDates(claim) {
   if (
@@ -793,7 +765,7 @@ function validateAdminOutcome(claim, outcome, pathPrefix) {
   }
 }
 
-/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ISSUE VALIDATION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ───────────────────── ISSUE VALIDATION ───────────────────── */
 
 function validateIssueLifecycleDates(claim, issue, pathPrefix) {
   const timestamps = ["employerDecidedAt", "escalatedAt", "adminDecidedAt", "resolvedAt"];
@@ -868,9 +840,7 @@ function validateClaimIssue(claim, issue, index) {
 
   const hasStructuredAdminOutcome = hasAdminOutcome(issue.adminOutcome);
 
-  /*
-   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ TYPE / SCOPE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  */
+  // --- TYPE / SCOPE ---
 
   if (!FINANCIAL_OCCURRENCE_CLAIM_TYPES.includes(issue.type)) {
     claim.invalidate(`${pathPrefix}.type`, "Invalid professional claim issue type.");
@@ -883,9 +853,7 @@ function validateClaimIssue(claim, issue, index) {
     );
   }
 
-  /*
-   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ PROFESSIONAL DETAILS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  */
+  // --- PROFESSIONAL DETAILS ---
 
   if (issue.type === "attendance_correction") {
     if (!hasAttendanceCorrection) {
@@ -917,9 +885,7 @@ function validateClaimIssue(claim, issue, index) {
     );
   }
 
-  /*
-   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ EMPLOYER REVIEW â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  */
+  // --- EMPLOYER REVIEW ---
 
   if (hasEmployerDecision) {
     if (!issue.employerDecisionReason || !issue.employerDecidedAt || !issue.employerDecidedBy) {
@@ -972,9 +938,7 @@ function validateClaimIssue(claim, issue, index) {
     }
   }
 
-  /*
-   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ESCALATION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  */
+  // --- ESCALATION ---
 
   if (hasEscalationAudit) {
     if (!issue.escalatedAt || !issue.escalationReason) {
@@ -1014,9 +978,7 @@ function validateClaimIssue(claim, issue, index) {
     }
   }
 
-  /*
-   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ADMIN DECISION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  */
+  // --- ADMIN DECISION ---
 
   if (hasAdminDecision) {
     if (
@@ -1066,7 +1028,9 @@ function validateClaimIssue(claim, issue, index) {
     }
 
     const outcome = issue.adminOutcome || {};
+
     const hasFinalAttendance = Boolean(outcome.finalCheckInAt || outcome.finalCheckOutAt);
+
     const hasFinalBasePay = hasValue(outcome.finalBaseProfessionalPay);
 
     if (issue.type === "attendance_correction") {
@@ -1093,9 +1057,7 @@ function validateClaimIssue(claim, issue, index) {
 
   validateAdminOutcome(claim, issue.adminOutcome, `${pathPrefix}.adminOutcome`);
 
-  /*
-   â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ ISSUE STATUS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  */
+  // --- ISSUE STATUS ---
 
   if (issue.status === "awaiting_employer_review") {
     if (
@@ -1153,7 +1115,7 @@ function validateClaimIssue(claim, issue, index) {
   }
 }
 
-/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ CASE VALIDATION â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ───────────────────── CASE VALIDATION ───────────────────── */
 
 shiftOccurrenceClaimSchema.pre("validate", function validateShiftOccurrenceClaim() {
   validateClaimLifecycleDates(this);
@@ -1200,6 +1162,7 @@ shiftOccurrenceClaimSchema.pre("validate", function validateShiftOccurrenceClaim
     }
 
     // Withdrawal preserves untouched submissions; it does not erase responses.
+
     if (issues.some((issue) => issue.status !== "awaiting_employer_review")) {
       this.invalidate(
         "status",
@@ -1215,7 +1178,7 @@ shiftOccurrenceClaimSchema.pre("validate", function validateShiftOccurrenceClaim
   }
 });
 
-/* â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ INDEXES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+/* ───────────────────── INDEXES ───────────────────── */
 
 shiftOccurrenceClaimSchema.index(
   {

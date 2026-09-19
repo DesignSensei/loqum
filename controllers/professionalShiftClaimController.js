@@ -44,7 +44,7 @@ function handleJsonError({ res, error, logContext, fallbackMessage, fallbackCode
   if (statusCode >= 500) {
     logger.error(`${logContext}:`, error);
   } else {
-    logger.warn(`${logContext} rejected: ${error.code || "UNKNOWN"} - ${error.message}`);
+    logger.warn(`${logContext} rejected: ` + `${error.code || "UNKNOWN"} - ` + `${error.message}`);
   }
 
   const response = {
@@ -64,6 +64,14 @@ function handleJsonError({ res, error, logContext, fallbackMessage, fallbackCode
   return res.status(statusCode).json(response);
 }
 
+function getEntityId(value) {
+  if (!value) {
+    return null;
+  }
+
+  return value._id ? String(value._id) : String(value);
+}
+
 function getProfessionalProfileId(req) {
   const professionalProfileId = req.professionalProfile?._id;
 
@@ -71,7 +79,9 @@ function getProfessionalProfileId(req) {
     const error = new Error("Professional profile context is unavailable.");
 
     error.name = "ProfessionalShiftClaimControllerError";
+
     error.code = "PROFESSIONAL_PROFILE_CONTEXT_REQUIRED";
+
     error.statusCode = 500;
 
     throw error;
@@ -80,21 +90,58 @@ function getProfessionalProfileId(req) {
   return professionalProfileId;
 }
 
+function getProfessionalUserId(req) {
+  const professionalUserId = req.user?._id;
+
+  if (!professionalUserId) {
+    const error = new Error("Professional user context is unavailable.");
+
+    error.name = "ProfessionalShiftClaimControllerError";
+
+    error.code = "PROFESSIONAL_USER_CONTEXT_REQUIRED";
+
+    error.statusCode = 500;
+
+    throw error;
+  }
+
+  return professionalUserId;
+}
+
 function getIdempotencyKey(req) {
   return String(req.get("Idempotency-Key") || req.body?.idempotencyKey || "").trim();
 }
 
-function toId(value) {
-  if (!value) {
-    return null;
+/* ─────────────────────────────── EVIDENCE RESPONSE ─────────────────────────────── */
+
+/**
+ * Expose only the evidence fields intentionally
+ * supported by the Cases workflow.
+ *
+ * Raw Mongoose evidence subdocuments should not
+ * become part of the browser API contract.
+ */
+function buildEvidenceResponse(items = []) {
+  if (!Array.isArray(items)) {
+    return [];
   }
 
-  if (typeof value === "object" && value._id) {
-    return String(value._id);
-  }
+  return items.map((item) => ({
+    type: item?.type || null,
 
-  return String(value);
+    reference: item?.reference || null,
+
+    description: item?.description || null,
+
+    submittedByRole: item?.submittedByRole || null,
+
+    submittedByUserId: getEntityId(item?.submittedByUser),
+
+    recordedAt: item?.recordedAt || null,
+  }));
 }
+
+/* ─────────────────────────────── SETTLEMENT SCOPE HELPERS ─────────────────────────────── */
 
 function getClaimChallengedSettlementComponents(claim) {
   if (!claim || !Array.isArray(claim.issues)) {
@@ -110,168 +157,6 @@ function getClaimChallengedSettlementComponents(claim) {
       )
     ),
   ];
-}
-
-/* ─────────────────────────────── CLAIM RESPONSE ─────────────────────────────── */
-
-function buildClaimIssueResponse(issue) {
-  if (!issue) {
-    return null;
-  }
-
-  return {
-    id: toId(issue._id),
-
-    type: issue.type,
-
-    challengedSettlementComponents: Array.isArray(issue.challengedSettlementComponents)
-      ? [...issue.challengedSettlementComponents]
-      : [],
-
-    details: issue.details || null,
-
-    statement: issue.statement || null,
-
-    evidence: Array.isArray(issue.evidence) ? [...issue.evidence] : [],
-
-    status: issue.status,
-
-    employerDecision: issue.employerDecision || null,
-
-    employerDecisionReason: issue.employerDecisionReason || null,
-
-    employerDecidedAt: issue.employerDecidedAt || null,
-
-    employerDecidedBy: toId(issue.employerDecidedBy),
-
-    employerCounterPosition: issue.employerCounterPosition || null,
-
-    employerEvidence: Array.isArray(issue.employerEvidence) ? [...issue.employerEvidence] : [],
-
-    escalatedAt: issue.escalatedAt || null,
-
-    escalationReason: issue.escalationReason || null,
-
-    escalatedBy: toId(issue.escalatedBy),
-
-    escalationNotes: issue.escalationNotes || null,
-
-    adminDecision: issue.adminDecision || null,
-
-    adminDecisionReason: issue.adminDecisionReason || null,
-
-    adminDecidedAt: issue.adminDecidedAt || null,
-
-    adminDecidedBy: toId(issue.adminDecidedBy),
-
-    adminOutcome: issue.adminOutcome || null,
-
-    adminEvidence: Array.isArray(issue.adminEvidence) ? [...issue.adminEvidence] : [],
-
-    resolvedAt: issue.resolvedAt || null,
-  };
-}
-
-function buildClaimResponse(claim) {
-  if (!claim) {
-    return null;
-  }
-
-  return {
-    id: toId(claim._id),
-
-    referenceCode: claim.referenceCode,
-
-    shiftId: toId(claim.shift),
-
-    occurrenceId: toId(claim.occurrence),
-
-    submittedIssueTypes: Array.isArray(claim.submittedIssueTypes)
-      ? [...claim.submittedIssueTypes]
-      : [],
-
-    challengedSettlementComponents: getClaimChallengedSettlementComponents(claim),
-
-    issues: Array.isArray(claim.issues)
-      ? claim.issues.map((issue) => buildClaimIssueResponse(issue))
-      : [],
-
-    status: claim.status,
-
-    submittedAt: claim.submittedAt || null,
-
-    challengeWindowOpenedAt: claim.challengeWindowOpenedAt || null,
-
-    challengeDeadlineAt: claim.challengeDeadlineAt || null,
-
-    employerResponseDeadlineAt: claim.employerResponseDeadlineAt || null,
-
-    employerRefundId: toId(claim.employerRefund),
-
-    resolvedAt: claim.resolvedAt || null,
-
-    withdrawnAt: claim.withdrawnAt || null,
-
-    withdrawnBy: toId(claim.withdrawnBy),
-
-    withdrawalReason: claim.withdrawalReason || null,
-  };
-}
-
-/* ─────────────────────────────── DISPUTE RESPONSE ─────────────────────────────── */
-
-function buildDisputeIssueResponse(issue) {
-  if (!issue) {
-    return null;
-  }
-
-  return {
-    id: toId(issue._id),
-
-    type: issue.type,
-
-    affectedSettlementComponents: Array.isArray(issue.affectedSettlementComponents)
-      ? [...issue.affectedSettlementComponents]
-      : [],
-
-    details: issue.details || null,
-
-    statement: issue.statement || null,
-
-    evidence: Array.isArray(issue.evidence) ? [...issue.evidence] : [],
-
-    status: issue.status,
-
-    professionalResponseStatement: issue.professionalResponseStatement || null,
-
-    professionalCounterPosition: issue.professionalCounterPosition || null,
-
-    professionalResponseEvidence: Array.isArray(issue.professionalResponseEvidence)
-      ? [...issue.professionalResponseEvidence]
-      : [],
-
-    professionalRespondedAt: issue.professionalRespondedAt || null,
-
-    professionalRespondedBy: toId(issue.professionalRespondedBy),
-
-    professionalResponseExpiredAt: issue.professionalResponseExpiredAt || null,
-
-    adminReviewStartedAt: issue.adminReviewStartedAt || null,
-
-    adminDecision: issue.adminDecision || null,
-
-    adminDecisionReason: issue.adminDecisionReason || null,
-
-    adminDecidedAt: issue.adminDecidedAt || null,
-
-    adminDecidedBy: toId(issue.adminDecidedBy),
-
-    adminOutcome: issue.adminOutcome || null,
-
-    adminEvidence: Array.isArray(issue.adminEvidence) ? [...issue.adminEvidence] : [],
-
-    resolvedAt: issue.resolvedAt || null,
-  };
 }
 
 function getDisputeAffectedSettlementComponents(dispute) {
@@ -295,8 +180,166 @@ function getRemainingProfessionalResponseIssueIds(dispute) {
 
   return dispute.issues
     .filter((issue) => issue?.status === "awaiting_professional_response")
-    .map((issue) => toId(issue?._id))
+    .map((issue) => getEntityId(issue?._id))
     .filter(Boolean);
+}
+
+/* ─────────────────────────────── CLAIM RESPONSE ─────────────────────────────── */
+
+function buildClaimIssueResponse(issue) {
+  if (!issue) {
+    return null;
+  }
+
+  return {
+    id: getEntityId(issue._id),
+
+    type: issue.type,
+
+    challengedSettlementComponents: Array.isArray(issue.challengedSettlementComponents)
+      ? [...issue.challengedSettlementComponents]
+      : [],
+
+    details: issue.details || null,
+
+    statement: issue.statement || null,
+
+    evidence: buildEvidenceResponse(issue.evidence),
+
+    status: issue.status,
+
+    employerDecision: issue.employerDecision || null,
+
+    employerDecisionReason: issue.employerDecisionReason || null,
+
+    employerDecidedAt: issue.employerDecidedAt || null,
+
+    employerDecidedBy: getEntityId(issue.employerDecidedBy),
+
+    employerCounterPosition: issue.employerCounterPosition || null,
+
+    employerEvidence: buildEvidenceResponse(issue.employerEvidence),
+
+    escalatedAt: issue.escalatedAt || null,
+
+    escalationReason: issue.escalationReason || null,
+
+    escalatedBy: getEntityId(issue.escalatedBy),
+
+    escalationNotes: issue.escalationNotes || null,
+
+    adminDecision: issue.adminDecision || null,
+
+    adminDecisionReason: issue.adminDecisionReason || null,
+
+    adminDecidedAt: issue.adminDecidedAt || null,
+
+    adminDecidedBy: getEntityId(issue.adminDecidedBy),
+
+    adminOutcome: issue.adminOutcome || null,
+
+    adminEvidence: buildEvidenceResponse(issue.adminEvidence),
+
+    resolvedAt: issue.resolvedAt || null,
+  };
+}
+
+function buildClaimResponse(claim) {
+  if (!claim) {
+    return null;
+  }
+
+  return {
+    id: getEntityId(claim._id),
+
+    referenceCode: claim.referenceCode,
+
+    shiftId: getEntityId(claim.shift),
+
+    occurrenceId: getEntityId(claim.occurrence),
+
+    submittedIssueTypes: Array.isArray(claim.submittedIssueTypes)
+      ? [...claim.submittedIssueTypes]
+      : [],
+
+    challengedSettlementComponents: getClaimChallengedSettlementComponents(claim),
+
+    issues: Array.isArray(claim.issues) ? claim.issues.map(buildClaimIssueResponse) : [],
+
+    status: claim.status,
+
+    submittedAt: claim.submittedAt || null,
+
+    challengeWindowOpenedAt: claim.challengeWindowOpenedAt || null,
+
+    challengeDeadlineAt: claim.challengeDeadlineAt || null,
+
+    employerResponseDeadlineAt: claim.employerResponseDeadlineAt || null,
+
+    employerRefundId: getEntityId(claim.employerRefund),
+
+    resolvedAt: claim.resolvedAt || null,
+
+    withdrawnAt: claim.withdrawnAt || null,
+
+    withdrawnBy: getEntityId(claim.withdrawnBy),
+
+    withdrawalReason: claim.withdrawalReason || null,
+  };
+}
+
+/* ─────────────────────────────── DISPUTE RESPONSE ─────────────────────────────── */
+
+function buildDisputeIssueResponse(issue) {
+  if (!issue) {
+    return null;
+  }
+
+  return {
+    id: getEntityId(issue._id),
+
+    type: issue.type,
+
+    affectedSettlementComponents: Array.isArray(issue.affectedSettlementComponents)
+      ? [...issue.affectedSettlementComponents]
+      : [],
+
+    details: issue.details || null,
+
+    statement: issue.statement || null,
+
+    evidence: buildEvidenceResponse(issue.evidence),
+
+    status: issue.status,
+
+    professionalResponseStatement: issue.professionalResponseStatement || null,
+
+    professionalCounterPosition: issue.professionalCounterPosition || null,
+
+    professionalResponseEvidence: buildEvidenceResponse(issue.professionalResponseEvidence),
+
+    professionalRespondedAt: issue.professionalRespondedAt || null,
+
+    professionalRespondedBy: getEntityId(issue.professionalRespondedBy),
+
+    professionalResponseExpiredAt: issue.professionalResponseExpiredAt || null,
+
+    adminReviewStartedAt: issue.adminReviewStartedAt || null,
+
+    adminDecision: issue.adminDecision || null,
+
+    adminDecisionReason: issue.adminDecisionReason || null,
+
+    adminDecidedAt: issue.adminDecidedAt || null,
+
+    adminDecidedBy: getEntityId(issue.adminDecidedBy),
+
+    adminOutcome: issue.adminOutcome || null,
+
+    adminEvidence: buildEvidenceResponse(issue.adminEvidence),
+
+    resolvedAt: issue.resolvedAt || null,
+  };
 }
 
 function buildDisputeResponse(dispute) {
@@ -305,13 +348,13 @@ function buildDisputeResponse(dispute) {
   }
 
   return {
-    id: toId(dispute._id),
+    id: getEntityId(dispute._id),
 
     referenceCode: dispute.referenceCode,
 
-    shiftId: toId(dispute.shift),
+    shiftId: getEntityId(dispute.shift),
 
-    occurrenceId: toId(dispute.occurrence),
+    occurrenceId: getEntityId(dispute.occurrence),
 
     submittedIssueTypes: Array.isArray(dispute.submittedIssueTypes)
       ? [...dispute.submittedIssueTypes]
@@ -319,9 +362,7 @@ function buildDisputeResponse(dispute) {
 
     affectedSettlementComponents: getDisputeAffectedSettlementComponents(dispute),
 
-    issues: Array.isArray(dispute.issues)
-      ? dispute.issues.map((issue) => buildDisputeIssueResponse(issue))
-      : [],
+    issues: Array.isArray(dispute.issues) ? dispute.issues.map(buildDisputeIssueResponse) : [],
 
     status: dispute.status,
 
@@ -333,13 +374,13 @@ function buildDisputeResponse(dispute) {
 
     professionalResponseDeadlineAt: dispute.professionalResponseDeadlineAt || null,
 
-    employerRefundId: toId(dispute.employerRefund),
+    employerRefundId: getEntityId(dispute.employerRefund),
 
     resolvedAt: dispute.resolvedAt || null,
 
     withdrawnAt: dispute.withdrawnAt || null,
 
-    withdrawnBy: toId(dispute.withdrawnBy),
+    withdrawnBy: getEntityId(dispute.withdrawnBy),
 
     withdrawalReason: dispute.withdrawalReason || null,
   };
@@ -347,13 +388,22 @@ function buildDisputeResponse(dispute) {
 
 /* ─────────────────────────────── OCCURRENCE RESPONSE ─────────────────────────────── */
 
+/**
+ * BASE and overtime settlement state are exposed
+ * independently.
+ *
+ * Ordinary claim/dispute workflows belong to
+ * BASE-side authority.
+ *
+ * The overtime workflow remains separate.
+ */
 function buildOccurrenceResponse(occurrence) {
   if (!occurrence) {
     return null;
   }
 
   return {
-    id: toId(occurrence._id),
+    id: getEntityId(occurrence._id),
 
     referenceCode: occurrence.referenceCode,
 
@@ -367,17 +417,15 @@ function buildOccurrenceResponse(occurrence) {
 
     attendanceStatus: occurrence.attendanceStatus,
 
-    settlementStatus: occurrence.settlementStatus,
-
     baseSettlementStatus: occurrence.baseSettlement?.status || "not_due",
 
     overtimeSettlementStatus: occurrence.overtimeSettlement?.status || "not_due",
 
-    refundStatus: occurrence.refundStatus,
+    refundStatus: occurrence.refundStatus || null,
 
-    activeClaimId: toId(occurrence.activeClaim),
+    activeClaimId: getEntityId(occurrence.activeClaim),
 
-    activeDisputeId: toId(occurrence.activeDispute),
+    activeDisputeId: getEntityId(occurrence.activeDispute),
   };
 }
 
@@ -407,6 +455,7 @@ exports.getCases = async (req, res, next) => {
           label: "Home",
           url: "/professional/dashboard",
         },
+
         {
           label: "Cases",
           url: null,
@@ -428,6 +477,24 @@ exports.getCases = async (req, res, next) => {
 
 /* ─────────────────────────────── RESPOND TO EMPLOYER DISPUTE ─────────────────────────────── */
 
+/**
+ * Professional submits the one permitted response
+ * to one issue in an employer occurrence dispute.
+ *
+ * The professional may provide:
+ *
+ * - a response statement;
+ * - a counter-position;
+ * - evidence.
+ *
+ * After response submission, the issue proceeds
+ * toward admin review.
+ *
+ * There is no later rebuttal or appeal stage.
+ *
+ * Eligibility, response-window enforcement and
+ * transition to admin review remain service-owned.
+ */
 exports.respondToDispute = async (req, res) => {
   try {
     const result = await ShiftOccurrenceDisputeService.submitProfessionalResponse({
@@ -437,7 +504,7 @@ exports.respondToDispute = async (req, res) => {
 
       professionalId: getProfessionalProfileId(req),
 
-      submittedByUserId: req.user._id,
+      submittedByUserId: getProfessionalUserId(req),
 
       statement: req.body.statement,
 
@@ -447,6 +514,12 @@ exports.respondToDispute = async (req, res) => {
 
       currentTime: new Date(),
     });
+
+    const remainingProfessionalResponseIssueIds = Array.isArray(
+      result?.remainingProfessionalResponseIssueIds
+    )
+      ? result.remainingProfessionalResponseIssueIds.map(getEntityId).filter(Boolean)
+      : getRemainingProfessionalResponseIssueIds(result?.dispute);
 
     setNoStoreHeaders(res);
 
@@ -464,11 +537,7 @@ exports.respondToDispute = async (req, res) => {
 
       finalAdminReviewRequired: result?.finalAdminReviewRequired === true,
 
-      remainingProfessionalResponseIssueIds: Array.isArray(
-        result?.remainingProfessionalResponseIssueIds
-      )
-        ? [...result.remainingProfessionalResponseIssueIds]
-        : getRemainingProfessionalResponseIssueIds(result?.dispute),
+      remainingProfessionalResponseIssueIds,
 
       dispute: buildDisputeResponse(result?.dispute),
 
@@ -494,8 +563,18 @@ exports.respondToDispute = async (req, res) => {
 /* ─────────────────────────────── SUBMIT CLAIM ─────────────────────────────── */
 
 /**
- * One occurrence claim case may contain multiple ordinary financial/factual
- * issues. Validation and settlement scope remain service-owned.
+ * Professional submits one original occurrence
+ * claim case.
+ *
+ * One case may contain multiple ordinary
+ * financial/factual BASE-side issues.
+ *
+ * The professional's original submission becomes
+ * immutable once accepted.
+ *
+ * Issue validation, duplicate controversy checks,
+ * challenge-window eligibility and settlement
+ * scope remain service-owned.
  */
 exports.submitClaim = async (req, res) => {
   try {
@@ -508,7 +587,7 @@ exports.submitClaim = async (req, res) => {
 
       professionalId: professionalProfileId,
 
-      submittedByUserId: req.user._id,
+      submittedByUserId: getProfessionalUserId(req),
 
       issues: req.body.issues,
 
@@ -570,19 +649,27 @@ exports.submitClaim = async (req, res) => {
 /* ─────────────────────────────── WITHDRAW CLAIM ─────────────────────────────── */
 
 /**
- * Withdrawal applies to the whole claim case and consumes the original claim
- * right. Restoration/finalization consequences remain service-owned.
+ * Withdrawal applies to the entire professional
+ * claim case.
+ *
+ * Withdrawal consumes the original claim right.
+ *
+ * A professional may not use withdrawal as a
+ * mechanism to replace or revise an immutable
+ * original submission.
+ *
+ * Eligibility, timing, restoration/finalization
+ * consequences and lifecycle transitions remain
+ * service-owned.
  */
 exports.withdrawClaim = async (req, res) => {
   try {
-    const professionalProfileId = getProfessionalProfileId(req);
-
     const result = await ShiftOccurrenceClaimService.withdrawClaim({
       claimId: req.params.claimId,
 
-      professionalId: professionalProfileId,
+      professionalId: getProfessionalProfileId(req),
 
-      withdrawnByUserId: req.user._id,
+      withdrawnByUserId: getProfessionalUserId(req),
 
       reason: req.body.reason,
 

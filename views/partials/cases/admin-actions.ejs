@@ -1,158 +1,316 @@
 <!-- views/partials/cases/admin-actions.ejs -->
 
-<%# ─────────────────────────────── ADMIN ADJUDICATION ─────────────────────────────── %>
+<!-- Admin adjudication -->
 
-<% if (issue.actions.adjudicate?.available) { %>
+<% if (issue.actions.adjudicate?.available && issue.adjudication?.available) { %>
+  <% const adjudicationAction = issue.actions.adjudicate; %>
+  <% const adjudication = issue.adjudication; %>
 
   <form
-    action="<%= issue.actions.adjudicate.url %>"
+    action="<%= adjudicationAction.url %>"
     method="post"
     data-case-action-form
+    data-admin-adjudication
     class="border-top pt-4"
   >
-
     <input
       type="hidden"
       name="_csrf"
       value="<%= csrfToken %>"
     />
 
+    <!-- Decision and reason -->
 
-    <%# ─────────────────────────────── DECISION / REASON ─────────────────────────────── %>
-
-    <div class="row g-3">
-
+    <div class="row g-3 mb-4">
       <div class="col-md-4">
-
-        <label class="form-label fw-bold">
+        <label
+          class="form-label fw-bold"
+          for="admin-decision-<%= issue.id %>"
+        >
           Decision
         </label>
 
         <select
+          id="admin-decision-<%= issue.id %>"
           class="form-select"
           name="decision"
           data-admin-decision
+          data-admin-outcome-decisions="<%= adjudication.adminOutcomeRequiredForDecisions.join(",") %>"
           required
         >
-
           <option value="">
             Choose a decision
           </option>
 
-          <% issue.adjudication.decisions.forEach((decision) => { %>
-
+          <% adjudication.decisions.forEach((decision) => { %>
             <option value="<%= decision.value %>">
               <%= decision.label %>
             </option>
-
           <% }); %>
-
         </select>
-
       </div>
 
-
       <div class="col-md-8">
-
-        <label class="form-label fw-bold">
+        <label
+          class="form-label fw-bold"
+          for="admin-reason-<%= issue.id %>"
+        >
           Decision reason
         </label>
 
         <textarea
+          id="admin-reason-<%= issue.id %>"
           class="form-control"
           name="reason"
-          rows="2"
+          rows="3"
           minlength="10"
           maxlength="1500"
           required
         ></textarea>
 
+        <div class="form-text">
+          Record the reasoning supporting this final decision.
+        </div>
       </div>
-
     </div>
 
+    <!-- Final authoritative outcome -->
 
-    <%# ─────────────────────────────── ADJUSTED OUTCOME ─────────────────────────────── %>
-
-    <%# Backend defines which adjusted fields belong to this issue.
-        cases.js reveals and enables this block only when "adjusted" is selected. %>
-
-    <% if (issue.adjudication.adjustedOutcome?.fields?.length) { %>
-
+    <% if (adjudication.adminOutcome?.fields?.length) { %>
       <div
-        class="bg-light rounded p-4 mt-3 d-none"
-        data-adjusted-outcome
+        class="bg-light rounded p-4 mb-4 d-none"
+        data-admin-outcome
       >
-
-        <div class="fw-bold text-gray-800 mb-3">
-          Adjusted outcome
+        <div class="fw-bold text-gray-800 mb-1">
+          Final authoritative outcome
         </div>
 
+        <div class="text-gray-500 fs-7 mb-3">
+          Record the final authoritative fact or BASE-pay value established by this decision.
+        </div>
 
         <div class="row g-3">
-
-          <% issue.adjudication.adjustedOutcome.fields.forEach((field) => { %>
-
-            <div class="<%= field.columnClass %>">
-
-              <label class="form-label">
+          <% adjudication.adminOutcome.fields.forEach((field) => { %>
+            <div class="<%= field.columnClass || "col-12" %>">
+              <label
+                class="form-label"
+                for="admin-outcome-<%= issue.id %>-<%= field.name %>"
+              >
                 <%= field.label %>
               </label>
 
-
               <% if (field.control === "textarea") { %>
-
                 <textarea
+                  id="admin-outcome-<%= issue.id %>-<%= field.name %>"
                   class="form-control"
                   name="<%= field.inputName %>"
-                  rows="<%= field.rows %>"
-                  maxlength="<%= field.maxLength %>"
+                  rows="<%= field.rows || 3 %>"
+                  <% if (field.maxLength !== undefined) { %>
+                    maxlength="<%= field.maxLength %>"
+                  <% } %>
+                  data-admin-outcome-input
                   disabled
                 ></textarea>
-
               <% } else { %>
-
                 <input
+                  id="admin-outcome-<%= issue.id %>-<%= field.name %>"
                   class="form-control"
                   type="<%= field.control %>"
                   name="<%= field.inputName %>"
                   <% if (field.min !== undefined) { %>
                     min="<%= field.min %>"
                   <% } %>
+                  <% if (field.max !== undefined) { %>
+                    max="<%= field.max %>"
+                  <% } %>
                   <% if (field.step !== undefined) { %>
                     step="<%= field.step %>"
                   <% } %>
+                  data-admin-outcome-input
                   disabled
                 />
-
               <% } %>
-
             </div>
-
           <% }); %>
-
         </div>
-
       </div>
-
     <% } %>
 
+    <!-- Admin evidence -->
 
-    <%# ─────────────────────────────── SUBMIT ─────────────────────────────── %>
+    <% if (adjudication.evidence?.allowed) { %>
+      <% const evidenceConfig = adjudication.evidence; %>
 
-    <button
-      type="submit"
-      class="btn btn-sm btn-danger mt-3"
-    >
-      <%= issue.actions.adjudicate.submitLabel %>
-    </button>
+      <div
+        class="mb-4"
+        data-case-evidence
+        data-evidence-max-items="<%= evidenceConfig.maxItems %>"
+      >
+        <div
+          class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3"
+        >
+          <div>
+            <div class="fw-bold text-gray-700">
+              Admin evidence
+            </div>
 
+            <div class="text-gray-500 fs-7">
+              Add any evidence relied upon for the final adjudication.
+              Up to <%= evidenceConfig.maxItems %>
+              item<%= evidenceConfig.maxItems === 1 ? "" : "s" %>.
+            </div>
+          </div>
+
+          <button
+            type="button"
+            class="btn btn-sm btn-light-primary"
+            data-add-evidence
+          >
+            Add evidence
+          </button>
+        </div>
+
+        <!-- Evidence rows are inserted by cases.js -->
+
+        <div
+          class="d-flex flex-column gap-3"
+          data-evidence-list
+        ></div>
+
+        <!-- Evidence row template -->
+
+        <template data-evidence-template>
+          <div
+            class="border border-gray-300 rounded p-4"
+            data-evidence-row
+          >
+            <div
+              class="d-flex align-items-center justify-content-between gap-3 mb-3"
+            >
+              <div class="fw-bold text-gray-700">
+                Evidence item
+                <span data-evidence-number></span>
+              </div>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-light-danger"
+                data-remove-evidence
+              >
+                Remove
+              </button>
+            </div>
+
+            <div class="row g-3">
+              <!-- Evidence type -->
+
+              <div class="col-md-4">
+                <label class="form-label">
+                  Evidence type
+                </label>
+
+                <select
+                  class="form-select"
+                  name="evidence[__INDEX__][type]"
+                  data-evidence-type
+                  required
+                >
+                  <option value="">
+                    Select evidence type
+                  </option>
+
+                  <% evidenceConfig.typeOptions.forEach((option) => { %>
+                    <option value="<%= option.value %>">
+                      <%= option.label %>
+                    </option>
+                  <% }); %>
+                </select>
+              </div>
+
+              <!-- Evidence reference -->
+
+              <div class="col-md-8">
+                <label class="form-label">
+                  Reference
+                </label>
+
+                <input
+                  type="text"
+                  class="form-control"
+                  name="evidence[__INDEX__][reference]"
+                  maxlength="<%= evidenceConfig.referenceMaxLength %>"
+                  placeholder="URL, file reference, system reference, or other evidence reference"
+                  data-evidence-reference
+                  required
+                />
+
+                <div class="form-text">
+                  A reference is required for each evidence item.
+                </div>
+              </div>
+
+              <!-- Evidence description -->
+
+              <div class="col-12">
+                <label class="form-label">
+                  Description
+                </label>
+
+                <textarea
+                  class="form-control"
+                  name="evidence[__INDEX__][description]"
+                  rows="2"
+                  maxlength="<%= evidenceConfig.descriptionMaxLength %>"
+                  placeholder="Optional description of this evidence"
+                  data-evidence-description
+                ></textarea>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- Evidence limit message -->
+
+        <div
+          class="text-gray-500 fs-7 mt-2 d-none"
+          data-evidence-limit-message
+        >
+          You have reached the maximum of
+          <%= evidenceConfig.maxItems %>
+          evidence item<%= evidenceConfig.maxItems === 1 ? "" : "s" %>.
+        </div>
+      </div>
+    <% } %>
+
+    <!-- Finality notice -->
+
+    <div class="alert alert-warning mb-4">
+      <div class="fw-semibold text-gray-800 mb-1">
+        Final adjudication
+      </div>
+
+      <div class="text-gray-700 fs-7">
+        This decision resolves the issue finally. There is no appeal,
+        rebuttal, or further party-response stage after admin adjudication.
+      </div>
+    </div>
+
+    <!-- Submit action -->
+
+    <div class="d-flex flex-wrap align-items-center gap-3">
+      <button
+        type="submit"
+        class="btn btn-sm btn-danger"
+      >
+        <%= adjudicationAction.submitLabel %>
+      </button>
+    </div>
+
+    <!-- Action result message -->
 
     <div
       class="mt-3 d-none"
       data-case-action-message
     ></div>
-
   </form>
-
 <% } %>

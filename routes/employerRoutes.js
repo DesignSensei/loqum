@@ -34,7 +34,7 @@ const employerShiftAttendanceController = require("../controllers/employerShiftA
 const employerShiftClaimController = require("../controllers/employerShiftClaimController");
 const employerShiftOvertimeController = require("../controllers/employerShiftOvertimeController");
 
-/* ─────────────────────────────── ROUTE PROTECTION ─────────────────────────────── */
+/* ───────────────────── ROUTE PROTECTION ───────────────────── */
 
 router.use(
   isAuthenticated,
@@ -46,13 +46,16 @@ router.use(
   attachEmployerContext
 );
 
-/* ─────────────────────────────── DASHBOARD ─────────────────────────────── */
+/* ───────────────────── DASHBOARD ───────────────────── */
 
 router.get("/dashboard", employerController.getDashboard);
 
+/* ───────────────────── CASES ───────────────────── */
+
+// Read access is scoped by employer context; mutation authority remains service-owned.
 router.get("/cases", employerShiftClaimController.getCases);
 
-/* ─────────────────────────────── BUSINESS PROFILE ─────────────────────────────── */
+/* ───────────────────── BUSINESS PROFILE ───────────────────── */
 
 router.get("/business-profile", employerController.getBusinessProfile);
 
@@ -61,7 +64,7 @@ router.post(
   employerController.postUpdateBusinessDetails
 );
 
-/* ─────────────────────────────── BRANCHES ─────────────────────────────── */
+/* ───────────────────── BRANCHES ───────────────────── */
 
 router.get("/branches", branchController.getBranches);
 
@@ -79,7 +82,7 @@ router.post("/branches/:branchId/update", branchController.postEditBranch);
 
 router.post("/business-profile/branches/update", branchController.postEditBranch);
 
-/* ─────────────────────────────── TEAM MEMBERS ─────────────────────────────── */
+/* ───────────────────── TEAM MEMBERS ───────────────────── */
 
 router.get("/business-profile/team-members/:memberId", teamMemberController.getTeamMember);
 
@@ -93,7 +96,7 @@ router.post(
   teamMemberController.postRemoveTeamMember
 );
 
-/* ─────────────────────────────── INVITES ─────────────────────────────── */
+/* ───────────────────── INVITES ───────────────────── */
 
 router.get("/invites", inviteController.getInvites);
 
@@ -111,13 +114,11 @@ router.post("/business-profile/invites/:inviteId/revoke", inviteController.postR
 
 router.post("/business-profile/invites/revoke", inviteController.postRevokeInvite);
 
-/* ─────────────────────────────── SHIFT PAGES ─────────────────────────────── */
+/* ───────────────────── SHIFT PAGES ───────────────────── */
 
 router.get("/shifts", employerShiftController.getManageShifts);
 
-/*
- * Keep literal Shift sub-pages before parameterized /shifts/:shiftId routes.
- */
+// Keep literal sub-pages before parameterized /shifts/:shiftId routes.
 router.get("/shifts/applications", employerShiftApplicationController.getApplications);
 
 router.get("/shifts/assignments", employerShiftAssignmentController.getAssignments);
@@ -126,16 +127,12 @@ router.get("/shifts/attendance", employerShiftAttendanceController.getAttendance
 
 router.get("/shifts/:shiftId/occurrences", employerShiftController.getShiftOccurrences);
 
-/*
- * Existing-Shift resolution remains available during delinquency.
- */
+// Existing-Shift resolution remains available during delinquency.
 router.get("/shifts/:shiftId/cancellation-preview", employerShiftController.getCancellationPreview);
 
-/* ─────────────────────────────── SHIFT APPLICATIONS ─────────────────────────────── */
+/* ───────────────────── SHIFT APPLICATIONS ───────────────────── */
 
-/*
- * Shortlist/reject only change application state.
- */
+// Shortlisting and rejection only change application state.
 router.post(
   "/shifts/applications/:applicationId/shortlist",
   employerShiftApplicationController.shortlistApplication
@@ -146,25 +143,24 @@ router.post(
   employerShiftApplicationController.rejectApplication
 );
 
-/*
+/**
  * Acceptance creates an assignment.
  *
- * Application authority differs from posting authority. The application
- * service owns the fresh delinquency check before creating the obligation.
+ * The application service owns the fresh delinquency check before
+ * creating the new obligation.
  */
 router.post(
   "/shifts/applications/:applicationId/accept",
   employerShiftApplicationController.acceptApplication
 );
 
-/* ─────────────────────────────── SHIFT ASSIGNMENTS ─────────────────────────────── */
+/* ───────────────────── SHIFT ASSIGNMENTS ───────────────────── */
 
-/*
- * Assignment cases manage early exits and employer-reported assignment issues.
+/**
+ * Assignment-case actions resolve existing assignment responsibility.
  *
- * These actions resolve existing assignment responsibility and do not create
- * new funded Shift capacity. ShiftAssignmentCaseService remains authoritative
- * for employer/business/branch authorization and lifecycle validity.
+ * ShiftAssignmentCaseService owns business/branch authorization
+ * and lifecycle validity.
  */
 router.post(
   "/shifts/assignments/:assignmentId/issues",
@@ -181,7 +177,7 @@ router.post(
   employerShiftAssignmentController.escalateAssignmentCase
 );
 
-/* ─────────────────────────────── ATTENDANCE PINS ─────────────────────────────── */
+/* ───────────────────── ATTENDANCE PINS ───────────────────── */
 
 router.get(
   "/shifts/:shiftId/occurrences/:occurrenceId/check-in-pin",
@@ -193,20 +189,16 @@ router.get(
   employerShiftAttendanceController.getCheckOutPin
 );
 
-/* ─────────────────────────────── SHIFT OVERTIME ─────────────────────────────── */
+/* ───────────────────── SHIFT OVERTIME ───────────────────── */
 
-/*
+/**
  * Employer reviews the professional's submitted OT request.
  *
- * These actions resolve an existing occurrence obligation.
- * Employer delinquency must therefore NOT block either decision.
+ * These decisions resolve an existing obligation, so employer
+ * delinquency must not block them.
  *
- * ShiftOvertimeService remains authoritative for:
- *
- * - employer/business/branch authorization;
- * - OT response deadline;
- * - approval/rejection validity; and
- * - final OT financial consequences.
+ * ShiftOvertimeService owns authorization, deadline validity,
+ * decision validity and financial consequences.
  */
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/overtime/approve",
@@ -218,13 +210,11 @@ router.post(
   employerShiftOvertimeController.rejectOvertime
 );
 
-/*
- * Approved OT creates an occurrence-specific employer top-up obligation.
+/**
+ * Approved OT creates an occurrence-specific top-up obligation.
  *
- * Paying that obligation resolves existing employer debt and must remain
- * available even when delinquency prevents creation of new obligations.
- *
- * Do NOT apply canPostShifts to either top-up route.
+ * Paying existing employer debt must remain available during
+ * delinquency. Do not apply canPostShifts to these routes.
  */
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/overtime/top-up/wallet",
@@ -236,60 +226,57 @@ router.post(
   employerShiftOvertimeController.initializeOvertimeTopUpCheckout
 );
 
-/* ─────────────────────────────── SHIFT DISPUTES ─────────────────────────────── */
+/* ───────────────────── EMPLOYER DISPUTES ───────────────────── */
 
-/*
- * Employer disputes challenge an existing occurrence outcome.
+/**
+ * Employer's one substantive dispute submission.
  *
- * They do not create a new Shift obligation, so delinquency must not
- * prevent submission. The dispute service owns issue scope, overlap
- * checks, challenge-window authority and financial consequences.
+ * Disputes challenge an existing occurrence outcome and do not create
+ * a new Shift obligation, so delinquency must not block submission.
+ *
+ * The dispute service owns authorization, scope, overlap,
+ * challenge-window validity and financial consequences.
  */
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/disputes",
   employerShiftClaimController.submitDispute
 );
 
+// Withdrawal is allowed only while the dispute remains withdrawable.
 router.post("/shifts/disputes/:disputeId/withdraw", employerShiftClaimController.withdrawDispute);
 
-/* ─────────────────────────────── SHIFT CLAIMS ─────────────────────────────── */
+/* ───────────────────── PROFESSIONAL CLAIM REVIEW ───────────────────── */
 
-/*
- * Employer reviews one issue within an active professional claim.
+/**
+ * Employer's one substantive response to a professional claim issue.
  *
- * Claim review resolves an existing controversy and remains available
- * during delinquency.
+ * The employer may approve or reject. Rejection may include a
+ * counter-position and evidence, then proceeds to admin review.
+ *
+ * There is no second response, rebuttal or appeal.
  */
 router.post(
   "/shifts/claims/:claimId/issues/:issueId/review",
   employerShiftClaimController.reviewClaim
 );
 
-/* ─────────────────────────────── SHIFT DETAILS ─────────────────────────────── */
+/* ───────────────────── SHIFT DETAILS ───────────────────── */
 
-/*
- * Keep this after more-specific /shifts/... GET routes.
- */
+// Keep after more-specific /shifts/... GET routes.
 router.get("/shifts/:shiftId", employerShiftController.getShiftDetails);
 
-/* ─────────────────────────────── SHIFT CREATION ─────────────────────────────── */
+/* ───────────────────── SHIFT CREATION ───────────────────── */
 
-/*
- * Shift creation introduces a new employer obligation.
- */
+// Shift creation introduces a new employer obligation.
 router.post("/shifts", canPostShifts, employerShiftController.postShift);
 
-/* ─────────────────────────────── INITIAL SHIFT FUNDING ─────────────────────────────── */
+/* ───────────────────── INITIAL SHIFT FUNDING ───────────────────── */
 
-/*
- * Initial funding publishes a pending Shift and therefore creates/activates
- * the new employer obligation.
+/**
+ * Initial funding activates a new employer obligation.
  *
- * New-obligation restrictions apply here.
- *
- * canFundShifts is separate from general wallet-management authority:
- * branch managers may fund Shifts within their assigned branches without
- * gaining withdrawal or wallet-administration permission.
+ * New-obligation restrictions apply. canFundShifts remains separate
+ * from general wallet-management authority.
  */
 router.post(
   "/shifts/:shiftId/fund-from-wallet",
@@ -305,14 +292,12 @@ router.post(
   employerShiftController.initializeShiftCheckout
 );
 
-/* ─────────────────────────────── SHIFT LIFECYCLE ─────────────────────────────── */
+/* ───────────────────── SHIFT LIFECYCLE ───────────────────── */
 
-/*
- * Cancellation reduces or closes an existing obligation.
- */
+// Cancellation reduces or closes an existing obligation.
 router.post("/shifts/:shiftId/cancel", employerShiftController.postCancelShift);
 
-/*
+/**
  * Active-work cancellation resolves work already in progress.
  *
  * This is the authoritative route used by ShiftViewService.
@@ -322,14 +307,13 @@ router.post(
   employerShiftController.postActiveWorkCancellation
 );
 
-/* ─────────────────────────────── BILLING / WALLET ─────────────────────────────── */
+/* ───────────────────── BILLING / WALLET ───────────────────── */
 
-/*
+/**
  * Wallet visibility is broader than wallet-management authority.
  *
- * Branch managers may inspect the business wallet, including available
- * balance and transaction information, but may not withdraw funds or
- * modify wallet/account configuration.
+ * Branch managers may inspect wallet information but may not
+ * withdraw funds or modify wallet/account configuration.
  */
 router.get("/billing", canViewWallet, employerBillingController.getBilling);
 
@@ -337,12 +321,11 @@ router.get("/billing/wallet", canViewWallet, (req, res) => {
   return res.redirect("/employer/billing");
 });
 
-/*
- * Employer delinquency does not freeze ordinary wallet/account management.
+/**
+ * Delinquency does not freeze ordinary wallet/account management.
  *
- * These actions remain limited to users with wallet-management authority.
- * A branch manager's ability to fund an authorized Shift does not grant
- * permission to administer the employer wallet.
+ * These actions remain limited to users with wallet-management
+ * authority.
  */
 router.post("/billing/setup-dva", canManageWallet, employerBillingController.postSetupDVA);
 

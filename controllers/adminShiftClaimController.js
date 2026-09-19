@@ -46,9 +46,7 @@ function handleJsonError({ res, error, logContext, fallbackMessage, fallbackCode
 
   const response = {
     success: false,
-
     message: operationalError ? error.message : fallbackMessage,
-
     code: operationalError ? error.code || fallbackCode : fallbackCode,
   };
 
@@ -68,15 +66,42 @@ function getAdminUserId(req) {
     const error = new Error("Administrator user context is unavailable.");
 
     error.name = "AdminShiftClaimControllerError";
-
     error.code = "ADMIN_USER_CONTEXT_REQUIRED";
-
     error.statusCode = 500;
 
     throw error;
   }
 
   return adminUserId;
+}
+
+function getEntityId(value) {
+  if (!value) {
+    return null;
+  }
+
+  return value._id ? String(value._id) : String(value);
+}
+
+/* ─────────────────────────────── EVIDENCE RESPONSE ─────────────────────────────── */
+
+/**
+ * Exposes only the evidence fields intentionally supported by
+ * the Cases workflow rather than returning raw Mongoose subdocuments.
+ */
+function buildEvidenceResponse(items = []) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.map((item) => ({
+    type: item?.type || null,
+    reference: item?.reference || null,
+    description: item?.description || null,
+    submittedByRole: item?.submittedByRole || null,
+    submittedByUserId: getEntityId(item?.submittedByUser),
+    recordedAt: item?.recordedAt || null,
+  }));
 }
 
 /* ─────────────────────────────── CLAIM RESPONSES ─────────────────────────────── */
@@ -96,44 +121,34 @@ function buildClaimIssueResponse(issue) {
       : [],
 
     details: issue.details || null,
-
     statement: issue.statement || null,
 
-    evidence: Array.isArray(issue.evidence) ? [...issue.evidence] : [],
+    evidence: buildEvidenceResponse(issue.evidence),
 
     status: issue.status,
 
     employerDecision: issue.employerDecision || null,
-
     employerDecisionReason: issue.employerDecisionReason || null,
-
     employerDecidedAt: issue.employerDecidedAt || null,
-
-    employerDecidedBy: issue.employerDecidedBy ? String(issue.employerDecidedBy) : null,
+    employerDecidedBy: getEntityId(issue.employerDecidedBy),
 
     employerCounterPosition: issue.employerCounterPosition || null,
 
-    employerEvidence: Array.isArray(issue.employerEvidence) ? [...issue.employerEvidence] : [],
+    employerEvidence: buildEvidenceResponse(issue.employerEvidence),
 
     escalatedAt: issue.escalatedAt || null,
-
     escalationReason: issue.escalationReason || null,
-
-    escalatedBy: issue.escalatedBy ? String(issue.escalatedBy) : null,
-
+    escalatedBy: getEntityId(issue.escalatedBy),
     escalationNotes: issue.escalationNotes || null,
 
     adminDecision: issue.adminDecision || null,
-
     adminDecisionReason: issue.adminDecisionReason || null,
-
     adminDecidedAt: issue.adminDecidedAt || null,
-
-    adminDecidedBy: issue.adminDecidedBy ? String(issue.adminDecidedBy) : null,
+    adminDecidedBy: getEntityId(issue.adminDecidedBy),
 
     adminOutcome: issue.adminOutcome || null,
 
-    adminEvidence: Array.isArray(issue.adminEvidence) ? [...issue.adminEvidence] : [],
+    adminEvidence: buildEvidenceResponse(issue.adminEvidence),
 
     resolvedAt: issue.resolvedAt || null,
   };
@@ -149,19 +164,14 @@ function buildClaimResponse(claim) {
 
     referenceCode: claim.referenceCode,
 
-    shiftId: claim.shift ? String(claim.shift) : null,
+    shiftId: getEntityId(claim.shift),
+    occurrenceId: getEntityId(claim.occurrence),
+    assignmentId: getEntityId(claim.assignment),
+    professionalId: getEntityId(claim.professional),
+    businessId: getEntityId(claim.business),
+    branchId: getEntityId(claim.branch),
 
-    occurrenceId: claim.occurrence ? String(claim.occurrence) : null,
-
-    assignmentId: claim.assignment ? String(claim.assignment) : null,
-
-    professionalId: claim.professional ? String(claim.professional) : null,
-
-    businessId: claim.business ? String(claim.business) : null,
-
-    branchId: claim.branch ? String(claim.branch) : null,
-
-    submittedByUserId: claim.submittedByUser ? String(claim.submittedByUser) : null,
+    submittedByUserId: getEntityId(claim.submittedByUser),
 
     submittedIssueTypes: Array.isArray(claim.submittedIssueTypes)
       ? [...claim.submittedIssueTypes]
@@ -181,13 +191,13 @@ function buildClaimResponse(claim) {
 
     employerResponseDeadlineAt: claim.employerResponseDeadlineAt || null,
 
-    employerRefundId: claim.employerRefund ? String(claim.employerRefund) : null,
+    employerRefundId: getEntityId(claim.employerRefund),
 
     resolvedAt: claim.resolvedAt || null,
 
     withdrawnAt: claim.withdrawnAt || null,
 
-    withdrawnBy: claim.withdrawnBy ? String(claim.withdrawnBy) : null,
+    withdrawnBy: getEntityId(claim.withdrawnBy),
 
     withdrawalReason: claim.withdrawalReason || null,
   };
@@ -209,6 +219,8 @@ function getClaimChallengedSettlementComponents(claim) {
   ];
 }
 
+/* ─────────────────────────────── DISPUTE RESPONSES ─────────────────────────────── */
+
 function getDisputeAffectedSettlementComponents(dispute) {
   if (!dispute || !Array.isArray(dispute.issues)) {
     return [];
@@ -222,8 +234,6 @@ function getDisputeAffectedSettlementComponents(dispute) {
     ),
   ];
 }
-
-/* ─────────────────────────────── DISPUTE RESPONSES ─────────────────────────────── */
 
 function buildDisputeIssueResponse(issue) {
   if (!issue) {
@@ -240,10 +250,9 @@ function buildDisputeIssueResponse(issue) {
       : [],
 
     details: issue.details || null,
-
     statement: issue.statement || null,
 
-    evidence: Array.isArray(issue.evidence) ? [...issue.evidence] : [],
+    evidence: buildEvidenceResponse(issue.evidence),
 
     status: issue.status,
 
@@ -251,31 +260,26 @@ function buildDisputeIssueResponse(issue) {
 
     professionalCounterPosition: issue.professionalCounterPosition || null,
 
-    professionalResponseEvidence: Array.isArray(issue.professionalResponseEvidence)
-      ? [...issue.professionalResponseEvidence]
-      : [],
+    professionalResponseEvidence: buildEvidenceResponse(issue.professionalResponseEvidence),
 
     professionalRespondedAt: issue.professionalRespondedAt || null,
 
-    professionalRespondedBy: issue.professionalRespondedBy
-      ? String(issue.professionalRespondedBy)
-      : null,
+    professionalRespondedBy: getEntityId(issue.professionalRespondedBy),
 
     professionalResponseExpiredAt: issue.professionalResponseExpiredAt || null,
 
     adminReviewStartedAt: issue.adminReviewStartedAt || null,
 
     adminDecision: issue.adminDecision || null,
-
     adminDecisionReason: issue.adminDecisionReason || null,
 
     adminDecidedAt: issue.adminDecidedAt || null,
 
-    adminDecidedBy: issue.adminDecidedBy ? String(issue.adminDecidedBy) : null,
+    adminDecidedBy: getEntityId(issue.adminDecidedBy),
 
     adminOutcome: issue.adminOutcome || null,
 
-    adminEvidence: Array.isArray(issue.adminEvidence) ? [...issue.adminEvidence] : [],
+    adminEvidence: buildEvidenceResponse(issue.adminEvidence),
 
     resolvedAt: issue.resolvedAt || null,
   };
@@ -291,19 +295,14 @@ function buildDisputeResponse(dispute) {
 
     referenceCode: dispute.referenceCode,
 
-    shiftId: dispute.shift ? String(dispute.shift) : null,
+    shiftId: getEntityId(dispute.shift),
+    occurrenceId: getEntityId(dispute.occurrence),
+    assignmentId: getEntityId(dispute.assignment),
+    professionalId: getEntityId(dispute.professional),
+    businessId: getEntityId(dispute.business),
+    branchId: getEntityId(dispute.branch),
 
-    occurrenceId: dispute.occurrence ? String(dispute.occurrence) : null,
-
-    assignmentId: dispute.assignment ? String(dispute.assignment) : null,
-
-    professionalId: dispute.professional ? String(dispute.professional) : null,
-
-    businessId: dispute.business ? String(dispute.business) : null,
-
-    branchId: dispute.branch ? String(dispute.branch) : null,
-
-    submittedByUserId: dispute.submittedByUser ? String(dispute.submittedByUser) : null,
+    submittedByUserId: getEntityId(dispute.submittedByUser),
 
     submittedIssueTypes: Array.isArray(dispute.submittedIssueTypes)
       ? [...dispute.submittedIssueTypes]
@@ -323,13 +322,13 @@ function buildDisputeResponse(dispute) {
 
     professionalResponseDeadlineAt: dispute.professionalResponseDeadlineAt || null,
 
-    employerRefundId: dispute.employerRefund ? String(dispute.employerRefund) : null,
+    employerRefundId: getEntityId(dispute.employerRefund),
 
     resolvedAt: dispute.resolvedAt || null,
 
     withdrawnAt: dispute.withdrawnAt || null,
 
-    withdrawnBy: dispute.withdrawnBy ? String(dispute.withdrawnBy) : null,
+    withdrawnBy: getEntityId(dispute.withdrawnBy),
 
     withdrawalReason: dispute.withdrawalReason || null,
   };
@@ -337,6 +336,13 @@ function buildDisputeResponse(dispute) {
 
 /* ─────────────────────────────── OCCURRENCE RESPONSE ─────────────────────────────── */
 
+/**
+ * BASE and overtime settlement state are intentionally exposed
+ * independently.
+ *
+ * Ordinary claim/dispute adjudication belongs to BASE-side authority.
+ * The overtime workflow remains independently represented.
+ */
 function buildOccurrenceResponse(occurrence) {
   if (!occurrence) {
     return null;
@@ -356,8 +362,6 @@ function buildOccurrenceResponse(occurrence) {
     status: occurrence.status,
 
     attendanceStatus: occurrence.attendanceStatus,
-
-    settlementStatus: occurrence.settlementStatus,
 
     checkedInAt: occurrence.checkedInAt || null,
 
@@ -383,15 +387,15 @@ function buildOccurrenceResponse(occurrence) {
 
     topUpRequired: Number(occurrence.topUpRequired || 0),
 
-    refundStatus: occurrence.refundStatus,
+    refundStatus: occurrence.refundStatus || null,
 
     refundableAmount: Number(occurrence.refundableAmount || 0),
 
     refundedAmount: Number(occurrence.refundedAmount || 0),
 
-    activeClaimId: occurrence.activeClaim ? String(occurrence.activeClaim) : null,
+    activeClaimId: getEntityId(occurrence.activeClaim),
 
-    activeDisputeId: occurrence.activeDispute ? String(occurrence.activeDispute) : null,
+    activeDisputeId: getEntityId(occurrence.activeDispute),
   };
 }
 
@@ -420,7 +424,7 @@ function buildRefundReevaluationResponse(refundResult) {
   return {
     expectedRefundAmount,
 
-    employerRefundId: employerRefund?._id ? String(employerRefund._id) : null,
+    employerRefundId: getEntityId(employerRefund),
 
     status: employerRefund?.status || null,
 
@@ -439,6 +443,69 @@ function buildRefundReevaluationResponse(refundResult) {
     revalidationRequired: refundResult.revalidationRequired === true,
 
     reconciliationRequired: refundResult.reconciliationRequired === true,
+  };
+}
+
+/* ─────────────────────────────── PREVIEW RESPONSE ─────────────────────────────── */
+
+/**
+ * ShiftOccurrenceResolutionService.buildResolutionPreview()
+ * currently exposes:
+ *
+ * current
+ * proposed
+ * impact
+ * refundRequiresReevaluation
+ * attendanceChanged
+ * basePlatformFeeUnchanged
+ * settlementImpact
+ *
+ * Keep the controller response explicit so service internals cannot
+ * accidentally become part of the public Cases frontend contract.
+ */
+function buildResolutionPreviewResponse(preview) {
+  if (!preview || typeof preview !== "object") {
+    return null;
+  }
+
+  const current = preview.current || {};
+  const proposed = preview.proposed || {};
+  const impact = preview.impact || {};
+  const settlementImpact = preview.settlementImpact || {};
+
+  return {
+    current: {
+      baseProfessionalPay: Number(current.baseProfessionalPay || 0),
+
+      basePlatformFee: Number(current.basePlatformFee || 0),
+    },
+
+    proposed: {
+      baseProfessionalPay: Number(proposed.baseProfessionalPay || 0),
+
+      basePlatformFee: Number(proposed.basePlatformFee || 0),
+    },
+
+    impact: {
+      professionalPayoutChange: Number(impact.professionalPayoutChange || 0),
+
+      employerRefundChange:
+        impact.employerRefundChange === undefined || impact.employerRefundChange === null
+          ? null
+          : Number(impact.employerRefundChange),
+
+      employerRefundRequiresReevaluation: impact.employerRefundRequiresReevaluation === true,
+    },
+
+    refundRequiresReevaluation: preview.refundRequiresReevaluation === true,
+
+    attendanceChanged: preview.attendanceChanged === true,
+
+    basePlatformFeeUnchanged: preview.basePlatformFeeUnchanged === true,
+
+    settlementImpact: {
+      requiresSettlementRecheck: settlementImpact.requiresSettlementRecheck === true,
+    },
   };
 }
 
@@ -490,13 +557,24 @@ exports.getCases = async (req, res, next) => {
 
     return res.render("admin/cases/index", {
       layout: "layouts/app-layout",
+
       title: casesView.pageTitle,
+
       breadcrumbs: [
-        { label: "Home", url: "/admin/dashboard" },
-        { label: casesView.pageTitle, url: null },
+        {
+          label: "Home",
+          url: "/admin/dashboard",
+        },
+        {
+          label: casesView.pageTitle,
+          url: null,
+        },
       ],
+
       csrfToken: req.csrfToken(),
+
       casesView,
+
       scripts: '<script src="/js/cases.js"></script>',
     });
   } catch (error) {
@@ -589,9 +667,13 @@ exports.resolveClaim = async (req, res) => {
 /**
  * Admin resolves one issue in an employer standalone dispute.
  *
- * Approval means the employer established that current Loqum authority
- * requires correction. adminOutcome records the final evidence-supported
- * authoritative fact/value. Rejection maintains current Loqum authority.
+ * Approval means the employer established that current Loqum
+ * authority requires correction.
+ *
+ * adminOutcome records the final evidence-supported
+ * authoritative fact/value.
+ *
+ * Rejection maintains current Loqum authority.
  */
 exports.resolveDispute = async (req, res) => {
   try {
@@ -663,6 +745,8 @@ exports.resolveDispute = async (req, res) => {
   }
 };
 
+/* ─────────────────────────────── PREVIEW CLAIM RESOLUTION ─────────────────────────────── */
+
 exports.previewClaimResolution = async (req, res) => {
   try {
     const result = await ShiftOccurrenceResolutionService.previewClaimIssueResolution({
@@ -684,7 +768,7 @@ exports.previewClaimResolution = async (req, res) => {
     return res.status(200).json({
       success: true,
 
-      preview: result,
+      preview: buildResolutionPreviewResponse(result),
     });
   } catch (error) {
     return handleJsonError({
@@ -700,6 +784,8 @@ exports.previewClaimResolution = async (req, res) => {
     });
   }
 };
+
+/* ─────────────────────────────── PREVIEW DISPUTE RESOLUTION ─────────────────────────────── */
 
 exports.previewDisputeResolution = async (req, res) => {
   try {
@@ -722,7 +808,7 @@ exports.previewDisputeResolution = async (req, res) => {
     return res.status(200).json({
       success: true,
 
-      preview: result,
+      preview: buildResolutionPreviewResponse(result),
     });
   } catch (error) {
     return handleJsonError({

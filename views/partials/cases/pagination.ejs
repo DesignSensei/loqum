@@ -1,22 +1,41 @@
 <!-- views/partials/cases/pagination.ejs -->
 
-<%# ─────────────────────────────── PAGINATION ─────────────────────────────── %> <% if
-(pagination.totalPages > 1) { %>
+<% if (pagination.totalPages > 1) { %>
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mt-6">
+  <!-- Pagination summary -->
 
-<div class="d-flex align-items-center justify-content-between mt-6">
-  <div class="text-gray-500 fs-7">Page <%= pagination.page %> of <%= pagination.totalPages %></div>
+  <div class="text-gray-500 fs-7">
+    Page
+    <strong class="text-gray-700"> <%= pagination.page %> </strong>
+    of
+    <strong class="text-gray-700"> <%= pagination.accessiblePages %> </strong>
 
-  <div class="d-flex gap-2">
-    <% if (pagination.previousUrl) { %>
-
-    <a class="btn btn-sm btn-light" href="<%= pagination.previousUrl %>"> Previous </a>
-
-    <% } %> <% if (pagination.nextUrl) { %>
-
-    <a class="btn btn-sm btn-light" href="<%= pagination.nextUrl %>"> Next </a>
-
+    <% if (pagination.totalItems !== undefined) { %>
+    <span class="ms-1">
+      · <%= pagination.totalItems %> case<%= pagination.totalItems === 1 ? "" : "s" %>
+    </span>
     <% } %>
   </div>
+
+  <!-- Pagination controls -->
+
+  <nav class="d-flex align-items-center gap-2" aria-label="Cases pagination">
+    <% if (pagination.hasPreviousPage && pagination.previousUrl) { %>
+    <a class="btn btn-sm btn-light" href="<%= pagination.previousUrl %>" rel="prev"> Previous </a>
+    <% } else { %>
+    <button type="button" class="btn btn-sm btn-light" disabled>Previous</button>
+    <% } %> <% if (pagination.hasNextPage && pagination.nextUrl) { %>
+    <a class="btn btn-sm btn-light" href="<%= pagination.nextUrl %>" rel="next"> Next </a>
+    <% } else { %>
+    <button type="button" class="btn btn-sm btn-light" disabled>Next</button>
+    <% } %>
+  </nav>
 </div>
 
-<% } %>
+<!-- Pagination limit notice -->
+
+<% if (pagination.capped) { %>
+<div class="text-gray-500 fs-8 mt-2">
+  Only the first <%= pagination.accessiblePages %> pages are available through this view.
+</div>
+<% } %> <% } %>

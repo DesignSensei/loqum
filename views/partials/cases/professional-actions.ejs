@@ -1,177 +1,282 @@
 <!-- views/partials/cases/professional-actions.ejs -->
 
-<%# ─────────────────────────────── PROFESSIONAL APPEAL ─────────────────────────────── %>
-
-<% if (issue.actions.appeal?.available) { %>
-
-  <form
-    action="<%= issue.actions.appeal.url %>"
-    method="post"
-    data-case-action-form
-    class="border-top pt-4"
-  >
-
-    <input
-      type="hidden"
-      name="_csrf"
-      value="<%= csrfToken %>"
-    />
-
-    <label class="form-label fw-bold">
-      <%= issue.actions.appeal.statementLabel %>
-    </label>
-
-    <textarea
-      class="form-control mb-3"
-      name="statement"
-      rows="3"
-      minlength="10"
-      maxlength="2000"
-      required
-    ></textarea>
-
-    <button
-      type="submit"
-      class="btn btn-sm btn-primary"
-    >
-      <%= issue.actions.appeal.submitLabel %>
-    </button>
-
-    <div
-      class="mt-3 d-none"
-      data-case-action-message
-    ></div>
-
-  </form>
-
-<% } %>
-
-
-<%# ─────────────────────────────── PROFESSIONAL REBUTTAL ─────────────────────────────── %>
-
-<% if (issue.actions.rebuttal?.available) { %>
-
-  <form
-    action="<%= issue.actions.rebuttal.url %>"
-    method="post"
-    data-case-action-form
-    class="border-top pt-4"
-  >
-
-    <input
-      type="hidden"
-      name="_csrf"
-      value="<%= csrfToken %>"
-    />
-
-    <label class="form-label fw-bold">
-      <%= issue.actions.rebuttal.statementLabel %>
-    </label>
-
-    <textarea
-      class="form-control mb-3"
-      name="statement"
-      rows="3"
-      minlength="10"
-      maxlength="2000"
-      required
-    ></textarea>
-
-    <button
-      type="submit"
-      class="btn btn-sm btn-primary"
-    >
-      <%= issue.actions.rebuttal.submitLabel %>
-    </button>
-
-    <div
-      class="mt-3 d-none"
-      data-case-action-message
-    ></div>
-
-  </form>
-
-<% } %>
-
-
-<%# ─────────────────────────────── PROFESSIONAL RESPONSE TO EMPLOYER DISPUTE ─────────────────────────────── %>
+<!-- Professional response to employer dispute -->
 
 <% if (issue.actions.respondToDispute?.available) { %>
+  <% const responseAction = issue.actions.respondToDispute; %>
 
   <form
-    action="<%= issue.actions.respondToDispute.url %>"
+    action="<%= responseAction.url %>"
     method="post"
     data-case-action-form
     class="border-top pt-4"
   >
-
     <input
       type="hidden"
       name="_csrf"
       value="<%= csrfToken %>"
     />
 
-    <label class="form-label fw-bold">
-      <%= issue.actions.respondToDispute.statementLabel %>
-    </label>
+    <!-- Response statement -->
 
-    <textarea
-      class="form-control mb-3"
-      name="statement"
-      rows="3"
-      minlength="10"
-      maxlength="2000"
-      required
-    ></textarea>
+    <div class="mb-4">
+      <label
+        class="form-label fw-bold"
+        for="professional-response-<%= issue.id %>"
+      >
+        <%= responseAction.statementLabel %>
+      </label>
 
+      <textarea
+        id="professional-response-<%= issue.id %>"
+        class="form-control"
+        name="statement"
+        rows="4"
+        minlength="10"
+        maxlength="2000"
+        required
+      ></textarea>
 
-    <%# Backend decides which counter-position fields belong to this dispute issue. %>
-
-    <% if (issue.actions.respondToDispute.counterPositionFields.length) { %>
-
-      <div class="row g-3 mb-3">
-
-        <% issue.actions.respondToDispute.counterPositionFields.forEach((field) => { %>
-
-          <div class="<%= field.columnClass %>">
-
-            <label class="form-label">
-              <%= field.label %>
-            </label>
-
-            <input
-              class="form-control"
-              type="<%= field.control %>"
-              name="<%= field.inputName %>"
-              <% if (field.min !== undefined) { %>
-                min="<%= field.min %>"
-              <% } %>
-              <% if (field.step !== undefined) { %>
-                step="<%= field.step %>"
-              <% } %>
-            />
-
-          </div>
-
-        <% }); %>
-
+      <div class="form-text">
+        Explain your response to the employer's dispute.
       </div>
+    </div>
 
+    <!-- Counter-position -->
+
+    <% if (responseAction.counterPositionFields?.length) { %>
+      <div class="mb-4">
+        <div class="fw-bold text-gray-700 mb-1">
+          Counter-position
+        </div>
+
+        <div class="text-gray-500 fs-7 mb-3">
+          Complete these fields only if you want to propose a different factual or BASE-pay position.
+        </div>
+
+        <div class="row g-3">
+          <% responseAction.counterPositionFields.forEach((field) => { %>
+            <div class="<%= field.columnClass || "col-12" %>">
+              <label
+                class="form-label"
+                for="professional-counter-<%= issue.id %>-<%= field.name %>"
+              >
+                <%= field.label %>
+              </label>
+
+              <% if (field.control === "textarea") { %>
+                <textarea
+                  id="professional-counter-<%= issue.id %>-<%= field.name %>"
+                  class="form-control"
+                  name="<%= field.inputName %>"
+                  rows="<%= field.rows || 3 %>"
+                  <% if (field.maxLength !== undefined) { %>
+                    maxlength="<%= field.maxLength %>"
+                  <% } %>
+                ></textarea>
+              <% } else { %>
+                <input
+                  id="professional-counter-<%= issue.id %>-<%= field.name %>"
+                  class="form-control"
+                  type="<%= field.control %>"
+                  name="<%= field.inputName %>"
+                  <% if (field.min !== undefined) { %>
+                    min="<%= field.min %>"
+                  <% } %>
+                  <% if (field.max !== undefined) { %>
+                    max="<%= field.max %>"
+                  <% } %>
+                  <% if (field.step !== undefined) { %>
+                    step="<%= field.step %>"
+                  <% } %>
+                />
+              <% } %>
+            </div>
+          <% }); %>
+        </div>
+      </div>
     <% } %>
 
+    <!-- Supporting evidence -->
 
-    <button
-      type="submit"
-      class="btn btn-sm btn-primary"
-    >
-      <%= issue.actions.respondToDispute.submitLabel %>
-    </button>
+    <% if (responseAction.evidence?.allowed) { %>
+      <% const evidenceConfig = responseAction.evidence; %>
+
+      <div
+        class="mb-4"
+        data-case-evidence
+        data-evidence-max-items="<%= evidenceConfig.maxItems %>"
+      >
+        <div
+          class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3"
+        >
+          <div>
+            <div class="fw-bold text-gray-700">
+              Supporting evidence
+            </div>
+
+            <div class="text-gray-500 fs-7">
+              Evidence is optional. Add up to
+              <%= evidenceConfig.maxItems %>
+              item<%= evidenceConfig.maxItems === 1 ? "" : "s" %>.
+            </div>
+          </div>
+
+          <button
+            type="button"
+            class="btn btn-sm btn-light-primary"
+            data-add-evidence
+          >
+            Add evidence
+          </button>
+        </div>
+
+        <!-- Evidence rows are inserted by cases.js -->
+
+        <div
+          class="d-flex flex-column gap-3"
+          data-evidence-list
+        ></div>
+
+        <!-- Evidence row template -->
+
+        <template data-evidence-template>
+          <div
+            class="border border-gray-300 rounded p-4"
+            data-evidence-row
+          >
+            <div
+              class="d-flex align-items-center justify-content-between gap-3 mb-3"
+            >
+              <div class="fw-bold text-gray-700">
+                Evidence item
+                <span data-evidence-number></span>
+              </div>
+
+              <button
+                type="button"
+                class="btn btn-sm btn-light-danger"
+                data-remove-evidence
+              >
+                Remove
+              </button>
+            </div>
+
+            <div class="row g-3">
+              <!-- Evidence type -->
+
+              <div class="col-md-4">
+                <label
+                  class="form-label"
+                  data-evidence-type-label
+                >
+                  Evidence type
+                </label>
+
+                <select
+                  class="form-select"
+                  name="evidence[__INDEX__][type]"
+                  data-evidence-type
+                  required
+                >
+                  <option value="">
+                    Select evidence type
+                  </option>
+
+                  <% evidenceConfig.typeOptions.forEach((option) => { %>
+                    <option value="<%= option.value %>">
+                      <%= option.label %>
+                    </option>
+                  <% }); %>
+                </select>
+              </div>
+
+              <!-- Evidence reference -->
+
+              <div class="col-md-8">
+                <label
+                  class="form-label"
+                  data-evidence-reference-label
+                >
+                  Reference
+                </label>
+
+                <input
+                  type="text"
+                  class="form-control"
+                  name="evidence[__INDEX__][reference]"
+                  maxlength="<%= evidenceConfig.referenceMaxLength %>"
+                  placeholder="URL, file reference, message reference, or other evidence reference"
+                  data-evidence-reference
+                  required
+                />
+
+                <div class="form-text">
+                  A reference is required for each evidence item.
+                </div>
+              </div>
+
+              <!-- Evidence description -->
+
+              <div class="col-12">
+                <label
+                  class="form-label"
+                  data-evidence-description-label
+                >
+                  Description
+                </label>
+
+                <textarea
+                  class="form-control"
+                  name="evidence[__INDEX__][description]"
+                  rows="2"
+                  maxlength="<%= evidenceConfig.descriptionMaxLength %>"
+                  placeholder="Optional description of this evidence"
+                  data-evidence-description
+                ></textarea>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- Evidence limit message -->
+
+        <div
+          class="text-gray-500 fs-7 mt-2 d-none"
+          data-evidence-limit-message
+        >
+          You have reached the maximum of
+          <%= evidenceConfig.maxItems %>
+          evidence item<%= evidenceConfig.maxItems === 1 ? "" : "s" %>.
+        </div>
+      </div>
+    <% } %>
+
+    <!-- Submission notice -->
+
+    <div class="alert alert-light border mb-4">
+      <div class="text-gray-700 fs-7">
+        Your response, counter-position, and evidence are submitted together.
+        After submission, this issue moves to admin review and you will not have another response or rebuttal opportunity.
+      </div>
+    </div>
+
+    <!-- Submit action -->
+
+    <div class="d-flex flex-wrap align-items-center gap-3">
+      <button
+        type="submit"
+        class="btn btn-sm btn-primary"
+      >
+        <%= responseAction.submitLabel %>
+      </button>
+    </div>
+
+    <!-- Action result message -->
 
     <div
       class="mt-3 d-none"
       data-case-action-message
     ></div>
-
   </form>
-
 <% } %>

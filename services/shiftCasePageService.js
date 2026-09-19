@@ -5,6 +5,8 @@ const mongoose = require("mongoose");
 const ShiftOccurrenceClaim = require("../models/ShiftOccurrenceClaim");
 const ShiftOccurrenceDispute = require("../models/ShiftOccurrenceDispute");
 
+const { OCCURRENCE_EVIDENCE_TYPES } = require("../constants/shiftLifecycle");
+
 const { badgeClass, formatStatus } = require("../utils/statusHelper");
 const money = require("../utils/money");
 
@@ -55,6 +57,48 @@ const STATUS_LABEL_OVERRIDES = Object.freeze({
   awaiting_professional_response: "Awaiting Professional Response",
   awaiting_admin_review: "Awaiting Admin Review",
 });
+
+const SUMMARY_CARD_DEFINITIONS = Object.freeze([
+  Object.freeze({
+    key: "active",
+    label: "Active",
+    icon: "ki-briefcase",
+    iconPaths: Object.freeze([1, 2]),
+    symbolClass: "bg-light-primary",
+    iconClass: "text-primary",
+    valueClass: "text-primary",
+  }),
+
+  Object.freeze({
+    key: "actionRequired",
+    label: "Action required",
+    icon: "ki-time",
+    iconPaths: Object.freeze([1, 2]),
+    symbolClass: "bg-light-warning",
+    iconClass: "text-warning",
+    valueClass: "text-warning",
+  }),
+
+  Object.freeze({
+    key: "resolved",
+    label: "Resolved",
+    icon: "ki-check-circle",
+    iconPaths: Object.freeze([1, 2]),
+    symbolClass: "bg-light-success",
+    iconClass: "text-success",
+    valueClass: "text-success",
+  }),
+
+  Object.freeze({
+    key: "withdrawn",
+    label: "Withdrawn",
+    icon: "ki-cross-circle",
+    iconPaths: Object.freeze([1, 2]),
+    symbolClass: "bg-light-secondary",
+    iconClass: "text-gray-600",
+    valueClass: "text-gray-700",
+  }),
+]);
 
 const CASE_DATE_FORMATTER = new Intl.DateTimeFormat("en-NG", {
   dateStyle: "medium",
@@ -164,7 +208,7 @@ const CASE_POPULATES = Object.freeze([
   },
 ]);
 
-/* ─────────────────────────────── ERRORS / NORMALIZATION ─────────────────────────────── */
+/* ───────────────────── ERRORS / NORMALIZATION ───────────────────── */
 
 function createPageError(message, statusCode = 500) {
   const error = new Error(message);
@@ -203,7 +247,7 @@ function normalizeType(value, audience) {
     : CASE_TYPES.ALL;
 }
 
-/* ─────────────────────────────── DISPLAY HELPERS ─────────────────────────────── */
+/* ───────────────────── DISPLAY HELPERS ───────────────────── */
 
 function getCaseId(caseItem) {
   return caseItem?._id ? String(caseItem._id) : null;
@@ -229,21 +273,10 @@ function getProfessionalName(professional) {
   return user.displayName || fullName || user.email || "Professional";
 }
 
-function getEvidenceCount(issue) {
-  return [
-    issue.evidence,
-    issue.employerEvidence,
-    issue.professionalResponseEvidence,
-    issue.adminEvidence,
-  ].reduce((total, items) => total + (Array.isArray(items) ? items.length : 0), 0);
-}
-
 function getStatusView(status) {
   return {
     value: status,
-
     label: STATUS_LABEL_OVERRIDES[status] || formatStatus(status),
-
     className: badgeClass[status] || "badge-light-secondary",
   };
 }
@@ -320,15 +353,10 @@ function buildEvidenceView(items = []) {
 
   return items.map((item) => ({
     type: item?.type || null,
-
     reference: item?.reference || null,
-
     description: item?.description || null,
-
     submittedByRole: item?.submittedByRole || null,
-
     submittedByUserId: getEntityId(item?.submittedByUser),
-
     recordedAt: buildDateView(item?.recordedAt),
   }));
 }
@@ -356,29 +384,22 @@ function buildAuthoritativeOccurrenceView(caseItem) {
   const currency = caseItem?.shift?.currency || null;
 
   const baseProfessionalPay = Number(occurrence.baseProfessionalPay || 0);
-
   const basePlatformFee = Number(occurrence.basePlatformFee || 0);
-
   const estimatedEmployerCharge = Number(occurrence.estimatedEmployerCharge || 0);
-
   const refundableAmount = Number(occurrence.refundableAmount || 0);
-
   const refundedAmount = Number(occurrence.refundedAmount || 0);
 
   return {
     status: getStatusView(occurrence.status),
-
     attendanceStatus: getStatusView(occurrence.attendanceStatus),
 
     scheduled: {
       startTime: buildDateView(occurrence.startTime),
-
       endTime: buildDateView(occurrence.endTime),
     },
 
     attendance: {
       rawCheckInAt: buildDateView(occurrence.checkedInAt),
-
       rawCheckOutAt: buildDateView(occurrence.checkedOutAt),
 
       authoritativeCheckInAt: buildDateView(getEffectiveOccurrenceCheckIn(occurrence)),
@@ -386,9 +407,7 @@ function buildAuthoritativeOccurrenceView(caseItem) {
       authoritativeCheckOutAt: buildDateView(getEffectiveOccurrenceCheckOut(occurrence)),
 
       attendanceOverride: occurrence.attendanceOverride || null,
-
       checkoutFallback: occurrence.checkoutFallback || null,
-
       lateCheckout: occurrence.lateCheckout || null,
     },
 
@@ -440,14 +459,6 @@ function buildAuthoritativeOccurrenceView(caseItem) {
   };
 }
 
-function buildSystemEvidenceView(caseItem) {
-  return {
-    submissionSnapshot: caseItem.lifecycleSnapshot || null,
-
-    currentAuthority: buildAuthoritativeOccurrenceView(caseItem),
-  };
-}
-
 function addTimelineItem(items, { type, label, at, actor = null, detail = null }) {
   if (!at) {
     return;
@@ -461,13 +472,9 @@ function addTimelineItem(items, { type, label, at, actor = null, detail = null }
 
   items.push({
     type,
-
     label,
-
     at: buildDateView(date),
-
     actor,
-
     detail,
   });
 }
@@ -489,70 +496,50 @@ function buildIssueTimeline(issue, caseItem) {
   if (caseItem.kind === CASE_KINDS.CLAIM) {
     addTimelineItem(items, {
       type: "employer_decision",
-
       label: "Employer reviewed issue",
-
       at: issue.employerDecidedAt,
-
       actor: "employer",
-
       detail: issue.employerDecision || null,
     });
 
     addTimelineItem(items, {
       type: "admin_escalation",
-
       label: "Issue moved to admin review",
-
       at: issue.escalatedAt,
-
       detail: issue.escalationReason || null,
     });
   } else {
     addTimelineItem(items, {
       type: "professional_response",
-
       label: "Professional responded to dispute",
-
       at: issue.professionalRespondedAt,
-
       actor: "professional",
     });
 
     addTimelineItem(items, {
       type: "professional_response_expired",
-
       label: "Professional response opportunity expired",
-
       at: issue.professionalResponseExpiredAt,
     });
 
     addTimelineItem(items, {
       type: "admin_review_started",
-
       label: "Issue moved to admin review",
-
       at: issue.adminReviewStartedAt,
     });
   }
 
   addTimelineItem(items, {
     type: "admin_decision",
-
     label: "Admin resolved issue",
-
     at: issue.adminDecidedAt,
-
     actor: "admin",
-
     detail: issue.adminDecision || null,
   });
 
   addTimelineItem(items, {
     type: "issue_resolved",
-
     label: "Issue resolved",
-
     at: issue.resolvedAt,
   });
 
@@ -597,18 +584,18 @@ function buildCaseTimeline(caseItem) {
 
   addTimelineItem(items, {
     type: "case_resolved",
-
     label: "Case resolved",
-
     at: caseItem.resolvedAt,
   });
 
   addTimelineItem(items, {
     type: "case_withdrawn",
-
     label: "Case withdrawn",
-
     at: caseItem.withdrawnAt,
+
+    actor: caseItem.kind === CASE_KINDS.CLAIM ? "professional" : "employer",
+
+    detail: caseItem.withdrawalReason || null,
   });
 
   return items.sort(
@@ -616,63 +603,72 @@ function buildCaseTimeline(caseItem) {
   );
 }
 
-function buildClaimPositionsView(issue) {
+function buildClaimPositionsView(issue, caseItem) {
+  const currency = caseItem?.shift?.currency || null;
+
   return {
     professional: {
+      label: "Professional",
       statement: issue.statement || null,
-
-      position: issue.details || null,
-
+      decision: null,
+      reason: null,
+      position: buildOriginalPositionView(issue, caseItem),
       evidence: buildEvidenceView(issue.evidence),
     },
 
     employer: {
-      decision: issue.employerDecision || null,
-
+      label: "Employer",
+      statement: null,
+      decision: buildDecisionView(issue.employerDecision),
       reason: issue.employerDecisionReason || null,
 
-      position: issue.employerCounterPosition || null,
+      position: buildCounterPositionView(issue.employerCounterPosition, currency),
 
       evidence: buildEvidenceView(issue.employerEvidence),
     },
 
     admin: {
-      decision: issue.adminDecision || null,
-
+      label: "Admin",
+      statement: null,
+      decision: buildDecisionView(issue.adminDecision),
       reason: issue.adminDecisionReason || null,
-
-      outcome: issue.adminOutcome || null,
-
+      position: buildAdminOutcomeView(issue.adminOutcome, caseItem),
       evidence: buildEvidenceView(issue.adminEvidence),
     },
   };
 }
 
-function buildDisputePositionsView(issue) {
+function buildDisputePositionsView(issue, caseItem) {
+  const currency = caseItem?.shift?.currency || null;
+
   return {
     employer: {
+      label: "Employer",
       statement: issue.statement || null,
-
-      position: issue.details || null,
-
+      decision: null,
+      reason: null,
+      position: buildOriginalPositionView(issue, caseItem),
       evidence: buildEvidenceView(issue.evidence),
     },
 
     professional: {
+      label: "Professional",
       statement: issue.professionalResponseStatement || null,
 
-      position: issue.professionalCounterPosition || null,
+      decision: null,
+      reason: null,
+
+      position: buildCounterPositionView(issue.professionalCounterPosition, currency),
 
       evidence: buildEvidenceView(issue.professionalResponseEvidence),
     },
 
     admin: {
-      decision: issue.adminDecision || null,
-
+      label: "Admin",
+      statement: null,
+      decision: buildDecisionView(issue.adminDecision),
       reason: issue.adminDecisionReason || null,
-
-      outcome: issue.adminOutcome || null,
-
+      position: buildAdminOutcomeView(issue.adminOutcome, caseItem),
       evidence: buildEvidenceView(issue.adminEvidence),
     },
   };
@@ -694,7 +690,7 @@ function buildDecisionPreviewBaseline(caseItem) {
 
     currentBasePlatformFeeDisplay: authority.base.platformFeeDisplay,
 
-    currentBaseSettlementStatus: authority.base.settlementStatus,
+    currentBaseSettlementStatus: getStatusView(authority.base.settlementStatus),
 
     currentRefundableAmount: authority.refund.refundableAmount,
 
@@ -715,7 +711,7 @@ function buildDecisionPreviewBaseline(caseItem) {
   };
 }
 
-/* ─────────────────────────────── URL HELPERS ─────────────────────────────── */
+/* ───────────────────── URL HELPERS ───────────────────── */
 
 function getCasePagePath(audience) {
   const path = CASE_PAGE_PATHS[audience];
@@ -769,91 +765,197 @@ function buildEmployerShiftDetailsUrl(shiftId, occurrenceId) {
     : `/employer/shifts/${shiftId}`;
 }
 
-/* ─────────────────────────────── FILTER / PAGINATION VIEWS ─────────────────────────────── */
+/* ───────────────────── SUMMARY / FILTERS ───────────────────── */
 
-function buildTypeOptions({ audience, type, status }) {
-  const options =
-    audience === AUDIENCES.ADMIN
-      ? [
-          {
-            value: CASE_TYPES.CLAIMS,
+function buildSummaryCards(counts = {}) {
+  return SUMMARY_CARD_DEFINITIONS.map((definition) => ({
+    ...definition,
 
-            label: "Professional claims",
-          },
-
-          {
-            value: CASE_TYPES.DISPUTES,
-
-            label: "Employer disputes",
-          },
-        ]
-      : [
-          {
-            value: CASE_TYPES.ALL,
-
-            label: "All cases",
-          },
-
-          {
-            value: CASE_TYPES.CLAIMS,
-
-            label: audience === AUDIENCES.PROFESSIONAL ? "My claims" : "Professional claims",
-          },
-
-          {
-            value: CASE_TYPES.DISPUTES,
-
-            label: "Employer disputes",
-          },
-        ];
-
-  return options.map((option) => {
-    const active = option.value === type;
-
-    return {
-      ...option,
-
-      active,
-
-      className: active ? "btn-primary" : "btn-light-primary",
-
-      url: buildCasePageUrl({
-        audience,
-
-        type: option.value,
-
-        status,
-
-        page: 1,
-      }),
-    };
-  });
+    value: Number(counts?.[definition.key] || 0),
+  }));
 }
 
-function buildStatusOptions({ audience, type, status }) {
-  return VALID_STATUSES.map((value) => {
-    const active = value === status;
+function getCaseTypeLabel(audience, type) {
+  if (type === CASE_TYPES.CLAIMS) {
+    return audience === AUDIENCES.PROFESSIONAL ? "My claims" : "Professional claims";
+  }
 
-    return {
-      value,
+  if (type === CASE_TYPES.DISPUTES) {
+    return "Employer disputes";
+  }
 
-      label: value === CASE_TYPES.ALL ? "All statuses" : formatStatus(value),
+  return "All cases";
+}
 
-      active,
+function buildFilterOptions({ audience, selectedType, selectedStatus, allowedKinds }) {
+  const options = [];
 
-      className: active ? "badge-primary" : "badge-light",
+  if (audience === AUDIENCES.ADMIN) {
+    if (allowedKinds.includes(CASE_KINDS.CLAIM)) {
+      options.push({
+        key: "claims",
+        label: "Professional claims",
+        active: selectedType === CASE_TYPES.CLAIMS && selectedStatus === CASE_TYPES.ALL,
+        url: buildCasePageUrl({
+          audience,
+          type: CASE_TYPES.CLAIMS,
+          status: CASE_TYPES.ALL,
+          page: 1,
+        }),
+      });
+
+      VALID_STATUSES.filter((status) => status !== CASE_TYPES.ALL).forEach((status) => {
+        options.push({
+          key: `claims:${status}`,
+          label: `${formatStatus(status)} professional claims`,
+          active: selectedType === CASE_TYPES.CLAIMS && selectedStatus === status,
+          url: buildCasePageUrl({
+            audience,
+            type: CASE_TYPES.CLAIMS,
+            status,
+            page: 1,
+          }),
+        });
+      });
+    }
+
+    if (allowedKinds.includes(CASE_KINDS.DISPUTE)) {
+      options.push({
+        key: "disputes",
+        label: "Employer disputes",
+        active: selectedType === CASE_TYPES.DISPUTES && selectedStatus === CASE_TYPES.ALL,
+        url: buildCasePageUrl({
+          audience,
+          type: CASE_TYPES.DISPUTES,
+          status: CASE_TYPES.ALL,
+          page: 1,
+        }),
+      });
+
+      VALID_STATUSES.filter((status) => status !== CASE_TYPES.ALL).forEach((status) => {
+        options.push({
+          key: `disputes:${status}`,
+          label: `${formatStatus(status)} employer disputes`,
+          active: selectedType === CASE_TYPES.DISPUTES && selectedStatus === status,
+          url: buildCasePageUrl({
+            audience,
+            type: CASE_TYPES.DISPUTES,
+            status,
+            page: 1,
+          }),
+        });
+      });
+    }
+
+    return options;
+  }
+
+  options.push({
+    key: "all",
+    label: "All cases",
+    active: selectedType === CASE_TYPES.ALL && selectedStatus === CASE_TYPES.ALL,
+    url: buildCasePageUrl({
+      audience,
+      type: CASE_TYPES.ALL,
+      status: CASE_TYPES.ALL,
+      page: 1,
+    }),
+  });
+
+  VALID_STATUSES.filter((status) => status !== CASE_TYPES.ALL).forEach((status) => {
+    options.push({
+      key: `status:${status}`,
+      label: `${formatStatus(status)} cases`,
+      active: selectedType === CASE_TYPES.ALL && selectedStatus === status,
+      url: buildCasePageUrl({
+        audience,
+        type: CASE_TYPES.ALL,
+        status,
+        page: 1,
+      }),
+    });
+  });
+
+  if (allowedKinds.includes(CASE_KINDS.CLAIM)) {
+    options.push({
+      key: "type:claims",
+      label: audience === AUDIENCES.PROFESSIONAL ? "My claims" : "Professional claims",
+      active: selectedType === CASE_TYPES.CLAIMS && selectedStatus === CASE_TYPES.ALL,
+      url: buildCasePageUrl({
+        audience,
+        type: CASE_TYPES.CLAIMS,
+        status: CASE_TYPES.ALL,
+        page: 1,
+      }),
+    });
+  }
+
+  if (allowedKinds.includes(CASE_KINDS.DISPUTE)) {
+    options.push({
+      key: "type:disputes",
+      label: "Employer disputes",
+      active: selectedType === CASE_TYPES.DISPUTES && selectedStatus === CASE_TYPES.ALL,
+      url: buildCasePageUrl({
+        audience,
+        type: CASE_TYPES.DISPUTES,
+        status: CASE_TYPES.ALL,
+        page: 1,
+      }),
+    });
+  }
+
+  return options;
+}
+
+function buildFiltersView({ audience, type, status, allowedKinds }) {
+  const typeLabel = getCaseTypeLabel(audience, type);
+
+  let selectedLabel = typeLabel;
+
+  if (status !== CASE_TYPES.ALL && type !== CASE_TYPES.ALL) {
+    selectedLabel = `${formatStatus(status)} · ${typeLabel}`;
+  } else if (status !== CASE_TYPES.ALL) {
+    selectedLabel = `${formatStatus(status)} cases`;
+  }
+
+  const hasActiveFilters =
+    audience === AUDIENCES.ADMIN
+      ? status !== CASE_TYPES.ALL
+      : type !== CASE_TYPES.ALL || status !== CASE_TYPES.ALL;
+
+  const clearType = audience === AUDIENCES.ADMIN ? type : CASE_TYPES.ALL;
+
+  return {
+    selectedLabel,
+
+    selectedType: type,
+
+    selectedStatus: status,
+
+    options: buildFilterOptions({
+      audience,
+      selectedType: type,
+      selectedStatus: status,
+      allowedKinds,
+    }),
+
+    hasActiveFilters,
+
+    clearAction: {
+      visible: hasActiveFilters,
+
+      label: "Clear filters",
+
+      buttonClass: "btn-light-danger",
 
       url: buildCasePageUrl({
         audience,
-
-        type,
-
-        status: value,
-
+        type: clearType,
+        status: CASE_TYPES.ALL,
         page: 1,
       }),
-    };
-  });
+    },
+  };
 }
 
 function buildPaginationView({ audience, type, status, page, totalItems, totalPages }) {
@@ -864,6 +966,10 @@ function buildPaginationView({ audience, type, status, page, totalItems, totalPa
   const previousPage = Math.max(1, page - 1);
 
   const nextPage = Math.min(totalPages, page + 1);
+
+  const startItem = totalItems > 0 ? (page - 1) * PAGE_SIZE + 1 : 0;
+
+  const endItem = totalItems > 0 ? Math.min(page * PAGE_SIZE, totalItems) : 0;
 
   return {
     page,
@@ -886,14 +992,20 @@ function buildPaginationView({ audience, type, status, page, totalItems, totalPa
 
     nextPage,
 
+    startItem,
+
+    endItem,
+
+    resultsText:
+      totalItems > 0
+        ? `Showing ${startItem}-${endItem} of ${totalItems}`
+        : "No cases match the current filters.",
+
     previousUrl: hasPreviousPage
       ? buildCasePageUrl({
           audience,
-
           type,
-
           status,
-
           page: previousPage,
         })
       : null,
@@ -901,18 +1013,15 @@ function buildPaginationView({ audience, type, status, page, totalItems, totalPa
     nextUrl: hasNextPage
       ? buildCasePageUrl({
           audience,
-
           type,
-
           status,
-
           page: nextPage,
         })
       : null,
   };
 }
 
-/* ─────────────────────────────── CASE HELPERS ─────────────────────────────── */
+/* ───────────────────── CASE HELPERS ───────────────────── */
 
 function getKinds(type) {
   if (type === CASE_TYPES.CLAIMS) {
@@ -957,17 +1066,17 @@ function combineCounts(items) {
 
       active: totals.active + item.active,
 
+      actionRequired: totals.actionRequired + item.actionRequired,
+
       resolved: totals.resolved + item.resolved,
 
       withdrawn: totals.withdrawn + item.withdrawn,
     }),
     {
       total: 0,
-
       active: 0,
-
+      actionRequired: 0,
       resolved: 0,
-
       withdrawn: 0,
     }
   );
@@ -981,7 +1090,7 @@ function caseRequiresActionFromViews(issues) {
   return Array.isArray(issues) ? issues.some(issueHasAvailableAction) : false;
 }
 
-/* ─────────────────────────────── FETCH LAYER ─────────────────────────────── */
+/* ───────────────────── FETCH / COUNT LAYER ───────────────────── */
 
 async function findCases({ kind, filter, limit }) {
   let query = getModel(kind).find(filter).select(CASE_SELECT);
@@ -993,7 +1102,6 @@ async function findCases({ kind, filter, limit }) {
   const documents = await query
     .sort({
       submittedAt: -1,
-
       _id: -1,
     })
     .limit(limit)
@@ -1002,48 +1110,106 @@ async function findCases({ kind, filter, limit }) {
 
   return documents.map((document) => ({
     ...document,
-
     kind,
   }));
 }
 
-async function countCases(kind, filter) {
+function buildActionRequiredFilter({ audience, kind, scopeFilter, canManage, currentTime }) {
+  if (kind === CASE_KINDS.CLAIM) {
+    // Employer's one substantive turn is reviewing the professional claim.
+    if (audience === AUDIENCES.EMPLOYER && canManage === true) {
+      return {
+        ...scopeFilter,
+
+        status: "active",
+
+        employerResponseDeadlineAt: {
+          $gt: currentTime,
+        },
+
+        "issues.status": "awaiting_employer_review",
+      };
+    }
+
+    // Admin acts only after the issue reaches final review.
+    if (audience === AUDIENCES.ADMIN && canManage === true) {
+      return {
+        ...scopeFilter,
+
+        status: "active",
+
+        "issues.status": "awaiting_admin_review",
+      };
+    }
+
+    return null;
+  }
+
+  if (kind === CASE_KINDS.DISPUTE) {
+    // Professional's one substantive turn is responding to the employer dispute.
+    if (audience === AUDIENCES.PROFESSIONAL) {
+      return {
+        ...scopeFilter,
+
+        status: "active",
+
+        professionalResponseDeadlineAt: {
+          $gt: currentTime,
+        },
+
+        "issues.status": "awaiting_professional_response",
+      };
+    }
+
+    // Admin acts only after the issue reaches final review.
+    if (audience === AUDIENCES.ADMIN && canManage === true) {
+      return {
+        ...scopeFilter,
+
+        status: "active",
+
+        "issues.status": "awaiting_admin_review",
+      };
+    }
+  }
+
+  return null;
+}
+
+async function countCases({ kind, scopeFilter, actionRequiredFilter }) {
   const Model = getModel(kind);
 
-  const [total, active, resolved, withdrawn] = await Promise.all([
-    Model.countDocuments(filter),
+  const [total, active, actionRequired, resolved, withdrawn] = await Promise.all([
+    Model.countDocuments(scopeFilter),
 
     Model.countDocuments({
-      ...filter,
-
+      ...scopeFilter,
       status: "active",
     }),
 
-    Model.countDocuments({
-      ...filter,
+    actionRequiredFilter ? Model.countDocuments(actionRequiredFilter) : Promise.resolve(0),
 
+    Model.countDocuments({
+      ...scopeFilter,
       status: "resolved",
     }),
 
     Model.countDocuments({
-      ...filter,
-
+      ...scopeFilter,
       status: "withdrawn",
     }),
   ]);
 
   return {
     total,
-
     active,
-
+    actionRequired,
     resolved,
-
     withdrawn,
   };
 }
 
-/* ─────────────────────────────── PAGE LOADER ─────────────────────────────── */
+/* ───────────────────── PAGE LOADER ───────────────────── */
 
 async function loadCasesPage({
   audience,
@@ -1052,7 +1218,8 @@ async function loadCasesPage({
   status: requestedStatus,
   page: requestedPage,
   allowedKinds,
-  canManage = false,
+  canManageByKind = {},
+  permissions = {},
 }) {
   const type = normalizeType(requestedType, audience);
 
@@ -1073,26 +1240,45 @@ async function loadCasesPage({
         }
       : {
           ...scopeFilter,
-
           status,
         };
 
   const fetchLimit = page * PAGE_SIZE;
+
+  const currentTime = new Date();
 
   const [groups, countGroups] = await Promise.all([
     Promise.all(
       kinds.map((kind) =>
         findCases({
           kind,
-
           filter: visibleFilter,
-
           limit: fetchLimit,
         })
       )
     ),
 
-    Promise.all(kinds.map((kind) => countCases(kind, scopeFilter))),
+    Promise.all(
+      kinds.map((kind) =>
+        countCases({
+          kind,
+
+          scopeFilter,
+
+          actionRequiredFilter: buildActionRequiredFilter({
+            audience,
+
+            kind,
+
+            scopeFilter,
+
+            canManage: canManageByKind?.[kind] === true,
+
+            currentTime,
+          }),
+        })
+      )
+    ),
   ]);
 
   const counts = combineCounts(countGroups);
@@ -1119,14 +1305,26 @@ async function loadCasesPage({
     buildAudienceCaseView(caseItem, {
       audience,
 
-      canManage,
+      canManage: canManageByKind?.[caseItem.kind] === true,
     })
   );
 
-  const actionRequired = cases.filter((caseItem) => caseItem.actions.required === true).length;
+  const pagination = buildPaginationView({
+    audience,
+    type,
+    status,
+    page: currentPage,
+    totalItems,
+    totalPages,
+  });
 
   return {
     audience,
+
+    permissions: {
+      canViewCases: permissions.canViewCases === true,
+      canManageCases: permissions.canManageCases === true,
+    },
 
     pageTitle: getPageTitle(audience, type),
 
@@ -1134,51 +1332,27 @@ async function loadCasesPage({
 
     cases,
 
-    counts: {
-      ...counts,
+    counts,
 
-      actionRequired,
-    },
+    summaryCards: buildSummaryCards(counts),
 
-    filters: {
-      type,
-
-      status,
-
-      typeOptions: buildTypeOptions({
-        audience,
-
-        type,
-
-        status,
-      }),
-
-      statusOptions: buildStatusOptions({
-        audience,
-
-        type,
-
-        status,
-      }),
-    },
-
-    pagination: buildPaginationView({
+    filters: buildFiltersView({
       audience,
-
       type,
-
       status,
-
-      page: currentPage,
-
-      totalItems,
-
-      totalPages,
+      allowedKinds,
     }),
+
+    resultsHeader: {
+      title: "Cases",
+      subtitle: pagination.resultsText,
+    },
+
+    pagination,
   };
 }
 
-/* ─────────────────────────────── AUDIENCE VIEW ROUTING ─────────────────────────────── */
+/* ───────────────────── AUDIENCE VIEW ROUTING ───────────────────── */
 
 function buildAudienceCaseView(caseItem, { audience, canManage }) {
   if (audience === AUDIENCES.PROFESSIONAL) {
@@ -1196,7 +1370,7 @@ function buildAudienceCaseView(caseItem, { audience, canManage }) {
   throw createPageError("Unsupported case-page audience.");
 }
 
-/* ─────────────────────────────── COMMON CASE VIEW ─────────────────────────────── */
+/* ───────────────────── COMMON CASE VIEW ───────────────────── */
 
 function buildCommonCaseView(caseItem) {
   const caseId = getCaseId(caseItem);
@@ -1234,7 +1408,9 @@ function buildCommonCaseView(caseItem) {
 
     assignment: {
       id: getEntityId(caseItem.assignment),
+
       referenceCode: caseItem.assignment?.referenceCode || null,
+
       slotNumber: caseItem.assignment?.slotNumber ?? caseItem.occurrence?.slotNumber ?? null,
     },
 
@@ -1268,11 +1444,13 @@ function buildCommonCaseView(caseItem) {
       reason: caseItem.withdrawalReason || null,
 
       withdrawnAt: buildDateView(caseItem.withdrawnAt),
+
+      withdrawnByUserId: getEntityId(caseItem.withdrawnBy),
     },
   };
 }
 
-/* ─────────────────────────────── COMMON ISSUE VIEW ─────────────────────────────── */
+/* ───────────────────── COMMON ISSUE VIEW ───────────────────── */
 
 function getIssueDeadline(caseItem, issue) {
   if (caseItem.kind === CASE_KINDS.CLAIM && issue.status === "awaiting_employer_review") {
@@ -1287,10 +1465,19 @@ function getIssueDeadline(caseItem, issue) {
 }
 
 function buildIssueView(issue, caseItem) {
-  const components =
-    caseItem.kind === CASE_KINDS.CLAIM
-      ? issue.challengedSettlementComponents
-      : issue.affectedSettlementComponents;
+  const isClaim = caseItem.kind === CASE_KINDS.CLAIM;
+
+  const components = isClaim
+    ? issue.challengedSettlementComponents
+    : issue.affectedSettlementComponents;
+
+  const settlementComponents = Array.isArray(components)
+    ? components.map((component) => ({
+        value: component,
+
+        label: formatStatus(component),
+      }))
+    : [];
 
   return {
     id: getEntityId(issue),
@@ -1305,31 +1492,21 @@ function buildIssueView(issue, caseItem) {
 
     statement: issue.statement || null,
 
-    details: issue.details || null,
+    originalPosition: buildOriginalPositionView(issue, caseItem),
 
-    affectedSettlementComponents: Array.isArray(components)
-      ? components.map((component) => ({
-          value: component,
+    settlementScope: {
+      type: isClaim ? "challenged" : "affected",
 
-          label: formatStatus(component),
-        }))
-      : [],
+      label: isClaim ? "Challenged settlement components" : "Affected settlement components",
 
-    evidenceCount: getEvidenceCount(issue),
+      components: settlementComponents,
+    },
+
+    submissionEvidence: buildEvidenceView(issue.evidence),
+
+    partyResponse: buildPartyResponseView(issue, caseItem),
 
     deadline: buildDateView(getIssueDeadline(caseItem, issue)),
-
-    employerDecision: issue.employerDecision
-      ? {
-          value: issue.employerDecision,
-
-          label: formatStatus(issue.employerDecision),
-        }
-      : null,
-
-    employerDecisionReason: issue.employerDecisionReason || null,
-
-    professionalResponseStatement: issue.professionalResponseStatement || null,
 
     adminDecision: issue.adminDecision
       ? {
@@ -1343,21 +1520,50 @@ function buildIssueView(issue, caseItem) {
   };
 }
 
-/* ─────────────────────────────── ACTION VIEW HELPERS ─────────────────────────────── */
+/* ───────────────────── ACTION VIEW HELPERS ───────────────────── */
 
 function responseWindowIsOpen(deadline, currentTime = new Date()) {
-  if (!deadline) return false;
+  if (!deadline) {
+    return false;
+  }
+
   const deadlineTime = new Date(deadline).getTime();
+
   return Number.isFinite(deadlineTime) && currentTime.getTime() < deadlineTime;
 }
 
 function unavailableAction() {
   return {
     available: false,
-
     url: null,
   };
 }
+
+function buildEvidenceTypeOptions() {
+  return OCCURRENCE_EVIDENCE_TYPES.map((type) => ({
+    value: type,
+
+    label: formatStatus(type),
+  }));
+}
+
+function buildEvidenceActionConfig() {
+  return {
+    allowed: true,
+
+    optional: true,
+
+    maxItems: 10,
+
+    referenceMaxLength: 1000,
+
+    descriptionMaxLength: 500,
+
+    typeOptions: buildEvidenceTypeOptions(),
+  };
+}
+
+/* ───────────────────── POSITION VIEWS ───────────────────── */
 
 function buildProfessionalCounterPositionFields(issue) {
   if (issue.type === "attendance_correction") {
@@ -1407,7 +1613,393 @@ function buildProfessionalCounterPositionFields(issue) {
   ];
 }
 
-/* ─────────────────────────────── PROFESSIONAL VIEW ─────────────────────────────── */
+function buildEmployerCounterPositionFields(issue) {
+  if (issue.type === "attendance_correction") {
+    return [
+      {
+        name: "correctedCheckInAt",
+
+        inputName: "counterPosition[correctedCheckInAt]",
+
+        label: "Corrected check-in (optional)",
+
+        control: "datetime-local",
+
+        columnClass: "col-md-6",
+      },
+
+      {
+        name: "correctedCheckOutAt",
+
+        inputName: "counterPosition[correctedCheckOutAt]",
+
+        label: "Corrected checkout (optional)",
+
+        control: "datetime-local",
+
+        columnClass: "col-md-6",
+      },
+    ];
+  }
+
+  return [
+    {
+      name: "proposedBaseProfessionalPay",
+
+      inputName: "counterPosition[proposedBaseProfessionalPay]",
+
+      label: "Proposed BASE professional pay in minor units (optional)",
+
+      control: "number",
+
+      columnClass: "col-12",
+
+      min: 0,
+
+      step: 1,
+    },
+  ];
+}
+
+function buildCounterPositionView(position, currency) {
+  if (!position || typeof position !== "object") {
+    return null;
+  }
+
+  const fields = [];
+
+  if (position.correctedCheckInAt) {
+    fields.push({
+      name: "correctedCheckInAt",
+
+      label: "Corrected check-in",
+
+      displayValue: formatCaseDate(position.correctedCheckInAt),
+    });
+  }
+
+  if (position.correctedCheckOutAt) {
+    fields.push({
+      name: "correctedCheckOutAt",
+
+      label: "Corrected checkout",
+
+      displayValue: formatCaseDate(position.correctedCheckOutAt),
+    });
+  }
+
+  if (
+    position.proposedBaseProfessionalPay !== null &&
+    position.proposedBaseProfessionalPay !== undefined
+  ) {
+    const amount = Number(position.proposedBaseProfessionalPay);
+
+    fields.push({
+      name: "proposedBaseProfessionalPay",
+
+      label: "Proposed BASE professional pay",
+
+      value: amount,
+
+      displayValue: formatCaseAmount(amount, currency) || String(amount),
+    });
+  }
+
+  if (fields.length === 0) {
+    return null;
+  }
+
+  return {
+    fields,
+  };
+}
+
+function buildDecisionView(value) {
+  if (!value) {
+    return null;
+  }
+
+  return {
+    value,
+
+    label: formatStatus(value),
+  };
+}
+
+function buildOriginalPositionView(issue, caseItem) {
+  const details = issue?.details;
+
+  if (!details) {
+    return null;
+  }
+
+  if (typeof details === "string") {
+    const value = details.trim();
+
+    return value
+      ? {
+          fields: [
+            {
+              name: "details",
+
+              label: "Details",
+
+              displayValue: value,
+            },
+          ],
+        }
+      : null;
+  }
+
+  if (typeof details !== "object" || Array.isArray(details)) {
+    return null;
+  }
+
+  const currency = caseItem?.shift?.currency || null;
+
+  const fields = [];
+
+  const attendanceCorrection =
+    details.attendanceCorrection && typeof details.attendanceCorrection === "object"
+      ? details.attendanceCorrection
+      : null;
+
+  if (attendanceCorrection?.correctedCheckInAt) {
+    fields.push({
+      name: "correctedCheckInAt",
+
+      label: "Corrected check-in",
+
+      displayValue: formatCaseDate(attendanceCorrection.correctedCheckInAt),
+    });
+  }
+
+  if (attendanceCorrection?.correctedCheckOutAt) {
+    fields.push({
+      name: "correctedCheckOutAt",
+
+      label: "Corrected checkout",
+
+      displayValue: formatCaseDate(attendanceCorrection.correctedCheckOutAt),
+    });
+  }
+
+  if (caseItem.kind === CASE_KINDS.CLAIM) {
+    if (
+      details.expectedBaseProfessionalPay !== null &&
+      details.expectedBaseProfessionalPay !== undefined
+    ) {
+      const amount = Number(details.expectedBaseProfessionalPay);
+
+      fields.push({
+        name: "expectedBaseProfessionalPay",
+
+        label: "Expected BASE professional pay",
+
+        value: amount,
+
+        displayValue: formatCaseAmount(amount, currency) || String(amount),
+      });
+    }
+  }
+
+  if (caseItem.kind === CASE_KINDS.DISPUTE) {
+    if (
+      details.proposedBaseProfessionalPay !== null &&
+      details.proposedBaseProfessionalPay !== undefined
+    ) {
+      const amount = Number(details.proposedBaseProfessionalPay);
+
+      fields.push({
+        name: "proposedBaseProfessionalPay",
+
+        label: "Proposed BASE professional pay",
+
+        value: amount,
+
+        displayValue: formatCaseAmount(amount, currency) || String(amount),
+      });
+    }
+  }
+
+  if (fields.length === 0) {
+    return null;
+  }
+
+  return {
+    fields,
+  };
+}
+
+function buildAdminOutcomeView(outcome, caseItem) {
+  if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) {
+    return null;
+  }
+
+  const currency = caseItem?.shift?.currency || null;
+
+  const fields = [];
+
+  if (outcome.finalCheckInAt) {
+    fields.push({
+      name: "finalCheckInAt",
+
+      label: "Final authoritative check-in",
+
+      displayValue: formatCaseDate(outcome.finalCheckInAt),
+    });
+  }
+
+  if (outcome.finalCheckOutAt) {
+    fields.push({
+      name: "finalCheckOutAt",
+
+      label: "Final authoritative checkout",
+
+      displayValue: formatCaseDate(outcome.finalCheckOutAt),
+    });
+  }
+
+  if (outcome.finalBaseProfessionalPay !== null && outcome.finalBaseProfessionalPay !== undefined) {
+    const amount = Number(outcome.finalBaseProfessionalPay);
+
+    fields.push({
+      name: "finalBaseProfessionalPay",
+
+      label: "Final BASE professional pay",
+
+      value: amount,
+
+      displayValue: formatCaseAmount(amount, currency) || String(amount),
+    });
+  }
+
+  if (outcome.adjustedOutcome) {
+    fields.push({
+      name: "adjustedOutcome",
+
+      label: "Recorded adjusted outcome",
+
+      displayValue: String(outcome.adjustedOutcome),
+    });
+  }
+
+  if (outcome.finalOutcome) {
+    fields.push({
+      name: "finalOutcome",
+
+      label: "Recorded final outcome",
+
+      displayValue: String(outcome.finalOutcome),
+    });
+  }
+
+  if (fields.length === 0) {
+    return null;
+  }
+
+  return {
+    fields,
+  };
+}
+
+/* ───────────────────── PARTY RESPONSE VIEW ───────────────────── */
+
+function buildPartyResponseView(issue, caseItem) {
+  const currency = caseItem?.shift?.currency || null;
+
+  // --- PROFESSIONAL CLAIM ---
+  // Professional submits first; employer gets one response/review turn.
+
+  if (caseItem.kind === CASE_KINDS.CLAIM) {
+    const counterPosition = buildCounterPositionView(issue.employerCounterPosition, currency);
+
+    const evidence = buildEvidenceView(issue.employerEvidence);
+
+    const decision = issue.employerDecision
+      ? {
+          value: issue.employerDecision,
+
+          label: formatStatus(issue.employerDecision),
+        }
+      : null;
+
+    const reason = issue.employerDecisionReason || null;
+
+    const respondedAt = buildDateView(issue.employerDecidedAt);
+
+    const hasResponse =
+      Boolean(decision) ||
+      Boolean(reason) ||
+      Boolean(counterPosition) ||
+      evidence.length > 0 ||
+      Boolean(respondedAt);
+
+    if (!hasResponse) {
+      return null;
+    }
+
+    return {
+      role: "employer",
+
+      label: "Employer response",
+
+      decision,
+
+      statement: null,
+
+      reason,
+
+      counterPosition,
+
+      evidence,
+
+      respondedAt,
+    };
+  }
+
+  // --- EMPLOYER DISPUTE ---
+  // Employer submits first; professional gets one response turn.
+
+  if (caseItem.kind === CASE_KINDS.DISPUTE) {
+    const counterPosition = buildCounterPositionView(issue.professionalCounterPosition, currency);
+
+    const evidence = buildEvidenceView(issue.professionalResponseEvidence);
+
+    const statement = issue.professionalResponseStatement || null;
+
+    const respondedAt = buildDateView(issue.professionalRespondedAt);
+
+    const hasResponse =
+      Boolean(statement) || Boolean(counterPosition) || evidence.length > 0 || Boolean(respondedAt);
+
+    if (!hasResponse) {
+      return null;
+    }
+
+    return {
+      role: "professional",
+
+      label: "Professional response",
+
+      decision: null,
+
+      statement,
+
+      reason: null,
+
+      counterPosition,
+
+      evidence,
+
+      respondedAt,
+    };
+  }
+
+  return null;
+}
+
+/* ───────────────────── PROFESSIONAL VIEW ───────────────────── */
 
 function buildProfessionalCaseView(caseItem) {
   const common = buildCommonCaseView(caseItem);
@@ -1473,13 +2065,15 @@ function buildProfessionalIssueView(issue, caseItem, caseId) {
             submitLabel: "Submit response",
 
             counterPositionFields: buildProfessionalCounterPositionFields(issue),
+
+            evidence: buildEvidenceActionConfig(),
           }
         : unavailableAction(),
     },
   };
 }
 
-/* ─────────────────────────────── EMPLOYER VIEW ─────────────────────────────── */
+/* ───────────────────── EMPLOYER VIEW ───────────────────── */
 
 function buildEmployerCaseView(caseItem, canManage) {
   const common = buildCommonCaseView(caseItem);
@@ -1554,8 +2148,6 @@ function buildEmployerIssueView(issue, caseItem, caseId, canManage) {
   return {
     ...view,
 
-    employerCounterPosition: issue.employerCounterPosition || null,
-
     actions: {
       review: canReview
         ? {
@@ -1578,13 +2170,19 @@ function buildEmployerIssueView(issue, caseItem, caseId, canManage) {
                 label: "Reject professional position",
               },
             ],
+
+            counterPositionDecision: "rejected",
+
+            counterPositionFields: buildEmployerCounterPositionFields(issue),
+
+            evidence: buildEvidenceActionConfig(),
           }
         : unavailableAction(),
     },
   };
 }
 
-/* ─────────────────────────────── ADMIN VIEW ─────────────────────────────── */
+/* ───────────────────── ADMIN VIEW ───────────────────── */
 
 function buildAdminCaseView(caseItem, canManage) {
   const common = buildCommonCaseView(caseItem);
@@ -1614,8 +2212,6 @@ function buildAdminCaseView(caseItem, canManage) {
 
     authoritativeOccurrence: buildAuthoritativeOccurrenceView(caseItem),
 
-    systemEvidence: buildSystemEvidenceView(caseItem),
-
     timeline: buildCaseTimeline(caseItem),
 
     issues,
@@ -1639,14 +2235,10 @@ function buildAdminIssueView(issue, caseItem, caseId, canManage) {
 
     positions:
       caseItem.kind === CASE_KINDS.CLAIM
-        ? buildClaimPositionsView(issue)
-        : buildDisputePositionsView(issue),
-
-    systemEvidence: buildSystemEvidenceView(caseItem),
+        ? buildClaimPositionsView(issue, caseItem)
+        : buildDisputePositionsView(issue, caseItem),
 
     timeline: buildIssueTimeline(issue, caseItem),
-
-    adminOutcome: issue.adminOutcome || null,
 
     decisionPreview: buildDecisionPreviewBaseline(caseItem),
 
@@ -1676,6 +2268,8 @@ function buildAdminAdjudicationView(issue, caseItem, canAdjudicate) {
       adminOutcome: null,
 
       adminOutcomeRequiredForDecisions: [],
+
+      evidence: null,
     };
   }
 
@@ -1730,10 +2324,7 @@ function buildAdminAdjudicationView(issue, caseItem, canAdjudicate) {
       },
     ];
 
-    /**
-     * Approval establishes that current Loqum authority requires correction.
-     * adminOutcome records the final evidence-supported fact/value.
-     */
+    // Approval establishes a corrected authoritative fact/value.
     adminOutcomeRequiredForDecisions = ["approved"];
   }
 
@@ -1745,6 +2336,8 @@ function buildAdminAdjudicationView(issue, caseItem, canAdjudicate) {
     adminOutcomeRequiredForDecisions,
 
     adminOutcome: buildAdminOutcomeFields(issue, caseItem),
+
+    evidence: buildEvidenceActionConfig(),
   };
 }
 
@@ -1842,12 +2435,15 @@ function buildAdminOutcomeFields(issue, caseItem) {
   };
 }
 
-/* ─────────────────────────────── PROFESSIONAL WITHDRAWAL RULE ─────────────────────────────── */
+/* ───────────────────── WITHDRAWAL RULES ───────────────────── */
+
+// --- PROFESSIONAL CLAIM WITHDRAWAL ---
 
 function canProfessionalWithdrawClaim(caseItem) {
   if (
     caseItem.kind !== CASE_KINDS.CLAIM ||
     caseItem.status !== "active" ||
+    !responseWindowIsOpen(caseItem.employerResponseDeadlineAt) ||
     !Array.isArray(caseItem.issues) ||
     caseItem.issues.length === 0
   ) {
@@ -1869,13 +2465,14 @@ function canProfessionalWithdrawClaim(caseItem) {
   );
 }
 
-/* ─────────────────────────────── EMPLOYER WITHDRAWAL RULE ─────────────────────────────── */
+// --- EMPLOYER DISPUTE WITHDRAWAL ---
 
 function canEmployerWithdrawDispute(caseItem, canManage) {
   if (
     !canManage ||
     caseItem.kind !== CASE_KINDS.DISPUTE ||
     caseItem.status !== "active" ||
+    !responseWindowIsOpen(caseItem.professionalResponseDeadlineAt) ||
     !Array.isArray(caseItem.issues) ||
     caseItem.issues.length === 0
   ) {
@@ -1912,7 +2509,7 @@ function canEmployerWithdrawDispute(caseItem, canManage) {
   });
 }
 
-/* ─────────────────────────────── PUBLIC SERVICE ─────────────────────────────── */
+/* ───────────────────── PUBLIC SERVICE ───────────────────── */
 
 class ShiftCasePageService {
   static async getProfessionalCasesPageData({ professionalId, type, status, page }) {
@@ -1934,6 +2531,12 @@ class ShiftCasePageService {
       page,
 
       allowedKinds: [CASE_KINDS.CLAIM, CASE_KINDS.DISPUTE],
+
+      permissions: {
+        canViewCases: true,
+
+        canManageCases: true,
+      },
     });
   }
 
@@ -1942,22 +2545,30 @@ class ShiftCasePageService {
       throw createPageError("Employer profile context is unavailable.");
     }
 
-    const canManageAllBranches =
-      employerContext?.isPrimaryEmployer === true || employerContext?.isBusinessAdmin === true;
+    const canViewClaims = employerContext?.canViewClaims === true;
 
-    const isBranchManager = employerContext?.isBranchManager === true;
+    const canViewDisputes = employerContext?.canViewDisputes === true;
 
-    const canManageCases = canManageAllBranches || isBranchManager;
+    const canManageClaims = canViewClaims && employerContext?.canManageClaims === true;
 
-    if (!canManageCases) {
+    const canManageDisputes = canViewDisputes && employerContext?.canManageDisputes === true;
+
+    const canViewCases = canViewClaims || canViewDisputes;
+
+    const canManageCases = canManageClaims || canManageDisputes;
+
+    if (!canViewCases) {
       throw createPageError("You do not have permission to view these cases.", 403);
     }
+
+    const hasBusinessWideCaseAccess =
+      employerContext?.isPrimaryEmployer === true || employerContext?.isBusinessAdmin === true;
 
     const scopeFilter = {
       business: businessId,
     };
 
-    if (!canManageAllBranches) {
+    if (!hasBusinessWideCaseAccess) {
       const assignedBranchIds = (employerContext?.assignedBranchIds || []).filter((branchId) =>
         mongoose.isValidObjectId(branchId)
       );
@@ -1971,6 +2582,16 @@ class ShiftCasePageService {
       };
     }
 
+    const allowedKinds = [];
+
+    if (canViewClaims) {
+      allowedKinds.push(CASE_KINDS.CLAIM);
+    }
+
+    if (canViewDisputes) {
+      allowedKinds.push(CASE_KINDS.DISPUTE);
+    }
+
     return loadCasesPage({
       audience: AUDIENCES.EMPLOYER,
 
@@ -1982,9 +2603,19 @@ class ShiftCasePageService {
 
       page,
 
-      allowedKinds: [CASE_KINDS.CLAIM, CASE_KINDS.DISPUTE],
+      allowedKinds,
 
-      canManage: true,
+      canManageByKind: {
+        [CASE_KINDS.CLAIM]: canManageClaims,
+
+        [CASE_KINDS.DISPUTE]: canManageDisputes,
+      },
+
+      permissions: {
+        canViewCases,
+
+        canManageCases,
+      },
     });
   }
 
@@ -2002,7 +2633,17 @@ class ShiftCasePageService {
 
       allowedKinds: [CASE_KINDS.CLAIM, CASE_KINDS.DISPUTE],
 
-      canManage: true,
+      canManageByKind: {
+        [CASE_KINDS.CLAIM]: true,
+
+        [CASE_KINDS.DISPUTE]: true,
+      },
+
+      permissions: {
+        canViewCases: true,
+
+        canManageCases: true,
+      },
     });
   }
 }

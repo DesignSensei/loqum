@@ -1,9 +1,7 @@
 <!-- views/partials/cases/issue-card.ejs -->
 
-<%# ─────────────────────────────── ISSUE CARD ─────────────────────────────── %>
-
 <details class="border border-gray-300 rounded p-4" open>
-  <%# ─────────────────────────────── ISSUE HEADER ─────────────────────────────── %>
+  <!-- Issue header -->
 
   <summary class="d-flex flex-wrap align-items-center justify-content-between gap-3 cursor-pointer">
     <span class="fw-bold text-gray-900"> <%= issue.type.label %> </span>
@@ -12,101 +10,217 @@
   </summary>
 
   <div class="pt-4">
-    <%# ─────────────────────────────── ISSUE SCOPE / EVIDENCE ─────────────────────────────── %> <%
-    if (issue.affectedSettlementComponents.length || issue.evidenceCount) { %>
+    <!-- Settlement scope -->
 
-    <div class="d-flex flex-wrap gap-2 mb-3">
-      <% issue.affectedSettlementComponents.forEach((component) => { %>
+    <% if (issue.settlementScope?.components?.length) { %>
+    <div class="mb-4">
+      <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-2">
+        <%= issue.settlementScope.label %>
+      </div>
 
-      <span class="badge badge-light-info"> <%= component.label %> </span>
-
-      <% }); %> <% if (issue.evidenceCount) { %>
-
-      <span class="badge badge-light-secondary">
-        <%= issue.evidenceCount %> evidence item<%= issue.evidenceCount === 1 ? "" : "s" %>
-      </span>
-
-      <% } %>
+      <div class="d-flex flex-wrap gap-2">
+        <% issue.settlementScope.components.forEach((component) => { %>
+        <span class="badge badge-light-info"> <%= component.label %> </span>
+        <% }); %>
+      </div>
     </div>
+    <% } %>
 
-    <% } %> <%# ─────────────────────────────── ORIGINAL POSITION ─────────────────────────────── %>
+    <!-- Original submission -->
 
-    <div class="bg-light rounded p-4 mb-3">
+    <div class="bg-light rounded p-4 mb-4">
       <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Original statement</div>
 
       <div class="text-gray-800 fs-6"><%= issue.statement || "No statement recorded." %></div>
-    </div>
 
-    <%# ─────────────────────────────── EMPLOYER DECISION ─────────────────────────────── %> <% if
-    (issue.employerDecision) { %>
+      <% if (issue.originalPosition?.fields?.length) { %>
+      <div class="separator separator-dashed my-3"></div>
 
-    <div class="mb-3">
-      <span class="fw-bold text-gray-700"> Employer decision: </span>
+      <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-2">Submitted position</div>
 
-      <span class="text-gray-700"> <%= issue.employerDecision.label %> </span>
+      <div class="row g-3">
+        <% issue.originalPosition.fields.forEach((field) => { %>
+        <div class="col-md-6">
+          <div class="text-gray-500 fs-8 mb-1"><%= field.label %></div>
 
-      <% if (issue.employerDecisionReason) { %>
-
-      <div class="text-gray-600 mt-1"><%= issue.employerDecisionReason %></div>
-
+          <div class="fw-semibold text-gray-800"><%= field.displayValue %></div>
+        </div>
+        <% }); %>
+      </div>
       <% } %>
     </div>
 
-    <% } %> <%# ─────────────────────────────── PROFESSIONAL RESPONSE
-    ─────────────────────────────── %> <% if (issue.professionalResponseStatement) { %>
+    <!-- Original evidence -->
 
-    <div class="mb-3">
-      <span class="fw-bold text-gray-700"> Professional response: </span>
+    <% if (issue.submissionEvidence?.length) { %>
+    <div class="mb-4">
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <span class="fw-bold text-gray-700"> Submitted evidence </span>
 
-      <span class="text-gray-600"> <%= issue.professionalResponseStatement %> </span>
+        <span class="badge badge-light-secondary">
+          <%= issue.submissionEvidence.length %> item<%= issue.submissionEvidence.length === 1 ? ""
+          : "s" %>
+        </span>
+      </div>
+
+      <div class="d-flex flex-column gap-2">
+        <% issue.submissionEvidence.forEach((evidence) => { %>
+        <div class="border border-gray-300 rounded p-3">
+          <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+            <% if (evidence.type) { %>
+            <span class="badge badge-light"> <%= evidence.type %> </span>
+            <% } %> <% if (evidence.recordedAt) { %>
+            <span class="text-gray-500 fs-8"> <%= evidence.recordedAt.label %> </span>
+            <% } %>
+          </div>
+
+          <% if (evidence.description) { %>
+          <div class="text-gray-700"><%= evidence.description %></div>
+          <% } %> <% if (evidence.reference) { %>
+          <div class="text-gray-500 fs-7 mt-1">Reference: <%= evidence.reference %></div>
+          <% } %>
+        </div>
+        <% }); %>
+      </div>
     </div>
+    <% } %>
 
-    <% } %> <%# ─────────────────────────────── PROFESSIONAL APPEAL ───────────────────────────────
-    %> <% if (issue.appealStatement) { %>
+    <!-- Other party response -->
 
-    <div class="mb-3">
-      <span class="fw-bold text-gray-700"> Professional appeal: </span>
+    <% if (issue.partyResponse) { %>
+    <div class="border border-gray-300 rounded p-4 mb-4">
+      <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+        <div class="fw-bold text-gray-900"><%= issue.partyResponse.label %></div>
 
-      <span class="text-gray-600"> <%= issue.appealStatement %> </span>
+        <% if (issue.partyResponse.respondedAt) { %>
+        <div class="text-gray-500 fs-8"><%= issue.partyResponse.respondedAt.label %></div>
+        <% } %>
+      </div>
+
+      <!-- Response decision -->
+
+      <% if (issue.partyResponse.decision) { %>
+      <div class="mb-3">
+        <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Decision</div>
+
+        <div class="text-gray-700"><%= issue.partyResponse.decision.label %></div>
+      </div>
+      <% } %>
+
+      <!-- Response statement -->
+
+      <% if (issue.partyResponse.statement) { %>
+      <div class="mb-3">
+        <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Statement</div>
+
+        <div class="text-gray-700"><%= issue.partyResponse.statement %></div>
+      </div>
+      <% } %>
+
+      <!-- Response reason -->
+
+      <% if (issue.partyResponse.reason) { %>
+      <div class="mb-3">
+        <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Reason</div>
+
+        <div class="text-gray-700"><%= issue.partyResponse.reason %></div>
+      </div>
+      <% } %>
+
+      <!-- Counter-position -->
+
+      <% if (issue.partyResponse.counterPosition?.fields?.length) { %>
+      <div class="mb-3">
+        <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-2">Counter-position</div>
+
+        <div class="row g-3">
+          <% issue.partyResponse.counterPosition.fields.forEach((field) => { %>
+          <div class="col-md-6">
+            <div class="text-gray-500 fs-8 mb-1"><%= field.label %></div>
+
+            <div class="fw-semibold text-gray-800"><%= field.displayValue %></div>
+          </div>
+          <% }); %>
+        </div>
+      </div>
+      <% } %>
+
+      <!-- Response evidence -->
+
+      <% if (issue.partyResponse.evidence?.length) { %>
+      <div>
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <span class="text-gray-500 fs-8 text-uppercase fw-bold"> Supporting evidence </span>
+
+          <span class="badge badge-light-secondary">
+            <%= issue.partyResponse.evidence.length %> item<%= issue.partyResponse.evidence.length
+            === 1 ? "" : "s" %>
+          </span>
+        </div>
+
+        <div class="d-flex flex-column gap-2">
+          <% issue.partyResponse.evidence.forEach((evidence) => { %>
+          <div class="border border-gray-300 rounded p-3">
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+              <% if (evidence.type) { %>
+              <span class="badge badge-light"> <%= evidence.type %> </span>
+              <% } %> <% if (evidence.recordedAt) { %>
+              <span class="text-gray-500 fs-8"> <%= evidence.recordedAt.label %> </span>
+              <% } %>
+            </div>
+
+            <% if (evidence.description) { %>
+            <div class="text-gray-700"><%= evidence.description %></div>
+            <% } %> <% if (evidence.reference) { %>
+            <div class="text-gray-500 fs-7 mt-1">Reference: <%= evidence.reference %></div>
+            <% } %>
+          </div>
+          <% }); %>
+        </div>
+      </div>
+      <% } %>
     </div>
+    <% } %>
 
-    <% } %> <%# ─────────────────────────────── PROFESSIONAL REBUTTAL
-    ─────────────────────────────── %> <% if (issue.rebuttalStatement) { %>
+    <!-- Admin decision -->
 
-    <div class="mb-3">
-      <span class="fw-bold text-gray-700"> Professional rebuttal: </span>
+    <% if (issue.adminDecision) { %>
+    <div class="border-start border-3 border-gray-300 ps-4 mb-4">
+      <div class="fw-bold text-gray-700 mb-1">Admin decision</div>
 
-      <span class="text-gray-600"> <%= issue.rebuttalStatement %> </span>
-    </div>
-
-    <% } %> <%# ─────────────────────────────── ADMIN DECISION ─────────────────────────────── %> <%
-    if (issue.adminDecision) { %>
-
-    <div class="mb-3">
-      <span class="fw-bold text-gray-700"> Admin decision: </span>
-
-      <span class="text-gray-700"> <%= issue.adminDecision.label %> </span>
+      <div class="text-gray-700"><%= issue.adminDecision.label %></div>
 
       <% if (issue.adminDecisionReason) { %>
-
       <div class="text-gray-600 mt-1"><%= issue.adminDecisionReason %></div>
-
       <% } %>
     </div>
+    <% } %>
 
-    <% } %> <%# ─────────────────────────────── CURRENT DEADLINE ─────────────────────────────── %>
+    <!-- Admin adjudication context -->
+
+    <% if (issue.positions || issue.decisionPreview || issue.timeline?.length) { %> <%-
+    include("admin-context", { issue }) %> <% } %>
+
+    <!-- Current response deadline -->
+
     <% if (issue.deadline) { %>
-
-    <div class="alert alert-warning py-3 px-4 mb-3">
+    <div class="alert alert-warning py-3 px-4 mb-4">
       Response deadline:
 
       <strong> <%= issue.deadline.label %> </strong>
     </div>
+    <% } %>
 
-    <% } %> <%# ─────────────────────────────── PROFESSIONAL ACTIONS ───────────────────────────────
-    %> <%- include("professional-actions", { issue, csrfToken }) %> <%#
-    ─────────────────────────────── EMPLOYER ACTIONS ─────────────────────────────── %> <%-
-    include("employer-actions", { issue, csrfToken }) %> <%# ─────────────────────────────── ADMIN
-    ACTIONS ─────────────────────────────── %> <%- include("admin-actions", { issue, csrfToken }) %>
+    <!-- Professional actions -->
+
+    <%- include("professional-actions", { issue, csrfToken }) %>
+
+    <!-- Employer actions -->
+
+    <%- include("employer-actions", { issue, csrfToken }) %>
+
+    <!-- Admin actions -->
+
+    <%- include("admin-actions", { issue, csrfToken }) %>
   </div>
 </details>

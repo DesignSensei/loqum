@@ -3,7 +3,7 @@
 "use strict";
 
 var Cases = (function () {
-  /* ─────────────────────────────── MESSAGES ─────────────────────────────── */
+  /* Messages */
 
   function showMessage(form, message, success) {
     var messageElement = form.querySelector("[data-case-action-message]");
@@ -30,42 +30,259 @@ var Cases = (function () {
     messageElement.textContent = "";
   }
 
-  /* ─────────────────────────────── ADMIN ADJUSTED OUTCOME ─────────────────────────────── */
+  /* Form field state */
 
-  function synchronizeAdjustedOutcome(form) {
-    var decisionSelect = form.querySelector("[data-admin-decision]");
-    var adjustedOutcome = form.querySelector("[data-adjusted-outcome]");
-
-    if (!decisionSelect || !adjustedOutcome) {
+  function setFieldsEnabled(container, enabled) {
+    if (!container) {
       return;
     }
 
-    var enabled = decisionSelect.value === "adjusted";
+    container.querySelectorAll("input, textarea, select").forEach(function (field) {
+      field.disabled = !enabled;
+    });
+  }
 
-    adjustedOutcome.classList.toggle("d-none", !enabled);
+  /* Employer counter-position */
 
-    adjustedOutcome.querySelectorAll("input, textarea, select").forEach(function (field) {
+  function synchronizeEmployerCounterPosition(form) {
+    var decisionSelect = form.querySelector("[data-employer-review-decision]");
+
+    var counterPosition = form.querySelector("[data-employer-counter-position]");
+
+    if (!decisionSelect || !counterPosition) {
+      return;
+    }
+
+    var counterPositionDecision = decisionSelect.dataset.counterPositionDecision || "";
+
+    var enabled =
+      Boolean(counterPositionDecision) && decisionSelect.value === counterPositionDecision;
+
+    counterPosition.classList.toggle("d-none", !enabled);
+
+    setFieldsEnabled(counterPosition, enabled);
+  }
+
+  function bindEmployerDecisionFields() {
+    document.querySelectorAll("[data-employer-claim-review]").forEach(function (form) {
+      var decisionSelect = form.querySelector("[data-employer-review-decision]");
+
+      if (!decisionSelect) {
+        return;
+      }
+
+      decisionSelect.addEventListener("change", function () {
+        synchronizeEmployerCounterPosition(form);
+      });
+
+      synchronizeEmployerCounterPosition(form);
+    });
+  }
+
+  /* Admin authoritative outcome */
+
+  function getAdminOutcomeDecisions(decisionSelect) {
+    var rawValue = decisionSelect.dataset.adminOutcomeDecisions || "";
+
+    return rawValue
+      .split(",")
+      .map(function (value) {
+        return value.trim();
+      })
+      .filter(Boolean);
+  }
+
+  function synchronizeAdminOutcome(form) {
+    var decisionSelect = form.querySelector("[data-admin-decision]");
+
+    var adminOutcome = form.querySelector("[data-admin-outcome]");
+
+    if (!decisionSelect || !adminOutcome) {
+      return;
+    }
+
+    var outcomeDecisions = getAdminOutcomeDecisions(decisionSelect);
+
+    var enabled = Boolean(decisionSelect.value) && outcomeDecisions.includes(decisionSelect.value);
+
+    adminOutcome.classList.toggle("d-none", !enabled);
+
+    adminOutcome.querySelectorAll("[data-admin-outcome-input]").forEach(function (field) {
       field.disabled = !enabled;
     });
   }
 
   function bindAdminDecisionFields() {
-    document.querySelectorAll("[data-admin-decision]").forEach(function (decisionSelect) {
-      var form = decisionSelect.closest("[data-case-action-form]");
+    document.querySelectorAll("[data-admin-adjudication]").forEach(function (form) {
+      var decisionSelect = form.querySelector("[data-admin-decision]");
 
-      if (!form) {
+      if (!decisionSelect) {
         return;
       }
 
       decisionSelect.addEventListener("change", function () {
-        synchronizeAdjustedOutcome(form);
+        synchronizeAdminOutcome(form);
       });
 
-      synchronizeAdjustedOutcome(form);
+      synchronizeAdminOutcome(form);
     });
   }
 
-  /* ─────────────────────────────── SUBMISSION ─────────────────────────────── */
+  /* Evidence */
+
+  function getEvidenceRows(container) {
+    var list = container.querySelector("[data-evidence-list]");
+
+    if (!list) {
+      return [];
+    }
+
+    return Array.from(list.querySelectorAll("[data-evidence-row]"));
+  }
+
+  function getEvidenceMaxItems(container) {
+    var value = Number.parseInt(container.dataset.evidenceMaxItems || "0", 10);
+
+    return Number.isSafeInteger(value) && value > 0 ? value : 0;
+  }
+
+  function updateEvidenceLimitState(container) {
+    var rows = getEvidenceRows(container);
+
+    var maxItems = getEvidenceMaxItems(container);
+
+    var addButton = container.querySelector("[data-add-evidence]");
+
+    var limitMessage = container.querySelector("[data-evidence-limit-message]");
+
+    var atLimit = maxItems > 0 && rows.length >= maxItems;
+
+    if (addButton) {
+      addButton.disabled = atLimit;
+    }
+
+    if (limitMessage) {
+      limitMessage.classList.toggle("d-none", !atLimit);
+    }
+  }
+
+  function replaceEvidenceIndex(value, index) {
+    if (!value) {
+      return value;
+    }
+
+    return value
+      .replace(/evidence\[(?:__INDEX__|\d+)\]/g, "evidence[" + index + "]")
+      .replace(/__INDEX__/g, String(index));
+  }
+
+  function updateEvidenceRowIndex(row, index) {
+    var numberElement = row.querySelector("[data-evidence-number]");
+
+    if (numberElement) {
+      numberElement.textContent = String(index + 1);
+    }
+
+    row.querySelectorAll("[name]").forEach(function (field) {
+      field.name = replaceEvidenceIndex(field.name, index);
+    });
+
+    row.querySelectorAll("[id]").forEach(function (field) {
+      field.id = replaceEvidenceIndex(field.id, index);
+    });
+
+    row.querySelectorAll("label[for]").forEach(function (label) {
+      label.htmlFor = replaceEvidenceIndex(label.htmlFor, index);
+    });
+  }
+
+  function renumberEvidenceRows(container) {
+    getEvidenceRows(container).forEach(function (row, index) {
+      updateEvidenceRowIndex(row, index);
+    });
+
+    updateEvidenceLimitState(container);
+  }
+
+  function createEvidenceRow(container) {
+    var template = container.querySelector("[data-evidence-template]");
+
+    var list = container.querySelector("[data-evidence-list]");
+
+    if (!template || !list) {
+      return;
+    }
+
+    var maxItems = getEvidenceMaxItems(container);
+
+    var rows = getEvidenceRows(container);
+
+    if (maxItems > 0 && rows.length >= maxItems) {
+      updateEvidenceLimitState(container);
+
+      return;
+    }
+
+    var fragment = template.content.cloneNode(true);
+
+    var row = fragment.querySelector("[data-evidence-row]");
+
+    if (!row) {
+      return;
+    }
+
+    list.appendChild(fragment);
+
+    renumberEvidenceRows(container);
+
+    var firstField = row.querySelector("select, input, textarea");
+
+    if (firstField) {
+      firstField.focus();
+    }
+  }
+
+  function removeEvidenceRow(container, row) {
+    if (!row) {
+      return;
+    }
+
+    row.remove();
+
+    renumberEvidenceRows(container);
+  }
+
+  function bindEvidenceCollection(container) {
+    var addButton = container.querySelector("[data-add-evidence]");
+
+    if (addButton) {
+      addButton.addEventListener("click", function () {
+        createEvidenceRow(container);
+      });
+    }
+
+    container.addEventListener("click", function (event) {
+      var removeButton = event.target.closest("[data-remove-evidence]");
+
+      if (!removeButton || !container.contains(removeButton)) {
+        return;
+      }
+
+      var row = removeButton.closest("[data-evidence-row]");
+
+      removeEvidenceRow(container, row);
+    });
+
+    renumberEvidenceRows(container);
+  }
+
+  function bindEvidenceCollections() {
+    document.querySelectorAll("[data-case-evidence]").forEach(function (container) {
+      bindEvidenceCollection(container);
+    });
+  }
+
+  /* Submission */
 
   function setSubmitting(submitButton, submitting, originalText) {
     if (!submitButton) {
@@ -77,27 +294,47 @@ var Cases = (function () {
     submitButton.textContent = submitting ? "Submitting…" : originalText;
   }
 
+  async function readResponsePayload(response) {
+    var contentType = response.headers.get("content-type") || "";
+
+    if (contentType.includes("application/json")) {
+      return response.json();
+    }
+
+    var text = await response.text();
+
+    return {
+      success: response.ok,
+
+      message: text || null,
+    };
+  }
+
   async function submitCaseAction(form) {
     var submitButton = form.querySelector('[type="submit"]');
 
-    var originalButtonText = submitButton ? submitButton.textContent : "";
+    var originalButtonText = submitButton ? submitButton.textContent.trim() : "";
 
     clearMessage(form);
 
     setSubmitting(submitButton, true, originalButtonText);
 
     try {
+      var formData = new FormData(form);
+
       var response = await fetch(form.action, {
-        method: form.method || "POST",
+        method: (form.method || "POST").toUpperCase(),
 
         headers: {
           Accept: "application/json",
         },
 
-        body: new URLSearchParams(new FormData(form)),
+        credentials: "same-origin",
+
+        body: new URLSearchParams(formData),
       });
 
-      var payload = await response.json();
+      var payload = await readResponsePayload(response);
 
       if (!response.ok || payload.success === false) {
         throw new Error(payload.message || "The case action could not be completed.");
@@ -115,7 +352,7 @@ var Cases = (function () {
     }
   }
 
-  /* ─────────────────────────────── CASE ACTION FORMS ─────────────────────────────── */
+  /* Case action forms */
 
   function bindCaseActionForms() {
     document.querySelectorAll("[data-case-action-form]").forEach(function (form) {
@@ -127,11 +364,13 @@ var Cases = (function () {
     });
   }
 
-  /* ─────────────────────────────── PUBLIC ─────────────────────────────── */
+  /* Public */
 
   return {
     init: function () {
+      bindEmployerDecisionFields();
       bindAdminDecisionFields();
+      bindEvidenceCollections();
       bindCaseActionForms();
     },
   };

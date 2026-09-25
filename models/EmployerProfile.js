@@ -49,24 +49,29 @@ const { hasAnyValue, validateVerificationState } = require("./helpers/employerPr
  *    The money does not become employer available wallet balance first.
  *
  * DVA WALLET TOP-UP:
+ *
  * DVA is only for employer wallet top-up.
  * DVA should not directly fund shifts.
  * DVA should not directly credit escrow.
  *
  * GENERAL WALLET TOP-UP:
+ *
  * If the employer intentionally tops up their wallet or sends a transfer
  * not tied to a shift funding attempt, the employer wallet is credited.
  *
  * REFUNDS:
+ *
  * Excess escrow from cancellation, dispute resolution or proration can be
  * returned to the employer wallet.
  *
  * KYC:
+ *
  * This model stores employer KYC summary fields.
  * Detailed documents, provider references and review history should live in
  * KYCVerification.
  *
  * BANK ACCOUNT:
+ *
  * Withdrawal destination is managed through the BankAccount model.
  * No bank account details are embedded here.
  */
@@ -110,6 +115,30 @@ const employerProfileSchema = new mongoose.Schema(
       required: true,
       trim: true,
       maxlength: 150,
+    },
+
+    // --- PUBLIC BUSINESS PROFILE / BRANDING ---
+
+    logoUrl: {
+      type: String,
+      trim: true,
+      maxlength: 1000,
+      default: null,
+    },
+
+    publicDescription: {
+      type: String,
+      trim: true,
+      maxlength: 1500,
+      default: null,
+    },
+
+    websiteUrl: {
+      type: String,
+      trim: true,
+      maxlength: 1000,
+      default: null,
+      match: [/^https?:\/\/\S+$/i, "websiteUrl must be a valid HTTP or HTTPS URL."],
     },
 
     businessEmail: {

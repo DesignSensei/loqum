@@ -35,6 +35,7 @@ const employerRoutes = require("./routes/employerRoutes");
 const accountRoutes = require("./routes/accountRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
+const jobRoutes = require("./routes/jobRoutes");
 // const reviewRoutes = require("./routes/reviewRoutes");
 const webhookRoutes = require("./routes/webhookRoutes");
 
@@ -157,6 +158,8 @@ app.use(attachViewLocals);
 app.use(authRoutes);
 
 app.use(accountRoutes);
+
+app.use("/jobs", jobRoutes);
 
 app.use("/payments", paymentRoutes);
 

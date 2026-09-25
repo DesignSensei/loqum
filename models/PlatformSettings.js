@@ -208,7 +208,6 @@ const isSupportedFinancialRate = (value) => {
  * Employer non-response also routes unresolved employer-review issues to admin
  * review. It does not automatically approve or reject the professional's claim.
  *
- *
  * EMPLOYER DISPUTE REVIEW:
  *
  * A ShiftOccurrenceDispute is raised by the employer and is not adjudicated by
@@ -247,6 +246,18 @@ const isSupportedFinancialRate = (value) => {
  * Where employer fault or another ordinary financial fact is challenged, BASE
  * settlement advancement and related employer-refund execution remain subject
  * to the applicable unresolved claim or dispute.
+ *
+ * JOB BOARD AND EMPLOYER MONETISATION:
+ *
+ * jobBoardPolicy controls platform-wide permanent-Job availability and the
+ * commercial publication mode. It does not store subscription products,
+ * one-off Job posting products, payments, subscriptions or employer allowance
+ * balances. Those belong to their dedicated monetisation records.
+ *
+ * The default Job Board publication mode is hybrid. Each employer receives one
+ * free Job publication per month with no rollover. After the free monthly
+ * allowance has been consumed, another publication requires either an included
+ * subscription allowance or a PAYG publication entitlement.
  *
  * CREDITS:
  *
@@ -426,6 +437,45 @@ const shiftCancellationPolicySchema = new mongoose.Schema(
   }
 );
 
+/* ------------------------------- JOB BOARD POLICY ------------------------------- */
+
+const jobBoardPolicySchema = new mongoose.Schema(
+  {
+    isEnabled: {
+      type: Boolean,
+      default: true,
+      required: true,
+    },
+
+    publicationEnabled: {
+      type: Boolean,
+      default: true,
+      required: true,
+    },
+
+    publicationMode: {
+      type: String,
+      enum: ["free", "paid", "subscription", "hybrid"],
+      default: "hybrid",
+      required: true,
+    },
+
+    freeJobPostsPerMonth: nonNegativeIntegerField({
+      required: true,
+      defaultValue: 1,
+    }),
+
+    freeJobPostRolloverEnabled: {
+      type: Boolean,
+      default: false,
+      required: true,
+    },
+  },
+  {
+    _id: false,
+  }
+);
+
 /* ------------------------------- PLATFORM SETTINGS ------------------------------- */
 
 const platformSettingsSchema = new mongoose.Schema(
@@ -527,6 +577,7 @@ const platformSettingsSchema = new mongoose.Schema(
       label: "overtimeResponseHours",
       defaultValue: 24,
     }),
+
     // Time given to the employer to approve or reject a professional's
     // overtime request.
     //
@@ -540,6 +591,7 @@ const platformSettingsSchema = new mongoose.Schema(
       label: "overtimeTopUpDeadlineHours",
       defaultValue: 24,
     }),
+
     // Payment deadline after approved overtime creates an additional employer
     // funding obligation.
     //
@@ -550,6 +602,7 @@ const platformSettingsSchema = new mongoose.Schema(
       label: "overtimeTopUpRestrictionGraceHours",
       defaultValue: 72,
     }),
+
     // Grace period after an approved overtime top-up becomes overdue.
     //
     // During this period, Loqum warns and reminds the employer to pay.
@@ -621,6 +674,7 @@ const platformSettingsSchema = new mongoose.Schema(
         message: "professionalSettlementPayoutTimeZone must be a valid IANA time zone.",
       },
     },
+
     // These values determine the weekly payout boundary used when a professional
     // settlement component becomes approved_for_release.
     //
@@ -633,6 +687,7 @@ const platformSettingsSchema = new mongoose.Schema(
       required: true,
       defaultValue: 30,
     }),
+
     // Controls how early an assigned professional may attempt check-in.
     //
     // It does not control when an authorised employer may retrieve attendance
@@ -642,6 +697,7 @@ const platformSettingsSchema = new mongoose.Schema(
       required: true,
       defaultValue: 30,
     }),
+
     // For an assignment created before occurrence start, this is measured
     // from startTime.
     //
@@ -654,6 +710,7 @@ const platformSettingsSchema = new mongoose.Schema(
       required: true,
       defaultValue: 72,
     }),
+
     // Defines the normal notice threshold for an assigned professional
     // releasing one future occurrence while remaining assigned to the rest
     // of the Shift.
@@ -678,6 +735,7 @@ const platformSettingsSchema = new mongoose.Schema(
       label: "unfilledFinalizationGraceMinutes",
       defaultValue: 15,
     }),
+
     // An unassigned or replacement-required occurrence may become
     // expired_unfilled after:
     //
@@ -696,6 +754,7 @@ const platformSettingsSchema = new mongoose.Schema(
       label: "occurrenceClaimWindowHours",
       defaultValue: 24,
     }),
+
     // Retains its existing field name for compatibility, but controls the
     // shared original ordinary occurrence challenge window.
     //
@@ -719,6 +778,7 @@ const platformSettingsSchema = new mongoose.Schema(
       label: "employerClaimResponseHours",
       defaultValue: 24,
     }),
+
     // Controls how long the employer has to respond to a professional-originated
     // ordinary occurrence claim.
     //
@@ -734,6 +794,7 @@ const platformSettingsSchema = new mongoose.Schema(
       label: "professionalDisputeResponseHours",
       defaultValue: 24,
     }),
+
     // Controls how long the professional has to respond to an employer-originated
     // occurrence dispute.
     //
@@ -786,6 +847,27 @@ const platformSettingsSchema = new mongoose.Schema(
       default: () => ({}),
       required: true,
     },
+
+    // --- PERMANENT JOB BOARD / EMPLOYER MONETISATION POLICY ---
+
+    jobBoardPolicy: {
+      type: jobBoardPolicySchema,
+      default: () => ({}),
+      required: true,
+    },
+
+    // publicationMode controls how a new Job publication obtains commercial
+    // authority:
+    // - free: publication requires no paid or subscription entitlement;
+    // - paid: publication requires a PAYG Job posting entitlement;
+    // - subscription: publication requires an included subscription allowance;
+    // - hybrid: the entitlement service may use the employer's free monthly
+    //   allowance first, then subscription allowance or PAYG.
+    //
+    // freeJobPostsPerMonth and freeJobPostRolloverEnabled describe the intended
+    // recurring free tier. Consumption state is not stored in PlatformSettings;
+    // it must be tracked atomically by the publication-entitlement/monetisation
+    // domain.
 
     // --- CREDITS, DORMANT FOR NOW ---
 

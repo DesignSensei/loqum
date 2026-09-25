@@ -2,7 +2,14 @@
 
 /* ------------------------------- CATEGORIES ------------------------------- */
 
-exports.NOTIFICATION_CATEGORIES = Object.freeze(["finance", "shift", "team", "account", "system"]);
+exports.NOTIFICATION_CATEGORIES = Object.freeze([
+  "finance",
+  "shift",
+  "job",
+  "team",
+  "account",
+  "system",
+]);
 
 /* ------------------------------- STATUSES ------------------------------- */
 
@@ -71,6 +78,37 @@ exports.SHIFT_NOTIFICATION_TYPES = Object.freeze([
   "overtime_resolved",
 ]);
 
+/* ------------------------------- JOB TYPES ------------------------------- */
+
+exports.JOB_NOTIFICATION_TYPES = Object.freeze([
+  // Publication lifecycle
+  "job_published",
+  "job_publication_paused",
+  "job_publication_resumed",
+  "job_publication_expired",
+  "job_publication_ended",
+
+  // Application lifecycle
+  "job_application_received",
+  "job_application_under_review",
+  "job_application_shortlisted",
+  "job_application_rejected",
+  "job_application_withdrawn",
+
+  // Interview / appointment lifecycle
+  "job_interview_invited",
+  "job_interview_rescheduled",
+  "job_interview_confirmed",
+  "job_interview_declined",
+  "job_interview_cancelled",
+  "job_interview_reminder",
+  "job_interview_no_show",
+
+  // Offer / hiring lifecycle
+  "job_offer_received",
+  "job_application_hired",
+]);
+
 /* ------------------------------- TEAM TYPES ------------------------------- */
 
 exports.TEAM_NOTIFICATION_TYPES = Object.freeze([
@@ -93,6 +131,7 @@ exports.SYSTEM_NOTIFICATION_TYPES = Object.freeze(["system_message"]);
 exports.NOTIFICATION_TYPES = Object.freeze([
   ...exports.FINANCE_NOTIFICATION_TYPES,
   ...exports.SHIFT_NOTIFICATION_TYPES,
+  ...exports.JOB_NOTIFICATION_TYPES,
   ...exports.TEAM_NOTIFICATION_TYPES,
   ...exports.ACCOUNT_NOTIFICATION_TYPES,
   ...exports.SYSTEM_NOTIFICATION_TYPES,
@@ -107,6 +146,7 @@ exports.NOTIFICATION_TYPES = Object.freeze([
 exports.NOTIFICATION_TYPES_BY_CATEGORY = Object.freeze({
   finance: exports.FINANCE_NOTIFICATION_TYPES,
   shift: exports.SHIFT_NOTIFICATION_TYPES,
+  job: exports.JOB_NOTIFICATION_TYPES,
   team: exports.TEAM_NOTIFICATION_TYPES,
   account: exports.ACCOUNT_NOTIFICATION_TYPES,
   system: exports.SYSTEM_NOTIFICATION_TYPES,

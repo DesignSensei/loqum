@@ -88,6 +88,16 @@ const createNigeriaCountrySetting = () => ({
   isActive: true,
 });
 
+/* ---------- Job Board defaults ---------- */
+
+const createJobBoardPolicyDefaults = () => ({
+  isEnabled: true,
+  publicationEnabled: true,
+  publicationMode: "hybrid",
+  freeJobPostsPerMonth: 1,
+  freeJobPostRolloverEnabled: false,
+});
+
 /* ---------- Normalise code list ---------- */
 
 const normalizeCodeList = (values) => {
@@ -196,6 +206,9 @@ const createNewPlatformSettings = () => {
     supportedCurrencies: ["NGN"],
 
     countrySettings: [nigeriaSetting],
+
+    // Permanent Job Board policy.
+    jobBoardPolicy: createJobBoardPolicyDefaults(),
 
     // Compatibility fallbacks for existing services.
     platformFeeRate: nigeriaSetting.platformFeeRate,
@@ -315,6 +328,30 @@ const backfillNigeriaCountrySetting = ({
   });
 
   return nigeriaSetting;
+};
+
+/* ---------- Backfill Job Board policy ---------- */
+
+const backfillJobBoardPolicy = (settings) => {
+  const defaults = createJobBoardPolicyDefaults();
+
+  if (!settings.jobBoardPolicy) {
+    settings.jobBoardPolicy = {};
+  }
+
+  setWhenMissing(settings, "jobBoardPolicy.isEnabled", defaults.isEnabled);
+
+  setWhenMissing(settings, "jobBoardPolicy.publicationEnabled", defaults.publicationEnabled);
+
+  setWhenMissing(settings, "jobBoardPolicy.publicationMode", defaults.publicationMode);
+
+  setWhenMissing(settings, "jobBoardPolicy.freeJobPostsPerMonth", defaults.freeJobPostsPerMonth);
+
+  setWhenMissing(
+    settings,
+    "jobBoardPolicy.freeJobPostRolloverEnabled",
+    defaults.freeJobPostRolloverEnabled
+  );
 };
 
 /* ---------- Backfill general platform rules ---------- */
@@ -550,6 +587,8 @@ const seedPlatformSettings = async () => {
         retiredValues.retiredGlobalMaximumEmployerWalletBalance,
     });
 
+    backfillJobBoardPolicy(settings);
+
     synchroniseActiveCountryLists(settings);
 
     synchroniseDefaultCountry(settings);
@@ -562,6 +601,7 @@ const seedPlatformSettings = async () => {
    * - nested countrySettings validation runs
    * - Protected Shift policy validation runs
    * - cancellation policy validation runs
+   * - Job Board policy validation runs
    * - PlatformSettings pre("validate") middleware runs
    * - timestamps are updated normally
    */

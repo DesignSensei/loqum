@@ -78,6 +78,8 @@ const notificationSchema = new mongoose.Schema(
       default: null,
     },
 
+    // --- FINANCE RELATIONSHIPS ---
+
     relatedWallet: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Wallet",
@@ -89,6 +91,14 @@ const notificationSchema = new mongoose.Schema(
       ref: "Transaction",
       default: null,
     },
+
+    relatedEmployerRefund: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "EmployerRefund",
+      default: null,
+    },
+
+    // --- SHIFT RELATIONSHIPS ---
 
     relatedShift: {
       type: mongoose.Schema.Types.ObjectId,
@@ -114,15 +124,35 @@ const notificationSchema = new mongoose.Schema(
       default: null,
     },
 
-    relatedEmployerRefund: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "EmployerRefund",
-      default: null,
-    },
-
     relatedInvite: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Invite",
+      default: null,
+    },
+
+    // --- PERMANENT JOB RELATIONSHIPS ---
+
+    relatedJob: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Job",
+      default: null,
+    },
+
+    relatedJobPublication: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "JobPublication",
+      default: null,
+    },
+
+    relatedJobApplication: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "JobApplication",
+      default: null,
+    },
+
+    relatedAppointment: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Appointment",
       default: null,
     },
 
@@ -182,6 +212,26 @@ notificationSchema.index({
 
 notificationSchema.index({
   relatedEmployerRefund: 1,
+  createdAt: -1,
+});
+
+notificationSchema.index({
+  relatedJob: 1,
+  createdAt: -1,
+});
+
+notificationSchema.index({
+  relatedJobPublication: 1,
+  createdAt: -1,
+});
+
+notificationSchema.index({
+  relatedJobApplication: 1,
+  createdAt: -1,
+});
+
+notificationSchema.index({
+  relatedAppointment: 1,
   createdAt: -1,
 });
 

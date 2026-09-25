@@ -70,6 +70,14 @@ exports.hasDocumentValue = function hasDocumentValue(value) {
   return value !== null && value !== undefined && value !== "";
 };
 
+exports.hasAnyDocumentValue = function hasAnyDocumentValue(values) {
+  return Array.isArray(values) && values.some(exports.hasDocumentValue);
+};
+
+exports.nonEmptyText = function nonEmptyText(value) {
+  return typeof value === "string" && value.trim().length > 0;
+};
+
 exports.hasCompleteAmountTriple = function hasCompleteAmountTriple({
   professionalPay,
   platformFee,

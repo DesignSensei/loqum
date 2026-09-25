@@ -1,11 +1,12 @@
 // services/platformSettingsService.js
 
 const PlatformSettings = require("../models/PlatformSettings");
-
 const { FINANCIAL_RATE_SCALE } = require("../constants/shiftPosting");
 
 const money = require("../utils/money");
 const logger = require("../utils/logger");
+
+const JOB_PUBLICATION_MODES = ["free", "paid", "subscription", "hybrid"];
 
 class PlatformSettingsService {
   /* ─────────────────────────────── ERRORS ─────────────────────────────── */
@@ -139,6 +140,32 @@ class PlatformSettingsService {
     }
 
     return value;
+  }
+
+  static assertBoolean(value, fieldName) {
+    if (typeof value !== "boolean") {
+      throw this.createSettingsError({
+        message: `${fieldName} must be a boolean.`,
+        code: "INVALID_PLATFORM_SETTING",
+      });
+    }
+
+    return value;
+  }
+
+  static assertJobPublicationMode(value) {
+    const publicationMode = String(value || "")
+      .trim()
+      .toLowerCase();
+
+    if (!JOB_PUBLICATION_MODES.includes(publicationMode)) {
+      throw this.createSettingsError({
+        message: "The configured Job publication mode is invalid.",
+        code: "INVALID_JOB_PUBLICATION_MODE",
+      });
+    }
+
+    return publicationMode;
   }
 
   /* ─────────────────────────────── ACTIVE SETTINGS ─────────────────────────────── */
@@ -378,6 +405,46 @@ class PlatformSettingsService {
     };
   }
 
+  /* ─────────────────────────────── JOB BOARD POLICY ─────────────────────────────── */
+
+  static buildJobBoardPolicy(settings) {
+    const configuredPolicy =
+      settings.jobBoardPolicy && typeof settings.jobBoardPolicy === "object"
+        ? settings.jobBoardPolicy
+        : {};
+
+    const isEnabled = configuredPolicy.isEnabled ?? true;
+
+    const publicationEnabled = configuredPolicy.publicationEnabled ?? true;
+
+    const publicationMode = configuredPolicy.publicationMode ?? "hybrid";
+
+    const freeJobPostsPerMonth = configuredPolicy.freeJobPostsPerMonth ?? 1;
+
+    const freeJobPostRolloverEnabled = configuredPolicy.freeJobPostRolloverEnabled ?? false;
+
+    return {
+      isEnabled: this.assertBoolean(isEnabled, "jobBoardPolicy.isEnabled"),
+
+      publicationEnabled: this.assertBoolean(
+        publicationEnabled,
+        "jobBoardPolicy.publicationEnabled"
+      ),
+
+      publicationMode: this.assertJobPublicationMode(publicationMode),
+
+      freeJobPostsPerMonth: this.assertNonNegativeInteger(
+        freeJobPostsPerMonth,
+        "jobBoardPolicy.freeJobPostsPerMonth"
+      ),
+
+      freeJobPostRolloverEnabled: this.assertBoolean(
+        freeJobPostRolloverEnabled,
+        "jobBoardPolicy.freeJobPostRolloverEnabled"
+      ),
+    };
+  }
+
   /* ─────────────────────────────── PUBLIC GETTERS ─────────────────────────────── */
 
   static async getCountrySettings(countryCode) {
@@ -408,6 +475,12 @@ class PlatformSettingsService {
     const settings = await this.getActiveSettings();
 
     return this.buildShiftCancellationPolicy(settings);
+  }
+
+  static async getJobBoardPolicy() {
+    const settings = await this.getActiveSettings();
+
+    return this.buildJobBoardPolicy(settings);
   }
 
   static async getShiftPostingSettings(countryCode) {

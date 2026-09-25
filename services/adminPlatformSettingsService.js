@@ -10,6 +10,8 @@ const money = require("../utils/money");
 
 const FACILITY_TYPES = Object.freeze(["pharmacy", "clinic", "hospital", "laboratory"]);
 
+const JOB_PUBLICATION_MODES = Object.freeze(["free", "paid", "subscription", "hybrid"]);
+
 class AdminPlatformSettingsService {
   /* ------------------------------- GENERIC HELPERS ------------------------------- */
 
@@ -116,6 +118,18 @@ class AdminPlatformSettingsService {
     }
 
     return value;
+  }
+
+  static normalizeJobPublicationMode(value) {
+    const normalizedMode = String(value || "")
+      .trim()
+      .toLowerCase();
+
+    if (!JOB_PUBLICATION_MODES.includes(normalizedMode)) {
+      throw new Error(`Job publication mode must be one of: ${JOB_PUBLICATION_MODES.join(", ")}.`);
+    }
+
+    return normalizedMode;
   }
 
   static normalizeTimeZone(value, fieldName) {
@@ -489,15 +503,10 @@ class AdminPlatformSettingsService {
       countryCode,
       currency,
       platformFeeRate,
-
       maximumEmployerWalletExternalTopupBalance,
-
       minimumEmployerWithdrawalAmount,
-
       minimumProfessionalWithdrawalAmount,
-
       protectedShiftLimits,
-
       isActive: true,
     });
 
@@ -986,6 +995,90 @@ class AdminPlatformSettingsService {
         maximumGeofenceRadiusMeters: settings.maximumGeofenceRadiusMeters,
 
         maximumLocationAccuracyMeters: settings.maximumLocationAccuracyMeters,
+      },
+    };
+  }
+
+  /* ------------------------------- JOB BOARD POLICY ------------------------------- */
+
+  static async updateJobBoardPolicy({
+    isEnabled,
+    publicationEnabled,
+    publicationMode,
+    freeJobPostsPerMonth,
+    freeJobPostRolloverEnabled,
+    updatedBy,
+    session = null,
+  }) {
+    AdminPlatformSettingsService.assertAtLeastOneProvided(
+      [
+        isEnabled,
+        publicationEnabled,
+        publicationMode,
+        freeJobPostsPerMonth,
+        freeJobPostRolloverEnabled,
+      ],
+      "At least one Job Board policy setting must be provided."
+    );
+
+    const settings = await AdminPlatformSettingsService.getActivePlatformSettings({
+      session,
+    });
+
+    if (!settings.jobBoardPolicy) {
+      settings.jobBoardPolicy = {};
+    }
+
+    if (AdminPlatformSettingsService.isProvided(isEnabled)) {
+      settings.jobBoardPolicy.isEnabled = AdminPlatformSettingsService.normalizeBoolean(
+        isEnabled,
+        "jobBoardPolicy.isEnabled"
+      );
+    }
+
+    if (AdminPlatformSettingsService.isProvided(publicationEnabled)) {
+      settings.jobBoardPolicy.publicationEnabled = AdminPlatformSettingsService.normalizeBoolean(
+        publicationEnabled,
+        "jobBoardPolicy.publicationEnabled"
+      );
+    }
+
+    if (AdminPlatformSettingsService.isProvided(publicationMode)) {
+      settings.jobBoardPolicy.publicationMode =
+        AdminPlatformSettingsService.normalizeJobPublicationMode(publicationMode);
+    }
+
+    if (AdminPlatformSettingsService.isProvided(freeJobPostsPerMonth)) {
+      settings.jobBoardPolicy.freeJobPostsPerMonth =
+        AdminPlatformSettingsService.normalizeNonNegativeInteger(
+          freeJobPostsPerMonth,
+          "jobBoardPolicy.freeJobPostsPerMonth"
+        );
+    }
+
+    if (AdminPlatformSettingsService.isProvided(freeJobPostRolloverEnabled)) {
+      settings.jobBoardPolicy.freeJobPostRolloverEnabled =
+        AdminPlatformSettingsService.normalizeBoolean(
+          freeJobPostRolloverEnabled,
+          "jobBoardPolicy.freeJobPostRolloverEnabled"
+        );
+    }
+
+    await AdminPlatformSettingsService.saveSettings(settings, updatedBy, session);
+
+    return {
+      settings,
+
+      jobBoardPolicy: {
+        isEnabled: settings.jobBoardPolicy.isEnabled,
+
+        publicationEnabled: settings.jobBoardPolicy.publicationEnabled,
+
+        publicationMode: settings.jobBoardPolicy.publicationMode,
+
+        freeJobPostsPerMonth: settings.jobBoardPolicy.freeJobPostsPerMonth,
+
+        freeJobPostRolloverEnabled: settings.jobBoardPolicy.freeJobPostRolloverEnabled,
       },
     };
   }

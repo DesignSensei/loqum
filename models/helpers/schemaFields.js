@@ -1,15 +1,21 @@
 // models/helpers/schemaFields.js
 
-const isNonNegativeSafeInteger = (value) =>
-  value === null || value === undefined || (Number.isSafeInteger(value) && value >= 0);
+const mongoose = require("mongoose");
+
+const { isNonNegativeSafeInteger, nonEmptyText } = require("./schemaValidators");
+
+/* ─────────────────────────────── NUMBER FIELDS ─────────────────────────────── */
 
 exports.minorUnitAmountField = ({ required = false, defaultValue, select } = {}) => {
   const field = {
     type: Number,
     required,
     min: 0,
+
     validate: {
-      validator: isNonNegativeSafeInteger,
+      validator: (value) =>
+        value === null || value === undefined || isNonNegativeSafeInteger(value),
+
       message: ({ path }) => `${path} must be a non-negative whole number in minor units.`,
     },
   };
@@ -30,8 +36,10 @@ exports.nonNegativeIntegerField = ({ required = false, defaultValue = 0 } = {}) 
   required,
   default: defaultValue,
   min: 0,
+
   validate: {
-    validator: isNonNegativeSafeInteger,
+    validator: (value) => value === null || value === undefined || isNonNegativeSafeInteger(value),
+
     message: ({ path }) => `${path} must be a non-negative whole number.`,
   },
 });
@@ -41,6 +49,7 @@ exports.positiveSafeIntegerField = ({ defaultValue, required = true, minimum = 1
     type: Number,
     required,
     min: minimum,
+
     validate: {
       validator: Number.isSafeInteger,
       message: "Value must be a safe whole number.",
@@ -59,6 +68,7 @@ exports.requiredPositiveSafeIntegerField = ({ label, maximum = null }) => {
     type: Number,
     required: true,
     min: [1, `${label} must be at least 1.`],
+
     validate: {
       validator: Number.isSafeInteger,
       message: `${label} must be a safe whole number.`,
@@ -76,11 +86,27 @@ exports.requiredPositiveMinorUnitAmountField = (label) => ({
   type: Number,
   required: true,
   min: [1, `${label} must be at least 1 minor unit.`],
+
   validate: {
     validator: Number.isSafeInteger,
     message: `${label} must be a safe whole-number minor-unit amount.`,
   },
 });
+
+/* ─────────────────────────────── DATE / REFERENCE FIELDS ─────────────────────────────── */
+
+exports.nullableDateField = () => ({
+  type: Date,
+  default: null,
+});
+
+exports.nullableReferenceField = (ref) => ({
+  type: mongoose.Schema.Types.ObjectId,
+  ref,
+  default: null,
+});
+
+/* ─────────────────────────────── ARRAY FIELDS ─────────────────────────────── */
 
 exports.requiredUniqueEnumArrayField = ({
   values,
@@ -93,15 +119,43 @@ exports.requiredUniqueEnumArrayField = ({
       enum: values,
     },
   ],
+
   required: true,
   default: undefined,
   immutable,
+
   validate: {
     validator: (items) =>
       Array.isArray(items) &&
       items.length > 0 &&
       items.length <= values.length &&
       new Set(items).size === items.length,
+
     message,
+  },
+});
+
+/**
+ * Creates an optional array of trimmed, non-empty strings.
+ *
+ * Domain-specific limits are supplied by the consuming model rather than
+ * being embedded in this shared helper.
+ */
+exports.textListField = ({ itemMaxLength, maxItems }) => ({
+  type: [
+    {
+      type: String,
+      trim: true,
+      maxlength: itemMaxLength,
+    },
+  ],
+
+  default: [],
+
+  validate: {
+    validator: (items) =>
+      Array.isArray(items) && items.length <= maxItems && items.every(nonEmptyText),
+
+    message: `Values must contain no more than ${maxItems} non-empty items.`,
   },
 });

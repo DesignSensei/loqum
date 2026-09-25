@@ -27,6 +27,10 @@ const inviteController = require("../controllers/inviteController");
 const teamMemberController = require("../controllers/teamMemberController");
 const employerBillingController = require("../controllers/employerBillingController");
 
+const employerJobController = require("../controllers/employerJobController");
+const employerJobApplicationController = require("../controllers/employerJobApplicationController");
+const employerJobAppointmentController = require("../controllers/employerJobAppointmentController");
+
 const employerShiftController = require("../controllers/employerShiftController");
 const employerShiftApplicationController = require("../controllers/employerShiftApplicationController");
 const employerShiftAssignmentController = require("../controllers/employerShiftAssignmentController");
@@ -53,6 +57,7 @@ router.get("/dashboard", employerController.getDashboard);
 /* ───────────────────── CASES ───────────────────── */
 
 // Read access is scoped by employer context; mutation authority remains service-owned.
+
 router.get("/cases", employerShiftClaimController.getCases);
 
 /* ───────────────────── BUSINESS PROFILE ───────────────────── */
@@ -114,11 +119,134 @@ router.post("/business-profile/invites/:inviteId/revoke", inviteController.postR
 
 router.post("/business-profile/invites/revoke", inviteController.postRevokeInvite);
 
+/* ───────────────────── PERMANENT JOB PAGES ───────────────────── */
+
+router.get("/jobs", employerJobController.getJobs);
+
+// Keep the focused-applications route before /jobs/:jobId.
+
+router.get("/jobs/:jobId/applications", employerJobApplicationController.getApplications);
+
+router.get("/jobs/:jobId", employerJobController.getJob);
+
+/* ───────────────────── PERMANENT JOB MASTER COMMANDS ───────────────────── */
+
+router.post("/jobs", employerJobController.createDraft);
+
+router.post("/jobs/:jobId/update", employerJobController.updateJob);
+
+router.post("/jobs/:jobId/archive", employerJobController.archiveJob);
+
+router.post("/jobs/:jobId/delete", employerJobController.deleteDraftJob);
+
+/* ───────────────────── JOB PUBLICATION COMMANDS ───────────────────── */
+
+/**
+ * Publish and renew resolve commercial publication authority inside
+ * JobPublicationEntitlementService through the controller.
+ *
+ * The client must never supply or construct an entitlement grant.
+ */
+
+router.post("/jobs/:jobId/publish", employerJobController.publishJob);
+
+router.post("/jobs/:jobId/renew", employerJobController.renewJobPublication);
+
+router.post("/job-publications/:publicationId/pause", employerJobController.pausePublication);
+
+router.post("/job-publications/:publicationId/resume", employerJobController.resumePublication);
+
+router.post(
+  "/job-publications/:publicationId/application-deadline",
+  employerJobController.adjustApplicationDeadline
+);
+
+router.post("/job-publications/:publicationId/end", employerJobController.endPublication);
+
+router.post("/jobs/:jobId/close-recruitment", employerJobController.closeRecruitment);
+
+/* ───────────────────── JOB APPLICATION PAGES ───────────────────── */
+
+router.get("/job-applications", employerJobApplicationController.getApplications);
+
+router.get("/job-applications/:applicationId", employerJobApplicationController.getApplication);
+
+/* ───────────────────── JOB APPLICATION COMMANDS ───────────────────── */
+
+router.post(
+  "/job-applications/:applicationId/under-review",
+  employerJobApplicationController.markUnderReview
+);
+
+router.post(
+  "/job-applications/:applicationId/shortlist",
+  employerJobApplicationController.shortlistApplication
+);
+
+router.post(
+  "/job-applications/:applicationId/interview",
+  employerJobApplicationController.moveApplicationToInterview
+);
+
+router.post(
+  "/job-applications/:applicationId/offer",
+  employerJobApplicationController.offerApplication
+);
+
+router.post(
+  "/job-applications/:applicationId/reject",
+  employerJobApplicationController.rejectApplication
+);
+
+/**
+ * Hiring must use the publication finalization flow in the controller/service.
+ * Never wire this route to a bare JobApplicationService.hireApplication() call.
+ */
+
+router.post(
+  "/job-applications/:applicationId/hire",
+  employerJobApplicationController.hireApplication
+);
+
+/* ───────────────────── JOB INTERVIEW PAGES ───────────────────── */
+
+router.get("/job-appointments", employerJobAppointmentController.getAppointments);
+
+router.get("/job-appointments/:appointmentId", employerJobAppointmentController.getAppointment);
+
+/* ───────────────────── JOB INTERVIEW COMMANDS ───────────────────── */
+
+router.post(
+  "/job-applications/:applicationId/interviews",
+  employerJobAppointmentController.inviteApplicationToInterview
+);
+
+router.post(
+  "/job-appointments/:appointmentId/reschedule",
+  employerJobAppointmentController.rescheduleAppointment
+);
+
+router.post(
+  "/job-appointments/:appointmentId/cancel",
+  employerJobAppointmentController.cancelAppointment
+);
+
+router.post(
+  "/job-appointments/:appointmentId/complete",
+  employerJobAppointmentController.completeAppointment
+);
+
+router.post(
+  "/job-appointments/:appointmentId/no-show",
+  employerJobAppointmentController.recordNoShow
+);
+
 /* ───────────────────── SHIFT PAGES ───────────────────── */
 
 router.get("/shifts", employerShiftController.getManageShifts);
 
 // Keep literal sub-pages before parameterized /shifts/:shiftId routes.
+
 router.get("/shifts/applications", employerShiftApplicationController.getApplications);
 
 router.get("/shifts/assignments", employerShiftAssignmentController.getAssignments);
@@ -128,11 +256,13 @@ router.get("/shifts/attendance", employerShiftAttendanceController.getAttendance
 router.get("/shifts/:shiftId/occurrences", employerShiftController.getShiftOccurrences);
 
 // Existing-Shift resolution remains available during delinquency.
+
 router.get("/shifts/:shiftId/cancellation-preview", employerShiftController.getCancellationPreview);
 
 /* ───────────────────── SHIFT APPLICATIONS ───────────────────── */
 
 // Shortlisting and rejection only change application state.
+
 router.post(
   "/shifts/applications/:applicationId/shortlist",
   employerShiftApplicationController.shortlistApplication
@@ -149,6 +279,7 @@ router.post(
  * The application service owns the fresh delinquency check before
  * creating the new obligation.
  */
+
 router.post(
   "/shifts/applications/:applicationId/accept",
   employerShiftApplicationController.acceptApplication
@@ -162,6 +293,7 @@ router.post(
  * ShiftAssignmentCaseService owns business/branch authorization
  * and lifecycle validity.
  */
+
 router.post(
   "/shifts/assignments/:assignmentId/issues",
   employerShiftAssignmentController.reportAssignmentIssue
@@ -200,6 +332,7 @@ router.get(
  * ShiftOvertimeService owns authorization, deadline validity,
  * decision validity and financial consequences.
  */
+
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/overtime/approve",
   employerShiftOvertimeController.approveOvertime
@@ -216,6 +349,7 @@ router.post(
  * Paying existing employer debt must remain available during
  * delinquency. Do not apply canPostShifts to these routes.
  */
+
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/overtime/top-up/wallet",
   employerShiftOvertimeController.fundOvertimeTopUpFromWallet
@@ -237,12 +371,14 @@ router.post(
  * The dispute service owns authorization, scope, overlap,
  * challenge-window validity and financial consequences.
  */
+
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/disputes",
   employerShiftClaimController.submitDispute
 );
 
 // Withdrawal is allowed only while the dispute remains withdrawable.
+
 router.post("/shifts/disputes/:disputeId/withdraw", employerShiftClaimController.withdrawDispute);
 
 /* ───────────────────── PROFESSIONAL CLAIM REVIEW ───────────────────── */
@@ -255,6 +391,7 @@ router.post("/shifts/disputes/:disputeId/withdraw", employerShiftClaimController
  *
  * There is no second response, rebuttal or appeal.
  */
+
 router.post(
   "/shifts/claims/:claimId/issues/:issueId/review",
   employerShiftClaimController.reviewClaim
@@ -263,11 +400,13 @@ router.post(
 /* ───────────────────── SHIFT DETAILS ───────────────────── */
 
 // Keep after more-specific /shifts/... GET routes.
+
 router.get("/shifts/:shiftId", employerShiftController.getShiftDetails);
 
 /* ───────────────────── SHIFT CREATION ───────────────────── */
 
 // Shift creation introduces a new employer obligation.
+
 router.post("/shifts", canPostShifts, employerShiftController.postShift);
 
 /* ───────────────────── INITIAL SHIFT FUNDING ───────────────────── */
@@ -278,6 +417,7 @@ router.post("/shifts", canPostShifts, employerShiftController.postShift);
  * New-obligation restrictions apply. canFundShifts remains separate
  * from general wallet-management authority.
  */
+
 router.post(
   "/shifts/:shiftId/fund-from-wallet",
   canPostShifts,
@@ -295,6 +435,7 @@ router.post(
 /* ───────────────────── SHIFT LIFECYCLE ───────────────────── */
 
 // Cancellation reduces or closes an existing obligation.
+
 router.post("/shifts/:shiftId/cancel", employerShiftController.postCancelShift);
 
 /**
@@ -302,6 +443,7 @@ router.post("/shifts/:shiftId/cancel", employerShiftController.postCancelShift);
  *
  * This is the authoritative route used by ShiftViewService.
  */
+
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/active-work-cancellation",
   employerShiftController.postActiveWorkCancellation
@@ -315,6 +457,7 @@ router.post(
  * Branch managers may inspect wallet information but may not
  * withdraw funds or modify wallet/account configuration.
  */
+
 router.get("/billing", canViewWallet, employerBillingController.getBilling);
 
 router.get("/billing/wallet", canViewWallet, (req, res) => {
@@ -327,6 +470,7 @@ router.get("/billing/wallet", canViewWallet, (req, res) => {
  * These actions remain limited to users with wallet-management
  * authority.
  */
+
 router.post("/billing/setup-dva", canManageWallet, employerBillingController.postSetupDVA);
 
 router.post(

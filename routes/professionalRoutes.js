@@ -13,11 +13,14 @@ const {
 } = require("../middleware/authMiddleware");
 
 const { attachProfessionalProfile } = require("../middleware/professionalMiddleware");
+const { parseJobApplicationResumeUpload } = require("../middleware/uploadMiddleware");
 
 const professionalController = require("../controllers/professionalController");
+const professionalJobController = require("../controllers/professionalJobController");
+const professionalJobApplicationController = require("../controllers/professionalJobApplicationController");
+const professionalJobAppointmentController = require("../controllers/professionalJobAppointmentController");
 
 const professionalShiftAttendanceController = require("../controllers/professionalShiftAttendanceController");
-
 const professionalShiftClaimController = require("../controllers/professionalShiftClaimController");
 
 /* ─────────────────────────────── MIDDLEWARE ─────────────────────────────── */
@@ -36,6 +39,55 @@ router.use(
 router.get("/dashboard", professionalController.getDashboard);
 
 router.get("/cases", professionalShiftClaimController.getCases);
+
+/* ─────────────────────────────── SAVED JOBS ─────────────────────────────── */
+
+router.get("/jobs/saved", professionalJobController.getSavedJobs);
+
+router.post("/jobs/:jobId/save", professionalJobController.saveJob);
+
+router.delete("/jobs/:jobId/save", professionalJobController.unsaveJob);
+
+/* ─────────────────────────────── JOB APPLICATIONS ─────────────────────────────── */
+
+router.get("/job-applications", professionalJobApplicationController.getApplications);
+
+router.get("/job-applications/:applicationId", professionalJobApplicationController.getApplication);
+
+/**
+ * Application identity is the exact JobPublication cycle.
+ *
+ * A fresh CV upload is parsed, validated and stored by trusted middleware.
+ * The resulting metadata is placed on req.jobApplicationResumeUpload.
+ *
+ * The controller never trusts raw resume metadata from req.body.
+ */
+router.post(
+  "/job-publications/:publicationId/apply",
+  parseJobApplicationResumeUpload,
+  professionalJobApplicationController.submitApplication
+);
+
+router.post(
+  "/job-applications/:applicationId/withdraw",
+  professionalJobApplicationController.withdrawApplication
+);
+
+/* ─────────────────────────────── JOB INTERVIEWS ─────────────────────────────── */
+
+router.get("/job-appointments", professionalJobAppointmentController.getAppointments);
+
+router.get("/job-appointments/:appointmentId", professionalJobAppointmentController.getAppointment);
+
+router.post(
+  "/job-appointments/:appointmentId/confirm",
+  professionalJobAppointmentController.confirmAppointment
+);
+
+router.post(
+  "/job-appointments/:appointmentId/decline",
+  professionalJobAppointmentController.declineAppointment
+);
 
 /* ─────────────────────────────── SHIFT ATTENDANCE ─────────────────────────────── */
 

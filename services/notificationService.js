@@ -184,6 +184,11 @@ class NotificationService {
       relatedEmployerRefund = null,
       relatedInvite = null,
 
+      relatedJob = null,
+      relatedJobPublication = null,
+      relatedJobApplication = null,
+      relatedAppointment = null,
+
       metadata = {},
     },
     options = {}
@@ -197,7 +202,6 @@ class NotificationService {
     }
 
     const normalizedCategory = NotificationService.normalizeCategory(category);
-
     const normalizedType = NotificationService.normalizeType(type);
 
     NotificationService.assertTypeMatchesCategory({
@@ -206,7 +210,6 @@ class NotificationService {
     });
 
     const cleanTitle = NotificationService.cleanString(title);
-
     const cleanMessage = NotificationService.cleanString(message);
 
     if (!cleanTitle) {
@@ -228,7 +231,6 @@ class NotificationService {
 
       title: cleanTitle,
       message: cleanMessage,
-
       actionUrl: NotificationService.cleanString(actionUrl),
 
       relatedWallet,
@@ -239,6 +241,11 @@ class NotificationService {
       relatedDispute,
       relatedEmployerRefund,
       relatedInvite,
+
+      relatedJob,
+      relatedJobPublication,
+      relatedJobApplication,
+      relatedAppointment,
 
       metadata: NotificationService.normalizeMetadata(metadata),
     };
@@ -255,7 +262,7 @@ class NotificationService {
    * Generic idempotency boundary for lifecycle notifications.
    *
    * notificationKey is delivery identity only. Domain identity remains on the
-   * first-class related Shift/occurrence/claim/dispute/refund fields.
+   * first-class related entity fields.
    */
   static async createNotificationOnce(
     {
@@ -281,19 +288,21 @@ class NotificationService {
       relatedEmployerRefund = null,
       relatedInvite = null,
 
+      relatedJob = null,
+      relatedJobPublication = null,
+      relatedJobApplication = null,
+      relatedAppointment = null,
+
       metadata = {},
     },
     options = {}
   ) {
     const normalizedNotificationKey = NotificationService.normalizeNotificationKey(notificationKey);
-
     const normalizedType = NotificationService.normalizeType(type);
 
     const existingQuery = Notification.findOne({
       recipientUser,
-
       type: normalizedType,
-
       "metadata.notificationKey": normalizedNotificationKey,
     });
 
@@ -328,9 +337,13 @@ class NotificationService {
         relatedEmployerRefund,
         relatedInvite,
 
+        relatedJob,
+        relatedJobPublication,
+        relatedJobApplication,
+        relatedAppointment,
+
         metadata: {
           ...NotificationService.normalizeMetadata(metadata),
-
           notificationKey: normalizedNotificationKey,
         },
       },
@@ -358,6 +371,12 @@ class NotificationService {
       relatedClaim = null,
       relatedDispute = null,
       relatedEmployerRefund = null,
+      relatedInvite = null,
+
+      relatedJob = null,
+      relatedJobPublication = null,
+      relatedJobApplication = null,
+      relatedAppointment = null,
 
       metadata = {},
     },
@@ -371,9 +390,7 @@ class NotificationService {
 
     const existingQuery = Notification.findOne({
       recipientUser,
-
       type: normalizedType,
-
       relatedTransaction,
     });
 
@@ -406,6 +423,12 @@ class NotificationService {
         relatedClaim,
         relatedDispute,
         relatedEmployerRefund,
+        relatedInvite,
+
+        relatedJob,
+        relatedJobPublication,
+        relatedJobApplication,
+        relatedAppointment,
 
         metadata,
       },
@@ -436,6 +459,11 @@ class NotificationService {
       relatedEmployerRefund = null,
       relatedInvite = null,
 
+      relatedJob = null,
+      relatedJobPublication = null,
+      relatedJobApplication = null,
+      relatedAppointment = null,
+
       metadata = {},
     },
     options = {}
@@ -466,6 +494,11 @@ class NotificationService {
         relatedDispute,
         relatedEmployerRefund,
         relatedInvite,
+
+        relatedJob,
+        relatedJobPublication,
+        relatedJobApplication,
+        relatedAppointment,
 
         metadata,
       },
@@ -494,6 +527,11 @@ class NotificationService {
       relatedEmployerRefund = null,
       relatedInvite = null,
 
+      relatedJob = null,
+      relatedJobPublication = null,
+      relatedJobApplication = null,
+      relatedAppointment = null,
+
       metadata = {},
     },
     options = {}
@@ -525,6 +563,11 @@ class NotificationService {
         relatedEmployerRefund,
         relatedInvite,
 
+        relatedJob,
+        relatedJobPublication,
+        relatedJobApplication,
+        relatedAppointment,
+
         metadata,
       },
       options
@@ -551,6 +594,12 @@ class NotificationService {
       relatedClaim = null,
       relatedDispute = null,
       relatedEmployerRefund = null,
+      relatedInvite = null,
+
+      relatedJob = null,
+      relatedJobPublication = null,
+      relatedJobApplication = null,
+      relatedAppointment = null,
 
       metadata = {},
     },
@@ -582,6 +631,12 @@ class NotificationService {
         relatedClaim,
         relatedDispute,
         relatedEmployerRefund,
+        relatedInvite,
+
+        relatedJob,
+        relatedJobPublication,
+        relatedJobApplication,
+        relatedAppointment,
 
         metadata,
       },
@@ -609,6 +664,12 @@ class NotificationService {
       relatedClaim = null,
       relatedDispute = null,
       relatedEmployerRefund = null,
+      relatedInvite = null,
+
+      relatedJob = null,
+      relatedJobPublication = null,
+      relatedJobApplication = null,
+      relatedAppointment = null,
 
       metadata = {},
     },
@@ -640,6 +701,132 @@ class NotificationService {
         relatedClaim,
         relatedDispute,
         relatedEmployerRefund,
+        relatedInvite,
+
+        relatedJob,
+        relatedJobPublication,
+        relatedJobApplication,
+        relatedAppointment,
+
+        metadata,
+      },
+      options
+    );
+  }
+
+  /* ─────────────────────────────── JOB LIFECYCLE ─────────────────────────────── */
+
+  static async createEmployerJobLifecycleNotification(
+    {
+      notificationKey,
+
+      recipientUser,
+      employer,
+
+      type,
+      title,
+      message,
+      actionUrl = null,
+
+      relatedJob,
+      relatedJobPublication = null,
+      relatedJobApplication = null,
+      relatedAppointment = null,
+      relatedTransaction = null,
+
+      metadata = {},
+    },
+    options = {}
+  ) {
+    if (!relatedJob) {
+      throw new Error("Related Job is required for a Job lifecycle notification.");
+    }
+
+    const normalizedType = NotificationService.normalizeType(type);
+
+    NotificationService.assertTypeMatchesCategory({
+      category: "job",
+      type: normalizedType,
+    });
+
+    return NotificationService.createEmployerLifecycleNotification(
+      {
+        notificationKey,
+
+        recipientUser,
+        employer,
+
+        category: "job",
+        type: normalizedType,
+
+        title,
+        message,
+        actionUrl,
+
+        relatedTransaction,
+        relatedJob,
+        relatedJobPublication,
+        relatedJobApplication,
+        relatedAppointment,
+
+        metadata,
+      },
+      options
+    );
+  }
+
+  static async createProfessionalJobLifecycleNotification(
+    {
+      notificationKey,
+
+      recipientUser,
+      professional,
+
+      type,
+      title,
+      message,
+      actionUrl = null,
+
+      relatedJob,
+      relatedJobPublication = null,
+      relatedJobApplication = null,
+      relatedAppointment = null,
+      relatedTransaction = null,
+
+      metadata = {},
+    },
+    options = {}
+  ) {
+    if (!relatedJob) {
+      throw new Error("Related Job is required for a Job lifecycle notification.");
+    }
+
+    const normalizedType = NotificationService.normalizeType(type);
+
+    NotificationService.assertTypeMatchesCategory({
+      category: "job",
+      type: normalizedType,
+    });
+
+    return NotificationService.createProfessionalLifecycleNotification(
+      {
+        notificationKey,
+
+        recipientUser,
+        professional,
+
+        category: "job",
+        type: normalizedType,
+
+        title,
+        message,
+        actionUrl,
+
+        relatedTransaction,
+        relatedJob,
+        relatedJobPublication,
+        relatedJobApplication,
+        relatedAppointment,
 
         metadata,
       },
@@ -682,13 +869,11 @@ class NotificationService {
         type: "wallet_funded",
 
         title: "Wallet funded",
-
         message: `${amountDisplay} has been added to your employer wallet.`,
 
         actionUrl: "/employer/billing",
 
         relatedWallet: wallet._id,
-
         relatedTransaction: transaction._id,
 
         metadata: {
@@ -738,13 +923,11 @@ class NotificationService {
         type: "withdrawal_submitted",
 
         title: "Withdrawal submitted",
-
         message: `Your withdrawal request of ${amountDisplay} has been submitted.`,
 
         actionUrl: "/employer/billing#withdrawal-status",
 
         relatedWallet: wallet._id,
-
         relatedTransaction: transaction._id,
 
         metadata: {
@@ -794,13 +977,11 @@ class NotificationService {
         type: "withdrawal_completed",
 
         title: "Withdrawal completed",
-
         message: `Your withdrawal of ${amountDisplay} has been completed.`,
 
         actionUrl: "/employer/billing#withdrawal-status",
 
         relatedWallet: wallet._id,
-
         relatedTransaction: transaction._id,
 
         metadata: {
@@ -850,7 +1031,6 @@ class NotificationService {
         type: "withdrawal_reversed",
 
         title: "Withdrawal reversed",
-
         message:
           `Your withdrawal of ${amountDisplay} could not be completed, ` +
           "so the amount has been returned to your wallet.",
@@ -858,7 +1038,6 @@ class NotificationService {
         actionUrl: "/employer/billing#withdrawal-status",
 
         relatedWallet: wallet._id,
-
         relatedTransaction: transaction._id,
 
         metadata: {
@@ -885,7 +1064,6 @@ class NotificationService {
       type = null,
 
       limit = DEFAULT_NOTIFICATION_LIMIT,
-
       createdAfter = null,
     } = {}
   ) {
@@ -948,7 +1126,6 @@ class NotificationService {
 
     const query = {
       recipientUser: userId,
-
       status: "unread",
     };
 
@@ -966,13 +1143,7 @@ class NotificationService {
   /* ─────────────────────────────── READ STATE ─────────────────────────────── */
 
   static async markNotificationAsRead(
-    {
-      notificationId,
-
-      recipientUser,
-
-      currentTime = new Date(),
-    },
+    { notificationId, recipientUser, currentTime = new Date() },
     options = {}
   ) {
     if (!notificationId) {
@@ -993,21 +1164,17 @@ class NotificationService {
     return Notification.findOneAndUpdate(
       {
         _id: notificationId,
-
         recipientUser,
       },
       {
         $set: {
           status: "read",
-
           readAt,
         },
       },
       {
         returnDocument: "after",
-
         runValidators: true,
-
         session: options.session || null,
       }
     );
@@ -1015,11 +1182,7 @@ class NotificationService {
 
   static async markAllUserNotificationsAsRead(
     userId,
-    {
-      currentTime = new Date(),
-
-      session = null,
-    } = {}
+    { currentTime = new Date(), session = null } = {}
   ) {
     if (!userId) {
       throw new Error("User ID is required.");
@@ -1035,13 +1198,11 @@ class NotificationService {
     return Notification.updateMany(
       {
         recipientUser: userId,
-
         status: "unread",
       },
       {
         $set: {
           status: "read",
-
           readAt,
         },
       },

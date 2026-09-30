@@ -15,6 +15,8 @@ const money = require("../utils/money");
 const FACILITY_TYPES = ["pharmacy", "clinic", "hospital", "laboratory"];
 
 const MAX_OCCURRENCES_PER_PARENT_SHIFT = 30;
+const FREE_JOB_POSTS_PER_MONTH = 1;
+const FREE_JOB_POST_ROLLOVER_ENABLED = false;
 
 const normalizeCodeList = (values, fallback) => {
   if (!Array.isArray(values)) {
@@ -256,8 +258,8 @@ const isSupportedFinancialRate = (value) => {
  *
  * The default Job Board publication mode is hybrid. Each employer receives one
  * free Job publication per month with no rollover. After the free monthly
- * allowance has been consumed, another publication requires either an included
- * subscription allowance or a PAYG publication entitlement.
+ * allowance has been consumed, another publication requires either an available
+ * subscription Job slot or a PAYG publication entitlement.
  *
  * CREDITS:
  *
@@ -309,7 +311,7 @@ protectedShiftFacilityPolicySchema.pre("validate", function validateProtectedShi
 const protectedShiftLimitsSchema = new mongoose.Schema(
   {
     pharmacy: {
-      type: protectedShiftFacilityPolicySchema,
+      type: protectedShiftLimitsSchema,
       required: true,
     },
 
@@ -460,15 +462,29 @@ const jobBoardPolicySchema = new mongoose.Schema(
       required: true,
     },
 
-    freeJobPostsPerMonth: nonNegativeIntegerField({
+    freeJobPostsPerMonth: {
+      type: Number,
+      default: FREE_JOB_POSTS_PER_MONTH,
       required: true,
-      defaultValue: 1,
-    }),
+      validate: {
+        validator(value) {
+          return Number.isSafeInteger(value) && value === FREE_JOB_POSTS_PER_MONTH;
+        },
+        message:
+          "jobBoardPolicy.freeJobPostsPerMonth must be exactly 1 publication per UTC calendar month.",
+      },
+    },
 
     freeJobPostRolloverEnabled: {
       type: Boolean,
-      default: false,
+      default: FREE_JOB_POST_ROLLOVER_ENABLED,
       required: true,
+      validate: {
+        validator(value) {
+          return value === FREE_JOB_POST_ROLLOVER_ENABLED;
+        },
+        message: "jobBoardPolicy.freeJobPostRolloverEnabled must remain false.",
+      },
     },
   },
   {
@@ -860,12 +876,13 @@ const platformSettingsSchema = new mongoose.Schema(
     // authority:
     // - free: publication requires no paid or subscription entitlement;
     // - paid: publication requires a PAYG Job posting entitlement;
-    // - subscription: publication requires an included subscription allowance;
+    // - subscription: publication requires an available subscription Job slot;
     // - hybrid: the entitlement service may use the employer's free monthly
-    //   allowance first, then subscription allowance or PAYG.
+    //   allowance first, then an available subscription Job slot or PAYG.
     //
-    // freeJobPostsPerMonth and freeJobPostRolloverEnabled describe the intended
-    // recurring free tier. Consumption state is not stored in PlatformSettings;
+    // freeJobPostsPerMonth and freeJobPostRolloverEnabled are fixed product invariants:
+    // exactly one free publication per UTC calendar month with no rollover.
+    // Consumption state is not stored in PlatformSettings;
     // it must be tracked atomically by the publication-entitlement/monetisation
     // domain.
 

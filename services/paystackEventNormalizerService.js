@@ -19,6 +19,7 @@ class PaystackEventNormalizerService {
     if (typeof value !== "string" && !(typeof value === "number" && Number.isSafeInteger(value))) {
       throw new Error("Provider text must be a string or safe integer identifier.");
     }
+
     const cleanValue = String(value).trim();
 
     return cleanValue || null;
@@ -46,6 +47,7 @@ class PaystackEventNormalizerService {
     if (typeof value !== "number" && !(typeof value === "string" && /^\d+$/.test(value))) {
       throw new Error("Provider amount must be an integer in minor units.");
     }
+
     const normalizedValue = Number(value);
 
     if (!Number.isSafeInteger(normalizedValue) || normalizedValue < 0) {
@@ -61,9 +63,11 @@ class PaystackEventNormalizerService {
     }
 
     const id = PaystackEventNormalizerService.cleanString(value);
+
     if (!id || !/^[1-9]\d*$/.test(id)) {
       throw new Error("Provider resource ID must be a positive integer identifier.");
     }
+
     return id;
   }
 
@@ -82,9 +86,29 @@ class PaystackEventNormalizerService {
   static getPaystackMetadata(payload = {}) {
     const data = PaystackEventNormalizerService.getData(payload);
 
-    const metadata = data?.metadata;
+    let metadata = data?.metadata;
 
-    return metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata : {};
+    if (
+      metadata === null ||
+      metadata === undefined ||
+      (typeof metadata === "string" && !metadata.trim())
+    ) {
+      return {};
+    }
+
+    if (typeof metadata === "string") {
+      try {
+        metadata = JSON.parse(metadata);
+      } catch {
+        throw new Error("Paystack metadata must contain a valid JSON object.");
+      }
+    }
+
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+      throw new Error("Paystack metadata must be an object.");
+    }
+
+    return metadata;
   }
 
   static getTransferRecipientMetadata(payload = {}) {
@@ -301,6 +325,7 @@ class PaystackEventNormalizerService {
     if (!Number.isSafeInteger(netAmount) || netAmount < 0) {
       throw new Error("Provider fee cannot exceed the event amount.");
     }
+
     return netAmount;
   }
 
@@ -310,42 +335,53 @@ class PaystackEventNormalizerService {
     const data = PaystackEventNormalizerService.getData(payload);
 
     const eventName = PaystackEventNormalizerService.getEventName(payload);
+
     const isMoneyEvent =
       eventName === "charge.success" ||
       eventName?.startsWith("transfer.") ||
       REFUND_EVENT_NAMES.has(eventName);
+
     const currency = PaystackEventNormalizerService.cleanUpperString(
       data.currency ?? (isMoneyEvent ? null : options.defaultCurrency)
     );
+
     if (!currency || !/^[A-Z]{3}$/.test(currency)) {
       throw new Error(
         "Provider event requires a valid currency; financial events cannot use a default."
       );
     }
+
     return currency;
   }
 
   static getCountryCode(payload = {}, options = {}) {
     const currency = PaystackEventNormalizerService.getCurrency(payload, options);
+
     const mapped = PaystackEventNormalizerService.cleanUpperString(
       options.currencyCountryMap?.[currency]
     );
+
     const explicit = PaystackEventNormalizerService.cleanUpperString(options.countryCode);
+
     if (mapped && explicit && mapped !== explicit) {
       throw new Error("Explicit provider country conflicts with the currency-country mapping.");
     }
+
     const defaultCurrency = PaystackEventNormalizerService.cleanUpperString(
       options.defaultCurrency
     );
+
     const country =
       explicit ||
       mapped ||
       (currency === defaultCurrency
         ? PaystackEventNormalizerService.cleanUpperString(options.defaultCountryCode)
         : null);
+
     if (!country || !/^[A-Z]{2}$/.test(country)) {
       throw new Error("Provider event country could not be resolved for its currency.");
     }
+
     return country;
   }
 
@@ -401,13 +437,16 @@ class PaystackEventNormalizerService {
       .map((part) => part.trim())
       .filter((part) => part.startsWith("key="))
       .map((part) => part.slice(4));
+
     const uniqueKeys = [...new Set(keys)];
+
     if (
       uniqueKeys.length > 1 ||
       uniqueKeys.some((key) => !key || key.length > 200 || /[\r\n]/.test(key))
     ) {
       throw new Error("Refund note contains an invalid or ambiguous trace key.");
     }
+
     return uniqueKeys[0] || null;
   }
 
@@ -440,9 +479,18 @@ class PaystackEventNormalizerService {
 
     const value = data.fully_deducted ?? data.fullyDeducted;
 
-    if (value === null || value === undefined) return null;
-    if (value === true || value === 1) return true;
-    if (value === false || value === 0) return false;
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    if (value === true || value === 1) {
+      return true;
+    }
+
+    if (value === false || value === 0) {
+      return false;
+    }
+
     throw new Error("Refund fully-deducted value is invalid.");
   }
 
@@ -479,6 +527,12 @@ class PaystackEventNormalizerService {
 
     const purpose = PaystackEventNormalizerService.cleanLowerString(metadata.purpose);
 
+    // Explicit commercial purchases must not be captured by legacy Shift
+    // funding hints or a stray shiftId on checkout metadata.
+    if (["subscription_payment", "job_publication_purchase"].includes(purpose)) {
+      return false;
+    }
+
     const fundingType = PaystackEventNormalizerService.cleanLowerString(metadata.fundingType);
 
     const paymentRail = PaystackEventNormalizerService.cleanLowerString(metadata.paymentRail);
@@ -504,6 +558,54 @@ class PaystackEventNormalizerService {
     return paymentRail === "paystack_checkout" && Boolean(shiftId);
   }
 
+  static isJobPublicationPaymentEvent(payload = {}) {
+    const eventName = PaystackEventNormalizerService.getEventName(payload);
+
+    if (eventName !== "charge.success") {
+      return false;
+    }
+
+    const metadata = PaystackEventNormalizerService.getPaystackMetadata(payload);
+
+    const purpose = PaystackEventNormalizerService.cleanLowerString(metadata.purpose);
+
+    return purpose === "job_publication_purchase";
+  }
+
+  static isSubscriptionPaymentEvent(payload = {}) {
+    const eventName = PaystackEventNormalizerService.getEventName(payload);
+
+    if (eventName !== "charge.success") {
+      return false;
+    }
+
+    const metadata = PaystackEventNormalizerService.getPaystackMetadata(payload);
+
+    const purpose = PaystackEventNormalizerService.cleanLowerString(metadata.purpose);
+
+    return purpose === "subscription_payment";
+  }
+
+  static getSubscriptionPaymentKind(payload = {}, { required = false } = {}) {
+    const metadata = PaystackEventNormalizerService.getPaystackMetadata(payload);
+
+    const paymentKind = PaystackEventNormalizerService.cleanLowerString(metadata.paymentKind);
+
+    if (!paymentKind) {
+      if (required) {
+        throw new Error("Subscription payment event requires paymentKind metadata.");
+      }
+
+      return null;
+    }
+
+    if (!["initial_purchase", "plan_change", "renewal"].includes(paymentKind)) {
+      throw new Error("Subscription payment event contains an unsupported paymentKind.");
+    }
+
+    return paymentKind;
+  }
+
   static isEmployerWalletFundingEvent(payload = {}) {
     const eventName = PaystackEventNormalizerService.getEventName(payload);
 
@@ -514,10 +616,15 @@ class PaystackEventNormalizerService {
     }
 
     /*
-     * Shift Checkout and DVA deposits both arrive as charge.success.
-     * Shift Checkout must be excluded before checking DVA signals.
+     * Shift Checkout, commercial Checkout payments and DVA deposits can all
+     * arrive as charge.success. Commercial purchases must be excluded before
+     * checking DVA signals.
      */
-    if (PaystackEventNormalizerService.isShiftCheckoutPaymentEvent(payload)) {
+    if (
+      PaystackEventNormalizerService.isShiftCheckoutPaymentEvent(payload) ||
+      PaystackEventNormalizerService.isJobPublicationPaymentEvent(payload) ||
+      PaystackEventNormalizerService.isSubscriptionPaymentEvent(payload)
+    ) {
       return false;
     }
 
@@ -607,6 +714,18 @@ class PaystackEventNormalizerService {
 
     if (PaystackEventNormalizerService.isShiftCheckoutPaymentEvent(payload)) {
       return "shift_checkout_payment";
+    }
+
+    if (PaystackEventNormalizerService.isJobPublicationPaymentEvent(payload)) {
+      return "job_publication_purchase";
+    }
+
+    if (PaystackEventNormalizerService.isSubscriptionPaymentEvent(payload)) {
+      PaystackEventNormalizerService.getSubscriptionPaymentKind(payload, {
+        required: true,
+      });
+
+      return "subscription_payment";
     }
 
     if (PaystackEventNormalizerService.isEmployerWalletFundingEvent(payload)) {
@@ -709,6 +828,34 @@ class PaystackEventNormalizerService {
 
       paymentRail: PaystackEventNormalizerService.cleanLowerString(metadata.paymentRail),
 
+      paymentReference: PaystackEventNormalizerService.cleanString(metadata.paymentReference),
+
+      paymentKind: PaystackEventNormalizerService.isSubscriptionPaymentEvent(payload)
+        ? PaystackEventNormalizerService.getSubscriptionPaymentKind(payload, {
+            required: true,
+          })
+        : PaystackEventNormalizerService.cleanLowerString(metadata.paymentKind),
+
+      paymentMethod: PaystackEventNormalizerService.cleanLowerString(metadata.paymentMethod),
+
+      jobPaymentId: PaystackEventNormalizerService.cleanString(metadata.jobPaymentId),
+
+      jobPostingPlanId: PaystackEventNormalizerService.cleanString(metadata.jobPostingPlanId),
+
+      subscriptionPaymentId: PaystackEventNormalizerService.cleanString(
+        metadata.subscriptionPaymentId
+      ),
+
+      subscriptionId: PaystackEventNormalizerService.cleanString(metadata.subscriptionId),
+
+      subscriptionPlanId: PaystackEventNormalizerService.cleanString(metadata.subscriptionPlanId),
+
+      billingCycleKey: PaystackEventNormalizerService.cleanString(metadata.billingCycleKey),
+
+      planCode: PaystackEventNormalizerService.cleanString(metadata.planCode),
+
+      planVersion: PaystackEventNormalizerService.cleanString(metadata.planVersion),
+
       /* ───────── REFUND PROVIDER STATE ───────── */
 
       providerRefundId,
@@ -783,9 +930,11 @@ class PaystackEventNormalizerService {
     const countryCode = PaystackEventNormalizerService.getCountryCode(payload, options);
 
     const metadata = PaystackEventNormalizerService.normalizeMetadata(payload);
+
     const isTransfer = ["transfer.success", "transfer.failed", "transfer.reversed"].includes(
       eventName
     );
+
     if (isTransfer) {
       if (!metadata.transferReference) {
         throw new Error("Transfer event requires its reference, not just its transfer code.");
@@ -833,6 +982,28 @@ class PaystackEventNormalizerService {
       : PaystackEventNormalizerService.cleanString(paystackMetadata.transactionId) ||
         PaystackEventNormalizerService.cleanString(paystackMetadata.withdrawalTransactionId) ||
         null;
+
+    const paymentReference = metadata.paymentReference || null;
+
+    const paymentKind = metadata.paymentKind || null;
+
+    const paymentMethod = metadata.paymentMethod || null;
+
+    const jobPaymentId = metadata.jobPaymentId || null;
+
+    const jobPostingPlanId = metadata.jobPostingPlanId || null;
+
+    const subscriptionPaymentId = metadata.subscriptionPaymentId || null;
+
+    const subscriptionId = metadata.subscriptionId || null;
+
+    const subscriptionPlanId = metadata.subscriptionPlanId || null;
+
+    const billingCycleKey = metadata.billingCycleKey || null;
+
+    const planCode = metadata.planCode || null;
+
+    const planVersion = metadata.planVersion || null;
 
     const originalTransactionReference = metadata.originalTransactionReference || null;
 
@@ -885,6 +1056,20 @@ class PaystackEventNormalizerService {
         fundingType: metadata.fundingType,
 
         paymentRail: metadata.paymentRail,
+
+        paymentReference,
+
+        paymentKind,
+
+        paymentMethod,
+
+        jobPaymentId,
+
+        subscriptionPaymentId,
+
+        subscriptionId,
+
+        subscriptionPlanId,
 
         refundStatus: metadata.refundStatus,
 
@@ -949,6 +1134,28 @@ class PaystackEventNormalizerService {
         fundingType: metadata.fundingType,
 
         paymentRail: metadata.paymentRail,
+
+        paymentReference,
+
+        paymentKind,
+
+        paymentMethod,
+
+        jobPaymentId,
+
+        jobPostingPlanId,
+
+        subscriptionPaymentId,
+
+        subscriptionId,
+
+        subscriptionPlanId,
+
+        billingCycleKey,
+
+        planCode,
+
+        planVersion,
 
         employerProfileId,
 

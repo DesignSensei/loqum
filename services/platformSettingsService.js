@@ -6,7 +6,10 @@ const { FINANCIAL_RATE_SCALE } = require("../constants/shiftPosting");
 const money = require("../utils/money");
 const logger = require("../utils/logger");
 
-const JOB_PUBLICATION_MODES = ["free", "paid", "subscription", "hybrid"];
+const JOB_PUBLICATION_MODES = Object.freeze(["free", "paid", "subscription", "hybrid"]);
+
+const FREE_JOB_POSTS_PER_MONTH = 1;
+const FREE_JOB_POST_ROLLOVER_ENABLED = false;
 
 class PlatformSettingsService {
   /* ─────────────────────────────── ERRORS ─────────────────────────────── */
@@ -419,9 +422,26 @@ class PlatformSettingsService {
 
     const publicationMode = configuredPolicy.publicationMode ?? "hybrid";
 
-    const freeJobPostsPerMonth = configuredPolicy.freeJobPostsPerMonth ?? 1;
+    if (
+      configuredPolicy.freeJobPostsPerMonth !== undefined &&
+      configuredPolicy.freeJobPostsPerMonth !== FREE_JOB_POSTS_PER_MONTH
+    ) {
+      throw this.createSettingsError({
+        message:
+          "The free Job publication allowance must be exactly one publication per UTC calendar month.",
+        code: "INVALID_FREE_JOB_POSTING_ALLOWANCE",
+      });
+    }
 
-    const freeJobPostRolloverEnabled = configuredPolicy.freeJobPostRolloverEnabled ?? false;
+    if (
+      configuredPolicy.freeJobPostRolloverEnabled !== undefined &&
+      configuredPolicy.freeJobPostRolloverEnabled !== FREE_JOB_POST_ROLLOVER_ENABLED
+    ) {
+      throw this.createSettingsError({
+        message: "Free Job publication rollover must remain disabled.",
+        code: "FREE_JOB_POSTING_ROLLOVER_NOT_SUPPORTED",
+      });
+    }
 
     return {
       isEnabled: this.assertBoolean(isEnabled, "jobBoardPolicy.isEnabled"),
@@ -433,15 +453,9 @@ class PlatformSettingsService {
 
       publicationMode: this.assertJobPublicationMode(publicationMode),
 
-      freeJobPostsPerMonth: this.assertNonNegativeInteger(
-        freeJobPostsPerMonth,
-        "jobBoardPolicy.freeJobPostsPerMonth"
-      ),
+      freeJobPostsPerMonth: FREE_JOB_POSTS_PER_MONTH,
 
-      freeJobPostRolloverEnabled: this.assertBoolean(
-        freeJobPostRolloverEnabled,
-        "jobBoardPolicy.freeJobPostRolloverEnabled"
-      ),
+      freeJobPostRolloverEnabled: FREE_JOB_POST_ROLLOVER_ENABLED,
     };
   }
 

@@ -4,11 +4,16 @@ const EmployerProfile = require("../models/EmployerProfile");
 const Transaction = require("../models/Transaction");
 const ShiftOccurrence = require("../models/ShiftOccurrence");
 const BankAccount = require("../models/BankAccount");
+const JobPublication = require("../models/JobPublication");
+const Subscription = require("../models/Subscription");
+const SubscriptionPayment = require("../models/SubscriptionPayment");
 
 const DVAService = require("./dvaService");
 const WalletService = require("./walletService");
 const BankProviderService = require("./bankProviderService");
 const EmployerDelinquencyService = require("./employerDelinquencyService");
+const SubscriptionService = require("./subscriptionService");
+const SubscriptionJobLifecycleService = require("./subscriptionJobLifecycleService");
 
 const money = require("../utils/money");
 const { badgeClass, formatStatus } = require("../utils/statusHelper");
@@ -22,32 +27,26 @@ const TRANSACTION_FILTER_DEFINITIONS = Object.freeze([
     value: "all",
     label: "All transactions",
   }),
-
   Object.freeze({
     value: "money_added",
     label: "Money added",
   }),
-
   Object.freeze({
     value: "money_used",
     label: "Money used",
   }),
-
   Object.freeze({
     value: "refunds",
     label: "Refunds",
   }),
-
   Object.freeze({
     value: "withdrawals",
     label: "Withdrawals",
   }),
-
   Object.freeze({
     value: "pending",
     label: "Pending",
   }),
-
   Object.freeze({
     value: "failed",
     label: "Failed",
@@ -362,12 +361,10 @@ class EmployerBillingService {
       )
       .populate({
         path: "shift",
-
         select: "referenceCode roleTitle scheduleMode",
       })
       .sort({
         "overtime.topUpDeadlineAt": 1,
-
         startTime: -1,
       })
       .lean();
@@ -542,10 +539,6 @@ class EmployerBillingService {
         ? state.blockingOccurrences
         : [],
 
-      /*
-       * First-level delinquency restricts new obligations only.
-       * It does not freeze the employer wallet or block debt resolution.
-       */
       walletUsable: true,
 
       message: restricted
@@ -581,7 +574,6 @@ class EmployerBillingService {
       {
         $match: {
           wallet: walletId,
-
           status: "completed",
         },
       },
@@ -1021,7 +1013,6 @@ class EmployerBillingService {
     for (let page = startPage; page <= endPage; page += 1) {
       pages.push({
         page,
-
         isActive: page === currentPage,
       });
     }
@@ -1095,17 +1086,14 @@ class EmployerBillingService {
     const transactions = await Transaction.find(queryFilter)
       .populate({
         path: "shift",
-
         select: "referenceCode roleTitle scheduleMode",
       })
       .populate({
         path: "shiftOccurrence",
-
         select: "referenceCode sequenceNumber startTime",
       })
       .populate({
         path: "settlementBatch",
-
         select: "referenceCode payoutDate settlementComponent",
       })
       .sort({
@@ -1125,14 +1113,12 @@ class EmployerBillingService {
 
     const pages = EmployerBillingService.buildPaginationPages({
       currentPage,
-
       totalPages,
     }).map((pageItem) => ({
       ...pageItem,
 
       url: EmployerBillingService.buildTransactionsUrl({
         filter: selectedFilter,
-
         page: pageItem.page,
       }),
     }));
@@ -1170,7 +1156,6 @@ class EmployerBillingService {
             ? null
             : EmployerBillingService.buildTransactionsUrl({
                 filter: selectedFilter,
-
                 page: previousPage,
               }),
 
@@ -1179,7 +1164,6 @@ class EmployerBillingService {
             ? null
             : EmployerBillingService.buildTransactionsUrl({
                 filter: selectedFilter,
-
                 page: nextPage,
               }),
 
@@ -1234,12 +1218,6 @@ class EmployerBillingService {
 
     const isActive = bankAccount.isActive !== false;
 
-    /*
-     * Match WalletWithdrawalService / PaystackTransferService readiness.
-     *
-     * A Paystack recipient code is deliberately not required here because the
-     * Transfer service creates and persists the recipient lazily when needed.
-     */
     const canWithdraw = Boolean(
       isActive && isVerified && accountNumber && accountName && paystackBankCode
     );
@@ -1308,7 +1286,6 @@ class EmployerBillingService {
   static async resolveWithdrawalAccount({ paystackBankCode, accountNumber }) {
     return BankProviderService.resolveAccountNumber({
       paystackBankCode,
-
       accountNumber,
     });
   }
@@ -1368,13 +1345,6 @@ class EmployerBillingService {
       throw new Error("Account number must be 10 digits.");
     }
 
-    /*
-     * Complete external verification BEFORE changing the
-     * currently active account.
-     *
-     * A Paystack/network failure here must leave the existing
-     * withdrawal account untouched.
-     */
     let verificationProvider = "manual";
 
     let verificationStatus = "pending";
@@ -1417,13 +1387,6 @@ class EmployerBillingService {
       throw new Error("Account name is required.");
     }
 
-    /*
-     * Only after the new account details are ready do we
-     * enter the database transaction.
-     *
-     * Deactivation of the old account and creation of the
-     * replacement now commit or roll back together.
-     */
     return WalletService.runWithOptionalTransaction({}, async (session) => {
       const existingAccount = await EmployerBillingService.getActiveEmployerBankAccount(
         profile._id,
@@ -1440,17 +1403,13 @@ class EmployerBillingService {
         const deactivationResult = await BankAccount.updateOne(
           {
             _id: existingAccount._id,
-
             ownerType: "employer",
-
             employer: profile._id,
-
             isActive: true,
           },
           {
             $set: {
               isActive: false,
-
               deactivatedAt: normalizedCurrentTime,
             },
           },
@@ -1468,27 +1427,16 @@ class EmployerBillingService {
 
       const bankAccount = new BankAccount({
         ownerType: "employer",
-
         employer: profile._id,
-
         professional: null,
-
         bankName: cleanBankName,
-
         accountNumber: cleanAccountNumber,
-
         accountName: cleanAccountName,
-
         paystackBankCode: cleanPaystackBankCode,
-
         paystackRecipientCode: null,
-
         verificationProvider,
-
         verificationStatus,
-
         verifiedAt,
-
         isActive: true,
       });
 
@@ -1530,17 +1478,13 @@ class EmployerBillingService {
     const result = await BankAccount.updateOne(
       {
         _id: existingAccount._id,
-
         ownerType: "employer",
-
         employer: profile._id,
-
         isActive: true,
       },
       {
         $set: {
           isActive: false,
-
           deactivatedAt: normalizedCurrentTime,
         },
       }
@@ -1556,6 +1500,563 @@ class EmployerBillingService {
       outcome: "removed",
 
       message: "Withdrawal bank account removed successfully.",
+    };
+  }
+
+  /* ---------- Build subscription plan display state ---------- */
+
+  static async getSubscriptionPlanViews({ countryCode, currency }) {
+    const plans = await SubscriptionService.listActivePlans({
+      countryCode,
+      currency,
+    });
+
+    return plans.map((plan) => ({
+      id: String(plan._id),
+
+      code: plan.code,
+
+      version: plan.version,
+
+      name: plan.name,
+
+      description: plan.description || null,
+
+      countryCode: plan.countryCode,
+
+      currency: plan.currency,
+
+      priceMinor: Number(plan.priceMinor || 0),
+
+      priceDisplay: EmployerBillingService.formatAmount(
+        Number(plan.priceMinor || 0),
+        plan.currency
+      ),
+
+      billingCycle: plan.billingCycle,
+
+      activeJobSlots: Number(plan.benefits?.activeJobSlots || 0),
+
+      basePlatformFeeRate: plan.benefits?.basePlatformFeeRate ?? null,
+
+      featureKeys: Array.isArray(plan.benefits?.featureKeys) ? [...plan.benefits.featureKeys] : [],
+    }));
+  }
+
+  /* ---------- Build subscription payment display state ---------- */
+
+  static buildSubscriptionPaymentView(payment, currentTime = new Date()) {
+    if (!payment) {
+      return null;
+    }
+
+    const now = EmployerBillingService.normalizeCurrentTime(currentTime);
+
+    const currency = payment.planSnapshot?.currency || "NGN";
+
+    const amount = Number(payment.planSnapshot?.priceMinor || 0);
+
+    const periodStart = payment.periodStart || null;
+
+    const periodEnd = payment.periodEnd || null;
+
+    const paidUnapplied = payment.paymentStatus === "paid" && !payment.appliedAt;
+
+    const scheduled = Boolean(
+      payment.paymentKind === "renewal" &&
+      paidUnapplied &&
+      periodStart &&
+      new Date(periodStart) > now
+    );
+
+    const applicationStatus = payment.appliedAt
+      ? "applied"
+      : scheduled
+        ? "scheduled"
+        : paidUnapplied
+          ? "pending_application"
+          : null;
+
+    return {
+      id: String(payment._id),
+
+      paymentReference: payment.paymentReference,
+
+      paymentKind: payment.paymentKind,
+
+      paymentKindLabel: formatStatus(payment.paymentKind),
+
+      paymentMethod: payment.paymentMethod,
+
+      paymentMethodLabel: formatStatus(payment.paymentMethod),
+
+      paymentStatus: payment.paymentStatus,
+
+      paymentStatusLabel: formatStatus(payment.paymentStatus),
+
+      paymentStatusBadgeClass: badgeClass[payment.paymentStatus] || "badge-light-secondary",
+
+      providerStatus: payment.providerStatus || null,
+
+      planId: payment.plan ? String(payment.plan) : null,
+
+      planCode: payment.planSnapshot?.code || null,
+
+      planName: payment.planSnapshot?.name || null,
+
+      billingCycle: payment.planSnapshot?.billingCycle || null,
+
+      billingCycleKey: payment.billingCycleKey || null,
+
+      currency,
+
+      amount,
+
+      amountDisplay: EmployerBillingService.formatAmount(amount, currency),
+
+      periodStart,
+
+      periodStartDisplay: EmployerBillingService.formatDateTime(periodStart),
+
+      periodEnd,
+
+      periodEndDisplay: EmployerBillingService.formatDateTime(periodEnd),
+
+      paidAt: payment.paidAt || null,
+
+      paidAtDisplay: EmployerBillingService.formatDateTime(payment.paidAt),
+
+      appliedAt: payment.appliedAt || null,
+
+      appliedAtDisplay: EmployerBillingService.formatDateTime(payment.appliedAt),
+
+      failedAt: payment.failedAt || null,
+
+      failureReason: payment.failureReason || null,
+
+      isPaidUnapplied: paidUnapplied,
+
+      scheduled,
+
+      applicationStatus,
+
+      applicationStatusLabel: applicationStatus ? formatStatus(applicationStatus) : null,
+
+      requiresApplicationAttention: applicationStatus === "pending_application",
+
+      createdAt: payment.createdAt || null,
+
+      createdAtDisplay: EmployerBillingService.formatDateTime(payment.createdAt),
+    };
+  }
+
+  /* ---------- Get active subscription-funded publications ---------- */
+
+  static async getSubscriptionPublicationViews({ employerProfileId, subscriptionId }) {
+    if (!subscriptionId) {
+      return [];
+    }
+
+    const occupancy = await SubscriptionJobLifecycleService.listActiveSubscriptionPublications({
+      subscriptionId,
+      businessId: employerProfileId,
+    });
+
+    const publicationIds = occupancy.publications.map((publication) => publication._id);
+
+    if (publicationIds.length === 0) {
+      return [];
+    }
+
+    const publications = await JobPublication.find({
+      _id: {
+        $in: publicationIds,
+      },
+    })
+      .select(
+        "_id referenceCode job status publishedAt applicationDeadline listingSnapshot.roleTitle"
+      )
+      .sort({
+        publishedAt: 1,
+        _id: 1,
+      })
+      .lean();
+
+    return publications.map((publication) => ({
+      publicationId: String(publication._id),
+
+      publicationReferenceCode: publication.referenceCode || null,
+
+      jobId: publication.job ? String(publication.job) : null,
+
+      roleTitle: publication.listingSnapshot?.roleTitle || "Published Job",
+
+      status: publication.status,
+
+      statusLabel: formatStatus(publication.status),
+
+      statusBadgeClass: badgeClass[publication.status] || "badge-light-secondary",
+
+      publishedAt: publication.publishedAt || null,
+
+      publishedAtDisplay: EmployerBillingService.formatDateTime(publication.publishedAt),
+
+      applicationDeadline: publication.applicationDeadline || null,
+
+      applicationDeadlineDisplay: EmployerBillingService.formatDateTime(
+        publication.applicationDeadline
+      ),
+    }));
+  }
+
+  /* ---------- Build subscription billing display state ---------- */
+
+  static async getSubscriptionBillingView({ employerProfileId, currentTime = new Date() }) {
+    const now = EmployerBillingService.normalizeCurrentTime(currentTime);
+
+    const [activeSubscription, liveSubscription, latestEndedSubscription] = await Promise.all([
+      SubscriptionService.getActiveSubscription({
+        employerProfileId,
+        currentTime: now,
+      }),
+
+      Subscription.findOne({
+        business: employerProfileId,
+        status: {
+          $in: ["pending", "active"],
+        },
+      })
+        .sort({
+          createdAt: -1,
+          _id: -1,
+        })
+        .lean(),
+
+      Subscription.findOne({
+        business: employerProfileId,
+        status: {
+          $in: ["cancelled", "expired"],
+        },
+      })
+        .sort({
+          endedAt: -1,
+          createdAt: -1,
+          _id: -1,
+        })
+        .lean(),
+    ]);
+
+    const subscription =
+      activeSubscription?.toObject?.() ||
+      activeSubscription ||
+      liveSubscription ||
+      latestEndedSubscription ||
+      null;
+
+    if (!subscription) {
+      return {
+        hasSubscription: false,
+
+        active: false,
+
+        storedStatus: null,
+
+        status: "none",
+
+        statusLabel: "No subscription",
+
+        statusBadgeClass: "badge-light-secondary",
+
+        canSubscribe: true,
+
+        canRenew: false,
+
+        canChangePlan: false,
+
+        canCancel: false,
+
+        subscription: null,
+
+        activePublications: [],
+
+        occupiedJobSlots: 0,
+
+        remainingJobSlots: 0,
+
+        pendingPlanChange: null,
+
+        outstandingRenewal: null,
+
+        latestRenewal: null,
+
+        latestPayment: null,
+      };
+    }
+
+    const periodStart = subscription.currentPeriodStart
+      ? new Date(subscription.currentPeriodStart)
+      : null;
+
+    const periodEnd = subscription.currentPeriodEnd
+      ? new Date(subscription.currentPeriodEnd)
+      : null;
+
+    const storedStatus = subscription.status;
+
+    const active = Boolean(
+      storedStatus === "active" && periodStart && periodEnd && periodStart <= now && periodEnd > now
+    );
+
+    const lifecycleBoundaryPassed = Boolean(
+      storedStatus === "active" && periodEnd && periodEnd <= now
+    );
+
+    const effectiveStatus = lifecycleBoundaryPassed ? "expired" : storedStatus;
+
+    const [payments, activePublications] = await Promise.all([
+      SubscriptionPayment.find({
+        subscription: subscription._id,
+      })
+        .sort({
+          createdAt: -1,
+          _id: -1,
+        })
+        .limit(20)
+        .lean(),
+
+      active
+        ? EmployerBillingService.getSubscriptionPublicationViews({
+            employerProfileId,
+            subscriptionId: subscription._id,
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const outstandingRenewalPayment =
+      payments.find(
+        (payment) =>
+          payment.paymentKind === "renewal" &&
+          (payment.paymentStatus === "pending" ||
+            (payment.paymentStatus === "paid" && !payment.appliedAt))
+      ) || null;
+
+    const latestRenewalPayment =
+      payments.find((payment) => payment.paymentKind === "renewal") || null;
+
+    const pendingPlanChangePayment = subscription.pendingPlanChange?.paymentReference
+      ? payments.find(
+          (payment) =>
+            payment.paymentKind === "plan_change" &&
+            String(payment.paymentReference || "").toUpperCase() ===
+              String(subscription.pendingPlanChange.paymentReference || "").toUpperCase()
+        ) || null
+      : payments.find(
+          (payment) =>
+            payment.paymentKind === "plan_change" &&
+            (payment.paymentStatus === "pending" ||
+              (payment.paymentStatus === "paid" && !payment.appliedAt))
+        ) || null;
+
+    const latestPayment = payments[0] || null;
+
+    const planSnapshot = subscription.planSnapshot || {};
+
+    const planCurrency = planSnapshot.currency || "NGN";
+
+    const priceMinor = Number(planSnapshot.priceMinor || 0);
+
+    const activeJobSlots = Number(planSnapshot.benefits?.activeJobSlots || 0);
+
+    const occupiedJobSlots = activePublications.length;
+
+    const remainingJobSlots = Math.max(activeJobSlots - occupiedJobSlots, 0);
+
+    const pendingPlanChange = subscription.pendingPlanChange
+      ? {
+          changeType: subscription.pendingPlanChange.changeType,
+
+          targetPlanId: subscription.pendingPlanChange.targetPlan
+            ? String(subscription.pendingPlanChange.targetPlan)
+            : null,
+
+          targetPlanCode: subscription.pendingPlanChange.targetPlanSnapshot?.code || null,
+
+          targetPlanName: subscription.pendingPlanChange.targetPlanSnapshot?.name || null,
+
+          targetPlanBillingCycle:
+            subscription.pendingPlanChange.targetPlanSnapshot?.billingCycle || null,
+
+          targetPlanPriceMinor:
+            subscription.pendingPlanChange.targetPlanSnapshot?.priceMinor ?? null,
+
+          targetPlanPriceDisplay:
+            subscription.pendingPlanChange.targetPlanSnapshot?.priceMinor === null ||
+            subscription.pendingPlanChange.targetPlanSnapshot?.priceMinor === undefined
+              ? null
+              : EmployerBillingService.formatAmount(
+                  subscription.pendingPlanChange.targetPlanSnapshot.priceMinor,
+                  subscription.pendingPlanChange.targetPlanSnapshot.currency || planCurrency
+                ),
+
+          targetActiveJobSlots:
+            subscription.pendingPlanChange.targetPlanSnapshot?.benefits?.activeJobSlots ?? 0,
+
+          paymentReference: subscription.pendingPlanChange.paymentReference || null,
+
+          requestedAt: subscription.pendingPlanChange.requestedAt || null,
+
+          requestedAtDisplay: EmployerBillingService.formatDateTime(
+            subscription.pendingPlanChange.requestedAt
+          ),
+
+          retainedPublicationIds: Array.isArray(
+            subscription.pendingPlanChange.retainedPublicationIds
+          )
+            ? subscription.pendingPlanChange.retainedPublicationIds.map(String)
+            : [],
+
+          payment: EmployerBillingService.buildSubscriptionPaymentView(
+            pendingPlanChangePayment,
+            now
+          ),
+        }
+      : null;
+
+    const outstandingRenewal = EmployerBillingService.buildSubscriptionPaymentView(
+      outstandingRenewalPayment,
+      now
+    );
+
+    const latestRenewal = EmployerBillingService.buildSubscriptionPaymentView(
+      latestRenewalPayment,
+      now
+    );
+
+    const cancellationScheduled = active && subscription.cancelAtPeriodEnd === true;
+
+    const planChangePending = active && Boolean(subscription.pendingPlanChange);
+
+    const renewalOutstanding = active && Boolean(outstandingRenewalPayment);
+
+    const canRenew = active && !cancellationScheduled && !planChangePending && !renewalOutstanding;
+
+    const canChangePlan =
+      active && !cancellationScheduled && !planChangePending && !renewalOutstanding;
+
+    const canCancel = active && !cancellationScheduled && !planChangePending;
+
+    const canSubscribe = ["cancelled", "expired"].includes(storedStatus);
+
+    return {
+      hasSubscription: true,
+
+      active,
+
+      storedStatus,
+
+      status: effectiveStatus,
+
+      statusLabel: formatStatus(effectiveStatus),
+
+      statusBadgeClass: badgeClass[effectiveStatus] || "badge-light-secondary",
+
+      lifecycleBoundaryPassed,
+
+      canSubscribe,
+
+      id: String(subscription._id),
+
+      referenceCode: subscription.referenceCode,
+
+      planId: subscription.plan ? String(subscription.plan) : null,
+
+      planCode: planSnapshot.code || null,
+
+      planName: planSnapshot.name || null,
+
+      billingCycle: planSnapshot.billingCycle || null,
+
+      countryCode: planSnapshot.countryCode || null,
+
+      currency: planCurrency,
+
+      priceMinor,
+
+      priceDisplay: EmployerBillingService.formatAmount(priceMinor, planCurrency),
+
+      activeJobSlots,
+
+      occupiedJobSlots,
+
+      remainingJobSlots,
+
+      activePublications,
+
+      basePlatformFeeRate: planSnapshot.benefits?.basePlatformFeeRate ?? null,
+
+      featureKeys: Array.isArray(planSnapshot.benefits?.featureKeys)
+        ? [...planSnapshot.benefits.featureKeys]
+        : [],
+
+      activatedAt: subscription.activatedAt || null,
+
+      activatedAtDisplay: EmployerBillingService.formatDateTime(subscription.activatedAt),
+
+      currentPlanStartedAt: subscription.currentPlanStartedAt || null,
+
+      currentPlanStartedAtDisplay: EmployerBillingService.formatDateTime(
+        subscription.currentPlanStartedAt
+      ),
+
+      currentPeriodStart: subscription.currentPeriodStart || null,
+
+      currentPeriodStartDisplay: EmployerBillingService.formatDateTime(
+        subscription.currentPeriodStart
+      ),
+
+      currentPeriodEnd: subscription.currentPeriodEnd || null,
+
+      currentPeriodEndDisplay: EmployerBillingService.formatDateTime(subscription.currentPeriodEnd),
+
+      renewalCount: Number(subscription.renewalCount || 0),
+
+      cancelAtPeriodEnd: subscription.cancelAtPeriodEnd === true,
+
+      cancellationScheduled,
+
+      cancellationRequestedAt: subscription.cancellationRequestedAt || null,
+
+      cancellationRequestedAtDisplay: EmployerBillingService.formatDateTime(
+        subscription.cancellationRequestedAt
+      ),
+
+      cancelledAt: subscription.cancelledAt || null,
+
+      cancelledAtDisplay: EmployerBillingService.formatDateTime(subscription.cancelledAt),
+
+      endedAt: subscription.endedAt || null,
+
+      endedAtDisplay: EmployerBillingService.formatDateTime(subscription.endedAt),
+
+      pendingPlanChange,
+
+      hasPendingPlanChange: Boolean(pendingPlanChange),
+
+      outstandingRenewal,
+
+      hasOutstandingRenewal: Boolean(outstandingRenewal),
+
+      latestRenewal,
+
+      latestPayment: EmployerBillingService.buildSubscriptionPaymentView(latestPayment, now),
+
+      canRenew,
+
+      canChangePlan,
+
+      canCancel,
+
+      subscription,
     };
   }
 
@@ -1584,6 +2085,8 @@ class EmployerBillingService {
       restrictionState,
       withdrawalAccount,
       withdrawalBankSetup,
+      subscription,
+      subscriptionPlans,
     ] = await Promise.all([
       DVAService.getEmployerDVAStatus({
         employerProfileId: profile._id,
@@ -1591,35 +2094,39 @@ class EmployerBillingService {
 
       EmployerBillingService.getRecentTransactions({
         walletId: wallet._id,
-
         page: transactionsPage,
-
         transactionFilter,
       }),
 
       EmployerBillingService.getWalletActivitySummary({
         walletId: wallet._id,
-
         currency,
       }),
 
       EmployerBillingService.getPaymentsDueSummary({
         employerProfileId: profile._id,
-
         currency,
-
         currentTime: now,
       }),
 
       EmployerDelinquencyService.getRestrictionState({
         businessId: profile._id,
-
         currentTime: now,
       }),
 
       EmployerBillingService.getEmployerWithdrawalAccountView(profile._id),
 
       BankProviderService.getWithdrawalBankSetup(),
+
+      EmployerBillingService.getSubscriptionBillingView({
+        employerProfileId: profile._id,
+        currentTime: now,
+      }),
+
+      EmployerBillingService.getSubscriptionPlanViews({
+        countryCode: profile.countryCode,
+        currency: profile.currency,
+      }),
     ]);
 
     return {
@@ -1644,6 +2151,10 @@ class EmployerBillingService {
       withdrawalBankSetup,
 
       withdrawalBanks: withdrawalBankSetup.banks,
+
+      subscription,
+
+      subscriptionPlans,
 
       paymentsDue,
 

@@ -4,6 +4,7 @@ const mongoose = require("mongoose");
 
 const Job = require("../../models/Job");
 const JobPublication = require("../../models/JobPublication");
+const Subscription = require("../../models/Subscription");
 const JobApplication = require("../../models/JobApplication");
 const SavedJob = require("../../models/SavedJob");
 const Branch = require("../../models/Branch");
@@ -1326,10 +1327,88 @@ class JobQueryService {
     return {
       status: "live",
 
-      expiresAt: {
-        $gt: currentTime,
-      },
+      // Keep authority alternatives separate from the text-search $or.
+      $and: [
+        {
+          $or: [
+            {
+              "entitlementSnapshot.source": { $in: ["free", "paid_single_post"] },
+              expiresAt: { $type: "date", $gt: currentTime },
+            },
+            {
+              "entitlementSnapshot.source": "subscription_slot",
+              expiresAt: { $type: "null" },
+            },
+          ],
+        },
+      ],
     };
+  }
+
+  // Apply these stages before the final count and pagination of public listings.
+  // The original entitlement period is historical; renewals use the live Subscription.
+  static buildMarketplaceAuthorityStages(currentTime) {
+    return [
+      {
+        $lookup: {
+          from: Subscription.collection.name,
+          let: {
+            subscriptionId: "$entitlementSnapshot.subscription",
+            businessId: "$business",
+            source: "$entitlementSnapshot.source",
+          },
+          pipeline: [
+            {
+              $match: {
+                status: "active",
+                currentPeriodStart: { $type: "date", $lte: currentTime },
+                currentPeriodEnd: { $type: "date", $gt: currentTime },
+                $expr: {
+                  $and: [
+                    { $eq: ["$$source", "subscription_slot"] },
+                    { $eq: ["$_id", "$$subscriptionId"] },
+                    { $eq: ["$business", "$$businessId"] },
+                  ],
+                },
+              },
+            },
+            { $project: { _id: 1 } },
+          ],
+          as: "marketplaceAuthority",
+        },
+      },
+      {
+        $match: {
+          $or: [
+            { "entitlementSnapshot.source": { $in: ["free", "paid_single_post"] } },
+            {
+              "entitlementSnapshot.source": "subscription_slot",
+              "marketplaceAuthority.0": { $exists: true },
+            },
+          ],
+        },
+      },
+      { $project: { marketplaceAuthority: 0 } },
+    ];
+  }
+
+  static async getMarketplaceAuthorizedPublicationIdSet(publicationIds, currentTime) {
+    if (!publicationIds.length) {
+      return new Set();
+    }
+
+    const publications = await JobPublication.aggregate([
+      {
+        $match: {
+          _id: { $in: publicationIds },
+          ...JobQueryService.buildMarketplaceBaseFilter(currentTime),
+        },
+      },
+      ...JobQueryService.buildMarketplaceAuthorityStages(currentTime),
+      { $project: { _id: 1 } },
+    ]);
+
+    return new Set(publications.map((publication) => String(publication._id)));
   }
 
   static applyMarketplaceFilters(
@@ -1456,7 +1535,8 @@ class JobQueryService {
     return new Set(applications.map((application) => String(application.job)));
   }
 
-  static async getMarketplacePublicationPage({ filter, page }) {
+  static async getMarketplacePublicationPage({ filter, page, currentTime = new Date() }) {
+    const normalizedCurrentTime = JobQueryService.normalizeCurrentTime(currentTime);
     const requestedPage = JobQueryService.normalizePageNumber(page);
 
     const preliminaryTotal = await JobPublication.countDocuments(filter);
@@ -1469,8 +1549,12 @@ class JobQueryService {
 
     const [result] = await JobPublication.aggregate([
       {
-        $match: filter,
+        $match: {
+          $and: [filter, JobQueryService.buildMarketplaceBaseFilter(normalizedCurrentTime)],
+        },
       },
+
+      ...JobQueryService.buildMarketplaceAuthorityStages(normalizedCurrentTime),
 
       {
         $lookup: {
@@ -1562,6 +1646,8 @@ class JobQueryService {
         filter,
 
         page: currentPage,
+
+        currentTime: normalizedCurrentTime,
       });
     }
 
@@ -1646,6 +1732,8 @@ class JobQueryService {
       filter,
 
       page,
+
+      currentTime: normalizedCurrentTime,
     });
 
     const jobIds = publications.map((publication) => publication.job).filter(Boolean);
@@ -1743,7 +1831,12 @@ class JobQueryService {
       })
     ).lean();
 
-    if (!rawPublication) {
+    const authorizedPublicationIds = await JobQueryService.getMarketplaceAuthorizedPublicationIdSet(
+      rawPublication ? [rawPublication._id] : [],
+      normalizedCurrentTime
+    );
+
+    if (!rawPublication || !authorizedPublicationIds.has(String(rawPublication._id))) {
       throw createJobQueryError({
         message: "Job listing not found.",
 
@@ -1901,6 +1994,11 @@ class JobQueryService {
         ])
       : [[], [], new Set()];
 
+    const authorizedPublicationIds = await JobQueryService.getMarketplaceAuthorizedPublicationIdSet(
+      rawPublications.map((publication) => publication._id),
+      normalizedCurrentTime
+    );
+
     const latestPublicationByJobId = new Map();
 
     for (const rawPublication of rawPublications) {
@@ -1932,8 +2030,7 @@ class JobQueryService {
         publication &&
         currentJob &&
         publication.status === "live" &&
-        publication.expiresAt &&
-        new Date(publication.expiresAt) > normalizedCurrentTime &&
+        authorizedPublicationIds.has(String(publication._id)) &&
         currentJob.recruitmentStatus === "active" &&
         currentJob.publicationStatus === "live" &&
         currentJob.currentPublication &&

@@ -1,5 +1,4 @@
 <!-- views/employer/billing/index.ejs -->
-
 <div class="content flex-column-fluid" id="kt_content">
   <div class="row g-5 g-xl-8 mb-8 align-items-stretch">
     <!-- Wallet Balance -->
@@ -9,11 +8,9 @@
           <div class="d-flex align-items-start justify-content-between mb-7">
             <div>
               <div class="text-muted fw-semibold fs-7 mb-2">Wallet Balance</div>
-
               <div class="fs-2hx fw-bold text-gray-900">
                 <%= billingView.wallet.availableBalanceDisplay %>
               </div>
-
               <div class="text-muted fs-7 mt-2">Available to pay for shifts</div>
             </div>
 
@@ -77,7 +74,6 @@
           >
             <div class="fw-semibold">
               <div class="fs-6 text-gray-800 fw-bold mb-1">Wallet Frozen</div>
-
               <div class="fs-7 text-muted"><%= billingView.wallet.frozenReason %></div>
             </div>
           </div>
@@ -93,7 +89,6 @@
           <div class="d-flex align-items-center justify-content-between mb-7">
             <div>
               <div class="text-muted fw-semibold fs-7 mb-2">Add Money</div>
-
               <div class="fs-3 fw-bold text-gray-900">Wallet Bank Account</div>
             </div>
           </div>
@@ -106,7 +101,6 @@
           <div class="d-flex flex-column gap-4">
             <div>
               <div class="text-muted fs-7 fw-semibold mb-1">Bank</div>
-
               <div class="fw-bold text-gray-900"><%= billingView.dva.bankName %></div>
             </div>
 
@@ -128,7 +122,6 @@
 
             <div>
               <div class="text-muted fs-7 fw-semibold mb-1">Account Name</div>
-
               <div class="fw-semibold text-gray-800"><%= billingView.dva.accountName %></div>
             </div>
           </div>
@@ -138,7 +131,6 @@
           >
             <div class="fw-semibold">
               <div class="fs-6 text-gray-800 fw-bold mb-1"><%= billingView.dva.message %></div>
-
               <div class="fs-7 text-muted"><%= billingView.dva.supportMessage %></div>
             </div>
           </div>
@@ -201,6 +193,643 @@
     </div>
   </div>
 
+  <!-- Subscription -->
+  <% const subscriptionView = billingView.subscription || {}; const subscriptionPlans =
+  Array.isArray(billingView.subscriptionPlans) ? billingView.subscriptionPlans : []; const
+  activeSubscriptionPublications = Array.isArray(subscriptionView.activePublications) ?
+  subscriptionView.activePublications : []; const currentSubscriptionPlanId =
+  String(subscriptionView.planId || ""); const changeableSubscriptionPlans =
+  subscriptionPlans.filter( (plan) => String(plan.id) !== currentSubscriptionPlanId ); %>
+
+  <div
+    class="card mb-8"
+    id="subscription"
+    data-subscription-id="<%= subscriptionView.id || '' %>"
+    data-occupied-job-slots="<%= subscriptionView.occupiedJobSlots || 0 %>"
+  >
+    <div class="card-header border-0 pt-6">
+      <div class="card-title flex-column">
+        <h3 class="fw-bold mb-1 fs-2">Employer Subscription</h3>
+
+        <div class="text-muted fs-7">
+          Manage your paid employer plan, billing period, and renewal status.
+        </div>
+      </div>
+
+      <% if (subscriptionView.hasSubscription) { %>
+      <div class="card-toolbar">
+        <span class="badge <%= subscriptionView.statusBadgeClass %>">
+          <%= subscriptionView.statusLabel %>
+        </span>
+      </div>
+      <% } %>
+    </div>
+
+    <div class="card-body pt-0">
+      <% if (!subscriptionView.hasSubscription) { %>
+      <div class="notice d-flex bg-light rounded border border-dashed p-6 mb-7">
+        <div>
+          <div class="fs-5 fw-bold text-gray-900 mb-2">No paid subscription yet</div>
+
+          <div class="text-muted fs-7">
+            Choose a plan below. Subscription Job slots are concurrent active publication slots and
+            remain available only while the paid subscription period is active.
+          </div>
+        </div>
+      </div>
+      <% } else { %>
+
+      <div class="row g-5">
+        <div class="col-xl-7">
+          <div class="bg-light rounded p-6 h-100">
+            <div class="d-flex flex-column flex-md-row justify-content-between gap-5 mb-6">
+              <div>
+                <div class="text-muted fs-8 fw-semibold mb-1">Current plan</div>
+
+                <div class="fs-2 fw-bold text-gray-900">
+                  <%= subscriptionView.planName || "Subscription" %>
+                </div>
+
+                <div class="text-muted fs-7 mt-1">
+                  <%= subscriptionView.priceDisplay %> <% if (subscriptionView.billingCycle) { %> /
+                  <%= subscriptionView.billingCycle %> <% } %>
+                </div>
+              </div>
+
+              <div class="text-md-end">
+                <div class="text-muted fs-8 fw-semibold mb-1">Reference</div>
+
+                <div class="fw-semibold text-gray-800">
+                  <%= subscriptionView.referenceCode || "-" %>
+                </div>
+              </div>
+            </div>
+
+            <div class="row g-4">
+              <div class="col-md-6">
+                <div class="border border-dashed rounded p-5 h-100">
+                  <div class="text-muted fs-8 fw-semibold mb-2">Active Job slots</div>
+
+                  <div class="fs-2 fw-bold text-gray-900">
+                    <%= subscriptionView.activeJobSlots %>
+                  </div>
+
+                  <div class="text-muted fs-8 mt-2">
+                    Concurrent subscription-funded Job publications.
+                  </div>
+                </div>
+              </div>
+
+              <div class="col-md-6">
+                <div class="border border-dashed rounded p-5 h-100">
+                  <div class="text-muted fs-8 fw-semibold mb-2">Slots in use</div>
+
+                  <div class="fs-2 fw-bold text-gray-900">
+                    <%= subscriptionView.occupiedJobSlots %> / <%= subscriptionView.activeJobSlots
+                    %>
+                  </div>
+
+                  <div class="text-muted fs-8 mt-2">
+                    <%= subscriptionView.remainingJobSlots %> slot<%=
+                    subscriptionView.remainingJobSlots === 1 ? "" : "s" %> currently available.
+                  </div>
+                </div>
+              </div>
+
+              <div class="col-md-6">
+                <div class="border border-dashed rounded p-5 h-100">
+                  <div class="text-muted fs-8 fw-semibold mb-2">Current period ends</div>
+
+                  <div class="fw-bold text-gray-900">
+                    <%= subscriptionView.currentPeriodEndDisplay %>
+                  </div>
+
+                  <div class="text-muted fs-8 mt-2">
+                    Benefits remain available only through this paid period.
+                  </div>
+                </div>
+              </div>
+
+              <% if (subscriptionView.basePlatformFeeRate !== null &&
+              subscriptionView.basePlatformFeeRate !== undefined) { %>
+              <div class="col-md-6">
+                <div class="border border-dashed rounded p-5 h-100">
+                  <div class="text-muted fs-8 fw-semibold mb-2">Base platform fee</div>
+
+                  <div class="fs-4 fw-bold text-gray-900">
+                    <%= (Number(subscriptionView.basePlatformFeeRate) * 100).toFixed(2) %>%
+                  </div>
+                </div>
+              </div>
+              <% } %>
+
+              <div class="col-md-6">
+                <div class="border border-dashed rounded p-5 h-100">
+                  <div class="text-muted fs-8 fw-semibold mb-2">Billing cycle</div>
+
+                  <div class="fs-4 fw-bold text-gray-900">
+                    <%= subscriptionView.billingCycle ?
+                    subscriptionView.billingCycle.charAt(0).toUpperCase() +
+                    subscriptionView.billingCycle.slice(1) : "-" %>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-xl-5">
+          <div class="border border-dashed rounded p-6 h-100 d-flex flex-column">
+            <div class="fw-bold text-gray-900 mb-4">Subscription status</div>
+
+            <div class="d-flex flex-column gap-4">
+              <div class="d-flex justify-content-between gap-4">
+                <span class="text-muted fs-7">Status</span>
+
+                <span class="badge <%= subscriptionView.statusBadgeClass %>">
+                  <%= subscriptionView.statusLabel %>
+                </span>
+              </div>
+
+              <% if (subscriptionView.currentPeriodStartDisplay !== "-") { %>
+              <div class="d-flex justify-content-between gap-4">
+                <span class="text-muted fs-7">Period started</span>
+
+                <span class="fw-semibold text-gray-800 text-end fs-7">
+                  <%= subscriptionView.currentPeriodStartDisplay %>
+                </span>
+              </div>
+              <% } %> <% if (subscriptionView.currentPeriodEndDisplay !== "-") { %>
+              <div class="d-flex justify-content-between gap-4">
+                <span class="text-muted fs-7">Period ends</span>
+
+                <span class="fw-semibold text-gray-800 text-end fs-7">
+                  <%= subscriptionView.currentPeriodEndDisplay %>
+                </span>
+              </div>
+              <% } %>
+
+              <div class="d-flex justify-content-between gap-4">
+                <span class="text-muted fs-7">Renewals completed</span>
+
+                <span class="fw-semibold text-gray-800 fs-7">
+                  <%= subscriptionView.renewalCount %>
+                </span>
+              </div>
+            </div>
+
+            <% if (subscriptionView.canRenew) { %>
+            <div class="mt-6">
+              <div class="separator mb-5"></div>
+
+              <div class="fw-bold text-gray-900 mb-2">Renew current plan</div>
+
+              <div class="text-muted fs-8 mb-4">
+                A renewal paid before the current period ends is held for the next billing period
+                and does not change current benefits early.
+              </div>
+
+              <div class="d-flex flex-column gap-3">
+                <form
+                  class="js-subscription-renewal-form"
+                  method="POST"
+                  action="/employer/billing/subscriptions/<%= subscriptionView.id %>/renew/wallet"
+                  data-payment-flow="wallet"
+                >
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                  <input type="hidden" name="idempotencyKey" value="" />
+
+                  <button type="submit" class="btn btn-light-primary w-100">
+                    <span class="indicator-label">Pay from wallet</span>
+
+                    <span class="indicator-progress">
+                      Please wait...
+                      <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+                    </span>
+                  </button>
+                </form>
+
+                <form
+                  class="js-subscription-renewal-form"
+                  method="POST"
+                  action="/employer/billing/subscriptions/<%= subscriptionView.id %>/renew/initialize-checkout"
+                  data-payment-flow="checkout"
+                >
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                  <input type="hidden" name="idempotencyKey" value="" />
+
+                  <button type="submit" class="btn btn-primary w-100">
+                    <span class="indicator-label">Pay with Paystack</span>
+
+                    <span class="indicator-progress">
+                      Please wait...
+                      <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+                    </span>
+                  </button>
+                </form>
+              </div>
+            </div>
+            <% } %> <% if (subscriptionView.canCancel) { %>
+            <div class="mt-auto pt-6">
+              <div class="separator mb-5"></div>
+
+              <form
+                id="kt_subscription_cancel_form"
+                method="POST"
+                action="/employer/billing/subscriptions/<%= subscriptionView.id %>/cancel"
+                class="mb-0"
+              >
+                <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+                <button
+                  id="kt_subscription_cancel_submit"
+                  type="submit"
+                  class="btn btn-light-danger w-100"
+                >
+                  <span class="indicator-label">Cancel at period end</span>
+
+                  <span class="indicator-progress">
+                    Please wait...
+                    <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+                  </span>
+                </button>
+              </form>
+            </div>
+            <% } %>
+          </div>
+        </div>
+      </div>
+
+      <% if (subscriptionView.cancellationScheduled) { %>
+      <div
+        class="notice d-flex bg-light-warning rounded border-warning border border-dashed p-5 mt-6"
+      >
+        <div>
+          <div class="fw-bold text-gray-900 mb-1">Cancellation scheduled</div>
+
+          <div class="text-muted fs-7">
+            Your subscription remains active through <%= subscriptionView.currentPeriodEndDisplay %>
+            and will then end.
+          </div>
+        </div>
+      </div>
+      <% } %> <% if (subscriptionView.lifecycleBoundaryPassed) { %>
+      <div
+        class="notice d-flex bg-light-danger rounded border-danger border border-dashed p-5 mt-6"
+      >
+        <div>
+          <div class="fw-bold text-gray-900 mb-1">Paid period ended</div>
+
+          <div class="text-muted fs-7">
+            Subscription benefits are no longer active. Final lifecycle processing may still be
+            completing.
+          </div>
+        </div>
+      </div>
+      <% } %> <% if (subscriptionView.pendingPlanChange) { %>
+      <div class="notice d-flex bg-light-info rounded border-info border border-dashed p-5 mt-6">
+        <div class="w-100">
+          <div class="fw-bold text-gray-900 mb-1">Plan change in progress</div>
+
+          <div class="text-muted fs-7">
+            Change to
+            <span class="fw-semibold text-gray-800">
+              <%= subscriptionView.pendingPlanChange.targetPlanName ||
+              subscriptionView.pendingPlanChange.targetPlanCode || "the selected plan" %>
+            </span>
+            is awaiting completion.
+          </div>
+
+          <% if (subscriptionView.pendingPlanChange.payment) { %>
+          <div class="text-muted fs-8 mt-2">
+            Payment:
+            <span class="fw-semibold text-gray-800">
+              <%= subscriptionView.pendingPlanChange.payment.paymentStatusLabel %>
+            </span>
+          </div>
+          <% } %>
+        </div>
+      </div>
+      <% } %> <% if (subscriptionView.outstandingRenewal) { %>
+      <div
+        class="notice d-flex <%= subscriptionView.outstandingRenewal.scheduled || subscriptionView.outstandingRenewal.isPaidUnapplied ? 'bg-light-success border-success' : 'bg-light-warning border-warning' %> rounded border border-dashed p-5 mt-6"
+      >
+        <div class="w-100">
+          <div class="fw-bold text-gray-900 mb-1">
+            <% if (subscriptionView.outstandingRenewal.scheduled) { %> Renewal paid <% } else if
+            (subscriptionView.outstandingRenewal.isPaidUnapplied) { %> Renewal paid, applying <% }
+            else { %> Renewal payment in progress <% } %>
+          </div>
+
+          <div class="text-muted fs-7">
+            <% if (subscriptionView.outstandingRenewal.scheduled) { %> The next billing period has
+            been paid for and will begin at <%=
+            subscriptionView.outstandingRenewal.periodStartDisplay %>. <% } else if
+            (subscriptionView.outstandingRenewal.isPaidUnapplied) { %> Payment is complete and is
+            waiting for the billing boundary application step. <% } else { %> The renewal payment
+            has not reached a completed paid state yet. <% } %>
+          </div>
+        </div>
+      </div>
+      <% } %> <% if (subscriptionView.storedStatus === "pending" && subscriptionView.latestPayment)
+      { %>
+      <div class="notice d-flex bg-light-info rounded border-info border border-dashed p-5 mt-6">
+        <div>
+          <div class="fw-bold text-gray-900 mb-1">Subscription payment in progress</div>
+
+          <div class="text-muted fs-7">
+            Latest payment status:
+            <span class="fw-semibold text-gray-800">
+              <%= subscriptionView.latestPayment.paymentStatusLabel %>
+            </span>
+          </div>
+        </div>
+      </div>
+      <% } %> <% if (!subscriptionView.active && subscriptionView.endedAtDisplay !== "-") { %>
+      <div class="text-muted fs-7 mt-5">
+        Subscription ended: <%= subscriptionView.endedAtDisplay %>
+      </div>
+      <% } %> <% } %> <% if (!subscriptionView.hasSubscription || subscriptionView.canSubscribe) {
+      %>
+      <div class="<%= subscriptionView.hasSubscription ? 'mt-8' : '' %>">
+        <div class="d-flex flex-column flex-md-row justify-content-between gap-4 mb-5">
+          <div>
+            <div class="fs-4 fw-bold text-gray-900 mb-1">
+              <%= subscriptionView.hasSubscription ? "Start a new subscription" : "Choose a plan" %>
+            </div>
+
+            <div class="text-muted fs-7">
+              Each plan provides concurrent active Job slots for the paid billing period.
+            </div>
+          </div>
+        </div>
+
+        <% if (subscriptionPlans.length === 0) { %>
+        <div class="notice d-flex bg-light-warning rounded border-warning border border-dashed p-5">
+          <div class="text-muted fs-7">No subscription plans are currently available.</div>
+        </div>
+        <% } else { %>
+        <div class="row g-5">
+          <% subscriptionPlans.forEach((plan) => { %>
+          <div class="col-xl-4 col-md-6">
+            <div class="border border-dashed rounded p-6 h-100 d-flex flex-column">
+              <div class="mb-5">
+                <div class="fs-4 fw-bold text-gray-900 mb-1"><%= plan.name %></div>
+
+                <% if (plan.description) { %>
+                <div class="text-muted fs-8"><%= plan.description %></div>
+                <% } %>
+              </div>
+
+              <div class="fs-2 fw-bold text-gray-900 mb-1"><%= plan.priceDisplay %></div>
+
+              <div class="text-muted fs-8 mb-5">
+                <%= plan.billingCycle ? plan.billingCycle.charAt(0).toUpperCase() +
+                plan.billingCycle.slice(1) : "Billing period" %>
+              </div>
+
+              <div class="d-flex justify-content-between gap-4 mb-3">
+                <span class="text-muted fs-8">Active Job slots</span>
+                <span class="fw-semibold text-gray-800 fs-8"><%= plan.activeJobSlots %></span>
+              </div>
+
+              <% if (plan.basePlatformFeeRate !== null && plan.basePlatformFeeRate !== undefined) {
+              %>
+              <div class="d-flex justify-content-between gap-4 mb-5">
+                <span class="text-muted fs-8">Base platform fee</span>
+
+                <span class="fw-semibold text-gray-800 fs-8">
+                  <%= (Number(plan.basePlatformFeeRate) * 100).toFixed(2) %>%
+                </span>
+              </div>
+              <% } %>
+
+              <div class="mt-auto d-flex flex-column gap-3">
+                <form
+                  class="js-subscription-purchase-form"
+                  method="POST"
+                  action="/employer/billing/subscriptions/purchase/wallet"
+                  data-payment-flow="wallet"
+                  data-plan-id="<%= plan.id %>"
+                >
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                  <input type="hidden" name="planId" value="<%= plan.id %>" />
+                  <input type="hidden" name="idempotencyKey" value="" />
+
+                  <button type="submit" class="btn btn-light-primary w-100">
+                    <span class="indicator-label">Pay from wallet</span>
+
+                    <span class="indicator-progress">
+                      Please wait...
+                      <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+                    </span>
+                  </button>
+                </form>
+
+                <form
+                  class="js-subscription-purchase-form"
+                  method="POST"
+                  action="/employer/billing/subscriptions/initialize-checkout"
+                  data-payment-flow="checkout"
+                  data-plan-id="<%= plan.id %>"
+                >
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                  <input type="hidden" name="planId" value="<%= plan.id %>" />
+                  <input type="hidden" name="idempotencyKey" value="" />
+
+                  <button type="submit" class="btn btn-primary w-100">
+                    <span class="indicator-label">Pay with Paystack</span>
+
+                    <span class="indicator-progress">
+                      Please wait...
+                      <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+                    </span>
+                  </button>
+                </form>
+              </div>
+            </div>
+          </div>
+          <% }); %>
+        </div>
+        <% } %>
+      </div>
+      <% } %> <% if (subscriptionView.canChangePlan && changeableSubscriptionPlans.length > 0) { %>
+      <div class="mt-8">
+        <div class="fs-4 fw-bold text-gray-900 mb-1">Change plan</div>
+
+        <div class="text-muted fs-7 mb-5">
+          A successful plan change replaces the current plan immediately and starts a fresh billing
+          period. Unused time or value on the current plan is forfeited.
+        </div>
+
+        <div class="row g-5">
+          <% changeableSubscriptionPlans.forEach((plan) => { %>
+          <div class="col-xl-4 col-md-6">
+            <div class="border border-dashed rounded p-6 h-100 d-flex flex-column">
+              <div class="mb-4">
+                <div class="fs-5 fw-bold text-gray-900"><%= plan.name %></div>
+
+                <div class="text-muted fs-8 mt-1">
+                  <%= plan.priceDisplay %> <% if (plan.billingCycle) { %> / <%= plan.billingCycle %>
+                  <% } %>
+                </div>
+              </div>
+
+              <div class="d-flex justify-content-between gap-4 mb-3">
+                <span class="text-muted fs-8">Active Job slots</span>
+                <span class="fw-semibold text-gray-800 fs-8"><%= plan.activeJobSlots %></span>
+              </div>
+
+              <div class="mt-auto pt-4">
+                <button
+                  type="button"
+                  class="btn btn-light-primary w-100 js-subscription-plan-change"
+                  data-bs-toggle="modal"
+                  data-bs-target="#kt_subscription_plan_change_modal"
+                  data-plan-id="<%= plan.id %>"
+                  data-plan-name="<%= plan.name %>"
+                  data-plan-price="<%= plan.priceDisplay %>"
+                  data-active-job-slots="<%= plan.activeJobSlots %>"
+                >
+                  Change to this plan
+                </button>
+              </div>
+            </div>
+          </div>
+          <% }); %>
+        </div>
+      </div>
+      <% } %>
+    </div>
+  </div>
+
+  <% if (subscriptionView.canChangePlan && changeableSubscriptionPlans.length > 0) { %>
+  <div class="modal fade" id="kt_subscription_plan_change_modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered mw-650px">
+      <div class="modal-content">
+        <form
+          id="kt_subscription_plan_change_form"
+          method="POST"
+          data-wallet-action="/employer/billing/subscriptions/<%= subscriptionView.id %>/plan-change/wallet"
+          data-checkout-action="/employer/billing/subscriptions/<%= subscriptionView.id %>/plan-change/initialize-checkout"
+        >
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+          <input type="hidden" name="planId" id="subscription_plan_change_plan_id" value="" />
+          <input type="hidden" name="idempotencyKey" value="" />
+
+          <div class="modal-header">
+            <h2 class="fw-bold">Confirm plan change</h2>
+
+            <button
+              type="button"
+              class="btn btn-icon btn-sm btn-active-light-primary"
+              data-bs-dismiss="modal"
+              aria-label="Close"
+            >
+              <i class="ki-duotone ki-cross fs-1">
+                <span class="path1"></span>
+                <span class="path2"></span>
+              </i>
+            </button>
+          </div>
+
+          <div class="modal-body py-10 px-lg-17">
+            <div class="mb-6">
+              <div class="text-muted fs-8 fw-semibold mb-1">Selected plan</div>
+
+              <div class="fs-4 fw-bold text-gray-900" id="subscription_plan_change_name">-</div>
+
+              <div class="text-muted fs-8 mt-1" id="subscription_plan_change_price">-</div>
+            </div>
+
+            <div
+              class="notice d-flex bg-light-warning rounded border-warning border border-dashed p-5 mb-6"
+            >
+              <div class="text-muted fs-7">
+                The new plan becomes effective immediately after successful payment. Your current
+                plan ends at that point, and unused time or value is not carried forward.
+              </div>
+            </div>
+
+            <div id="subscription_plan_change_retention" class="d-none">
+              <div class="fw-bold text-gray-900 mb-2">Choose Job publications to keep active</div>
+
+              <div class="text-muted fs-8 mb-5" id="subscription_plan_change_retention_help"></div>
+
+              <div class="d-flex flex-column gap-3">
+                <% activeSubscriptionPublications.forEach((publication) => { %>
+                <label class="d-flex align-items-start gap-3 border border-dashed rounded p-4">
+                  <input
+                    class="form-check-input mt-1 js-retained-publication"
+                    type="checkbox"
+                    name="retainedPublicationIds"
+                    value="<%= publication.publicationId %>"
+                  />
+
+                  <span class="flex-grow-1">
+                    <span class="fw-semibold text-gray-900 d-block">
+                      <%= publication.roleTitle %>
+                    </span>
+
+                    <span class="text-muted fs-8">
+                      <%= publication.publicationReferenceCode || publication.publicationId %>
+                    </span>
+                  </span>
+                </label>
+                <% }); %>
+              </div>
+
+              <div class="text-muted fs-8 mt-4" id="subscription_plan_change_selection_count"></div>
+            </div>
+
+            <div
+              id="subscription_plan_change_all_end"
+              class="notice d-none bg-light-danger rounded border-danger border border-dashed p-5"
+            >
+              <div class="text-muted fs-7">
+                This plan has no available active Job slots. All currently active
+                subscription-funded Job publications will end immediately after successful payment.
+              </div>
+            </div>
+          </div>
+
+          <div class="modal-footer flex-column flex-sm-row">
+            <button type="button" class="btn btn-light me-sm-auto" data-bs-dismiss="modal">
+              Cancel
+            </button>
+
+            <button
+              type="button"
+              class="btn btn-light-primary js-subscription-plan-change-submit"
+              data-payment-flow="wallet"
+            >
+              <span class="indicator-label">Pay from wallet</span>
+
+              <span class="indicator-progress">
+                Please wait...
+                <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+              </span>
+            </button>
+
+            <button
+              type="button"
+              class="btn btn-primary js-subscription-plan-change-submit"
+              data-payment-flow="checkout"
+            >
+              <span class="indicator-label">Pay with Paystack</span>
+
+              <span class="indicator-progress">
+                Please wait...
+                <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+              </span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <% } %>
+
   <!-- Payments Needing Attention -->
   <% if (billingView.paymentsDue?.hasPaymentsDue) { %>
   <div class="card mb-8">
@@ -221,7 +850,6 @@
 
           <div>
             <div class="fs-6 fw-bold text-gray-900 mb-1">Payments Needing Attention</div>
-
             <div class="fs-7 text-muted"><%= billingView.paymentsDue.message %></div>
           </div>
         </div>
@@ -649,7 +1277,6 @@
     <div class="card-header border-0 pt-6">
       <div class="card-title flex-column">
         <h3 class="fw-bold mb-1">Recent Transactions</h3>
-
         <div class="text-muted fs-7">Latest wallet activity for your employer account.</div>
       </div>
 

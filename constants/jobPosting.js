@@ -4,7 +4,8 @@
  * Job recruitment state is separate from marketplace publication state.
  *
  * A Job may stop accepting new applications because its publication expires
- * while recruitment continues with professionals who already applied.
+ * or otherwise ends while recruitment continues with professionals who already
+ * applied.
  */
 exports.JOB_RECRUITMENT_STATUSES = ["draft", "active", "closed", "archived"];
 
@@ -14,17 +15,26 @@ exports.JOB_RECRUITMENT_STATUSES = ["draft", "active", "closed", "archived"];
  * Publication status controls marketplace visibility and whether new
  * applications may be submitted.
  *
- * Expiry does not close recruitment or invalidate existing applications.
+ * Expiry or ending a publication does not close recruitment or invalidate
+ * existing applications.
  */
 exports.JOB_PUBLICATION_STATUSES = ["unpublished", "live", "paused", "expired", "ended"];
 
 /**
- * Standard Job marketplace visibility period.
+ * Fixed Job marketplace visibility period for one-use publication entitlements.
  *
- * A fresh publication entitlement is required to extend or renew visibility
- * for another publication period.
+ * Applies to:
+ * - free publications;
+ * - paid_single_post PAYG publications.
+ *
+ * subscription_slot publications do not use a fixed publication-age expiry.
+ * Their marketplace lifetime is governed by the active subscription, available
+ * slot capacity and the underlying recruitment lifecycle.
+ *
+ * A fresh one-use entitlement is required to extend or republish a Free/PAYG
+ * Job after its fixed publication period ends.
  */
-exports.DEFAULT_JOB_PUBLICATION_PERIOD_DAYS = 45;
+exports.FIXED_JOB_PUBLICATION_PERIOD_DAYS = 30;
 
 /* ─────────────────────────────── RECRUITMENT CLOSURE ─────────────────────────────── */
 
@@ -74,11 +84,11 @@ exports.JOB_SCREENING_REQUIREMENT_LEVELS = ["informational", "preferred", "requi
  *
  * - free covers platform-granted free publication authority, including the
  *   recurring monthly free allowance used by hybrid monetisation.
- * - plan_allowance covers included publication allowance from a paid
- *   subscription plan.
+ * - subscription_slot covers publication authorized by available concurrent
+ *   Job-slot capacity from an active paid subscription.
  * - paid_single_post covers a one-off PAYG Job publication purchase.
  */
-exports.JOB_PUBLICATION_ENTITLEMENT_SOURCES = ["free", "plan_allowance", "paid_single_post"];
+exports.JOB_PUBLICATION_ENTITLEMENT_SOURCES = ["free", "subscription_slot", "paid_single_post"];
 
 /* ─────────────────────────────── TEXT LIMITS ─────────────────────────────── */
 

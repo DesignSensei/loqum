@@ -13,25 +13,14 @@ exports.handleWebhook = async (req, res) => {
 
       rawHeaders: req.headers,
 
-      processImmediately: true,
+      // Acknowledge after recording; the recovery scheduler owns dispatch.
+      processImmediately: false,
 
       currentTime: new Date(),
     });
 
-    /*
-     * SECURITY:
-     *
-     * paystackWebhookService verifies the Paystack
-     * signature before recording a ProviderEvent.
-     *
-     * An invalid request must not be reported as a
-     * successfully accepted Paystack event.
-     *
-     * Returning a non-200 response also means a real
-     * Paystack event affected by a temporary signature/
-     * configuration problem is not silently discarded.
-     */
-    if (!result.isVerified) {
+    // Reject unverified webhook requests.
+    if (result.isVerified !== true) {
       logger.warn("Rejected unverified Paystack webhook.", {
         reason: result.skippedProcessingReason || "Invalid Paystack webhook signature.",
       });
@@ -42,15 +31,14 @@ exports.handleWebhook = async (req, res) => {
       });
     }
 
-    /*
-     * At this point the verified provider event has
-     * been durably recorded.
-     *
-     * Some event categories may intentionally not be
-     * processed immediately during a staged deployment.
-     * That is still a successful webhook receipt and
-     * must not cause unnecessary Paystack redelivery.
-     */
+    if (result.recorded !== true || !result.providerEvent?._id) {
+      const error = new Error("Webhook recording did not confirm a persisted event.");
+      error.code = "PAYSTACK_WEBHOOK_RECORDING_NOT_CONFIRMED";
+      throw error;
+    }
+
+    // Verified event has been durably recorded, including duplicate deliveries.
+    // Deploy with received-event recovery enabled in ProviderEventRetryScheduler.
     return res.status(200).json({
       success: true,
       message: "Webhook received.",
@@ -64,13 +52,7 @@ exports.handleWebhook = async (req, res) => {
       stack: error.stack,
     });
 
-    /*
-     * A non-200 response is reserved for webhook requests
-     * that could not be safely verified or durably recorded.
-     *
-     * Once recorded, downstream processing and retries are
-     * owned by the ProviderEvent lifecycle.
-     */
+    // Non-200 is reserved for verification or recording failure.
     return res
       .status(
         Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode <= 599

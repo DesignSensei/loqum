@@ -12,8 +12,61 @@ var EmployerBilling = (function () {
   var walletWithdrawalForm = null;
   var walletWithdrawalSubmitButton = null;
 
+  var subscriptionPlanChangeForm = null;
+  var subscriptionPlanChangeTargetSlots = null;
+  var subscriptionPlanChangeRequiresSelection = false;
+
   function getErrorMessage(error, fallbackMessage) {
     return error?.response?.data?.message || error?.message || fallbackMessage;
+  }
+
+  function getErrorRedirectUrl(error) {
+    return error?.response?.data?.redirectUrl || null;
+  }
+
+  function getCheckoutAuthorizationUrl(response) {
+    return (
+      response?.data?.checkout?.authorizationUrl ||
+      response?.data?.authorizationUrl ||
+      response?.data?.data?.checkout?.authorizationUrl ||
+      response?.data?.data?.authorizationUrl ||
+      null
+    );
+  }
+
+  function getPaymentStatus(response) {
+    return response?.data?.payment?.paymentStatus || null;
+  }
+
+  function getSubscriptionStatus(response) {
+    return response?.data?.application?.lifecycle?.subscription?.status || null;
+  }
+
+  function isPaymentCompleted(response) {
+    return getPaymentStatus(response) === "paid";
+  }
+
+  function getSubscriptionPaymentAlert(response, fallbackMessage) {
+    var subscriptionStatus = getSubscriptionStatus(response);
+
+    if (isPaymentCompleted(response)) {
+      if (subscriptionStatus === "active") {
+        return {
+          text: "Payment completed and subscription activated successfully.",
+          icon: "success",
+        };
+      }
+
+      return {
+        text: "Payment completed. Subscription activation is being processed.",
+        icon: "info",
+      };
+    }
+
+    return {
+      text: response.data.message || fallbackMessage,
+      icon: "success",
+    };
   }
 
   function setButtonLoading(button, isLoading) {
@@ -30,6 +83,11 @@ var EmployerBilling = (function () {
   }
 
   function showAlert({ text, icon, confirmButtonText = "Ok, got it!" }) {
+    if (!window.Swal) {
+      window.alert(text);
+      return Promise.resolve();
+    }
+
     return Swal.fire({
       text,
       icon,
@@ -39,6 +97,34 @@ var EmployerBilling = (function () {
         confirmButton: "btn btn-primary",
       },
     });
+  }
+
+  function createIdempotencyKey(prefix) {
+    if (window.crypto?.randomUUID) {
+      return `${prefix}-${window.crypto.randomUUID()}`;
+    }
+
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  function ensureIdempotencyKey(form, prefix) {
+    var input = form?.querySelector('input[name="idempotencyKey"]');
+
+    if (!input) return null;
+
+    if (!input.value.trim()) {
+      input.value = createIdempotencyKey(prefix);
+    }
+
+    return input.value;
+  }
+
+  function clearIdempotencyKey(form) {
+    var input = form?.querySelector('input[name="idempotencyKey"]');
+
+    if (input) {
+      input.value = "";
+    }
   }
 
   function handleDVASetupSubmission() {
@@ -108,7 +194,6 @@ var EmployerBilling = (function () {
       };
 
       resolveHint.className = (toneClassMap[tone] || "text-muted") + " fs-8 mt-2";
-
       resolveHint.textContent = message;
     }
 
@@ -137,6 +222,7 @@ var EmployerBilling = (function () {
           "Account name will be resolved automatically after you select a bank and enter a valid account number.",
           "muted"
         );
+
         return;
       }
 
@@ -150,12 +236,10 @@ var EmployerBilling = (function () {
         })
         .then(function (response) {
           accountNameInput.value = response.data.accountName || "";
-
           setResolveHint("Account name resolved.", "success");
         })
         .catch(function (error) {
           accountNameInput.value = "";
-
           setResolveHint(getErrorMessage(error, "Unable to resolve account name."), "danger");
         });
     }
@@ -185,7 +269,6 @@ var EmployerBilling = (function () {
     if (accountNumberInput) {
       accountNumberInput.addEventListener("input", function () {
         accountNumberInput.value = accountNumberInput.value.replace(/\D/g, "").slice(0, 10);
-
         scheduleResolve();
       });
     }
@@ -195,7 +278,6 @@ var EmployerBilling = (function () {
 
   function handleWithdrawalAccountSubmission() {
     withdrawalAccountForm = document.querySelector("#kt_withdrawal_account_form");
-
     withdrawalAccountSubmitButton = document.querySelector("#kt_withdrawal_account_submit");
 
     if (!withdrawalAccountForm || !withdrawalAccountSubmitButton) return;
@@ -392,6 +474,8 @@ var EmployerBilling = (function () {
             });
           })
           .catch(function (error) {
+            var redirectUrl = getErrorRedirectUrl(error);
+
             setButtonLoading(walletWithdrawalSubmitButton, false);
 
             showAlert({
@@ -405,6 +489,478 @@ var EmployerBilling = (function () {
           });
       });
     });
+  }
+
+  function submitSubscriptionPaymentForm({
+    form,
+    submitButton,
+    idempotencyPrefix,
+    successMessage,
+  }) {
+    var paymentFlow = form?.dataset?.paymentFlow || "wallet";
+
+    ensureIdempotencyKey(form, idempotencyPrefix);
+    setButtonLoading(submitButton, true);
+
+    var formData = new FormData(form);
+    var data = Object.fromEntries(formData);
+
+    axios
+      .post(form.action, data)
+      .then(function (response) {
+        if (paymentFlow === "checkout") {
+          var authorizationUrl = getCheckoutAuthorizationUrl(response);
+
+          if (authorizationUrl) {
+            window.location.href = authorizationUrl;
+            return;
+          }
+
+          if (isPaymentCompleted(response)) {
+            setButtonLoading(submitButton, false);
+
+            var alertConfig = getSubscriptionPaymentAlert(response, "Payment completed.");
+
+            showAlert(alertConfig).then(function () {
+              window.location.href = response.data.redirectUrl || "/employer/billing#subscription";
+            });
+
+            return;
+          }
+
+          throw new Error(
+            "Payment status could not be confirmed. Please retry or check your billing page."
+          );
+        }
+
+        setButtonLoading(submitButton, false);
+
+        var alertConfig = getSubscriptionPaymentAlert(response, successMessage);
+
+        showAlert(alertConfig).then(function () {
+          window.location.href = response.data.redirectUrl || "/employer/billing#subscription";
+        });
+      })
+      .catch(function (error) {
+        var redirectUrl = getErrorRedirectUrl(error);
+
+        setButtonLoading(submitButton, false);
+
+        showAlert({
+          text: getErrorMessage(error, "Unable to complete the subscription payment."),
+          icon: "error",
+        }).then(function () {
+          if (redirectUrl) {
+            window.location.href = redirectUrl;
+          }
+        });
+      });
+  }
+
+  function handleSubscriptionPurchaseSubmission() {
+    var forms = document.querySelectorAll(".js-subscription-purchase-form");
+
+    forms.forEach(function (form) {
+      form.addEventListener("submit", function (e) {
+        e.preventDefault();
+
+        var submitButton = form.querySelector('button[type="submit"]');
+
+        if (!submitButton || submitButton.disabled) return;
+
+        submitSubscriptionPaymentForm({
+          form,
+          submitButton,
+          idempotencyPrefix: "subscription-initial",
+          successMessage: "Subscription purchased successfully.",
+        });
+      });
+    });
+  }
+
+  function handleSubscriptionRenewalSubmission() {
+    var forms = document.querySelectorAll(".js-subscription-renewal-form");
+
+    forms.forEach(function (form) {
+      form.addEventListener("submit", function (e) {
+        e.preventDefault();
+
+        var submitButton = form.querySelector('button[type="submit"]');
+
+        if (!submitButton || submitButton.disabled) return;
+
+        submitSubscriptionPaymentForm({
+          form,
+          submitButton,
+          idempotencyPrefix: "subscription-renewal",
+          successMessage: "Subscription renewal payment completed successfully.",
+        });
+      });
+    });
+  }
+
+  function confirmSubscriptionCancellation() {
+    var message =
+      "Cancel this subscription at the end of the current paid period? Benefits remain active until then.";
+
+    if (!window.Swal) {
+      return Promise.resolve(window.confirm(message));
+    }
+
+    return Swal.fire({
+      text: message,
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "Yes, cancel at period end",
+      cancelButtonText: "Keep subscription",
+      buttonsStyling: false,
+      customClass: {
+        confirmButton: "btn btn-danger",
+        cancelButton: "btn btn-light",
+      },
+    }).then(function (result) {
+      return result.isConfirmed;
+    });
+  }
+
+  function handleSubscriptionCancellation() {
+    var form = document.querySelector("#kt_subscription_cancel_form");
+    var submitButton = document.querySelector("#kt_subscription_cancel_submit");
+
+    if (!form || !submitButton) return;
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+
+      confirmSubscriptionCancellation().then(function (confirmed) {
+        if (!confirmed) return;
+
+        setButtonLoading(submitButton, true);
+
+        var formData = new FormData(form);
+        var data = Object.fromEntries(formData);
+
+        axios
+          .post(form.action, data)
+          .then(function (response) {
+            setButtonLoading(submitButton, false);
+
+            showAlert({
+              text: response.data.message || "Subscription cancellation scheduled successfully.",
+              icon: "success",
+            }).then(function () {
+              window.location.href = response.data.redirectUrl || "/employer/billing#subscription";
+            });
+          })
+          .catch(function (error) {
+            var redirectUrl = getErrorRedirectUrl(error);
+
+            setButtonLoading(submitButton, false);
+
+            showAlert({
+              text: getErrorMessage(error, "Unable to schedule subscription cancellation."),
+              icon: "error",
+            }).then(function () {
+              if (redirectUrl) {
+                window.location.href = redirectUrl;
+              }
+            });
+          });
+      });
+    });
+  }
+
+  function getPlanChangeCheckboxes() {
+    if (!subscriptionPlanChangeForm) return [];
+
+    return Array.from(subscriptionPlanChangeForm.querySelectorAll(".js-retained-publication"));
+  }
+
+  function getSelectedPlanChangePublicationIds() {
+    return getPlanChangeCheckboxes()
+      .filter(function (checkbox) {
+        return checkbox.checked;
+      })
+      .map(function (checkbox) {
+        return checkbox.value;
+      });
+  }
+
+  function setPlanChangeSubmitButtonsDisabled(disabled) {
+    if (!subscriptionPlanChangeForm) return;
+
+    subscriptionPlanChangeForm
+      .querySelectorAll(".js-subscription-plan-change-submit")
+      .forEach(function (button) {
+        if (!button.hasAttribute("data-kt-indicator")) {
+          button.disabled = disabled;
+        }
+      });
+  }
+
+  function updatePlanChangeSelectionState() {
+    if (!subscriptionPlanChangeForm) return;
+
+    var checkboxes = getPlanChangeCheckboxes();
+    var selectedIds = getSelectedPlanChangePublicationIds();
+    var selectionCount = document.querySelector("#subscription_plan_change_selection_count");
+
+    if (!subscriptionPlanChangeRequiresSelection) {
+      checkboxes.forEach(function (checkbox) {
+        checkbox.disabled = false;
+      });
+
+      if (selectionCount) {
+        selectionCount.textContent = "";
+      }
+
+      setPlanChangeSubmitButtonsDisabled(false);
+      return;
+    }
+
+    var requiredCount = Math.max(Number(subscriptionPlanChangeTargetSlots) || 0, 0);
+    var selectionComplete = selectedIds.length === requiredCount;
+
+    checkboxes.forEach(function (checkbox) {
+      checkbox.disabled = !checkbox.checked && selectedIds.length >= requiredCount;
+    });
+
+    if (selectionCount) {
+      selectionCount.textContent = `${selectedIds.length} of ${requiredCount} selected.`;
+    }
+
+    setPlanChangeSubmitButtonsDisabled(!selectionComplete);
+  }
+
+  function resetPlanChangeSelection(clearPaymentAttempt) {
+    getPlanChangeCheckboxes().forEach(function (checkbox) {
+      checkbox.checked = false;
+      checkbox.disabled = false;
+    });
+
+    subscriptionPlanChangeTargetSlots = null;
+    subscriptionPlanChangeRequiresSelection = false;
+
+    if (clearPaymentAttempt) {
+      clearIdempotencyKey(subscriptionPlanChangeForm);
+    }
+
+    updatePlanChangeSelectionState();
+  }
+
+  function configurePlanChangeModal(triggerButton) {
+    if (!subscriptionPlanChangeForm) return;
+
+    var subscriptionCard = document.querySelector("#subscription");
+    var planIdInput = document.querySelector("#subscription_plan_change_plan_id");
+    var planName = document.querySelector("#subscription_plan_change_name");
+    var planPrice = document.querySelector("#subscription_plan_change_price");
+    var retentionContainer = document.querySelector("#subscription_plan_change_retention");
+    var retentionHelp = document.querySelector("#subscription_plan_change_retention_help");
+    var allEndNotice = document.querySelector("#subscription_plan_change_all_end");
+
+    var occupiedSlots = Math.max(Number(subscriptionCard?.dataset?.occupiedJobSlots) || 0, 0);
+    var targetSlots = Math.max(Number(triggerButton.dataset.activeJobSlots) || 0, 0);
+
+    resetPlanChangeSelection(true);
+
+    subscriptionPlanChangeTargetSlots = targetSlots;
+    subscriptionPlanChangeRequiresSelection = occupiedSlots > targetSlots && targetSlots > 0;
+
+    if (planIdInput) {
+      planIdInput.value = triggerButton.dataset.planId || "";
+    }
+
+    if (planName) {
+      planName.textContent = triggerButton.dataset.planName || "Selected plan";
+    }
+
+    if (planPrice) {
+      planPrice.textContent = triggerButton.dataset.planPrice || "";
+    }
+
+    if (retentionContainer) {
+      retentionContainer.classList.toggle("d-none", !subscriptionPlanChangeRequiresSelection);
+    }
+
+    if (retentionHelp) {
+      retentionHelp.textContent = subscriptionPlanChangeRequiresSelection
+        ? `Your current ${occupiedSlots} active subscription publications exceed this plan's ${targetSlots} slots. Select exactly ${targetSlots} publication${
+            targetSlots === 1 ? "" : "s"
+          } to keep active.`
+        : "";
+    }
+
+    if (allEndNotice) {
+      allEndNotice.classList.toggle("d-none", !(occupiedSlots > 0 && targetSlots === 0));
+    }
+
+    updatePlanChangeSelectionState();
+  }
+
+  function submitSubscriptionPlanChange(paymentFlow, submitButton) {
+    if (!subscriptionPlanChangeForm) return;
+
+    var planIdInput = document.querySelector("#subscription_plan_change_plan_id");
+    var planId = planIdInput?.value?.trim() || "";
+
+    if (!planId) {
+      showAlert({
+        text: "Select a subscription plan before continuing.",
+        icon: "warning",
+      });
+
+      return;
+    }
+
+    var retainedPublicationIds = getSelectedPlanChangePublicationIds();
+
+    if (
+      subscriptionPlanChangeRequiresSelection &&
+      retainedPublicationIds.length !== subscriptionPlanChangeTargetSlots
+    ) {
+      showAlert({
+        text: `Select exactly ${subscriptionPlanChangeTargetSlots} active Job publication${
+          subscriptionPlanChangeTargetSlots === 1 ? "" : "s"
+        } to retain.`,
+        icon: "warning",
+      });
+
+      return;
+    }
+
+    ensureIdempotencyKey(subscriptionPlanChangeForm, "subscription-plan-change");
+
+    setButtonLoading(submitButton, true);
+
+    subscriptionPlanChangeForm
+      .querySelectorAll(".js-subscription-plan-change-submit")
+      .forEach(function (button) {
+        if (button !== submitButton) {
+          button.disabled = true;
+        }
+      });
+
+    var formData = new FormData(subscriptionPlanChangeForm);
+    var data = Object.fromEntries(formData);
+
+    if (subscriptionPlanChangeRequiresSelection) {
+      data.retainedPublicationIds = retainedPublicationIds;
+    } else {
+      delete data.retainedPublicationIds;
+    }
+
+    var action =
+      paymentFlow === "checkout"
+        ? subscriptionPlanChangeForm.dataset.checkoutAction
+        : subscriptionPlanChangeForm.dataset.walletAction;
+
+    if (!action) {
+      setButtonLoading(submitButton, false);
+      updatePlanChangeSelectionState();
+
+      showAlert({
+        text: "The selected plan-change payment route is unavailable.",
+        icon: "error",
+      });
+
+      return;
+    }
+
+    axios
+      .post(action, data)
+      .then(function (response) {
+        if (paymentFlow === "checkout") {
+          var authorizationUrl = getCheckoutAuthorizationUrl(response);
+
+          if (authorizationUrl) {
+            window.location.href = authorizationUrl;
+            return;
+          }
+
+          if (isPaymentCompleted(response)) {
+            setButtonLoading(submitButton, false);
+
+            showAlert({
+              text:
+                getSubscriptionStatus(response) === "active"
+                  ? "Payment completed and subscription activated successfully."
+                  : "Payment completed. Subscription activation is being processed.",
+              icon: "success",
+            }).then(function () {
+              window.location.href = response.data.redirectUrl || "/employer/billing#subscription";
+            });
+
+            return;
+          }
+
+          throw new Error(
+            "Payment status could not be confirmed. Please retry or check your billing page."
+          );
+        }
+
+        setButtonLoading(submitButton, false);
+
+        var alertConfig = getSubscriptionPaymentAlert(
+          response,
+          "Subscription plan changed successfully."
+        );
+
+        showAlert(alertConfig).then(function () {
+          window.location.href = response.data.redirectUrl || "/employer/billing#subscription";
+        });
+      })
+      .catch(function (error) {
+        var redirectUrl = getErrorRedirectUrl(error);
+
+        setButtonLoading(submitButton, false);
+        updatePlanChangeSelectionState();
+
+        showAlert({
+          text: getErrorMessage(error, "Unable to change the subscription plan."),
+          icon: "error",
+        }).then(function () {
+          if (redirectUrl) {
+            window.location.href = redirectUrl;
+          }
+        });
+      });
+  }
+
+  function handleSubscriptionPlanChange() {
+    subscriptionPlanChangeForm = document.querySelector("#kt_subscription_plan_change_form");
+
+    if (!subscriptionPlanChangeForm) return;
+
+    document.querySelectorAll(".js-subscription-plan-change").forEach(function (button) {
+      button.addEventListener("click", function () {
+        configurePlanChangeModal(button);
+      });
+    });
+
+    getPlanChangeCheckboxes().forEach(function (checkbox) {
+      checkbox.addEventListener("change", function () {
+        updatePlanChangeSelectionState();
+      });
+    });
+
+    subscriptionPlanChangeForm
+      .querySelectorAll(".js-subscription-plan-change-submit")
+      .forEach(function (button) {
+        button.addEventListener("click", function () {
+          if (button.disabled) return;
+
+          submitSubscriptionPlanChange(button.dataset.paymentFlow || "wallet", button);
+        });
+      });
+
+    var modal = document.querySelector("#kt_subscription_plan_change_modal");
+
+    if (modal) {
+      modal.addEventListener("hidden.bs.modal", function () {
+        resetPlanChangeSelection(false);
+      });
+    }
   }
 
   function handleCopyTextButtons() {
@@ -485,6 +1041,10 @@ var EmployerBilling = (function () {
       handleWithdrawalAccountSubmission();
       handleWithdrawalAccountRemoval();
       handleWalletWithdrawalSubmission();
+      handleSubscriptionPurchaseSubmission();
+      handleSubscriptionRenewalSubmission();
+      handleSubscriptionCancellation();
+      handleSubscriptionPlanChange();
       handleCopyTextButtons();
     },
   };

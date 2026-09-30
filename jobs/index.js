@@ -5,17 +5,14 @@ const ShiftSettlementScheduler = require("./shiftSettlementScheduler");
 const WithdrawalReversalScheduler = require("./withdrawalReversalScheduler");
 const EmployerRefundBatchScheduler = require("./employerRefundBatchScheduler");
 const ProviderEventRetryScheduler = require("./providerEventRetryScheduler");
+const SubscriptionLifecycleScheduler = require("./subscriptionLifecycleScheduler");
 
 const logger = require("../utils/logger");
 
 /**
  * BACKGROUND JOB REGISTRY
  *
- * This module owns background scheduler startup and shutdown only.
- *
- * It does not own lifecycle, settlement, refund, withdrawal, ProviderEvent
- * processing or reconciliation business logic. Each scheduler delegates those
- * responsibilities to its authoritative service layer.
+ * Starts and stops background schedulers only.
  */
 
 exports.startBackgroundJobs = function startBackgroundJobs() {
@@ -63,6 +60,15 @@ exports.startBackgroundJobs = function startBackgroundJobs() {
     runImmediately: false,
   });
 
+  SubscriptionLifecycleScheduler.start({
+    intervalMinutes: 5,
+    renewalLeadMinutes: 10,
+    applicationLimit: 100,
+    renewalLimit: 100,
+    boundaryLimit: 100,
+    runImmediately: false,
+  });
+
   logger.info("Background jobs started.");
 };
 
@@ -72,6 +78,7 @@ exports.stopBackgroundJobs = function stopBackgroundJobs() {
   WithdrawalReversalScheduler.stop();
   EmployerRefundBatchScheduler.stop();
   ProviderEventRetryScheduler.stop();
+  SubscriptionLifecycleScheduler.stop();
 
   logger.info("Background jobs stopped.");
 };

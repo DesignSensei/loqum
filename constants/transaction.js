@@ -1,15 +1,115 @@
 // constants/transaction.js
 
 /**
- * Shared transaction vocabulary.
+ * TRANSACTION CONSTANTS
  *
- * A Transaction records one wallet-side ledger movement.
+ * This file defines the shared transaction vocabulary used across:
  *
- * Professional payouts belong to ShiftSettlementBatch.
- * Platform fees are occurrence-level.
- * EmployerRefundBatch owns weekly refund execution.
- * Successful Paystack Shift-funding payments that cannot fund their Shift
- * are returned directly from escrow to the employer wallet.
+ * - Transaction model validation;
+ * - WalletService;
+ * - Shift funding;
+ * - overtime top-up;
+ * - direct Shift refunds;
+ * - weekly employer refund batching;
+ * - weekly professional settlement;
+ * - occurrence-level platform-fee earning;
+ * - employer commercial purchases;
+ * - withdrawals; and
+ * - administrative ledger adjustments.
+ *
+ * IMPORTANT ARCHITECTURE
+ *
+ * One Transaction represents one WALLET-SIDE ledger movement.
+ *
+ * A Transaction does not need to describe every business component that
+ * contributed to that wallet movement.
+ *
+ * EMPLOYER COMMERCIAL PURCHASES
+ *
+ * Wallet-funded permanent-Job PAYG publication purchases use:
+ *
+ *   job_publication_purchase
+ *   → job_publication_purchase
+ *
+ * Wallet-funded subscription purchases and renewals use:
+ *
+ *   subscription_payment
+ *   → subscription_payment
+ *
+ * Direct Paystack Checkout for either commercial product credits the platform
+ * wallet through an external Paystack Transaction using that product's exact
+ * commercial type and purpose.
+ *
+ * A reusable Paystack authorization renewal also records the successful
+ * external receipt through the existing paystack_checkout rail. The
+ * SubscriptionPayment record distinguishes the authorization-based charge from
+ * an interactive Checkout payment.
+ *
+ * credit_purchase remains reserved for the future Credits domain and must not
+ * be reused for Job or subscription monetisation.
+ *
+ * PROFESSIONAL SETTLEMENT
+ *
+ * One weekly ShiftSettlementBatch may contain:
+ *
+ * - worked BASE pay;
+ * - cancellation compensation;
+ * - active-work cancellation compensation; and
+ * - OVERTIME pay.
+ *
+ * The detailed component allocation remains authoritative in:
+ *
+ * - ShiftSettlementBatch.lines[].settlementComponent;
+ * - ShiftSettlementBatch.lines[].earningType;
+ * - ShiftSettlementBatch.releaseKeys;
+ * - ShiftOccurrence.baseSettlement; and
+ * - ShiftOccurrence.overtimeSettlement.
+ *
+ * Therefore the weekly batch produces only:
+ *
+ *   professional_payout
+ *   → weekly_professional_payout
+ *
+ * Platform fees do NOT belong to ShiftSettlementBatch.
+ *
+ * PLATFORM FEES
+ *
+ * Platform fees are earned occurrence by occurrence.
+ *
+ * Base:
+ *
+ *   platform_fee
+ *   → base_platform_fee_earned
+ *
+ * Overtime:
+ *
+ *   platform_fee
+ *   → overtime_platform_fee_earned
+ *
+ * The base fee is earned when the occurrence first becomes part of a
+ * successfully confirmed professional assignment.
+ *
+ * The overtime fee is earned when the final payable overtime obligation is
+ * established.
+ *
+ * Once validly earned, neither fee is ordinarily reversed through the normal
+ * claim, dispute, settlement or refund lifecycle.
+ *
+ * EMPLOYER REFUNDS
+ *
+ * Refunds have two execution shapes:
+ *
+ * 1. Direct Shift / occurrence refund
+ *    - references Shift;
+ *    - may reference ShiftOccurrence; and
+ *    - uses an exact direct refund purpose.
+ *
+ * 2. Weekly EmployerRefundBatch execution
+ *    - references EmployerRefundBatch;
+ *    - references the exact embedded execution line; and
+ *    - uses weekly_employer_refund.
+ *
+ * There is deliberately no generic "shift_refund" purpose.
  */
 
 /* ─────────────────────────────── LIMITS ─────────────────────────────── */
@@ -53,44 +153,26 @@ exports.TRANSACTION_TYPES = Object.freeze([
 
   "adjustment",
 
+  "job_publication_purchase",
+
+  "subscription_payment",
+
   "credit_purchase",
 ]);
-
-/* ─────────────────────────────── SHIFT PAYMENT RETURNS ─────────────────────────────── */
-
-/**
- * Direct wallet-return reasons for successful Paystack Shift payments:
- *
- * late               → payment completed at/after Shift start.
- * duplicate          → another transaction already funded the Shift.
- * timely_expired     → payment was on time, but funding-deadline cancellation occurred before application.
- * employer_cancelled → employer cancelled the pending-funding Shift before payment application.
- */
-exports.SHIFT_PAYMENT_RETURN_PURPOSE_BY_REASON = Object.freeze({
-  late: "late_shift_payment_return",
-
-  duplicate: "duplicate_shift_payment_return",
-
-  timely_expired: "timely_unapplied_shift_payment_return",
-
-  employer_cancelled: "employer_cancelled_shift_payment_return",
-});
-
-exports.SHIFT_PAYMENT_RETURN_PURPOSES = Object.freeze(
-  Object.values(exports.SHIFT_PAYMENT_RETURN_PURPOSE_BY_REASON)
-);
 
 /* ─────────────────────────────── TRANSACTION PURPOSES ─────────────────────────────── */
 
 exports.TRANSACTION_PURPOSES = Object.freeze([
+  // Employer wallet funding.
   "wallet_topup",
 
+  // Protected Shift funding.
   "shift_base_funding",
 
+  // Additional final approved overtime funding.
   "shift_overtime_topup",
 
-  ...exports.SHIFT_PAYMENT_RETURN_PURPOSES,
-
+  // Direct occurrence-level scheduled/base allocation refunds.
   "expired_unfilled_refund",
 
   "unused_occurrence_balance_refund",
@@ -101,26 +183,39 @@ exports.TRANSACTION_PURPOSES = Object.freeze([
 
   "closed_occurrence_refund",
 
+  // Parent Shift final protected-fund reconciliation.
   "final_shift_reconciliation_refund",
 
+  // Weekly aggregated employer refund execution.
   "weekly_employer_refund",
 
+  // Weekly aggregated professional settlement.
   "weekly_professional_payout",
 
+  // Occurrence-level Loqum platform-fee earning.
   "base_platform_fee_earned",
 
   "overtime_platform_fee_earned",
 
+  // Permanent-Job PAYG publication purchase.
+  "job_publication_purchase",
+
+  // Employer subscription purchase or renewal.
+  "subscription_payment",
+
+  // Professional or employer bank withdrawal.
   "withdrawal",
 
   "withdrawal_reversal",
 
+  // Other financial purposes.
   "cancellation_fee",
 
   "dispute_resolution",
 
   "admin_adjustment",
 
+  // Reserved for the future Credits domain.
   "credit_purchase",
 
   null,
@@ -175,7 +270,7 @@ exports.TRANSACTION_PAYMENT_RAILS = Object.freeze([
 ]);
 
 /**
- * Movement between Loqum-controlled wallets.
+ * Rails representing movement between Loqum-controlled wallets.
  */
 exports.INTERNAL_PAYMENT_RAILS = Object.freeze([
   "wallet_balance",
@@ -186,7 +281,7 @@ exports.INTERNAL_PAYMENT_RAILS = Object.freeze([
 ]);
 
 /**
- * Rails handled through Paystack.
+ * Rails involving Paystack as the external provider.
  */
 exports.PAYSTACK_PAYMENT_RAILS = Object.freeze([
   "paystack_checkout",
@@ -199,8 +294,11 @@ exports.PAYSTACK_PAYMENT_RAILS = Object.freeze([
 ]);
 
 /**
- * Rails that use paystackReference.
- * Paystack Transfer uses paystackTransferCode instead.
+ * Paystack operations represented through paystackReference.
+ *
+ * Paystack Transfer is excluded because it has its dedicated:
+ *
+ *   paystackTransferCode
  */
 exports.PAYSTACK_PAYMENT_REFERENCE_RAILS = Object.freeze([
   "paystack_checkout",
@@ -239,10 +337,18 @@ exports.TRANSACTION_INITIATOR_ROLES = Object.freeze([
 /* ─────────────────────────────── DIRECT SHIFT TRANSACTIONS ─────────────────────────────── */
 
 /**
- * Types that inherently belong to one Shift.
+ * Transaction types that inherently belong to one Shift.
  *
- * shift_refund is excluded because it may also belong to EmployerRefundBatch.
- * professional_payout belongs to ShiftSettlementBatch.
+ * shift_refund is deliberately excluded because it may either:
+ *
+ * - directly reference one Shift; or
+ * - belong to an EmployerRefundBatch that may aggregate several Shifts.
+ *
+ * professional_payout is excluded because professional payout now belongs
+ * exclusively to ShiftSettlementBatch.
+ *
+ * platform_fee IS included because fee earning happens directly against the
+ * specific Shift occurrence whose fee was earned.
  */
 exports.DIRECT_SHIFT_TRANSACTION_TYPES = Object.freeze([
   "shift_funding",
@@ -262,6 +368,10 @@ exports.DIRECT_SHIFT_TRANSACTION_TYPES = Object.freeze([
 
 /* ─────────────────────────────── ASSIGNMENT-CASE TRANSACTIONS ─────────────────────────────── */
 
+/**
+ * Only these transaction types may optionally trace back to a
+ * ShiftAssignmentCase.
+ */
 exports.ASSIGNMENT_CASE_ALLOWED_TRANSACTION_TYPES = Object.freeze([
   "shift_refund",
 
@@ -275,6 +385,11 @@ exports.ASSIGNMENT_CASE_ALLOWED_TRANSACTION_TYPES = Object.freeze([
 exports.SHIFT_FUNDING_TRANSACTION_TYPES = Object.freeze(["shift_funding", "shift_topup"]);
 
 /**
+ * A Shift is funded entirely from:
+ *
+ * - employer wallet balance; or
+ * - Paystack Checkout.
+ *
  * Mixed Shift funding is not supported.
  */
 exports.SHIFT_FUNDING_PAYMENT_RAILS = Object.freeze(["wallet_balance", "paystack_checkout"]);
@@ -282,7 +397,13 @@ exports.SHIFT_FUNDING_PAYMENT_RAILS = Object.freeze(["wallet_balance", "paystack
 /* ─────────────────────────────── PLATFORM FEES ─────────────────────────────── */
 
 /**
- * Exact purpose for each occurrence-level platform fee.
+ * Exact legal purpose for each occurrence-level Loqum fee.
+ *
+ * There is deliberately no generic platform-fee earning purpose because the
+ * ledger must show whether the money was earned from:
+ *
+ * - the confirmed scheduled/base engagement; or
+ * - the final established overtime obligation.
  */
 exports.PLATFORM_FEE_PURPOSE_BY_COMPONENT = Object.freeze({
   base: "base_platform_fee_earned",
@@ -295,15 +416,19 @@ exports.PLATFORM_FEE_PURPOSES = Object.freeze(
 );
 
 /**
- * Earned platform fees move from escrow to the platform wallet.
+ * Earned platform fees move only between Loqum-controlled wallets:
+ *
+ * escrow → platform wallet.
  */
 exports.PLATFORM_FEE_PAYMENT_RAILS = Object.freeze(["internal_transfer"]);
 
 /* ─────────────────────────────── REFUND PURPOSES ─────────────────────────────── */
 
 /**
- * Occurrence-level scheduled/base refunds.
- * Earned platform fees are excluded.
+ * Occurrence-specific refunds return unused scheduled/base allocation.
+ *
+ * An earned platform fee is excluded from ordinary employer refund
+ * calculation.
  */
 exports.OCCURRENCE_REFUND_PURPOSES = Object.freeze([
   "expired_unfilled_refund",
@@ -318,22 +443,33 @@ exports.OCCURRENCE_REFUND_PURPOSES = Object.freeze([
 ]);
 
 /**
- * Parent-Shift refund and Paystack payment-return purposes.
+ * Parent Shift protected-fund reconciliation.
+ *
+ * This purpose is Shift-level rather than occurrence-level.
  */
-exports.SHIFT_LEVEL_REFUND_PURPOSES = Object.freeze([
-  "final_shift_reconciliation_refund",
+exports.SHIFT_LEVEL_REFUND_PURPOSES = Object.freeze(["final_shift_reconciliation_refund"]);
 
-  ...exports.SHIFT_PAYMENT_RETURN_PURPOSES,
-]);
-
+/**
+ * Refund purposes that may be represented directly against one Shift.
+ */
 exports.DIRECT_SHIFT_REFUND_PURPOSES = Object.freeze([
   ...exports.OCCURRENCE_REFUND_PURPOSES,
 
   ...exports.SHIFT_LEVEL_REFUND_PURPOSES,
 ]);
 
+/**
+ * Purpose used when EmployerRefundBatch aggregates employer refund execution.
+ */
 exports.EMPLOYER_REFUND_BATCH_PURPOSES = Object.freeze(["weekly_employer_refund"]);
 
+/**
+ * Every valid purpose for:
+ *
+ *   type: "shift_refund"
+ *
+ * There is deliberately no generic "shift_refund" purpose.
+ */
 exports.SHIFT_REFUND_PURPOSES = Object.freeze([
   ...exports.DIRECT_SHIFT_REFUND_PURPOSES,
 
@@ -343,7 +479,14 @@ exports.SHIFT_REFUND_PURPOSES = Object.freeze([
 /* ─────────────────────────────── REFUND PAYMENT RAILS ─────────────────────────────── */
 
 /**
- * paystack_transfer is reserved for EmployerRefundBatch fallback execution.
+ * All rails technically available to shift_refund.
+ *
+ * Direct Shift refunds have tighter model rules:
+ *
+ * - internal_transfer; or
+ * - paystack_refund.
+ *
+ * paystack_transfer is reserved for the EmployerRefundBatch fallback route.
  */
 exports.SHIFT_REFUND_PAYMENT_RAILS = Object.freeze([
   "internal_transfer",
@@ -353,6 +496,13 @@ exports.SHIFT_REFUND_PAYMENT_RAILS = Object.freeze([
   "paystack_transfer",
 ]);
 
+/**
+ * Weekly EmployerRefundBatch lines may execute through:
+ *
+ * - internal wallet transfer;
+ * - original Paystack refund route; or
+ * - Paystack Transfer fallback.
+ */
 exports.EMPLOYER_REFUND_BATCH_PAYMENT_RAILS = Object.freeze([
   "internal_transfer",
 
@@ -363,6 +513,9 @@ exports.EMPLOYER_REFUND_BATCH_PAYMENT_RAILS = Object.freeze([
 
 /* ─────────────────────────────── EMPLOYER REFUND BATCH ─────────────────────────────── */
 
+/**
+ * EmployerRefundBatch currently produces shift_refund ledger movements.
+ */
 exports.EMPLOYER_REFUND_BATCH_TRANSACTION_TYPES = Object.freeze(["shift_refund"]);
 
 exports.EMPLOYER_REFUND_BATCH_PURPOSE_BY_TRANSACTION_TYPE = Object.freeze({
@@ -372,10 +525,21 @@ exports.EMPLOYER_REFUND_BATCH_PURPOSE_BY_TRANSACTION_TYPE = Object.freeze({
 /* ─────────────────────────────── PROFESSIONAL SETTLEMENT BATCH ─────────────────────────────── */
 
 /**
- * ShiftSettlementBatch releases professional earnings only.
+ * ShiftSettlementBatch exists only to release professional earnings.
+ *
+ * Platform fees are intentionally excluded because their earning/collection
+ * lifecycle is occurrence-level and independent of weekly professional
+ * settlement.
  */
 exports.SETTLEMENT_BATCH_TRANSACTION_TYPES = Object.freeze(["professional_payout"]);
 
+/**
+ * One aggregated weekly ShiftSettlementBatch may contain both BASE and
+ * OVERTIME professional settlement lines.
+ *
+ * Therefore the resulting professional wallet transaction is intentionally
+ * component-neutral.
+ */
 exports.SETTLEMENT_BATCH_PURPOSE_BY_TRANSACTION_TYPE = Object.freeze({
   professional_payout: "weekly_professional_payout",
 });
@@ -387,7 +551,18 @@ exports.SETTLEMENT_BATCH_PURPOSES = Object.freeze(
 /* ─────────────────────────────── REQUIRED PURPOSES ─────────────────────────────── */
 
 /**
- * Types with one legal purpose regardless of caller.
+ * Transaction types with exactly one legal purpose regardless of caller.
+ *
+ * shift_refund is excluded because its legal purpose depends on whether it is:
+ *
+ * - a direct Shift/occurrence refund; or
+ * - an EmployerRefundBatch execution.
+ *
+ * platform_fee is also excluded because its legal purpose depends on the
+ * occurrence fee component:
+ *
+ * - base_platform_fee_earned; or
+ * - overtime_platform_fee_earned.
  */
 exports.REQUIRED_PURPOSE_BY_TRANSACTION_TYPE = Object.freeze({
   wallet_funding: "wallet_topup",
@@ -397,6 +572,10 @@ exports.REQUIRED_PURPOSE_BY_TRANSACTION_TYPE = Object.freeze({
   shift_topup: "shift_overtime_topup",
 
   professional_payout: "weekly_professional_payout",
+
+  job_publication_purchase: "job_publication_purchase",
+
+  subscription_payment: "subscription_payment",
 
   withdrawal: "withdrawal",
 
@@ -414,6 +593,12 @@ exports.REQUIRED_PURPOSE_BY_TRANSACTION_TYPE = Object.freeze({
 /* ─────────────────────────────── PAYSTACK TRANSFER ─────────────────────────────── */
 
 /**
- * Allowed only for bank withdrawals and EmployerRefundBatch fallback refunds.
+ * Paystack Transfer is currently allowed only for:
+ *
+ * - bank withdrawals; and
+ * - EmployerRefundBatch fallback refunds.
+ *
+ * Transaction model validation further restricts shift_refund +
+ * paystack_transfer to EmployerRefundBatch.
  */
 exports.PAYSTACK_TRANSFER_ALLOWED_TRANSACTION_TYPES = Object.freeze(["withdrawal", "shift_refund"]);

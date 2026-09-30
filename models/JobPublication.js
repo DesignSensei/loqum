@@ -27,7 +27,7 @@ const {
   JOB_SCREENING_QUESTION_TYPES,
   JOB_SCREENING_REQUIREMENT_LEVELS,
   JOB_PUBLICATION_ENTITLEMENT_SOURCES,
-  DEFAULT_JOB_PUBLICATION_PERIOD_DAYS,
+  FIXED_JOB_PUBLICATION_PERIOD_DAYS,
   MAX_JOB_TITLE_LENGTH,
   MAX_JOB_SUMMARY_LENGTH,
   MAX_JOB_DESCRIPTION_LENGTH,
@@ -39,15 +39,20 @@ const {
 /**
  * JOB PUBLICATION:
  *
- * Represents one free, subscription-allowance or paid marketplace publication
+ * Represents one free, subscription-slot or paid marketplace publication
  * cycle for a permanent Job.
  *
  * A publication cycle is separate from the Job's recruitment lifecycle.
- * Natural expiry stops new applications but does not close recruitment or
- * invalidate existing JobApplication records.
  *
- * Each renewal creates a new JobPublication record with a fresh entitlement.
- * Pause/resume does not reset or extend the original expiry clock.
+ * Free and paid-single-post publications have a fixed visibility period and may
+ * naturally expire. Subscription-slot publications have no publication-age expiry;
+ * they remain eligible while their subscription-slot authority remains valid.
+ *
+ * Expiry or ending publication stops new applications but does not close recruitment
+ * or invalidate existing JobApplication records.
+ *
+ * Republishing creates a new JobPublication record with a fresh entitlement.
+ * Pause/resume does not reset or extend a fixed-duration publication clock.
  *
  * listingSnapshot preserves the advertised Job content for this publication
  * cycle. Operational application-deadline changes are intentionally stored
@@ -63,8 +68,8 @@ const {
  * every subsequent deadline change.
  *
  * entitlementSnapshot records why this exact publication was authorized.
- * Commercial charging, allowance accounting and provider execution belong to
- * the monetization/service layer rather than this model.
+ * Commercial charging, subscription-slot capacity accounting and provider
+ * execution belong to the monetization/service layer rather than this model.
  */
 
 const SUPPORTED_PROFESSIONAL_TYPES = [
@@ -102,7 +107,6 @@ function sameNullableDate(left, right) {
   }
 
   const leftDate = left instanceof Date ? left : new Date(left);
-
   const rightDate = right instanceof Date ? right : new Date(right);
 
   if (Number.isNaN(leftDate.getTime()) || Number.isNaN(rightDate.getTime())) {
@@ -130,7 +134,6 @@ const locationSnapshotSchema = new mongoose.Schema(
       validate: [
         {
           validator: (coordinates) => Array.isArray(coordinates) && coordinates.length === 2,
-
           message: "Publication location coordinates must contain longitude and latitude.",
         },
         {
@@ -150,7 +153,6 @@ const locationSnapshotSchema = new mongoose.Schema(
               latitude <= 90
             );
           },
-
           message:
             "Publication location coordinates must be [longitude, latitude] with valid ranges.",
         },
@@ -440,7 +442,6 @@ const employerSnapshotSchema = new mongoose.Schema(
 
       validate: {
         validator: isPositiveSafeInteger,
-
         message: "employerSnapshot.snapshotVersion must be a positive whole number.",
       },
     },
@@ -539,7 +540,6 @@ const listingSnapshotSchema = new mongoose.Schema(
 
       validate: {
         validator: isPositiveSafeInteger,
-
         message: "listingSnapshot.snapshotVersion must be a positive whole number.",
       },
     },
@@ -590,7 +590,6 @@ const listingSnapshotSchema = new mongoose.Schema(
 
       validate: {
         validator: isNonNegativeSafeInteger,
-
         message: "minimumYearsOfExperience must be a non-negative whole number.",
       },
     },
@@ -682,19 +681,16 @@ const listingSnapshotSchema = new mongoose.Schema(
 
     responsibilities: textListField({
       itemMaxLength: MAX_JOB_SECTION_LENGTH,
-
       maxItems: MAX_JOB_LIST_ITEMS,
     }),
 
     requirements: textListField({
       itemMaxLength: MAX_JOB_SECTION_LENGTH,
-
       maxItems: MAX_JOB_LIST_ITEMS,
     }),
 
     preferredQualifications: textListField({
       itemMaxLength: MAX_JOB_SECTION_LENGTH,
-
       maxItems: MAX_JOB_LIST_ITEMS,
     }),
 
@@ -718,7 +714,6 @@ const listingSnapshotSchema = new mongoose.Schema(
 
     screeningQuestions: {
       type: [screeningQuestionSnapshotSchema],
-
       default: [],
 
       validate: {
@@ -792,7 +787,7 @@ const entitlementSnapshotSchema = new mongoose.Schema(
     },
 
     /**
-     * Unique identifier for the exact free, plan-allowance or paid-post
+     * Unique identifier for the exact free, subscription-slot or paid-post
      * entitlement consumed by this publication.
      */
     consumptionReference: {
@@ -801,6 +796,15 @@ const entitlementSnapshotSchema = new mongoose.Schema(
       required: true,
       maxlength: MAX_PUBLICATION_REFERENCE_LENGTH,
     },
+
+    /**
+     * Subscription whose concurrent slot authorized this publication.
+     *
+     * Required only for subscription_slot publications. The reference remains
+     * fixed as historical entitlement identity even when the Subscription later
+     * renews or changes plan.
+     */
+    subscription: nullableReferenceField("Subscription"),
 
     planCode: {
       type: String,
@@ -816,6 +820,11 @@ const entitlementSnapshotSchema = new mongoose.Schema(
       default: null,
     },
 
+    /**
+     * Billing cycle in which the subscription-slot entitlement was originally
+     * granted. This is audit metadata, not the publication's ongoing validity
+     * boundary across later successful subscription renewals.
+     */
     billingCycleKey: {
       type: String,
       trim: true,
@@ -850,6 +859,7 @@ const entitlementSnapshotSchema = new mongoose.Schema(
 entitlementSnapshotSchema.pre("validate", function validateEntitlementSnapshot() {
   if (this.source === "free") {
     if (
+      this.subscription ||
       this.planCode ||
       this.planName ||
       this.billingCycleKey ||
@@ -858,28 +868,42 @@ entitlementSnapshotSchema.pre("validate", function validateEntitlementSnapshot()
     ) {
       this.invalidate(
         "source",
-        "Free publication entitlement cannot contain plan or paid-purchase details."
+        "Free publication entitlement cannot contain subscription, plan or paid-purchase details."
       );
     }
   }
 
-  if (this.source === "plan_allowance") {
+  if (this.source === "subscription_slot") {
+    if (!this.subscription) {
+      this.invalidate(
+        "subscription",
+        "Subscription-slot publication requires a Subscription reference."
+      );
+    }
+
     if (!nonEmptyText(this.planCode) || !nonEmptyText(this.billingCycleKey)) {
       this.invalidate(
         "planCode",
-        "Plan-allowance publication requires planCode and billingCycleKey."
+        "Subscription-slot publication requires planCode and billingCycleKey."
       );
     }
 
     if (this.purchaseReference || this.paymentTransaction) {
       this.invalidate(
         "purchaseReference",
-        "Plan-allowance publication cannot contain paid-single-post purchase details."
+        "Subscription-slot publication cannot contain paid-single-post purchase details."
       );
     }
   }
 
   if (this.source === "paid_single_post") {
+    if (this.subscription) {
+      this.invalidate(
+        "subscription",
+        "Paid single-post publication cannot contain a Subscription reference."
+      );
+    }
+
     if (!nonEmptyText(this.purchaseReference)) {
       this.invalidate(
         "purchaseReference",
@@ -1015,13 +1039,11 @@ const jobPublicationSchema = new mongoose.Schema(
       ...requiredPositiveSafeIntegerField({
         label: "cycleNumber",
       }),
-
       immutable: true,
     },
 
     previousPublication: {
       ...nullableReferenceField("JobPublication"),
-
       immutable: true,
     },
 
@@ -1049,22 +1071,13 @@ const jobPublicationSchema = new mongoose.Schema(
 
     publicationPeriodDays: {
       type: Number,
-
-      default: DEFAULT_JOB_PUBLICATION_PERIOD_DAYS,
-
-      required: true,
-
+      default: null,
       immutable: true,
 
-      min: DEFAULT_JOB_PUBLICATION_PERIOD_DAYS,
-
-      max: DEFAULT_JOB_PUBLICATION_PERIOD_DAYS,
-
       validate: {
-        validator: (value) =>
-          isPositiveSafeInteger(value) && value === DEFAULT_JOB_PUBLICATION_PERIOD_DAYS,
+        validator: (value) => value === null || value === undefined || isPositiveSafeInteger(value),
 
-        message: `publicationPeriodDays must be ${DEFAULT_JOB_PUBLICATION_PERIOD_DAYS}.`,
+        message: "publicationPeriodDays must be null or a positive whole number.",
       },
     },
 
@@ -1082,8 +1095,7 @@ const jobPublicationSchema = new mongoose.Schema(
     },
 
     expiresAt: {
-      type: Date,
-      required: true,
+      ...nullableDateField(),
       immutable: true,
     },
 
@@ -1091,7 +1103,9 @@ const jobPublicationSchema = new mongoose.Schema(
 
     /**
      * The deadline selected when this publication cycle first goes live.
-     * Null means applications initially remain open until publication expiry.
+     *
+     * Null means applications initially remain open while the publication is live.
+     * For fixed-duration publications, natural expiry still closes applications.
      */
     initialApplicationDeadline: {
       ...nullableDateField(),
@@ -1101,14 +1115,17 @@ const jobPublicationSchema = new mongoose.Schema(
     /**
      * Current operational deadline for this publication cycle.
      *
-     * Null means applications remain open until expiresAt, subject to the
-     * publication itself being live.
+     * Null means applications remain open while the publication itself is live.
+     * Fixed-duration publications also stop accepting applications at expiresAt.
+     *
+     * For subscription_slot publications, an explicit application deadline must
+     * not exceed the Subscription's currentPeriodEnd. That external-state rule is
+     * enforced by the publication service rather than this schema.
      */
     applicationDeadline: nullableDateField(),
 
     deadlineHistory: {
       type: [deadlineHistorySchema],
-
       default: [],
     },
 
@@ -1123,13 +1140,18 @@ const jobPublicationSchema = new mongoose.Schema(
 
     pauseHistory: {
       type: [publicationPauseSchema],
-
       default: [],
     },
 
     endedAt: nullableDateField(),
 
     endedBy: nullableReferenceField("User"),
+
+    endedByRole: {
+      type: String,
+      enum: ["employer", "admin", "system", null],
+      default: null,
+    },
 
     endReason: {
       type: String,
@@ -1184,6 +1206,12 @@ jobPublicationSchema.index(
 );
 
 jobPublicationSchema.index({
+  "entitlementSnapshot.subscription": 1,
+  "entitlementSnapshot.source": 1,
+  status: 1,
+});
+
+jobPublicationSchema.index({
   job: 1,
   status: 1,
   publishedAt: -1,
@@ -1208,13 +1236,9 @@ jobPublicationSchema.index({
 
 jobPublicationSchema.index({
   "listingSnapshot.professionalType": 1,
-
   "listingSnapshot.employmentType": 1,
-
   "listingSnapshot.workplaceType": 1,
-
   "listingSnapshot.state": 1,
-
   publishedAt: -1,
 });
 
@@ -1248,6 +1272,10 @@ jobPublicationSchema.pre("validate", function validateJobPublication() {
     this.invalidate("status", "A new JobPublication must begin in live status.");
   }
 
+  if (this.isNew && pauses.length > 0) {
+    this.invalidate("pauseHistory", "A new publication cannot begin with pause history.");
+  }
+
   if (this.status === "unpublished") {
     this.invalidate("status", "JobPublication records cannot use unpublished status.");
   }
@@ -1270,18 +1298,60 @@ jobPublicationSchema.pre("validate", function validateJobPublication() {
 
   /* ─────────────────────────────── PUBLICATION CLOCK ─────────────────────────────── */
 
-  if (this.publishedAt && this.expiresAt && this.expiresAt <= this.publishedAt) {
-    this.invalidate("expiresAt", "expiresAt must be later than publishedAt.");
+  const entitlementSource = this.entitlementSnapshot?.source || null;
+
+  const usesFixedPublicationPeriod = ["free", "paid_single_post"].includes(entitlementSource);
+
+  const usesSubscriptionSlot = entitlementSource === "subscription_slot";
+
+  if (usesFixedPublicationPeriod) {
+    if (this.publicationPeriodDays !== FIXED_JOB_PUBLICATION_PERIOD_DAYS) {
+      this.invalidate(
+        "publicationPeriodDays",
+        `Free and paid single-post publications require publicationPeriodDays to be ${FIXED_JOB_PUBLICATION_PERIOD_DAYS}.`
+      );
+    }
+
+    if (!this.expiresAt) {
+      this.invalidate("expiresAt", "Free and paid single-post publications require expiresAt.");
+    }
+
+    if (this.publishedAt && this.expiresAt) {
+      if (this.expiresAt <= this.publishedAt) {
+        this.invalidate("expiresAt", "expiresAt must be later than publishedAt.");
+      }
+
+      const expectedExpiresAt =
+        this.publishedAt.getTime() + FIXED_JOB_PUBLICATION_PERIOD_DAYS * MILLISECONDS_PER_DAY;
+
+      if (this.expiresAt.getTime() !== expectedExpiresAt) {
+        this.invalidate(
+          "expiresAt",
+          `expiresAt must be exactly ${FIXED_JOB_PUBLICATION_PERIOD_DAYS} days after publishedAt for Free and paid single-post publications.`
+        );
+      }
+    }
   }
 
-  if (this.publishedAt && this.expiresAt) {
-    const expectedExpiresAt =
-      this.publishedAt.getTime() + DEFAULT_JOB_PUBLICATION_PERIOD_DAYS * MILLISECONDS_PER_DAY;
+  if (usesSubscriptionSlot) {
+    if (this.publicationPeriodDays !== null && this.publicationPeriodDays !== undefined) {
+      this.invalidate(
+        "publicationPeriodDays",
+        "Subscription-slot publications cannot contain a fixed publication period."
+      );
+    }
 
-    if (this.expiresAt.getTime() !== expectedExpiresAt) {
+    if (this.expiresAt) {
       this.invalidate(
         "expiresAt",
-        `expiresAt must be exactly ${DEFAULT_JOB_PUBLICATION_PERIOD_DAYS} days after publishedAt.`
+        "Subscription-slot publications cannot contain a publication-age expiresAt value."
+      );
+    }
+
+    if (this.status === "expired") {
+      this.invalidate(
+        "status",
+        "Subscription-slot publications end through subscription or recruitment lifecycle events and cannot naturally expire."
       );
     }
   }
@@ -1457,14 +1527,17 @@ jobPublicationSchema.pre("validate", function validateJobPublication() {
       break;
     }
 
-    if (this.expiresAt && pause.pausedAt && pause.pausedAt > this.expiresAt) {
-      this.invalidate("pauseHistory", "A publication cannot be paused after its expiry time.");
+    if (this.expiresAt && pause.pausedAt && pause.pausedAt >= this.expiresAt) {
+      this.invalidate(
+        "pauseHistory",
+        "A publication cannot be paused at or after its expiry time."
+      );
 
       break;
     }
 
-    if (this.expiresAt && pause.resumedAt && pause.resumedAt > this.expiresAt) {
-      this.invalidate("pauseHistory", "A publication cannot resume after its expiry time.");
+    if (this.expiresAt && pause.resumedAt && pause.resumedAt >= this.expiresAt) {
+      this.invalidate("pauseHistory", "A publication cannot resume at or after its expiry time.");
 
       break;
     }
@@ -1504,21 +1577,42 @@ jobPublicationSchema.pre("validate", function validateJobPublication() {
 
   /* ─────────────────────────────── EARLY END ─────────────────────────────── */
 
-  const hasEndAudit = hasAnyDocumentValue([this.endedAt, this.endedBy, this.endReason]);
+  const hasEndAudit = hasAnyDocumentValue([
+    this.endedAt,
+    this.endedBy,
+    this.endedByRole,
+    this.endReason,
+  ]);
 
   if (this.status === "ended") {
-    if (!this.endedAt || !this.endedBy || !nonEmptyText(this.endReason)) {
-      this.invalidate("status", "An ended publication requires endedAt, endedBy and endReason.");
+    if (!this.endedAt || !this.endedByRole || !nonEmptyText(this.endReason)) {
+      this.invalidate(
+        "status",
+        "An ended publication requires endedAt, endedByRole and endReason."
+      );
+    }
+
+    if (this.endedByRole === "system" && this.endedBy) {
+      this.invalidate("endedBy", "A system-ended publication cannot contain an endedBy user.");
+    }
+
+    if (this.endedByRole && this.endedByRole !== "system" && !this.endedBy) {
+      this.invalidate("endedBy", "Employer- or admin-ended publication requires an endedBy user.");
     }
 
     if (this.endedAt && this.publishedAt && this.endedAt < this.publishedAt) {
       this.invalidate("endedAt", "A publication cannot end before it is published.");
     }
 
-    if (this.endedAt && this.expiresAt && this.endedAt >= this.expiresAt) {
+    if (
+      usesFixedPublicationPeriod &&
+      this.endedAt &&
+      this.expiresAt &&
+      this.endedAt >= this.expiresAt
+    ) {
       this.invalidate(
         "endedAt",
-        "ended status is for publication terminated before natural expiry."
+        "A fixed-duration publication cannot use ended status at or after natural expiry."
       );
     }
   } else if (hasEndAudit) {
@@ -1530,11 +1624,20 @@ jobPublicationSchema.pre("validate", function validateJobPublication() {
 
   /* ─────────────────────────────── EXPIRED STATE ─────────────────────────────── */
 
-  if (this.status === "expired" && hasEndAudit) {
-    this.invalidate(
-      "status",
-      "Naturally expired publications cannot contain early-end audit fields."
-    );
+  if (this.status === "expired") {
+    if (!usesFixedPublicationPeriod || !this.expiresAt) {
+      this.invalidate(
+        "status",
+        "Only fixed-duration Free or paid single-post publications may use expired status."
+      );
+    }
+
+    if (hasEndAudit) {
+      this.invalidate(
+        "status",
+        "Naturally expired publications cannot contain early-end audit fields."
+      );
+    }
   }
 });
 

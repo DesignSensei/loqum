@@ -3,6 +3,7 @@
 const Job = require("../models/Job");
 const JobPublication = require("../models/JobPublication");
 const EmployerProfile = require("../models/EmployerProfile");
+const Subscription = require("../models/Subscription");
 
 const JobService = require("./jobService");
 const JobApplicationService = require("./jobApplicationService");
@@ -11,7 +12,7 @@ const {
   JOB_PUBLICATION_ENTITLEMENT_SOURCES,
   JOB_SALARY_PERIODS,
   JOB_COMPENSATION_TYPES,
-  DEFAULT_JOB_PUBLICATION_PERIOD_DAYS,
+  FIXED_JOB_PUBLICATION_PERIOD_DAYS,
 } = require("../constants/jobPosting");
 
 const { createServiceError } = require("./helpers/serviceErrorHelper");
@@ -34,6 +35,7 @@ const MAX_EXPIRY_BATCH_SIZE = 500;
 
 const LIVE_PUBLICATION_STATUSES = ["live", "paused"];
 const REPUBLISHABLE_PUBLICATION_STATUSES = ["expired", "ended"];
+const FIXED_PUBLICATION_ENTITLEMENT_SOURCES = ["free", "paid_single_post"];
 
 /**
  * JobPublicationService owns permanent-Job marketplace publication lifecycle.
@@ -43,10 +45,10 @@ const REPUBLISHABLE_PUBLICATION_STATUSES = ["expired", "ended"];
  * entitlement resolution and consumption orchestration before calling
  * publishJob with that durable grant.
  *
- * SubscriptionAllowance / JobPayment authority does not yet exist in the
- * current repository, so this service does not invent allowance balances,
- * prices or payment state. Future subscription and PAYG producers plug into
- * JobPublicationEntitlementService without changing this lifecycle service.
+ * Subscription Job-slot capacity and PAYG payment authority are resolved by
+ * JobPublicationEntitlementService. This lifecycle service validates the durable
+ * entitlement grant but does not calculate subscription capacity, purchase
+ * balances or payment state.
  *
  * Notifications are represented as post-commit events. This service does not
  * create Notification documents inside lifecycle transactions.
@@ -220,7 +222,7 @@ class JobPublicationService {
   }
 
   static escapeRegExp(value) {
-    return String(value).replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&");
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   /* ─────────────────────────────── ENTITLEMENT GRANT ─────────────────────────────── */
@@ -294,6 +296,12 @@ class JobPublicationService {
       });
     }
 
+    const subscription = this.normalizeObjectId(
+      entitlementGrant.subscription,
+      "publication subscription ID",
+      false
+    );
+
     const planCode = this.normalizeOptionalText(
       entitlementGrant.planCode,
       "Publication entitlement plan code",
@@ -325,28 +333,51 @@ class JobPublicationService {
     );
 
     if (source === "free") {
-      if (planCode || planName || billingCycleKey || purchaseReference || paymentTransaction) {
+      if (
+        subscription ||
+        planCode ||
+        planName ||
+        billingCycleKey ||
+        purchaseReference ||
+        paymentTransaction
+      ) {
         throw this.createError({
-          message: "Free publication entitlement cannot contain plan or paid-purchase details.",
+          message:
+            "Free publication entitlement cannot contain subscription, plan or paid-purchase details.",
           code: "FREE_JOB_PUBLICATION_ENTITLEMENT_METADATA_CONFLICT",
         });
       }
     }
 
-    if (source === "plan_allowance") {
+    if (source === "subscription_slot") {
+      if (!subscription) {
+        throw this.createError({
+          message: "Subscription-slot publication requires a Subscription reference.",
+          code: "SUBSCRIPTION_SLOT_PUBLICATION_SUBSCRIPTION_REQUIRED",
+        });
+      }
+
       if (!planCode || !billingCycleKey) {
         throw this.createError({
-          message: "Plan-allowance publication requires planCode and billingCycleKey.",
-          code: "INCOMPLETE_PLAN_ALLOWANCE_PUBLICATION_ENTITLEMENT",
+          message: "Subscription-slot publication requires planCode and billingCycleKey.",
+          code: "INCOMPLETE_SUBSCRIPTION_SLOT_PUBLICATION_ENTITLEMENT",
         });
       }
 
       if (purchaseReference || paymentTransaction) {
         throw this.createError({
-          message: "Plan-allowance publication cannot contain paid single-post purchase details.",
-          code: "PLAN_ALLOWANCE_PUBLICATION_PAYMENT_CONFLICT",
+          message:
+            "Subscription-slot publication cannot contain paid single-post purchase details.",
+          code: "SUBSCRIPTION_SLOT_PUBLICATION_PAYMENT_CONFLICT",
         });
       }
+    }
+
+    if (source === "paid_single_post" && subscription) {
+      throw this.createError({
+        message: "Paid single-post publication cannot contain a Subscription reference.",
+        code: "PAID_JOB_PUBLICATION_SUBSCRIPTION_CONFLICT",
+      });
     }
 
     if (source === "paid_single_post" && !purchaseReference) {
@@ -359,6 +390,7 @@ class JobPublicationService {
     return {
       source,
       consumptionReference,
+      subscription,
       planCode,
       planName,
       billingCycleKey,
@@ -538,24 +570,52 @@ class JobPublicationService {
     }
   }
 
-  static validatePublicationDeadline(applicationDeadline, publishedAt, expiresAt) {
+  static validatePublicationDeadline({
+    applicationDeadline,
+    minimumTime,
+    authorityEnd,
+    entitlementSource,
+  }) {
     if (!applicationDeadline) {
       return null;
     }
 
-    if (applicationDeadline <= publishedAt) {
+    if (applicationDeadline <= minimumTime) {
       throw this.createError({
-        message: "Application deadline must be later than the publication start time.",
+        message: "Application deadline must be later than the time it is set.",
         code: "JOB_APPLICATION_DEADLINE_NOT_FUTURE",
         statusCode: 409,
       });
     }
 
-    if (applicationDeadline > expiresAt) {
+    if (!authorityEnd) {
       throw this.createError({
-        message: "Application deadline cannot exceed the 45-day publication expiry.",
+        message: "Publication authority end time is unavailable.",
+        code: "JOB_PUBLICATION_AUTHORITY_END_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
+    if (applicationDeadline > authorityEnd) {
+      if (entitlementSource === "subscription_slot") {
+        throw this.createError({
+          message:
+            "Application deadline cannot exceed the subscription's current guaranteed publication period.",
+          code: "JOB_APPLICATION_DEADLINE_AFTER_SUBSCRIPTION_AUTHORITY_END",
+          statusCode: 409,
+          details: {
+            authorityEnd,
+          },
+        });
+      }
+
+      throw this.createError({
+        message: "Application deadline cannot exceed publication expiry.",
         code: "JOB_APPLICATION_DEADLINE_AFTER_PUBLICATION_EXPIRY",
         statusCode: 409,
+        details: {
+          authorityEnd,
+        },
       });
     }
 
@@ -649,6 +709,136 @@ class JobPublicationService {
     }
 
     return employerProfile;
+  }
+
+  static async getSubscriptionPublicationAuthority({
+    subscriptionId,
+    businessId,
+    currentTime,
+    session = null,
+  }) {
+    const normalizedSubscriptionId = this.normalizeObjectId(
+      subscriptionId,
+      "publication subscription ID"
+    );
+
+    const normalizedBusinessId = this.normalizeObjectId(businessId, "publication business ID");
+
+    const authorityTime = this.normalizeCurrentTime(currentTime);
+
+    const subscription = await this.withSession(
+      Subscription.findById(normalizedSubscriptionId).select(
+        "_id business status currentPeriodStart currentPeriodEnd plan planSnapshot"
+      ),
+      session
+    );
+
+    if (!subscription) {
+      throw this.createError({
+        message: "The Subscription authorizing this Job publication was not found.",
+        code: "JOB_PUBLICATION_SUBSCRIPTION_NOT_FOUND",
+        statusCode: 409,
+      });
+    }
+
+    if (String(subscription.business) !== String(normalizedBusinessId)) {
+      throw this.createError({
+        message: "The publication Subscription does not belong to this employer.",
+        code: "JOB_PUBLICATION_SUBSCRIPTION_BUSINESS_MISMATCH",
+        statusCode: 409,
+      });
+    }
+
+    if (subscription.status !== "active") {
+      throw this.createError({
+        message: "The Subscription authorizing this Job publication is not active.",
+        code: "JOB_PUBLICATION_SUBSCRIPTION_NOT_ACTIVE",
+        statusCode: 409,
+      });
+    }
+
+    if (!subscription.currentPeriodStart || !subscription.currentPeriodEnd) {
+      throw this.createError({
+        message: "The active Subscription is missing its current billing period.",
+        code: "JOB_PUBLICATION_SUBSCRIPTION_PERIOD_MISSING",
+        statusCode: 500,
+      });
+    }
+
+    if (
+      authorityTime < subscription.currentPeriodStart ||
+      authorityTime >= subscription.currentPeriodEnd
+    ) {
+      throw this.createError({
+        message: "The Subscription does not currently provide guaranteed publication authority.",
+        code: "JOB_PUBLICATION_SUBSCRIPTION_AUTHORITY_INACTIVE",
+        statusCode: 409,
+        details: {
+          currentPeriodStart: subscription.currentPeriodStart,
+          currentPeriodEnd: subscription.currentPeriodEnd,
+        },
+      });
+    }
+
+    return subscription;
+  }
+
+  static async resolveExistingPublicationAuthority({
+    publication,
+    businessId,
+    currentTime,
+    session = null,
+  }) {
+    const entitlementSource = publication.entitlementSnapshot?.source || null;
+
+    if (FIXED_PUBLICATION_ENTITLEMENT_SOURCES.includes(entitlementSource)) {
+      if (!publication.expiresAt) {
+        throw this.createError({
+          message: "Fixed-duration Job publication is missing expiresAt.",
+          code: "JOB_PUBLICATION_EXPIRY_MISSING",
+          statusCode: 500,
+        });
+      }
+
+      return {
+        entitlementSource,
+        fixedDuration: true,
+        authorityEnd: new Date(publication.expiresAt),
+        subscription: null,
+      };
+    }
+
+    if (entitlementSource === "subscription_slot") {
+      const subscriptionId = publication.entitlementSnapshot?.subscription;
+
+      if (!subscriptionId) {
+        throw this.createError({
+          message: "Subscription-slot Job publication is missing its Subscription reference.",
+          code: "JOB_PUBLICATION_SUBSCRIPTION_REFERENCE_MISSING",
+          statusCode: 500,
+        });
+      }
+
+      const subscription = await this.getSubscriptionPublicationAuthority({
+        subscriptionId,
+        businessId,
+        currentTime,
+        session,
+      });
+
+      return {
+        entitlementSource,
+        fixedDuration: false,
+        authorityEnd: new Date(subscription.currentPeriodEnd),
+        subscription,
+      };
+    }
+
+    throw this.createError({
+      message: "Job publication entitlement source is invalid.",
+      code: "INVALID_JOB_PUBLICATION_ENTITLEMENT_SOURCE",
+      statusCode: 500,
+    });
   }
 
   static async getEmployerPublication({
@@ -803,11 +993,16 @@ class JobPublicationService {
 
       /*
        * Scheduler lag must not force a user to wait before renewing an already
-       * elapsed publication. Normalize the due current publication first.
+       * elapsed fixed-duration publication. Normalize the due current
+       * publication first.
        */
       if (
         latestPublication &&
         LIVE_PUBLICATION_STATUSES.includes(latestPublication.status) &&
+        FIXED_PUBLICATION_ENTITLEMENT_SOURCES.includes(
+          latestPublication.entitlementSnapshot?.source
+        ) &&
+        latestPublication.expiresAt &&
         publishedAt >= new Date(latestPublication.expiresAt)
       ) {
         const expiryResult = await this.expirePublicationInternal({
@@ -818,7 +1013,6 @@ class JobPublicationService {
         });
 
         latestPublication = expiryResult.publication;
-
         events.push(...expiryResult.events);
       }
 
@@ -834,15 +1028,42 @@ class JobPublicationService {
 
       const cycleNumber = latestPublication ? Number(latestPublication.cycleNumber) + 1 : 1;
 
-      const expiresAt = new Date(
-        publishedAt.getTime() + DEFAULT_JOB_PUBLICATION_PERIOD_DAYS * MILLISECONDS_PER_DAY
+      const usesFixedPublicationPeriod = FIXED_PUBLICATION_ENTITLEMENT_SOURCES.includes(
+        normalizedEntitlement.source
       );
 
-      const applicationDeadline = this.validatePublicationDeadline(
-        this.normalizeNullableDate(job.applicationDeadline, "applicationDeadline"),
-        publishedAt,
-        expiresAt
-      );
+      const publicationPeriodDays = usesFixedPublicationPeriod
+        ? FIXED_JOB_PUBLICATION_PERIOD_DAYS
+        : null;
+
+      const expiresAt = usesFixedPublicationPeriod
+        ? new Date(publishedAt.getTime() + FIXED_JOB_PUBLICATION_PERIOD_DAYS * MILLISECONDS_PER_DAY)
+        : null;
+
+      let subscriptionAuthority = null;
+
+      if (normalizedEntitlement.source === "subscription_slot") {
+        subscriptionAuthority = await this.getSubscriptionPublicationAuthority({
+          subscriptionId: normalizedEntitlement.subscription,
+          businessId: job.business,
+          currentTime: publishedAt,
+          session,
+        });
+      }
+
+      const authorityEnd = usesFixedPublicationPeriod
+        ? expiresAt
+        : new Date(subscriptionAuthority.currentPeriodEnd);
+
+      const applicationDeadline = this.validatePublicationDeadline({
+        applicationDeadline: this.normalizeNullableDate(
+          job.applicationDeadline,
+          "applicationDeadline"
+        ),
+        minimumTime: publishedAt,
+        authorityEnd,
+        entitlementSource: normalizedEntitlement.source,
+      });
 
       const publicationPayload = {
         referenceCode: generateReference("LQ-JPUB"),
@@ -854,7 +1075,7 @@ class JobPublicationService {
         employerSnapshot: this.buildEmployerSnapshot(employerProfile, branch),
         listingSnapshot: this.buildListingSnapshot(job, publishedAt),
         entitlementSnapshot: normalizedEntitlement,
-        publicationPeriodDays: DEFAULT_JOB_PUBLICATION_PERIOD_DAYS,
+        publicationPeriodDays,
         publishedAt,
         publishedBy,
         expiresAt,
@@ -961,7 +1182,14 @@ class JobPublicationService {
         });
       }
 
-      if (pausedAt >= new Date(publication.expiresAt)) {
+      const publicationAuthority = await this.resolveExistingPublicationAuthority({
+        publication,
+        businessId: job.business,
+        currentTime: pausedAt,
+        session,
+      });
+
+      if (publicationAuthority.fixedDuration && pausedAt >= publicationAuthority.authorityEnd) {
         const expiryResult = await this.expirePublicationInternal({
           publication,
           job,
@@ -1058,7 +1286,14 @@ class JobPublicationService {
         });
       }
 
-      if (resumedAt >= new Date(publication.expiresAt)) {
+      const publicationAuthority = await this.resolveExistingPublicationAuthority({
+        publication,
+        businessId: job.business,
+        currentTime: resumedAt,
+        session,
+      });
+
+      if (publicationAuthority.fixedDuration && resumedAt >= publicationAuthority.authorityEnd) {
         const expiryResult = await this.expirePublicationInternal({
           publication,
           job,
@@ -1166,7 +1401,14 @@ class JobPublicationService {
         });
       }
 
-      if (changedAt >= new Date(publication.expiresAt)) {
+      const publicationAuthority = await this.resolveExistingPublicationAuthority({
+        publication,
+        businessId: job.business,
+        currentTime: changedAt,
+        session,
+      });
+
+      if (publicationAuthority.fixedDuration && changedAt >= publicationAuthority.authorityEnd) {
         const expiryResult = await this.expirePublicationInternal({
           publication,
           job,
@@ -1181,23 +1423,12 @@ class JobPublicationService {
         };
       }
 
-      if (requestedDeadline) {
-        if (requestedDeadline <= changedAt) {
-          throw this.createError({
-            message: "The new application deadline must be in the future.",
-            code: "JOB_APPLICATION_DEADLINE_NOT_FUTURE",
-            statusCode: 409,
-          });
-        }
-
-        if (requestedDeadline > new Date(publication.expiresAt)) {
-          throw this.createError({
-            message: "Application deadline cannot exceed publication expiry.",
-            code: "JOB_APPLICATION_DEADLINE_AFTER_PUBLICATION_EXPIRY",
-            statusCode: 409,
-          });
-        }
-      }
+      this.validatePublicationDeadline({
+        applicationDeadline: requestedDeadline,
+        minimumTime: changedAt,
+        authorityEnd: publicationAuthority.authorityEnd,
+        entitlementSource: publicationAuthority.entitlementSource,
+      });
 
       if (this.sameNullableDate(publication.applicationDeadline, requestedDeadline)) {
         return {
@@ -1241,7 +1472,15 @@ class JobPublicationService {
 
   /* ─────────────────────────────── EARLY END ─────────────────────────────── */
 
-  static async endPublicationInternal({ publication, job, endedBy, reason, endedAt, session }) {
+  static async endPublicationInternal({
+    publication,
+    job,
+    endedBy = null,
+    endedByRole = "system",
+    reason,
+    endedAt,
+    session,
+  }) {
     if (publication.status === "ended") {
       return {
         publication,
@@ -1271,7 +1510,35 @@ class JobPublicationService {
       });
     }
 
-    if (endedAt >= new Date(publication.expiresAt)) {
+    if (!["employer", "admin", "system"].includes(endedByRole)) {
+      throw this.createError({
+        message: "Publication endedByRole is invalid.",
+        code: "INVALID_JOB_PUBLICATION_END_ACTOR_ROLE",
+        statusCode: 500,
+      });
+    }
+
+    if (endedByRole === "system" && endedBy) {
+      throw this.createError({
+        message: "System-ended publication cannot contain an endedBy user.",
+        code: "SYSTEM_JOB_PUBLICATION_END_USER_CONFLICT",
+        statusCode: 500,
+      });
+    }
+
+    if (endedByRole !== "system" && !endedBy) {
+      throw this.createError({
+        message: "Employer- or admin-ended publication requires an endedBy user.",
+        code: "JOB_PUBLICATION_END_USER_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
+    if (
+      FIXED_PUBLICATION_ENTITLEMENT_SOURCES.includes(publication.entitlementSnapshot?.source) &&
+      publication.expiresAt &&
+      endedAt >= new Date(publication.expiresAt)
+    ) {
       return this.expirePublicationInternal({
         publication,
         job,
@@ -1283,6 +1550,7 @@ class JobPublicationService {
     publication.status = "ended";
     publication.endedAt = endedAt;
     publication.endedBy = endedBy;
+    publication.endedByRole = endedByRole;
     publication.endReason = reason;
 
     await publication.save({
@@ -1357,6 +1625,42 @@ class JobPublicationService {
         publication,
         job,
         endedBy,
+        endedByRole: adminEmployerContext ? "admin" : "employer",
+        reason: normalizedReason,
+        endedAt,
+        session,
+      });
+    });
+  }
+
+  static async endPublicationBySystem(
+    { publicationId, reason, currentTime = new Date() },
+    options = {}
+  ) {
+    const endedAt = this.normalizeCurrentTime(currentTime);
+
+    const normalizedReason = this.normalizeOptionalText(
+      reason,
+      "Publication end reason",
+      MAX_PUBLICATION_END_REASON_LENGTH
+    );
+
+    if (!normalizedReason) {
+      throw this.createError({
+        message: "Publication end reason is required.",
+        code: "JOB_PUBLICATION_END_REASON_REQUIRED",
+      });
+    }
+
+    return this.runWithOptionalTransaction(options, async (session) => {
+      const publication = await this.getPublication(publicationId, session);
+      const job = await JobService.getSystemJob(publication.job, session);
+
+      return this.endPublicationInternal({
+        publication,
+        job,
+        endedBy: null,
+        endedByRole: "system",
         reason: normalizedReason,
         endedAt,
         session,
@@ -1392,6 +1696,17 @@ class JobPublicationService {
       throw this.createError({
         message: "This Job publication cannot expire from its current state.",
         code: "JOB_PUBLICATION_EXPIRY_NOT_ALLOWED",
+        statusCode: 409,
+      });
+    }
+
+    if (
+      !FIXED_PUBLICATION_ENTITLEMENT_SOURCES.includes(publication.entitlementSnapshot?.source) ||
+      !publication.expiresAt
+    ) {
+      throw this.createError({
+        message: "Only fixed-duration Free or paid single-post publications may naturally expire.",
+        code: "JOB_PUBLICATION_NOT_FIXED_DURATION",
         statusCode: 409,
       });
     }
@@ -1437,7 +1752,6 @@ class JobPublicationService {
 
     return this.runWithOptionalTransaction(options, async (session) => {
       const publication = await this.getPublication(publicationId, session);
-
       const job = await JobService.getSystemJob(publication.job, session);
 
       return this.expirePublicationInternal({
@@ -1454,14 +1768,17 @@ class JobPublicationService {
     limit = DEFAULT_EXPIRY_BATCH_SIZE,
   } = {}) {
     const expiredAt = this.normalizeCurrentTime(currentTime);
-
     const batchLimit = this.normalizeExpiryBatchLimit(limit);
 
     const candidates = await JobPublication.find({
       status: {
         $in: LIVE_PUBLICATION_STATUSES,
       },
+      "entitlementSnapshot.source": {
+        $in: FIXED_PUBLICATION_ENTITLEMENT_SOURCES,
+      },
       expiresAt: {
+        $type: "date",
         $lte: expiredAt,
       },
     })
@@ -1591,7 +1908,6 @@ class JobPublicationService {
     options = {}
   ) {
     const closedAt = this.normalizeCurrentTime(currentTime);
-
     const closedBy = this.normalizeObjectId(closedByUserId, "closed-by user ID");
 
     return this.runWithOptionalTransaction(options, async (session) => {
@@ -1612,7 +1928,6 @@ class JobPublicationService {
       }
 
       const events = [];
-
       let publicationResult = null;
 
       if (LIVE_PUBLICATION_STATUSES.includes(job.publicationStatus)) {
@@ -1630,13 +1945,13 @@ class JobPublicationService {
           publication,
           job,
           endedBy: closedBy,
+          endedByRole: "employer",
           reason: "Recruitment closed by employer.",
           endedAt: closedAt,
           session,
         });
 
         job = publicationResult.job;
-
         events.push(...(publicationResult.events || []));
       }
 
@@ -1684,7 +1999,6 @@ class JobPublicationService {
     options = {}
   ) {
     const closedAt = this.normalizeCurrentTime(currentTime);
-
     const closedBy = this.normalizeObjectId(closedByUserId, "closed-by user ID");
 
     return this.runWithOptionalTransaction(options, async (session) => {
@@ -1711,7 +2025,6 @@ class JobPublicationService {
       }
 
       const events = [];
-
       let publicationResult = null;
 
       if (LIVE_PUBLICATION_STATUSES.includes(job.publicationStatus)) {
@@ -1725,7 +2038,11 @@ class JobPublicationService {
 
         const publication = await this.getPublication(job.currentPublication, session);
 
-        if (closedAt >= new Date(publication.expiresAt)) {
+        if (
+          FIXED_PUBLICATION_ENTITLEMENT_SOURCES.includes(publication.entitlementSnapshot?.source) &&
+          publication.expiresAt &&
+          closedAt >= new Date(publication.expiresAt)
+        ) {
           publicationResult = await this.expirePublicationInternal({
             publication,
             job,
@@ -1737,6 +2054,7 @@ class JobPublicationService {
             publication,
             job,
             endedBy: closedBy,
+            endedByRole: "employer",
             reason: "All Job vacancies have been filled.",
             endedAt: closedAt,
             session,
@@ -1744,7 +2062,6 @@ class JobPublicationService {
         }
 
         job = publicationResult.job;
-
         events.push(...(publicationResult.events || []));
       }
 
@@ -1801,9 +2118,25 @@ class JobPublicationService {
   }) {
     const filter = {
       status: "live",
-      expiresAt: {
-        $gt: currentTime,
-      },
+      $and: [
+        {
+          $or: [
+            {
+              "entitlementSnapshot.source": {
+                $in: FIXED_PUBLICATION_ENTITLEMENT_SOURCES,
+              },
+              expiresAt: {
+                $type: "date",
+                $gt: currentTime,
+              },
+            },
+            {
+              "entitlementSnapshot.source": "subscription_slot",
+              expiresAt: { $type: "null" },
+            },
+          ],
+        },
+      ],
     };
 
     if (professionalType) {
@@ -1914,23 +2247,25 @@ class JobPublicationService {
     if (normalizedSearch) {
       const pattern = new RegExp(this.escapeRegExp(normalizedSearch), "i");
 
-      filter.$or = [
-        {
-          "listingSnapshot.roleTitle": pattern,
-        },
-        {
-          "listingSnapshot.specialty": pattern,
-        },
-        {
-          "listingSnapshot.department": pattern,
-        },
-        {
-          "listingSnapshot.summary": pattern,
-        },
-        {
-          "employerSnapshot.businessName": pattern,
-        },
-      ];
+      filter.$and.push({
+        $or: [
+          {
+            "listingSnapshot.roleTitle": pattern,
+          },
+          {
+            "listingSnapshot.specialty": pattern,
+          },
+          {
+            "listingSnapshot.department": pattern,
+          },
+          {
+            "listingSnapshot.summary": pattern,
+          },
+          {
+            "employerSnapshot.businessName": pattern,
+          },
+        ],
+      });
     }
 
     return filter;
@@ -1946,10 +2281,15 @@ class JobPublicationService {
     };
   }
 
+  // Presentation only: callers must first validate live Subscription authority
+  // and current Job/publication identity. Null expiry alone is not authorization.
   static decoratePublicPublication(publication, currentTime) {
     const deadline = publication.applicationDeadline
       ? new Date(publication.applicationDeadline)
       : null;
+
+    const intrinsicExpiryActive =
+      !publication.expiresAt || new Date(publication.expiresAt) > currentTime;
 
     const listingSnapshot = publication.listingSnapshot || {};
 
@@ -1982,7 +2322,7 @@ class JobPublicationService {
       applicationDeadline: publication.applicationDeadline || null,
       acceptingApplications:
         publication.status === "live" &&
-        new Date(publication.expiresAt) > currentTime &&
+        intrinsicExpiryActive &&
         (!deadline || deadline >= currentTime),
     };
   }
@@ -2006,7 +2346,6 @@ class JobPublicationService {
     const now = this.normalizeCurrentTime(currentTime);
 
     const normalizedPage = this.normalizePage(page);
-
     const normalizedLimit = this.normalizeLimit(limit);
 
     const filter = this.buildPublicMarketplaceFilter({
@@ -2027,6 +2366,77 @@ class JobPublicationService {
     const pipeline = [
       {
         $match: filter,
+      },
+      {
+        $lookup: {
+          from: Subscription.collection.name,
+          let: {
+            subscriptionId: "$entitlementSnapshot.subscription",
+            publicationBusiness: "$business",
+          },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $and: [
+                    {
+                      $eq: ["$_id", "$$subscriptionId"],
+                    },
+                    {
+                      $eq: ["$business", "$$publicationBusiness"],
+                    },
+                    {
+                      $eq: ["$status", "active"],
+                    },
+                    // Aggregation comparisons use BSON type ordering. Require
+                    // real dates so null or malformed periods cannot authorize visibility.
+                    {
+                      $eq: [{ $type: "$currentPeriodStart" }, "date"],
+                    },
+                    {
+                      $eq: [{ $type: "$currentPeriodEnd" }, "date"],
+                    },
+                    {
+                      $lte: ["$currentPeriodStart", now],
+                    },
+                    {
+                      $gt: ["$currentPeriodEnd", now],
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+          as: "subscriptionAuthority",
+        },
+      },
+      {
+        $match: {
+          $or: [
+            {
+              "entitlementSnapshot.source": {
+                $in: FIXED_PUBLICATION_ENTITLEMENT_SOURCES,
+              },
+            },
+            {
+              $and: [
+                {
+                  "entitlementSnapshot.source": "subscription_slot",
+                },
+                {
+                  $expr: {
+                    $gt: [
+                      {
+                        $size: "$subscriptionAuthority",
+                      },
+                      0,
+                    ],
+                  },
+                },
+              ],
+            },
+          ],
+        },
       },
       {
         $lookup: {
@@ -2066,6 +2476,7 @@ class JobPublicationService {
             {
               $project: {
                 jobRecord: 0,
+                subscriptionAuthority: 0,
               },
             },
           ],
@@ -2098,12 +2509,13 @@ class JobPublicationService {
 
     const id = this.normalizeObjectId(publicationId, "Job publication ID");
 
+    const publicationFilter = this.buildPublicMarketplaceFilter({
+      currentTime: now,
+    });
+
     const publication = await JobPublication.findOne({
       _id: id,
-      status: "live",
-      expiresAt: {
-        $gt: now,
-      },
+      ...publicationFilter,
     }).lean();
 
     if (!publication) {
@@ -2112,6 +2524,30 @@ class JobPublicationService {
         code: "PUBLIC_JOB_LISTING_NOT_FOUND",
         statusCode: 404,
       });
+    }
+
+    if (publication.entitlementSnapshot?.source === "subscription_slot") {
+      const subscriptionAuthority = await Subscription.exists({
+        _id: publication.entitlementSnapshot.subscription,
+        business: publication.business,
+        status: "active",
+        currentPeriodStart: {
+          $type: "date",
+          $lte: now,
+        },
+        currentPeriodEnd: {
+          $type: "date",
+          $gt: now,
+        },
+      });
+
+      if (!subscriptionAuthority) {
+        throw this.createError({
+          message: "Published Job listing was not found.",
+          code: "PUBLIC_JOB_LISTING_NOT_FOUND",
+          statusCode: 404,
+        });
+      }
     }
 
     const job = await Job.findOne({

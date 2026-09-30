@@ -464,11 +464,148 @@ router.get("/billing/wallet", canViewWallet, (req, res) => {
   return res.redirect("/employer/billing");
 });
 
+/* ───────────────────── EMPLOYER MONETISATION ───────────────────── */
+
+/**
+ * Commercial plan reads sit inside the employer billing area.
+ *
+ * Wallet visibility is sufficient for read-only commercial information.
+ * Purchase/cancellation authority remains service-owned.
+ */
+
+router.get(
+  "/billing/job-publication-plans",
+  canViewWallet,
+  employerBillingController.getJobPublicationPlans
+);
+
+router.get(
+  "/billing/subscription-plans",
+  canViewWallet,
+  employerBillingController.getSubscriptionPlans
+);
+
+router.get("/billing/subscription", canViewWallet, employerBillingController.getActiveSubscription);
+
+/**
+ * Wallet-funded PAYG publication purchase spends employer wallet balance.
+ *
+ * canManageWallet protects the wallet mutation. JobPublicationPaymentService
+ * also independently requires the primary employer or a business admin.
+ */
+
+router.post(
+  "/billing/job-publications/purchase/wallet",
+  canManageWallet,
+  employerBillingController.purchaseJobPublicationFromWallet
+);
+
+/**
+ * Direct Paystack Checkout does not spend employer wallet balance.
+ *
+ * Do not gate this route with canManageWallet. The commercial service owns
+ * business-level purchase authority and permits only the primary employer or a
+ * business admin.
+ */
+
+router.post(
+  "/billing/job-publications/initialize-checkout",
+  employerBillingController.initializeJobPublicationCheckout
+);
+
+/* ───────────────────── SUBSCRIPTION PURCHASES ───────────────────── */
+
+/**
+ * Initial subscription purchase.
+ *
+ * Wallet purchase spends the employer wallet and therefore requires
+ * canManageWallet in addition to the service-owned subscription-management
+ * authorization check.
+ */
+
+router.post(
+  "/billing/subscriptions/purchase/wallet",
+  canManageWallet,
+  employerBillingController.purchaseInitialSubscriptionFromWallet
+);
+
+/**
+ * Initial subscription purchase through Paystack Checkout.
+ *
+ * This does not spend employer wallet balance, so canManageWallet must not be
+ * used as the commercial authorization boundary. SubscriptionPaymentService
+ * independently requires the primary employer or a business admin.
+ */
+
+router.post(
+  "/billing/subscriptions/initialize-checkout",
+  employerBillingController.initializeInitialSubscriptionCheckout
+);
+
+/* ───────────────────── SUBSCRIPTION PLAN CHANGES ───────────────────── */
+
+/**
+ * Plan changes are immediate purchases on the same continuing Subscription.
+ *
+ * There is never more than one effective subscription plan. The existing plan
+ * remains current only while payment is unresolved. Once payment succeeds, the
+ * purchased target plan replaces it immediately and starts a fresh billing
+ * period. Unused time/value on the previous plan is forfeited.
+ *
+ * A downgrade may include retainedPublicationIds in the request body when the
+ * target plan has fewer concurrent active Job slots than are currently occupied.
+ */
+
+router.post(
+  "/billing/subscriptions/:subscriptionId/plan-change/wallet",
+  canManageWallet,
+  employerBillingController.purchaseSubscriptionPlanChangeFromWallet
+);
+
+router.post(
+  "/billing/subscriptions/:subscriptionId/plan-change/initialize-checkout",
+  employerBillingController.initializeSubscriptionPlanChangeCheckout
+);
+
+/* ───────────────────── SUBSCRIPTION RENEWALS ───────────────────── */
+
+/**
+ * Renewal purchases the next period of the one currently effective plan.
+ *
+ * An early renewal may be paid before currentPeriodEnd, but it does not create
+ * another current plan or alter current benefits before the billing boundary.
+ */
+
+router.post(
+  "/billing/subscriptions/:subscriptionId/renew/wallet",
+  canManageWallet,
+  employerBillingController.purchaseSubscriptionRenewalFromWallet
+);
+
+router.post(
+  "/billing/subscriptions/:subscriptionId/renew/initialize-checkout",
+  employerBillingController.initializeSubscriptionRenewalCheckout
+);
+
+/* ───────────────────── SUBSCRIPTION CANCELLATION ───────────────────── */
+
+/**
+ * Subscription cancellation is a commercial lifecycle action, not a wallet
+ * mutation. SubscriptionService owns the primary-employer/business-admin
+ * authorization check.
+ */
+
+router.post(
+  "/billing/subscriptions/:subscriptionId/cancel",
+  employerBillingController.requestSubscriptionCancellation
+);
+
+/* ───────────────────── WALLET MANAGEMENT ───────────────────── */
+
 /**
  * Delinquency does not freeze ordinary wallet/account management.
  *
- * These actions remain limited to users with wallet-management
- * authority.
+ * These actions remain limited to users with wallet-management authority.
  */
 
 router.post("/billing/setup-dva", canManageWallet, employerBillingController.postSetupDVA);

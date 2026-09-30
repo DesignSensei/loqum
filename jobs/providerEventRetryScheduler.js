@@ -19,10 +19,11 @@ const MAXIMUM_PROCESSING_LIMIT = 1000;
  *
  * This scheduler owns periodic recovery and retry triggering for ProviderEvents.
  *
- * It performs two passes:
+ * It performs three independently bounded passes:
  *
  * 1. Recover verified processing events whose worker claim has become stale.
  * 2. Process verified failed events whose nextRetryAt deadline has arrived.
+ * 3. Recover verified received events left behind by interrupted dispatch.
  *
  * It delegates:
  *
@@ -63,6 +64,38 @@ const MAXIMUM_PROCESSING_LIMIT = 1000;
 class ProviderEventRetryScheduler {
   static intervalHandle = null;
   static isRunning = false;
+  // Process-local sweeps reset on restart; services retain durable ownership.
+  static batchCursors = new Map();
+
+  static async discoverBatch(kind, options) {
+    const batch = await ProviderEventService.getRecoveryProviderEventBatch({
+      ...options,
+      kind,
+      cursor: this.batchCursors.get(kind) || null,
+    });
+    if (batch.cursor) this.batchCursors.set(kind, batch.cursor);
+    else this.batchCursors.delete(kind);
+    return batch.providerEventIds;
+  }
+
+  static async runStage(name, callback) {
+    try {
+      return await callback();
+    } catch (error) {
+      logger.error("Provider event " + name + " stage failed:", error);
+      return {
+        inspected: 0,
+        stageFailed: true,
+        errorCode: error.code || "PROVIDER_EVENT_RECOVERY_STAGE_FAILED",
+        errorMessage: error.message,
+      };
+    }
+  }
+
+  static async processReceivedEvents({ currentTime, limit }) {
+    const ids = await this.discoverBatch("received", { currentTime, limit });
+    return this.processDiscoveredEvents({ currentTime, providerEventIds: ids });
+  }
 
   /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
 
@@ -114,7 +147,7 @@ class ProviderEventRetryScheduler {
      * stale ProviderEvent. ProviderEventService performs
      * the actual processing → failed recovery atomically.
      */
-    const providerEventIds = await ProviderEventService.getStaleProcessingProviderEventIds({
+    const providerEventIds = await this.discoverBatch("stale", {
       currentTime,
 
       staleProcessingMinutes,
@@ -229,12 +262,16 @@ class ProviderEventRetryScheduler {
      * ProviderEvent. ProviderEventService.markProcessing()
      * decides atomically which worker actually owns it.
      */
-    const providerEventIds = await ProviderEventService.getDueRetryProviderEventIds({
+    const providerEventIds = await this.discoverBatch("retry", {
       currentTime,
 
       limit,
     });
 
+    return this.processDiscoveredEvents({ currentTime, providerEventIds });
+  }
+
+  static async processDiscoveredEvents({ currentTime, providerEventIds }) {
     const result = {
       inspected: providerEventIds.length,
 
@@ -483,13 +520,15 @@ class ProviderEventRetryScheduler {
        * failed with nextRetryAt = currentTime and
        * invalidates the old processingClaimId.
        */
-      const staleRecovery = await ProviderEventRetryScheduler.recoverStaleProcessing({
-        currentTime: normalizedCurrentTime,
+      const staleRecovery = await this.runStage("stale recovery", () =>
+        this.recoverStaleProcessing({
+          currentTime: normalizedCurrentTime,
 
-        staleProcessingMinutes: normalizedStaleProcessingMinutes,
+          staleProcessingMinutes: normalizedStaleProcessingMinutes,
 
-        limit: normalizedStaleProcessingLimit,
-      });
+          limit: normalizedStaleProcessingLimit,
+        })
+      );
 
       /*
        * This pass handles both:
@@ -502,11 +541,21 @@ class ProviderEventRetryScheduler {
        * ProviderEventProcessorService must still win a
        * fresh processing claim before business logic runs.
        */
-      const processing = await ProviderEventRetryScheduler.processDueRetries({
-        currentTime: normalizedCurrentTime,
+      const processing = await this.runStage("retry", () =>
+        this.processDueRetries({
+          currentTime: normalizedCurrentTime,
 
-        limit: normalizedRetryLimit,
-      });
+          limit: normalizedRetryLimit,
+        })
+      );
+
+      // Independent budget: received events cannot displace due failed retries.
+      const received = await this.runStage("received", () =>
+        this.processReceivedEvents({
+          currentTime: normalizedCurrentTime,
+          limit: normalizedRetryLimit,
+        })
+      );
 
       const result = {
         currentTime: normalizedCurrentTime,
@@ -514,9 +563,15 @@ class ProviderEventRetryScheduler {
         staleRecovery,
 
         processing,
+        received,
+        stageFailed: [staleRecovery, processing, received].some((stage) => stage.stageFailed),
       };
 
       logger.info("Provider event retry scheduler run completed.", {
+        stageFailed: result.stageFailed,
+        receivedInspected: received.inspected || 0,
+        receivedProcessed: received.processed?.length || 0,
+        receivedExecutionFailed: received.executionFailed?.length || 0,
         staleInspected: staleRecovery.inspected || 0,
 
         staleRecovered: staleRecovery.recovered?.length || 0,

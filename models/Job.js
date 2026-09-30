@@ -48,7 +48,7 @@ const geoPointSchema = require("./helpers/geoPointSchema");
  * recruitmentStatus controls the employer's overall recruitment lifecycle.
  *
  * publicationStatus controls marketplace visibility and whether the current
- * publication period remains active.
+ * publication remains active.
  *
  * These lifecycles are intentionally independent.
  *
@@ -62,10 +62,11 @@ const geoPointSchema = require("./helpers/geoPointSchema");
  *
  * PUBLICATION:
  *
- * Individual 45-day publication periods and their commercial entitlement
- * provenance belong to JobPublication.
+ * Fixed-duration Free/PAYG publication periods, subscription-slot authority
+ * and commercial entitlement provenance belong to JobPublication.
  *
- * Job stores the current publication locator and marketplace summary only.
+ * Job stores only the current publication locator and marketplace summary.
+ * Detailed pause/end audit remains on JobPublication.
  *
  * SHIFT SEPARATION:
  *
@@ -110,7 +111,6 @@ const compensationSchema = new mongoose.Schema(
         required: true,
         defaultValue: undefined,
       }),
-
       min: [1, "minimumAmount must be at least 1 minor unit."],
     },
 
@@ -119,7 +119,6 @@ const compensationSchema = new mongoose.Schema(
         required: true,
         defaultValue: undefined,
       }),
-
       min: [1, "maximumAmount must be at least 1 minor unit."],
     },
 
@@ -196,7 +195,6 @@ const screeningQuestionSchema = new mongoose.Schema(
           maxlength: MAX_SCREENING_OPTION_LENGTH,
         },
       ],
-
       default: [],
     },
 
@@ -223,7 +221,6 @@ const screeningQuestionSchema = new mongoose.Schema(
           maxlength: MAX_SCREENING_OPTION_LENGTH,
         },
       ],
-
       default: [],
     },
 
@@ -462,7 +459,6 @@ const jobSchema = new mongoose.Schema(
       type: Number,
       min: 0,
       default: 0,
-
       validate: {
         validator: isNonNegativeSafeInteger,
         message: "minimumYearsOfExperience must be a non-negative whole number.",
@@ -582,7 +578,6 @@ const jobSchema = new mongoose.Schema(
       default: 1,
       min: 1,
       required: true,
-
       validate: {
         validator: isPositiveSafeInteger,
         message: "vacancyCount must be a positive whole number.",
@@ -598,11 +593,9 @@ const jobSchema = new mongoose.Schema(
     screeningQuestions: {
       type: [screeningQuestionSchema],
       default: [],
-
       validate: {
         validator: (questions) =>
           Array.isArray(questions) && questions.length <= MAX_SCREENING_QUESTIONS,
-
         message: `A Job may contain at most ${MAX_SCREENING_QUESTIONS} screening questions.`,
       },
     },
@@ -655,15 +648,9 @@ const jobSchema = new mongoose.Schema(
 
     publicationCount: nonNegativeIntegerField(),
 
-    firstPublishedAt: nullableDateField(),
-
     lastPublishedAt: nullableDateField(),
 
     publicationExpiresAt: nullableDateField(),
-
-    publicationPausedAt: nullableDateField(),
-
-    publicationEndedAt: nullableDateField(),
   },
   {
     timestamps: true,
@@ -858,11 +845,8 @@ jobSchema.pre("validate", function validateJob() {
 
   const publicationAuditFields = [
     this.currentPublication,
-    this.firstPublishedAt,
     this.lastPublishedAt,
     this.publicationExpiresAt,
-    this.publicationPausedAt,
-    this.publicationEndedAt,
   ];
 
   if (!hasEverBeenPublished) {
@@ -873,27 +857,10 @@ jobSchema.pre("validate", function validateJob() {
       );
     }
   } else {
-    if (
-      !this.currentPublication ||
-      !this.firstPublishedAt ||
-      !this.lastPublishedAt ||
-      !this.publicationExpiresAt ||
-      this.publicationCount < 1
-    ) {
+    if (!this.currentPublication || !this.lastPublishedAt || this.publicationCount < 1) {
       this.invalidate(
         "publicationStatus",
-        "A published Job requires currentPublication, publication timestamps and publicationCount."
-      );
-    }
-
-    if (
-      this.firstPublishedAt &&
-      this.lastPublishedAt &&
-      this.lastPublishedAt < this.firstPublishedAt
-    ) {
-      this.invalidate(
-        "lastPublishedAt",
-        "lastPublishedAt cannot be earlier than firstPublishedAt."
+        "A published Job requires currentPublication, lastPublishedAt and publicationCount."
       );
     }
 
@@ -905,6 +872,13 @@ jobSchema.pre("validate", function validateJob() {
       this.invalidate(
         "publicationExpiresAt",
         "publicationExpiresAt must be later than lastPublishedAt."
+      );
+    }
+
+    if (this.publicationStatus === "expired" && !this.publicationExpiresAt) {
+      this.invalidate(
+        "publicationExpiresAt",
+        "An expired Job publication requires publicationExpiresAt."
       );
     }
   }
@@ -939,33 +913,10 @@ jobSchema.pre("validate", function validateJob() {
     }
   }
 
-  if (this.publicationStatus === "live" && this.publicationPausedAt) {
-    this.invalidate("publicationPausedAt", "A live Job cannot retain publicationPausedAt.");
-  }
-
-  if (this.publicationStatus === "paused" && !this.publicationPausedAt) {
-    this.invalidate("publicationPausedAt", "A paused Job requires publicationPausedAt.");
-  }
-
-  if (this.publicationStatus !== "paused" && this.publicationPausedAt) {
-    this.invalidate(
-      "publicationPausedAt",
-      "publicationPausedAt may only be set while publicationStatus is paused."
-    );
-  }
-
-  /* ─────────────────────────────── ENDED PUBLICATION ─────────────────────────────── */
-
-  if (this.publicationStatus === "ended" && !this.publicationEndedAt) {
-    this.invalidate("publicationEndedAt", "An ended publication requires publicationEndedAt.");
-  }
-
-  if (this.publicationStatus !== "ended" && this.publicationEndedAt) {
-    this.invalidate(
-      "publicationEndedAt",
-      "publicationEndedAt may only be set when publicationStatus is ended."
-    );
-  }
+  /*
+   * Pause/end audit belongs to JobPublication. Job mirrors only the current
+   * publication status, so duplicate pause/end timestamps are not stored here.
+   */
 
   if (
     ["closed", "archived"].includes(this.recruitmentStatus) &&

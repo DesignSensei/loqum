@@ -2,9 +2,7 @@
 
 const crypto = require("crypto");
 const mongoose = require("mongoose");
-
 const ProviderEvent = require("../models/ProviderEvent");
-
 const money = require("../utils/money");
 
 class ProviderEventService {
@@ -13,6 +11,7 @@ class ProviderEventService {
   static async runWithOptionalTransaction(options = {}, callback) {
     if (typeof callback !== "function") throw new TypeError("Transaction callback is required.");
     ProviderEventService.assertOptionalSession(options);
+
     if (options.session) {
       return callback(options.session);
     }
@@ -47,6 +46,7 @@ class ProviderEventService {
     for (const field of [
       "provider",
       "eventName",
+      "eventCategory",
       "providerEventId",
       "providerReference",
       "providerRefundId",
@@ -65,25 +65,42 @@ class ProviderEventService {
     }
 
     // A duplicate replay must not mutate the contents of the existing ProviderEvent.
+
     return existing;
   }
 
   static async findDuplicate(incoming, session = null) {
     const conditions = [{ eventKey: incoming.eventKey }];
+
     if (incoming.providerEventId) {
-      conditions.push({ provider: incoming.provider, providerEventId: incoming.providerEventId });
+      conditions.push({
+        provider: incoming.provider,
+        providerEventId: incoming.providerEventId,
+      });
     }
-    const query = ProviderEvent.findOne({ $or: conditions });
-    if (session) query.session(session);
+
+    const query = ProviderEvent.findOne({
+      $or: conditions,
+    });
+
+    if (session) {
+      query.session(session);
+    }
+
     const existing = await query;
+
     return existing ? ProviderEventService.assertDuplicateIdentity(existing, incoming) : null;
   }
 
   static cleanString(value) {
-    if (value === null || value === undefined) return null;
+    if (value === null || value === undefined) {
+      return null;
+    }
+
     if (typeof value !== "string" && !(typeof value === "number" && Number.isSafeInteger(value))) {
       throw new Error("Provider event text must be a string or safe integer identifier.");
     }
+
     const cleanValue = String(value).trim();
 
     return cleanValue || null;
@@ -96,10 +113,14 @@ class ProviderEventService {
   }
 
   static normalizeCurrentTime(value) {
-    if (value === undefined) return new Date();
+    if (value === undefined) {
+      return new Date();
+    }
+
     if (!(value instanceof Date) && typeof value !== "number" && typeof value !== "string") {
       throw new Error("Provider event current time is invalid.");
     }
+
     const currentTime = value instanceof Date ? new Date(value.getTime()) : new Date(value);
 
     if (Number.isNaN(currentTime.getTime())) {
@@ -117,6 +138,7 @@ class ProviderEventService {
     if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
       throw new Error(`${label} must be a non-negative safe integer.`);
     }
+
     return money.normalizeMinorUnitAmount(value, label);
   }
 
@@ -311,7 +333,10 @@ class ProviderEventService {
       throw new Error("Provider event is already linked to a different provider refund reference.");
     }
 
-    for (const [field, value] of Object.entries({ employer, shift })) {
+    for (const [field, value] of Object.entries({
+      employer,
+      shift,
+    })) {
       if (
         value &&
         providerEvent[field] &&
@@ -320,8 +345,11 @@ class ProviderEventService {
         throw new Error(`Provider event is already linked to a different ${field}.`);
       }
     }
-    if (!normalizedBatch || !normalizedLineId)
+
+    if (!normalizedBatch || !normalizedLineId) {
       throw new Error("Refund execution requires batch and line IDs.");
+    }
+
     providerEvent.eventCategory = "employer_refund";
 
     providerEvent.employerRefundBatch = normalizedBatch;
@@ -359,6 +387,7 @@ class ProviderEventService {
 
     providerRefundId = null,
     providerRefundReference = null,
+
     refundTraceKey = null,
     originalTransactionProviderId = null,
   }) {
@@ -386,6 +415,7 @@ class ProviderEventService {
      * Prefer the provider's actual webhook/event ID
      * whenever one exists.
      */
+
     if (cleanProviderEventId) {
       return `${cleanProvider}:event:${cleanProviderEventId}`;
     }
@@ -397,32 +427,39 @@ class ProviderEventService {
      * eventName remains part of the key because one
      * refund can emit multiple lifecycle events.
      */
+
     if (cleanProviderRefundId) {
-      return `${cleanProvider}:${cleanEventName}:refund:${cleanProviderRefundId}`;
+      return `${cleanProvider}:${cleanEventName}:refund:` + `${cleanProviderRefundId}`;
     }
 
     if (cleanProviderRefundReference) {
-      return `${cleanProvider}:${cleanEventName}:refund-reference:${cleanProviderRefundReference}`;
+      return (
+        `${cleanProvider}:${cleanEventName}:refund-reference:` + `${cleanProviderRefundReference}`
+      );
     }
 
     if (cleanProvider === "paystack" && cleanEventName.startsWith("refund.")) {
       const trace = ProviderEventService.cleanString(refundTraceKey);
+
       const original =
         cleanProviderReference || ProviderEventService.cleanString(originalTransactionProviderId);
+
       if (!trace || !original) {
         throw new Error(
           "Refund event needs a refund identity or trace plus original transaction identity; payment reference alone is insufficient."
         );
       }
+
       const digest = crypto
         .createHash("sha256")
         .update(JSON.stringify([original, trace]))
         .digest("hex");
-      return `${cleanProvider}:${cleanEventName}:refund-trace:${digest}`;
+
+      return `${cleanProvider}:${cleanEventName}:refund-trace:` + `${digest}`;
     }
 
     if (cleanProviderReference) {
-      return `${cleanProvider}:${cleanEventName}:reference:${cleanProviderReference}`;
+      return `${cleanProvider}:${cleanEventName}:reference:` + `${cleanProviderReference}`;
     }
 
     throw new Error(
@@ -458,6 +495,7 @@ class ProviderEventService {
    * Finding is not ownership. markProcessing()
    * remains the atomic processing claim.
    */
+
   static async getDueRetryProviderEventIds(
     { currentTime = new Date(), limit = 100 } = {},
     options = {}
@@ -507,6 +545,7 @@ class ProviderEventService {
    * Finding a stale event does not recover or process
    * it. Recovery remains a separate atomic operation.
    */
+
   static async getStaleProcessingProviderEventIds(
     { currentTime = new Date(), staleProcessingMinutes = 30, limit = 100 } = {},
     options = {}
@@ -524,8 +563,11 @@ class ProviderEventService {
     );
 
     const staleOffset = normalizedStaleProcessingMinutes * 60 * 1000;
-    if (!Number.isSafeInteger(staleOffset))
+
+    if (!Number.isSafeInteger(staleOffset)) {
       throw new Error("Stale-processing duration is too large.");
+    }
+
     const staleBefore = ProviderEventService.normalizeCurrentTime(
       normalizedCurrentTime.getTime() - staleOffset
     );
@@ -559,6 +601,79 @@ class ProviderEventService {
     const providerEvents = await query;
 
     return providerEvents.map((providerEvent) => String(providerEvent._id));
+  }
+
+  // Read-only bounded discovery. The returned cursor is scheduling state,
+  // never ownership; markProcessing/recoverStaleProcessingProviderEvent decide it.
+  static async getRecoveryProviderEventBatch({
+    kind,
+    currentTime = new Date(),
+    staleProcessingMinutes = 30,
+    limit = 100,
+    cursor = null,
+  } = {}) {
+    const now = this.normalizeCurrentTime(currentTime);
+    const batchLimit = this.normalizePositiveInteger(limit, "Provider event recovery limit");
+    if (batchLimit > 1000) throw new Error("Provider event recovery limit cannot exceed 1000.");
+    const filter = {
+      isVerified: true,
+      receivedAt: { $type: "date", $lte: now },
+      verifiedAt: { $type: "date", $lte: now },
+    };
+    if (kind === "received") {
+      filter.status = "received";
+    } else if (kind === "retry") {
+      filter.status = "failed";
+      filter.nextRetryAt = { $type: "date", $lte: now };
+    } else if (kind === "stale") {
+      const minutes = this.normalizePositiveInteger(
+        staleProcessingMinutes,
+        "Stale processing minutes"
+      );
+      const offset = minutes * 60 * 1000;
+      if (!Number.isSafeInteger(offset)) throw new Error("Stale-processing duration is too large.");
+      const before = this.normalizeCurrentTime(now.getTime() - offset);
+      filter.status = "processing";
+      filter.processingStartedAt = { $type: "date", $lte: before };
+      filter.lastProcessingStartedAt = { $type: "date", $lte: before };
+      filter.retryCount = { $gte: 0, $lt: Number.MAX_SAFE_INTEGER };
+    } else {
+      throw new Error("Unknown ProviderEvent recovery batch kind.");
+    }
+    let position = cursor
+      ? {
+          afterId: cursor.afterId ? this.normalizeProviderEventRecordId(cursor.afterId) : null,
+          throughId: this.normalizeProviderEventRecordId(cursor.throughId),
+        }
+      : null;
+    const beginSweep = async () => {
+      const last = await ProviderEvent.find(filter).sort({ _id: -1 }).limit(1).select("_id").lean();
+      return last.length ? { afterId: null, throughId: last[0]._id } : null;
+    };
+    const read = (value) =>
+      ProviderEvent.find({
+        ...filter,
+        _id: { $lte: value.throughId, ...(value.afterId ? { $gt: value.afterId } : {}) },
+      })
+        .sort({ _id: 1 })
+        .limit(batchLimit)
+        .select("_id")
+        .lean();
+    if (!position) position = await beginSweep();
+    let events = position ? await read(position) : [];
+    if (!events.length && cursor) {
+      position = await beginSweep();
+      events = position ? await read(position) : [];
+    }
+    return {
+      providerEventIds: events.map((event) => String(event._id)),
+      cursor: events.length
+        ? {
+            afterId: String(events[events.length - 1]._id),
+            throughId: String(position.throughId),
+          }
+        : null,
+    };
   }
 
   /* ─────────────────────────────── RECORD EVENT ─────────────────────────────── */
@@ -609,15 +724,21 @@ class ProviderEventService {
     options = {}
   ) {
     let incoming = null;
+
     try {
       return await ProviderEventService.runWithOptionalTransaction(options, async (session) => {
-        if (isVerified !== true)
+        if (isVerified !== true) {
           throw new Error("New provider events must be verified before recording.");
+        }
+
         countryCode = ProviderEventService.cleanString(countryCode)?.toUpperCase();
+
         currency = ProviderEventService.cleanString(currency)?.toUpperCase();
+
         if (!/^[A-Z]{2}$/.test(countryCode || "") || !/^[A-Z]{3}$/.test(currency || "")) {
           throw new Error("Explicit provider event country and currency are required.");
         }
+
         const normalizedCurrentTime = ProviderEventService.normalizeCurrentTime(currentTime);
 
         const cleanProvider = ProviderEventService.cleanLowerString(provider);
@@ -656,9 +777,12 @@ class ProviderEventService {
           providerRefundId: cleanProviderRefundId,
 
           providerRefundReference: cleanProviderRefundReference,
+
           refundTraceKey: normalizedPayload?.refundTraceKey,
+
           originalTransactionProviderId: normalizedPayload?.originalTransactionProviderId,
         });
+
         if (eventKey && ProviderEventService.cleanString(eventKey) !== cleanEventKey) {
           throw new Error(
             "Supplied event key does not match the canonical provider event identity."
@@ -704,6 +828,7 @@ class ProviderEventService {
         ) {
           throw new Error("Net amount requires amount and fee and must equal their difference.");
         }
+
         const providerEventData = {
           provider: cleanProvider,
 
@@ -761,19 +886,54 @@ class ProviderEventService {
         };
 
         incoming = providerEventData;
-        const existing = await ProviderEventService.findDuplicate(incoming, session);
-        if (existing) return { providerEvent: existing, created: false, idempotent: true };
 
-        const [providerEvent] = await ProviderEvent.create([providerEventData], { session });
-        return { providerEvent, created: true, idempotent: false };
+        const existing = await ProviderEventService.findDuplicate(incoming, session);
+
+        if (existing) {
+          return {
+            providerEvent: existing,
+
+            created: false,
+
+            idempotent: true,
+          };
+        }
+
+        const [providerEvent] = await ProviderEvent.create([providerEventData], {
+          session,
+        });
+
+        return {
+          providerEvent,
+
+          created: true,
+
+          idempotent: false,
+        };
       });
     } catch (error) {
-      // A duplicate-key write aborts MongoDB's transaction. Read only after our
-      // transaction has ended. An outer-session caller must abort/retry itself.
-      if (error.code !== 11000 || options.session || !incoming) throw error;
+      /*
+       * A duplicate-key write aborts MongoDB's transaction. Read only after our
+       * transaction has ended. An outer-session caller must abort/retry itself.
+       */
+
+      if (error.code !== 11000 || options.session || !incoming) {
+        throw error;
+      }
+
       const existing = await ProviderEventService.findDuplicate(incoming);
-      if (!existing) throw error;
-      return { providerEvent: existing, created: false, idempotent: true };
+
+      if (!existing) {
+        throw error;
+      }
+
+      return {
+        providerEvent: existing,
+
+        created: false,
+
+        idempotent: true,
+      };
     }
   }
 
@@ -814,6 +974,7 @@ class ProviderEventService {
        * This prevents a stale Worker A from modifying
        * the ProviderEvent after Worker B has reclaimed it.
        */
+
       ProviderEventService.assertActiveProcessingClaim(providerEvent, processingClaimId);
 
       ProviderEventService.applyEmployerRefundExecutionLink(providerEvent, {
@@ -864,6 +1025,7 @@ class ProviderEventService {
    * Only the worker that changes the status to
    * processing owns execution.
    */
+
   static async markProcessing(
     {
       providerEventRecordId,
@@ -873,6 +1035,7 @@ class ProviderEventService {
     options = {}
   ) {
     ProviderEventService.assertOptionalSession(options);
+
     const normalizedCurrentTime = ProviderEventService.normalizeCurrentTime(currentTime);
 
     const normalizedProviderEventRecordId =
@@ -884,6 +1047,7 @@ class ProviderEventService {
      * The scheduler/caller cannot choose processing
      * ownership by supplying its own claim ID.
      */
+
     const processingClaimId = ProviderEventService.generateProcessingClaimId();
 
     const baseClaimFilter = {
@@ -891,11 +1055,26 @@ class ProviderEventService {
 
       isVerified: true,
 
-      receivedAt: { $lte: normalizedCurrentTime },
-      verifiedAt: { $ne: null, $lte: normalizedCurrentTime },
+      receivedAt: {
+        $lte: normalizedCurrentTime,
+      },
+
+      verifiedAt: {
+        $ne: null,
+        $lte: normalizedCurrentTime,
+      },
+
       $or: [
-        { status: "received" },
-        { status: "failed", nextRetryAt: { $ne: null, $lte: normalizedCurrentTime } },
+        {
+          status: "received",
+        },
+        {
+          status: "failed",
+          nextRetryAt: {
+            $ne: null,
+            $lte: normalizedCurrentTime,
+          },
+        },
       ],
     };
 
@@ -932,11 +1111,13 @@ class ProviderEventService {
     /*
      * First-ever claim.
      */
+
     let claimedProviderEvent = await ProviderEvent.findOneAndUpdate(
       {
         ...baseClaimFilter,
 
         processingStartedAt: null,
+
         lastProcessingStartedAt: null,
       },
       {
@@ -954,13 +1135,21 @@ class ProviderEventService {
      *
      * Preserve the permanent first-start timestamp.
      */
+
     if (!claimedProviderEvent) {
       claimedProviderEvent = await ProviderEvent.findOneAndUpdate(
         {
           ...baseClaimFilter,
 
-          processingStartedAt: { $ne: null, $lte: normalizedCurrentTime },
-          lastProcessingStartedAt: { $ne: null, $lte: normalizedCurrentTime },
+          processingStartedAt: {
+            $ne: null,
+            $lte: normalizedCurrentTime,
+          },
+
+          lastProcessingStartedAt: {
+            $ne: null,
+            $lte: normalizedCurrentTime,
+          },
         },
         {
           $set: commonClaimSet,
@@ -989,6 +1178,7 @@ class ProviderEventService {
      * Reload only to explain why. This read never
      * grants processing ownership.
      */
+
     const providerEvent = await ProviderEventService.getProviderEventById(
       normalizedProviderEventRecordId,
       {
@@ -1026,6 +1216,7 @@ class ProviderEventService {
          * Do not return the current owner's claim as
          * this worker did not win ownership.
          */
+
         processingClaimId: null,
 
         claimedForProcessing: false,
@@ -1052,6 +1243,7 @@ class ProviderEventService {
    * A new worker must still win markProcessing()
    * before any event-specific processing continues.
    */
+
   static async recoverStaleProcessingProviderEvent(
     {
       providerEventRecordId,
@@ -1063,6 +1255,7 @@ class ProviderEventService {
     options = {}
   ) {
     ProviderEventService.assertOptionalSession(options);
+
     const normalizedCurrentTime = ProviderEventService.normalizeCurrentTime(currentTime);
 
     const normalizedStaleProcessingMinutes = ProviderEventService.normalizePositiveInteger(
@@ -1074,8 +1267,11 @@ class ProviderEventService {
       ProviderEventService.normalizeProviderEventRecordId(providerEventRecordId);
 
     const staleOffset = normalizedStaleProcessingMinutes * 60 * 1000;
-    if (!Number.isSafeInteger(staleOffset))
+
+    if (!Number.isSafeInteger(staleOffset)) {
       throw new Error("Stale-processing duration is too large.");
+    }
+
     const staleBefore = ProviderEventService.normalizeCurrentTime(
       normalizedCurrentTime.getTime() - staleOffset
     );
@@ -1087,6 +1283,7 @@ class ProviderEventService {
      * already changed the event, this no longer
      * matches.
      */
+
     const recoveredProviderEvent = await ProviderEvent.findOneAndUpdate(
       {
         _id: normalizedProviderEventRecordId,
@@ -1095,11 +1292,29 @@ class ProviderEventService {
 
         status: "processing",
 
-        processingStartedAt: { $ne: null, $lte: staleBefore },
-        lastProcessingStartedAt: { $ne: null, $lte: staleBefore },
-        verifiedAt: { $ne: null, $lte: normalizedCurrentTime },
-        receivedAt: { $lte: normalizedCurrentTime },
-        retryCount: { $gte: 0, $lt: Number.MAX_SAFE_INTEGER },
+        processingStartedAt: {
+          $ne: null,
+          $lte: staleBefore,
+        },
+
+        lastProcessingStartedAt: {
+          $ne: null,
+          $lte: staleBefore,
+        },
+
+        verifiedAt: {
+          $ne: null,
+          $lte: normalizedCurrentTime,
+        },
+
+        receivedAt: {
+          $lte: normalizedCurrentTime,
+        },
+
+        retryCount: {
+          $gte: 0,
+          $lt: Number.MAX_SAFE_INTEGER,
+        },
       },
       {
         $set: {
@@ -1109,6 +1324,7 @@ class ProviderEventService {
            * Explicitly invalidate Worker A's
            * processing ownership.
            */
+
           processingClaimId: null,
 
           failedAt: normalizedCurrentTime,
@@ -1119,6 +1335,7 @@ class ProviderEventService {
            * Immediately eligible for normal
            * retry discovery.
            */
+
           nextRetryAt: normalizedCurrentTime,
 
           processedAt: null,
@@ -1284,13 +1501,16 @@ class ProviderEventService {
        * No mutation occurs if another worker already
        * completed the event.
        */
+
       if (providerEvent.status === "processed") {
         if (processingClaimId) {
           throw ProviderEventService.createProcessingClaimError({
             message: "This processing attempt no longer owns the completed event.",
+
             code: "PROVIDER_EVENT_PROCESSING_CLAIM_INACTIVE",
           });
         }
+
         return {
           providerEvent,
 
@@ -1310,6 +1530,7 @@ class ProviderEventService {
        * Only the worker that currently owns this
        * processing attempt may complete it.
        */
+
       ProviderEventService.assertActiveProcessingClaim(providerEvent, processingClaimId);
 
       const hasIncomingRefundBatch = ProviderEventService.hasValue(employerRefundBatch);
@@ -1365,12 +1586,17 @@ class ProviderEventService {
        *
        * Historical first/latest timestamps remain.
        */
+
       providerEvent.processingClaimId = null;
 
       providerEvent.processedAt = normalizedCurrentTime;
+
       providerEvent.failedAt = null;
+
       providerEvent.failureReason = null;
+
       providerEvent.ignoredAt = null;
+
       providerEvent.ignoredReason = null;
 
       providerEvent.nextRetryAt = null;
@@ -1450,7 +1676,10 @@ class ProviderEventService {
     options = {}
   ) {
     return ProviderEventService.runWithOptionalTransaction(options, async (session) => {
-      if (typeof retryable !== "boolean") throw new Error("retryable must be a boolean.");
+      if (typeof retryable !== "boolean") {
+        throw new Error("retryable must be a boolean.");
+      }
+
       const normalizedCurrentTime = ProviderEventService.normalizeCurrentTime(currentTime);
 
       const providerEvent = await ProviderEventService.getProviderEventById(providerEventRecordId, {
@@ -1468,6 +1697,7 @@ class ProviderEventService {
       /*
        * Normal processing failures are claim-bound.
        */
+
       if (providerEvent.status === "processing") {
         ProviderEventService.assertActiveProcessingClaim(providerEvent, processingClaimId);
       } else {
@@ -1479,6 +1709,7 @@ class ProviderEventService {
          * A stale Worker A therefore cannot mark a
          * recovered failed event again.
          */
+
         const isUnverifiedReceivedEvent =
           providerEvent.status === "received" && providerEvent.isVerified !== true;
 
@@ -1518,11 +1749,15 @@ class ProviderEventService {
       /*
        * Leaving processing invalidates ownership.
        */
+
       providerEvent.processingClaimId = null;
 
       providerEvent.failedAt = normalizedCurrentTime;
+
       providerEvent.processedAt = null;
+
       providerEvent.ignoredAt = null;
+
       providerEvent.ignoredReason = null;
 
       providerEvent.failureReason =
@@ -1535,6 +1770,7 @@ class ProviderEventService {
       ) {
         throw new Error("Provider event retry count is invalid or exhausted.");
       }
+
       providerEvent.retryCount += 1;
 
       providerEvent.nextRetryAt = retryable ? normalizedNextRetryAt : null;
@@ -1585,13 +1821,16 @@ class ProviderEventService {
       /*
        * Idempotent read-only result.
        */
+
       if (providerEvent.status === "ignored") {
         if (processingClaimId) {
           throw ProviderEventService.createProcessingClaimError({
             message: "This processing attempt no longer owns the ignored event.",
+
             code: "PROVIDER_EVENT_PROCESSING_CLAIM_INACTIVE",
           });
         }
+
         return {
           providerEvent,
 
@@ -1607,6 +1846,7 @@ class ProviderEventService {
        * Ignore is a terminal result of the active
        * processing attempt, so it is claim-bound.
        */
+
       ProviderEventService.assertActiveProcessingClaim(providerEvent, processingClaimId);
 
       providerEvent.status = "ignored";
@@ -1614,8 +1854,11 @@ class ProviderEventService {
       providerEvent.processingClaimId = null;
 
       providerEvent.ignoredAt = normalizedCurrentTime;
+
       providerEvent.processedAt = null;
+
       providerEvent.failedAt = null;
+
       providerEvent.failureReason = null;
 
       providerEvent.ignoredReason =

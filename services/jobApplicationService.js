@@ -3,6 +3,7 @@
 const Job = require("../models/Job");
 const JobPublication = require("../models/JobPublication");
 const JobApplication = require("../models/JobApplication");
+const Subscription = require("../models/Subscription");
 const ProfessionalProfile = require("../models/ProfessionalProfile");
 const ProfessionalResume = require("../models/ProfessionalResume");
 const User = require("../models/User");
@@ -38,6 +39,9 @@ const PIPELINE_STATUSES = ["submitted", "under_review", "shortlisted", "intervie
 const TERMINAL_STATUSES = ["hired", "rejected", "withdrawn"];
 
 const EMPLOYER_PIPELINE_TARGETS = ["under_review", "shortlisted", "interview", "offered"];
+
+const FIXED_PUBLICATION_ENTITLEMENT_SOURCES = ["free", "paid_single_post"];
+const SUBSCRIPTION_PUBLICATION_ENTITLEMENT_SOURCE = "subscription_slot";
 
 const RESUME_MIME_TYPES = [
   "application/pdf",
@@ -386,7 +390,12 @@ class JobApplicationService {
 
   /* ─────────────────────────────── ELIGIBILITY ─────────────────────────────── */
 
-  static assertPublicationAcceptsApplications({ publication, job, currentTime }) {
+  static async assertPublicationAcceptsApplications({
+    publication,
+    job,
+    currentTime,
+    session = null,
+  }) {
     if (publication.status !== "live") {
       throw this.createError({
         message: "This Job publication is not currently accepting applications.",
@@ -423,13 +432,115 @@ class JobApplicationService {
       });
     }
 
-    const expiresAt = new Date(publication.expiresAt);
+    const entitlementSource = publication.entitlementSnapshot?.source || null;
 
-    if (Number.isNaN(expiresAt.getTime()) || currentTime >= expiresAt) {
+    if (FIXED_PUBLICATION_ENTITLEMENT_SOURCES.includes(entitlementSource)) {
+      if (!publication.expiresAt) {
+        throw this.createError({
+          message: "Fixed-duration Job publication is missing expiresAt.",
+          code: "JOB_PUBLICATION_EXPIRY_MISSING",
+          statusCode: 500,
+        });
+      }
+
+      const expiresAt = new Date(publication.expiresAt);
+
+      if (Number.isNaN(expiresAt.getTime())) {
+        throw this.createError({
+          message: "Job publication expiresAt is invalid.",
+          code: "INVALID_JOB_PUBLICATION_EXPIRY",
+          statusCode: 500,
+        });
+      }
+
+      if (currentTime >= expiresAt) {
+        throw this.createError({
+          message: "This Job publication has expired.",
+          code: "JOB_PUBLICATION_EXPIRED",
+          statusCode: 409,
+        });
+      }
+    } else if (entitlementSource === SUBSCRIPTION_PUBLICATION_ENTITLEMENT_SOURCE) {
+      const subscriptionId = publication.entitlementSnapshot?.subscription;
+
+      if (!subscriptionId) {
+        throw this.createError({
+          message: "Subscription-slot Job publication is missing its Subscription reference.",
+          code: "JOB_PUBLICATION_SUBSCRIPTION_REFERENCE_MISSING",
+          statusCode: 500,
+        });
+      }
+
+      const subscription = await this.withSession(
+        Subscription.findById(
+          this.normalizeObjectId(subscriptionId, "publication subscription ID")
+        ).select("_id business status currentPeriodStart currentPeriodEnd"),
+        session
+      );
+
+      if (!subscription) {
+        throw this.createError({
+          message: "The Subscription authorizing this Job publication was not found.",
+          code: "JOB_PUBLICATION_SUBSCRIPTION_NOT_FOUND",
+          statusCode: 409,
+        });
+      }
+
+      if (String(subscription.business) !== String(job.business)) {
+        throw this.createError({
+          message: "The publication Subscription does not belong to this employer.",
+          code: "JOB_PUBLICATION_SUBSCRIPTION_BUSINESS_MISMATCH",
+          statusCode: 409,
+        });
+      }
+
+      if (subscription.status !== "active") {
+        throw this.createError({
+          message: "The Subscription authorizing this Job publication is not active.",
+          code: "JOB_PUBLICATION_SUBSCRIPTION_NOT_ACTIVE",
+          statusCode: 409,
+        });
+      }
+
+      if (!subscription.currentPeriodStart || !subscription.currentPeriodEnd) {
+        throw this.createError({
+          message: "The active Subscription is missing its current billing period.",
+          code: "JOB_PUBLICATION_SUBSCRIPTION_PERIOD_MISSING",
+          statusCode: 500,
+        });
+      }
+
+      const currentPeriodStart = new Date(subscription.currentPeriodStart);
+      const currentPeriodEnd = new Date(subscription.currentPeriodEnd);
+
+      if (
+        Number.isNaN(currentPeriodStart.getTime()) ||
+        Number.isNaN(currentPeriodEnd.getTime()) ||
+        currentPeriodEnd <= currentPeriodStart
+      ) {
+        throw this.createError({
+          message: "The active Subscription has an invalid current billing period.",
+          code: "JOB_PUBLICATION_SUBSCRIPTION_PERIOD_INVALID",
+          statusCode: 500,
+        });
+      }
+
+      if (currentTime < currentPeriodStart || currentTime >= currentPeriodEnd) {
+        throw this.createError({
+          message: "The Subscription does not currently provide publication authority.",
+          code: "JOB_PUBLICATION_SUBSCRIPTION_AUTHORITY_INACTIVE",
+          statusCode: 409,
+          details: {
+            currentPeriodStart,
+            currentPeriodEnd,
+          },
+        });
+      }
+    } else {
       throw this.createError({
-        message: "This Job publication has expired.",
-        code: "JOB_PUBLICATION_EXPIRED",
-        statusCode: 409,
+        message: "Job publication entitlement source is invalid.",
+        code: "INVALID_JOB_PUBLICATION_ENTITLEMENT_SOURCE",
+        statusCode: 500,
       });
     }
 
@@ -1473,10 +1584,11 @@ class JobApplicationService {
 
       const job = await this.getJob(publication.job, session);
 
-      this.assertPublicationAcceptsApplications({
+      await this.assertPublicationAcceptsApplications({
         publication,
         job,
         currentTime: submittedAt,
+        session,
       });
 
       await this.assertVacancyStillOpen(job, session);

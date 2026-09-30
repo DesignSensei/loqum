@@ -2,37 +2,23 @@
 
 const express = require("express");
 
-/*
-  Paystack needs the original raw request body for signature verification.
-
-  This middleware:
-  1. Reads the webhook body as a raw Buffer.
-  2. Stores that Buffer on req.rawBody.
-  3. Parses the Buffer into req.paystackPayload for the controller/service.
-*/
-
+// Hash the received bytes, not a parsed/re-serialized object. Reject compressed
+// bodies rather than silently changing the bytes used for signature verification.
 exports.paystackRawBodyParser = express.raw({
   type: "application/json",
   limit: "1mb",
+  inflate: false,
 });
 
-exports.attachPaystackWebhookBody = (req, res, next) => {
-  try {
-    if (!Buffer.isBuffer(req.body)) {
-      const error = new Error("Paystack webhook raw body is unavailable.");
-      error.statusCode = 400;
-      throw error;
-    }
-
-    req.rawBody = req.body;
-
-    const rawBodyString = req.body.toString("utf8");
-
-    req.paystackPayload = rawBodyString ? JSON.parse(rawBodyString) : {};
-
-    return next();
-  } catch (error) {
-    error.statusCode = error.statusCode || 400;
-    return next(error);
+exports.attachPaystackWebhookBody = function attachPaystackWebhookBody(req, res, next) {
+  if (!Buffer.isBuffer(req.body)) {
+    return res.status(415).json({
+      success: false,
+      message: "Paystack webhook requires an application/json request body.",
+    });
   }
+
+  req.rawBody = Buffer.from(req.body);
+  // Parsing and shape validation happen in the service only after verification.
+  return next();
 };

@@ -49,6 +49,11 @@ let server = null;
 let isShuttingDown = false;
 let backgroundJobsStarted = false;
 
+/* ---------- Public webhook routes ---------- */
+
+// Must run before normal body parsers so Paystack raw bytes are preserved.
+app.use("/webhooks", webhookRoutes);
+
 /* ---------- Parsers ---------- */
 
 app.use(cookieParser());
@@ -62,10 +67,6 @@ app.use(
 app.use(express.json());
 
 app.use(methodOverride("_method"));
-
-/* ---------- Public webhook routes ---------- */
-
-app.use("/webhooks", webhookRoutes);
 
 /* ---------- Static files ---------- */
 
@@ -187,10 +188,9 @@ app.use((req, res) => {
   });
 });
 
-/* ---------- Global Error Handler (CSRF + others) ---------- */
+/* ---------- Global Error Handler ---------- */
 
 app.use((err, req, res, next) => {
-  // CSRF errors.
   if (err.code === "EBADCSRFTOKEN") {
     res.status(403);
 
@@ -237,13 +237,11 @@ async function shutdown(signal) {
 
   logger.info(`${signal} received. Shutting down gracefully.`);
 
-  /*
-   * Stop scheduling new background work before closing the
-   * HTTP server or MongoDB connection.
-   */
+  // Stop scheduling new work before closing HTTP and MongoDB.
   if (backgroundJobsStarted) {
     stopBackgroundJobs();
   }
+
   const closeDatabase = async () => {
     try {
       if (mongoose.connection.readyState !== 0) {
@@ -295,7 +293,7 @@ process.on("SIGTERM", () => {
   void shutdown("SIGTERM");
 });
 
-/* ---------- Start server and connect to database ---------- */
+/* ---------- Start server ---------- */
 
 (async () => {
   try {
@@ -306,6 +304,7 @@ process.on("SIGTERM", () => {
 
       if (process.env.NODE_ENV === "production") {
         startBackgroundJobs();
+
         backgroundJobsStarted = true;
 
         logger.info("Background jobs enabled.");

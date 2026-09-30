@@ -1,12 +1,11 @@
 // models/ProviderEvent.js
-
 const mongoose = require("mongoose");
 
 /**
  * PROVIDER EVENT MODEL:
  *
  * Stores raw and normalized payment-provider events before they affect wallets,
- * transactions, Shifts, withdrawals or employer refund execution.
+ * transactions, Shifts, employer commercial payments, withdrawals or employer refund execution.
  *
  * This model is provider-facing.
  * Transaction.js remains the wallet ledger.
@@ -19,6 +18,17 @@ const mongoose = require("mongoose");
  * - Fence each active processing attempt with a unique ownership claim.
  * - Keep provider webhook logic separate from wallet ledger logic.
  * - Preserve provider-side refund state independently from Loqum refund obligations.
+ *
+ * EMPLOYER COMMERCIAL PAYMENT FLOW:
+ *
+ * Paystack charge.success webhook received
+ * → signature verified and event normalized
+ * → PAYG Job publication or Subscription payment category recorded
+ * → ProviderEventProcessorService delegates to the authoritative payment service
+ * → payment service re-verifies Paystack and completes the canonical platform receipt
+ * → subscription lifecycle application, where applicable, remains service-owned
+ * → ProviderEvent is marked processed only after the delegated workflow reaches
+ *   its durable terminal state.
  *
  * EMPLOYER REFUND FLOW:
  *
@@ -65,6 +75,7 @@ const preserveNumericType = (value) => {
   if (value !== null && value !== undefined && typeof value !== "number") {
     throw new TypeError("Provider event numeric fields must be Numbers, not coerced values.");
   }
+
   return value;
 };
 
@@ -150,6 +161,9 @@ const providerEventSchema = new mongoose.Schema(
       enum: [
         "employer_wallet_funding",
         "shift_checkout_payment",
+
+        "job_publication_purchase",
+        "subscription_payment",
 
         "employer_refund",
 
@@ -253,6 +267,7 @@ const providerEventSchema = new mongoose.Schema(
 
     retryCount: {
       type: Number,
+      required: true,
       set: preserveNumericType,
       default: 0,
       min: 0,
@@ -571,6 +586,13 @@ providerEventSchema.index({
   lastProcessingStartedAt: 1,
 });
 
+// Equality prefix and ID order used by bounded recovery sweeps.
+// Date deadlines remain query filters; deployment must build this index.
+providerEventSchema.index(
+  { isVerified: 1, status: 1, _id: 1 },
+  { name: "provider_event_recovery_sweep" }
+);
+
 // --- VALIDATION / NORMALIZATION ---
 
 providerEventSchema.pre("validate", function () {
@@ -617,18 +639,22 @@ providerEventSchema.pre("validate", function () {
   if (!this.countryCode || !/^[A-Z]{2}$/.test(this.countryCode)) {
     throw new Error("Provider event requires an explicit two-letter country code.");
   }
+
   if (!this.currency || !/^[A-Z]{3}$/.test(this.currency)) {
     throw new Error("Provider event requires an explicit three-letter currency.");
   }
 
   // Empty optional IDs must not occupy the partial unique provider-event-ID index.
+
   for (const field of [
     "providerEventId",
     "providerReference",
     "providerRefundId",
     "providerRefundReference",
   ]) {
-    if (typeof this[field] === "string" && !this[field].trim()) this[field] = null;
+    if (typeof this[field] === "string" && !this[field].trim()) {
+      this[field] = null;
+    }
   }
 
   if (!this.eventKey) {
@@ -651,6 +677,7 @@ providerEventSchema.pre("validate", function () {
    * required because one provider refund belongs
    * to one exact embedded batch line.
    */
+
   const hasEmployerRefundBatch = Boolean(this.employerRefundBatch);
 
   const hasEmployerRefundBatchLineId = Boolean(this.employerRefundBatchLineId);
@@ -663,6 +690,7 @@ providerEventSchema.pre("validate", function () {
    * Only documented Paystack refund lifecycle
    * webhooks may be classified as employer_refund.
    */
+
   if (
     this.eventCategory === "employer_refund" &&
     this.provider === "paystack" &&
@@ -679,18 +707,36 @@ providerEventSchema.pre("validate", function () {
     throw new Error("Paystack refund lifecycle events must use employer_refund category.");
   }
 
+  /*
+   * PAYG Job-publication and subscription payments currently enter through
+   * Paystack charge.success. The normalized metadata may distinguish the exact
+   * commercial payment kind, but lifecycle semantics remain service-owned.
+   */
+
+  if (
+    this.provider === "paystack" &&
+    ["job_publication_purchase", "subscription_payment"].includes(this.eventCategory) &&
+    this.eventName !== "charge.success"
+  ) {
+    throw new Error(`Paystack ${this.eventCategory} events must use charge.success.`);
+  }
+
   // Services supply audit facts at the transition; validation never invents them.
+
   if (this.isVerified && !this.verifiedAt) {
     throw new Error("Verified provider event requires its verification time.");
   }
+
   if (!this.isVerified && this.verifiedAt) {
     throw new Error("Unverified provider event cannot have a verification time.");
   }
+
   if (["processing", "processed"].includes(this.status) && this.isVerified !== true) {
     throw new Error("Only verified provider events may enter processing or processed status.");
   }
 
   const hasFirstAttempt = Boolean(this.processingStartedAt);
+
   const hasLatestAttempt = Boolean(this.lastProcessingStartedAt);
 
   if (hasFirstAttempt !== hasLatestAttempt) {
@@ -701,6 +747,7 @@ providerEventSchema.pre("validate", function () {
    * A ProviderEvent that has never entered processing
    * must not contain processing history.
    */
+
   if (this.status === "received" && hasFirstAttempt) {
     throw new Error("Received provider event cannot already contain processing history.");
   }
@@ -712,6 +759,7 @@ providerEventSchema.pre("validate", function () {
    * event is failed, representing rejection before
    * processing begins.
    */
+
   if (!this.isVerified && hasFirstAttempt) {
     throw new Error("Unverified provider event cannot contain processing history.");
   }
@@ -730,6 +778,7 @@ providerEventSchema.pre("validate", function () {
    * processing attempt and must therefore retain its
    * processing history.
    */
+
   const requiresProcessingHistory =
     ["processing", "processed", "ignored"].includes(this.status) ||
     (this.status === "failed" && this.isVerified === true);
@@ -748,9 +797,12 @@ providerEventSchema.pre("validate", function () {
 
   const terminalFields = {
     processed: ["processedAt", null],
+
     failed: ["failedAt", "failureReason"],
+
     ignored: ["ignoredAt", "ignoredReason"],
   };
+
   for (const [status, [dateField, reasonField]] of Object.entries(terminalFields)) {
     if (this.status === status) {
       if (!this[dateField] || (reasonField && !this[reasonField]?.trim())) {
@@ -762,8 +814,25 @@ providerEventSchema.pre("validate", function () {
       );
     }
   }
+
   if (this.nextRetryAt && this.status !== "failed") {
     throw new Error("Only failed provider events may have a next retry time.");
+  }
+
+  if (!isNonNegativeInteger(this.retryCount)) {
+    throw new Error("Provider event retry count must be a non-negative safe integer.");
+  }
+
+  if (this.status === "received" && this.retryCount !== 0) {
+    throw new Error("Received provider event cannot already contain failed-attempt history.");
+  }
+
+  if (this.status === "failed" && this.retryCount < 1) {
+    throw new Error("Failed provider event requires a recorded failed-attempt count.");
+  }
+
+  if (!this.isVerified && this.nextRetryAt) {
+    throw new Error("Unverified provider event cannot be scheduled for processing retry.");
   }
 
   const dateFields = [
@@ -776,25 +845,35 @@ providerEventSchema.pre("validate", function () {
     "ignoredAt",
     "nextRetryAt",
   ];
+
   for (const field of dateFields) {
     const value = this[field];
+
     if (value != null && (!(value instanceof Date) || !Number.isFinite(value.getTime()))) {
       throw new Error(`Provider event ${field} must be a valid date.`);
     }
   }
+
   const assertOrder = (earlier, later) => {
     if (this[earlier] && this[later] && this[later].getTime() < this[earlier].getTime()) {
       throw new Error(`Provider event ${later} cannot precede ${earlier}.`);
     }
   };
+
   // Verification may precede recording. Processing must follow both.
+
   assertOrder("receivedAt", "processingStartedAt");
+
   assertOrder("verifiedAt", "processingStartedAt");
+
   assertOrder("processingStartedAt", "lastProcessingStartedAt");
+
   for (const field of ["processedAt", "failedAt", "ignoredAt"]) {
     assertOrder("receivedAt", field);
+
     assertOrder("lastProcessingStartedAt", field);
   }
+
   assertOrder("failedAt", "nextRetryAt");
 
   for (const field of ["amount", "providerFee", "netAmount"]) {
@@ -802,9 +881,11 @@ providerEventSchema.pre("validate", function () {
       throw new Error(`Provider event ${field} must be a non-negative safe integer or null.`);
     }
   }
+
   if (this.netAmount != null && (this.amount == null || this.providerFee == null)) {
     throw new Error("Net amount requires both amount and provider fee.");
   }
+
   if (this.netAmount != null && this.netAmount !== this.amount - this.providerFee) {
     throw new Error("Provider event net amount must equal amount minus provider fee.");
   }

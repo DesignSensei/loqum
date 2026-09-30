@@ -6,15 +6,18 @@ const router = express.Router();
 
 const paymentController = require("../controllers/paymentController");
 
-/* ─────────────────────────────── PAYSTACK CALLBACK ─────────────────────────────── */
+/* ─────────────────────────────── PAYSTACK CALLBACKS ─────────────────────────────── */
 
-/*
- * Public browser callback after employer Shift Checkout.
- *
- * The callback reference is only an identifier. The controller verifies
- * the transaction directly with Paystack before ShiftFundingService
- * decides whether to fund the Shift or return the payment safely.
- */
+// Shift Checkout callback.
 router.get("/paystack/shift-callback", paymentController.handleShiftCheckoutCallback);
+
+// PAYG Job publication callback.
+router.get(
+  "/paystack/job-publication-callback",
+  paymentController.handleJobPublicationCheckoutCallback
+);
+
+// Subscription payment callback.
+router.get("/paystack/subscription-callback", paymentController.handleSubscriptionCheckoutCallback);
 
 module.exports = router;

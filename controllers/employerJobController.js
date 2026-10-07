@@ -10,6 +10,8 @@ const JobViewService = require("../services/jobs/jobViewService");
 const logger = require("../utils/logger");
 
 const EMPLOYER_JOBS_VIEW = "employer/jobs/index";
+const EMPLOYER_JOB_CREATE_VIEW = "employer/jobs/new";
+const EMPLOYER_JOB_EDIT_VIEW = "employer/jobs/edit";
 const EMPLOYER_JOB_DETAIL_VIEW = "employer/jobs/show";
 
 /* ─────────────────────────────── HELPERS ─────────────────────────────── */
@@ -199,6 +201,120 @@ exports.getJob = async (req, res, next) => {
     });
   } catch (error) {
     logger.error("Employer Job detail page error:", error);
+
+    return next(error);
+  }
+};
+
+/* ─────────────────────────────── CREATE JOB PAGE ─────────────────────────────── */
+
+/**
+ * Read-only form preparation. The query service checks employer membership,
+ * management authority and active branch scope before presentation is built.
+ * Saving a draft remains the separate createDraft POST handler below.
+ */
+exports.getCreateJob = async (req, res, next) => {
+  setNoStoreHeaders(res);
+
+  try {
+    const pageData = await JobQueryService.getEmployerJobCreatePageData({
+      userId: getActorUserId(req),
+
+      employerProfile: req.employerProfile,
+
+      employerContext: req.employerContext || null,
+    });
+
+    const jobCreateView = JobViewService.buildEmployerJobCreatePageView(pageData);
+
+    return res.render(EMPLOYER_JOB_CREATE_VIEW, {
+      layout: "layouts/app-layout",
+
+      title: jobCreateView.pageTitle || "Create Job",
+
+      breadcrumbs: [
+        {
+          label: "Home",
+          url: "/employer/dashboard",
+        },
+        {
+          label: "Permanent Jobs",
+          url: "/employer/jobs",
+        },
+        {
+          label: "Create Job",
+          url: null,
+        },
+      ],
+
+      csrfToken: req.csrfToken(),
+
+      jobCreateView,
+
+      scripts: '<script src="/js/employer/job-create.js" defer></script>',
+    });
+  } catch (error) {
+    logger.error("Employer Create Job page error:", error);
+
+    return next(error);
+  }
+};
+
+/* ─────────────────────────────── EDIT JOB PAGE ─────────────────────────────── */
+
+/**
+ * Read-only preparation of the existing Job's edit form.
+ * The query checks business/branch access and editable recruitment/publication
+ * state. The updateJob POST handler remains authoritative when changes are saved.
+ */
+exports.getEditJob = async (req, res, next) => {
+  setNoStoreHeaders(res);
+
+  try {
+    const pageData = await JobQueryService.getEmployerJobEditPageData({
+      userId: getActorUserId(req),
+
+      employerProfile: req.employerProfile,
+
+      employerContext: req.employerContext || null,
+
+      jobId: req.params.jobId,
+    });
+
+    const jobEditView = JobViewService.buildEmployerJobEditPageView(pageData);
+
+    return res.render(EMPLOYER_JOB_EDIT_VIEW, {
+      layout: "layouts/app-layout",
+
+      title: jobEditView.pageTitle || "Edit Job",
+
+      breadcrumbs: [
+        {
+          label: "Home",
+          url: "/employer/dashboard",
+        },
+        {
+          label: "Permanent Jobs",
+          url: "/employer/jobs",
+        },
+        {
+          label: jobEditView.referenceCode || "Job Details",
+          url: jobEditView.actions.detailsUrl,
+        },
+        {
+          label: "Edit Job",
+          url: null,
+        },
+      ],
+
+      csrfToken: req.csrfToken(),
+
+      jobEditView,
+
+      scripts: '<script src="/js/employer/job-edit.js" defer></script>',
+    });
+  } catch (error) {
+    logger.error("Employer Edit Job page error:", error);
 
     return next(error);
   }

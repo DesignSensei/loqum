@@ -31,6 +31,9 @@ const logger = require("../utils/logger");
 const MILLISECONDS_PER_MINUTE = 60 * 1000;
 const MAX_BATCH_SIZE = 500;
 
+// Private authorization tokens, created only after stored whole-shift consent checks.
+const authorizedAdminCancellationContexts = new WeakSet();
+
 const EMPLOYER_CANCELLABLE_PARENT_STATUSES = Object.freeze(
   SHIFT_CANCELLABLE_FROM_STATUSES.filter((status) => status !== "pending_funding")
 );
@@ -380,7 +383,10 @@ class ShiftLifecycleService {
 
     const seen = new Set();
     for (const occurrence of occurrences) {
-      ShiftOccurrenceCancellationService.assertOccurrenceBelongsToShift({ shift, occurrence });
+      ShiftOccurrenceCancellationService.assertOccurrenceBelongsToShift({
+        shift,
+        occurrence,
+      });
       const key = `${occurrence.slotNumber}:${occurrence.sequenceNumber}`;
       if (seen.has(key))
         throw this.createError({
@@ -1137,7 +1143,11 @@ class ShiftLifecycleService {
     );
     const activeOutcomes = activeOccurrences.map((occurrence) => ({
       occurrence,
-      ...this.buildActiveWorkCancellationBreakdown({ shift, occurrence, effectiveAt: now }),
+      ...this.buildActiveWorkCancellationBreakdown({
+        shift,
+        occurrence,
+        effectiveAt: now,
+      }),
     }));
     const outcomes = scheduledOccurrences.map((occurrence) => {
       ShiftOccurrenceCancellationService.assertFutureUntouchedOccurrence({
@@ -1522,6 +1532,7 @@ class ShiftLifecycleService {
     effectiveEndAtOverride = null,
     actor,
     actorUserId,
+    caseActor = { role: "system", userId: null },
     reason,
     now,
     session,
@@ -1554,7 +1565,7 @@ class ShiftLifecycleService {
         const caseResult = await ShiftAssignmentCaseService.cancelCase(
           {
             caseId: assignment.openCase,
-            actor: { role: "system", userId: null },
+            actor: caseActor,
             reason,
             currentTime: now,
           },
@@ -1742,6 +1753,304 @@ class ShiftLifecycleService {
     return shift;
   }
 
+  /* ───────────────────── ADMIN-ASSISTED EMPLOYER REQUESTS ───────────────────── */
+
+  /**
+   * Controllers take adminUserId from authenticated req.user._id.
+   * This is employer assistance, not platform intervention. Whole-shift consent
+   * covers every remaining occurrence, including active work when explicitly
+   * choosing terminate_active_work. No employerContext is manufactured.
+   */
+  static async loadAdminCancellationRequest(input, session) {
+    const requests = require("./employerCancellationRequestService");
+
+    requests.assertTransaction(session);
+
+    if (input.mode && input.mode !== "employer_assisted") {
+      throw this.createError({
+        message: "Platform intervention requires an agreed financial policy.",
+        code: "PLATFORM_CANCELLATION_FINANCIAL_POLICY_REQUIRED",
+        statusCode: 409,
+      });
+    }
+
+    const adminUserId = await requests.assertAdmin(input.adminUserId, session);
+    const request = await requests.loadRequest(
+      input.requestReference,
+      input.employerProfileId,
+      session
+    );
+
+    if (request.scope !== "shift" || request.occurrence) {
+      throw this.createError({
+        message: "An employer request covering the entire shift is required.",
+        code: "WHOLE_SHIFT_REQUEST_REQUIRED",
+        statusCode: 403,
+      });
+    }
+
+    const { shift } = await requests.loadTarget(
+      {
+        employerProfileId: request.business,
+        shiftId: request.shift,
+        scope: "shift",
+      },
+      session
+    );
+
+    const currentTime = new Date();
+
+    if (request.status !== "fulfilled") {
+      if (request.status !== "pending") {
+        throw requests.error("REQUEST_NOT_EXECUTABLE", "Request is not pending execution.", 409);
+      }
+
+      if (requests.same(adminUserId, request.requestedBy)) {
+        throw requests.error("INVALID_REQUESTER", "Admin and employer requester must differ.", 403);
+      }
+
+      await requests.assertEmployerAuthority(request.requestedBy, shift, session);
+      await request.validate();
+    }
+
+    return { requests, request, shift, adminUserId, currentTime };
+  }
+
+  // Preview requires no persisted request: recording happens only on Confirm.
+  static async getAdminCancellationPreview(input, options = {}) {
+    return this.runWithOptionalTransaction(options, async (session) => {
+      const requests = require("./employerCancellationRequestService");
+      requests.assertTransaction(session);
+      await requests.assertAdmin(input.adminUserId, session);
+
+      if (input.mode && input.mode !== "employer_assisted") {
+        throw requests.error(
+          "PLATFORM_CANCELLATION_FINANCIAL_POLICY_REQUIRED",
+          "Platform intervention is a separate workflow.",
+          409
+        );
+      }
+
+      const { shift } = await requests.loadTarget(
+        {
+          employerProfileId: input.employerProfileId,
+          shiftId: input.shiftId,
+          scope: "shift",
+        },
+        session
+      );
+      await requests.assertEmployerAuthority(input.requestedBy, shift, session);
+      const occurrences = await this.getOccurrences({ shiftId: shift._id, session });
+      return {
+        ...(await this.buildCancellationPreview({ shift, occurrences, now: new Date() })),
+        scope: "shift",
+      };
+    });
+  }
+
+  static async cancelShiftAsAdmin(input, options = {}) {
+    const actions = ["cancel_pending_funding", "cancel_engagement", "terminate_active_work"];
+
+    if (!actions.includes(input.action)) {
+      throw this.createError({
+        message: "Choose an explicit whole-shift cancellation action.",
+        code: "ADMIN_CANCELLATION_ACTION_REQUIRED",
+      });
+    }
+
+    return this.runWithOptionalTransaction(options, async (session) => {
+      const { requests, request, shift, adminUserId, currentTime } =
+        await this.loadAdminCancellationRequest(input, session);
+      const reason = requests.text(input.reason, "Admin execution reason", 10);
+
+      if (request.status === "fulfilled") {
+        if (
+          !requests.same(request.execution.adminUserId, adminUserId) ||
+          request.execution.reason !== reason ||
+          shift.status !== "cancelled" ||
+          shift.cancellationAdministration?.requestReference !== String(request._id) ||
+          !requests.same(shift.cancellationAdministration?.executedBy, adminUserId)
+        ) {
+          throw requests.error(
+            "REQUEST_EXECUTION_CONFLICT",
+            "Completed request does not match this command.",
+            409
+          );
+        }
+
+        return {
+          ...this.buildExistingCancellationView(shift),
+          request,
+          idempotent: true,
+          professionalCompensation: this.buildMoneyView(
+            request.execution.professionalCompensationMinor,
+            shift.currency
+          ),
+        };
+      }
+
+      if (shift.status === "cancelled") {
+        throw requests.error(
+          "SHIFT_ALREADY_CANCELLED",
+          "This request cannot adopt an earlier cancellation.",
+          409
+        );
+      }
+
+      const administration = {
+        mode: "employer_assisted",
+        executedBy: adminUserId,
+        requestedBy: request.requestedBy,
+        requestedAt: request.requestedAt,
+        executedAt: currentTime,
+        reason,
+        requestReference: String(request._id),
+        policyBasis: "employer_cancellation_policy",
+      };
+
+      const context = { request, administration, session, currentTime };
+      authorizedAdminCancellationContexts.add(context);
+
+      const payload = {
+        shiftId: request.shift,
+        employerProfileId: request.business,
+        userId: request.requestedBy,
+        reason: request.cancellationReason,
+        cancellationReasonCode: request.cancellationReasonCode,
+        now: currentTime,
+      };
+
+      const executionOptions = { session, adminCancellationContext: context };
+      const result =
+        input.action === "cancel_pending_funding"
+          ? await this.cancelPendingFundingShift(payload, executionOptions)
+          : input.action === "terminate_active_work"
+            ? await this.cancelActiveOccurrenceWork(payload, executionOptions)
+            : await this.cancelEngagement(payload, executionOptions);
+
+      const compensation =
+        input.action === "cancel_pending_funding"
+          ? result.professionalPay
+          : result.professionalCompensation?.amount;
+
+      this.assertAdminFinancialOutcome(compensation);
+
+      request.status = "fulfilled";
+      request.execution = {
+        adminUserId,
+        executedAt: currentTime,
+        reason,
+        currency: shift.currency,
+        professionalCompensationMinor: compensation,
+      };
+      await request.save({ session });
+
+      return { ...result, request };
+    });
+  }
+
+  static assertAdminFinancialOutcome(amount) {
+    if (!Number.isSafeInteger(amount) || amount < 0) {
+      throw this.createError({
+        message: "Cancellation professional pay must be a non-negative minor-unit amount.",
+        code: "INVALID_CANCELLATION_OUTCOME",
+        statusCode: 500,
+      });
+    }
+  }
+
+  static async getCancellationShift(payload, options, session) {
+    const context = options.adminCancellationContext;
+
+    if (!context) return this.getEmployerShift({ ...payload, session });
+
+    if (
+      !authorizedAdminCancellationContexts.has(context) ||
+      context.session !== session ||
+      String(payload.shiftId) !== String(context.request.shift) ||
+      String(payload.employerProfileId) !== String(context.request.business) ||
+      String(payload.userId) !== String(context.request.requestedBy) ||
+      payload.reason !== context.request.cancellationReason ||
+      new Date(payload.now).getTime() !== context.currentTime.getTime()
+    ) {
+      throw this.createError({
+        message: "Use the verified admin cancellation entry point.",
+        code: "ADMIN_CANCELLATION_AUTHORIZATION_REQUIRED",
+        statusCode: 403,
+      });
+    }
+
+    const shift = await this.getSystemShift({ shiftId: payload.shiftId, session });
+
+    if (String(shift.business) !== String(context.request.business)) {
+      throw this.createError({
+        message: "Shift employer does not match consent.",
+        code: "SHIFT_BUSINESS_MISMATCH",
+        statusCode: 403,
+      });
+    }
+
+    return shift;
+  }
+
+  static buildAdminPropagationOptions(context, occurrence, session) {
+    if (!context) return { session };
+
+    if (
+      !authorizedAdminCancellationContexts.has(context) ||
+      context.session !== session ||
+      String(occurrence.shift) !== String(context.request.shift) ||
+      String(occurrence.business) !== String(context.request.business)
+    ) {
+      throw this.createError({
+        message: "Occurrence is outside the authorized shift.",
+        code: "REQUEST_SCOPE_MISMATCH",
+        statusCode: 403,
+      });
+    }
+
+    const { request, administration } = context;
+
+    return {
+      session,
+      adminCancellation: {
+        adminUserId: administration.executedBy,
+        employerProfileId: request.business,
+        mode: "employer_assisted",
+        requestReference: String(request._id),
+        reason: administration.reason,
+      },
+      verifyEmployerCancellationRequest: async (target) => {
+        if (
+          target.session !== session ||
+          target.requestReference !== String(request._id) ||
+          String(target.adminUserId) !== String(administration.executedBy) ||
+          String(target.employerProfileId) !== String(request.business) ||
+          String(target.shiftId) !== String(request.shift) ||
+          String(target.occurrenceId) !== String(occurrence._id)
+        ) {
+          throw this.createError({
+            message: "Occurrence does not match verified shift consent.",
+            code: "REQUEST_SCOPE_MISMATCH",
+            statusCode: 403,
+          });
+        }
+
+        return {
+          authorized: true,
+          requestReference: String(request._id),
+          employerProfileId: request.business,
+          shiftId: request.shift,
+          occurrenceId: occurrence._id,
+          requestedBy: request.requestedBy,
+          requestedAt: request.requestedAt,
+          cancellationReasonCode: request.cancellationReasonCode,
+          cancellationReason: request.cancellationReason,
+        };
+      },
+    };
+  }
+
   static async cancelPendingFundingShift(
     { shiftId, userId, employerProfileId, employerContext, reason, now = new Date() },
     options = {}
@@ -1753,12 +2062,21 @@ class ShiftLifecycleService {
     const cancellationDate = ShiftLifecycleService.normalizeDate(now, "cancellation date");
 
     return ShiftLifecycleService.runWithOptionalTransaction(options, async (session) => {
-      const shift = await ShiftLifecycleService.getEmployerShift({
-        shiftId,
-        employerProfileId,
-        employerContext,
-        session,
-      });
+      const shift = await this.getCancellationShift(
+        {
+          shiftId,
+          employerProfileId,
+          employerContext,
+          userId: actorUserId,
+          reason: cancellationReason,
+          now: cancellationDate,
+        },
+        options,
+        session
+      );
+      const adminContext = options.adminCancellationContext;
+
+      if (adminContext) this.assertAdminFinancialOutcome(0);
 
       if (shift.status === "cancelled") {
         return ShiftLifecycleService.buildExistingCancellationView(shift);
@@ -1794,6 +2112,14 @@ class ShiftLifecycleService {
       }
 
       if (shiftStartTime <= cancellationDate) {
+        if (adminContext) {
+          throw this.createError({
+            message:
+              "Funding deadline has passed; use system expiration rather than recording employer cancellation.",
+            code: "SHIFT_FUNDING_DEADLINE_PASSED",
+            statusCode: 409,
+          });
+        }
         return ShiftLifecycleService.expireUnfundedShift(
           {
             shiftId: shift._id,
@@ -1826,6 +2152,9 @@ class ShiftLifecycleService {
           compensation: null,
         });
 
+        if (adminContext)
+          occurrence.cancellationAdministration = { ...adminContext.administration };
+
         await occurrence.save({
           session,
         });
@@ -1846,6 +2175,8 @@ class ShiftLifecycleService {
         compensation: null,
       });
 
+      if (adminContext) shift.cancellationAdministration = { ...adminContext.administration };
+
       await shift.save({
         session,
       });
@@ -1857,7 +2188,7 @@ class ShiftLifecycleService {
       });
 
       logger.info(
-        `Pending-funding Shift ${shift.referenceCode} cancelled by employer user ${actorUserId}`
+        `Pending-funding Shift ${shift.referenceCode} cancelled for employer user ${actorUserId}`
       );
 
       return {
@@ -2647,7 +2978,10 @@ class ShiftLifecycleService {
     session,
   }) {
     if (expiredOccurrence.expiredFromAssignmentStatus !== "replacement_required") {
-      return { parentReplacementTailAffected: false, expiredOccurrenceApplicationCount: 0 };
+      return {
+        parentReplacementTailAffected: false,
+        expiredOccurrenceApplicationCount: 0,
+      };
     }
     const replacementForAssignmentId = expiredOccurrence.replacementForAssignment;
     const isolated = await ShiftApplicationService.expireOpenApplicationsForShift(
@@ -2972,6 +3306,7 @@ class ShiftLifecycleService {
       employerProfileId,
       employerContext,
       reason,
+      cancellationReasonCode = "other",
       now = new Date(),
     },
     options = {},
@@ -2987,12 +3322,19 @@ class ShiftLifecycleService {
       });
     }
     return this.runWithOptionalTransaction(options, async (session) => {
-      let shift = await this.getEmployerShift({
-        shiftId,
-        employerProfileId,
-        employerContext,
-        session,
-      });
+      let shift = await this.getCancellationShift(
+        {
+          shiftId,
+          employerProfileId,
+          employerContext,
+          userId: actorUserId,
+          reason: cancellationReason,
+          now: currentTime,
+        },
+        options,
+        session
+      );
+      const adminContext = options.adminCancellationContext;
 
       if (shift.status === "cancelled") return this.buildExistingCancellationView(shift);
 
@@ -3006,7 +3348,11 @@ class ShiftLifecycleService {
 
       const occurrences = await this.getOccurrences({ shiftId: shift._id, session });
 
-      const preview = await this.buildCancellationPreview({ shift, occurrences, now: currentTime });
+      const preview = await this.buildCancellationPreview({
+        shift,
+        occurrences,
+        now: currentTime,
+      });
 
       if (!allowActive && preview.activeOccurrences.length) {
         throw this.createError({
@@ -3031,6 +3377,10 @@ class ShiftLifecycleService {
         });
       }
 
+      if (adminContext) {
+        this.assertAdminFinancialOutcome(preview.professionalCompensation?.amount);
+      }
+
       const refundResults = [];
       for (const outcome of preview.activeOutcomes) {
         const occurrence = outcome.occurrence;
@@ -3043,6 +3393,9 @@ class ShiftLifecycleService {
           effectiveAt: currentTime,
           breakdown: outcome,
         });
+
+        if (adminContext)
+          occurrence.cancellationAdministration = { ...adminContext.administration };
 
         await occurrence.save({ session });
         const settlement = await this.establishBaseSettlementOutcome({
@@ -3065,7 +3418,9 @@ class ShiftLifecycleService {
           shift,
           occurrence: freshOccurrence,
           reason: "unused_scheduled_time",
-          initiatedBy: { role: "employer", userId: actorUserId },
+          initiatedBy: adminContext
+            ? { role: "admin", userId: adminContext.administration.executedBy }
+            : { role: "employer", userId: actorUserId },
           currentTime,
           session,
         });
@@ -3085,11 +3440,12 @@ class ShiftLifecycleService {
               parentCancellationCode: "employer_cancelled",
               cancelledBy: "employer",
               cancelledByUserId: actorUserId,
+              cancellationReasonCode,
               cancellationReason,
               cancelledAt: currentTime,
               reconcileParent: false,
             },
-            { session }
+            this.buildAdminPropagationOptions(adminContext, outcome.occurrence, session)
           );
 
         refundResults.push({
@@ -3110,8 +3466,11 @@ class ShiftLifecycleService {
         firstAffectedSequenceNumber: firstSequence + (preview.activeOccurrences.length ? 1 : 0),
         finalResponsibleSequenceNumber: firstSequence - (preview.activeOccurrences.length ? 0 : 1),
         effectiveEndAtOverride: preview.activeOccurrences.length ? currentTime : null,
-        actor: "employer",
-        actorUserId,
+        actor: adminContext ? "admin" : "employer",
+        actorUserId: adminContext ? adminContext.administration.executedBy : actorUserId,
+        caseActor: adminContext
+          ? { role: "admin", userId: adminContext.administration.executedBy }
+          : undefined,
         reason: cancellationReason,
         now: currentTime,
         session,
@@ -3145,6 +3504,8 @@ class ShiftLifecycleService {
           })),
         };
       }
+      if (adminContext) shift.cancellationAdministration = { ...adminContext.administration };
+
       await shift.save({ session });
 
       await this.expireOpenApplications({ shiftId: shift._id, session });

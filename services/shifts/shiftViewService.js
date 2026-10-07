@@ -5512,6 +5512,1087 @@ class ShiftViewService {
       },
     };
   }
+  /* ─────────────────────────────── PROFESSIONAL PRESENTATION ─────────────────────────────── */
+
+  /**
+   * These builders consume the professional DTOs returned by ShiftQueryService.
+   * The GET controller passes its query result to the matching page builder.
+   * They perform no database reads, eligibility decisions or lifecycle writes.
+   * Do not pass employer views or unscoped database documents into this API.
+   */
+  static getProfessionalShiftsUrl() {
+    return "/professional/shifts";
+  }
+
+  static getProfessionalMyShiftsUrl() {
+    return "/professional/shifts/my";
+  }
+
+  static professionalViewFields(source, fields) {
+    const result = {};
+
+    for (const field of fields) {
+      if (source?.[field] !== undefined) {
+        result[field] = source[field];
+      }
+    }
+
+    return result;
+  }
+
+  static professionalViewId(value) {
+    const id = value && typeof value === "object" ? value.id || value._id : value;
+
+    return id == null ? null : String(id);
+  }
+
+  static professionalDetailsUrl(shiftId, occurrenceId = null) {
+    const id = this.professionalViewId(shiftId);
+
+    if (!id) {
+      return null;
+    }
+
+    const base = `${this.getProfessionalShiftsUrl()}/${encodeURIComponent(id)}`;
+
+    return occurrenceId
+      ? `${base}?occurrenceId=${encodeURIComponent(this.professionalViewId(occurrenceId))}`
+      : base;
+  }
+
+  static buildProfessionalAmountView(amount, currency = DEFAULT_CURRENCY) {
+    // Unknown is different from a genuine zero. Never infer pay from employer charges.
+    const known = typeof amount === "number" && Number.isSafeInteger(amount) && amount >= 0;
+
+    return {
+      value: known ? amount : null,
+      display: known ? this.formatAmount(amount, currency) : "Not available",
+      currency,
+      known,
+    };
+  }
+
+  static formatProfessionalDateTime(value, timeZone = null) {
+    if (value == null || value === "") {
+      return "-";
+    }
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+      return "-";
+    }
+
+    return new Intl.DateTimeFormat("en-NG", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: timeZone || ShiftScheduleService.getTimeZone(),
+    }).format(date);
+  }
+
+  static buildProfessionalBranchView(branch) {
+    if (!branch) {
+      return null;
+    }
+
+    return {
+      id: this.professionalViewId(branch),
+      name: branch.name || "Branch",
+      address: branch.address || null,
+      state: branch.state || null,
+      lga: branch.lga || null,
+      locationLabel: [branch.address, branch.lga, branch.state].filter(Boolean).join(", "),
+    };
+  }
+
+  static buildProfessionalApplicationView(application) {
+    if (!application) {
+      return null;
+    }
+
+    const timestamps = [
+      "createdAt",
+      "updatedAt",
+      "shortlistedAt",
+      "acceptedAt",
+      "rejectedAt",
+      "withdrawnAt",
+      "expiredAt",
+      "cancelledAt",
+    ];
+
+    const view = {
+      id: this.professionalViewId(application),
+      ...this.professionalViewFields(application, [
+        "shiftId",
+        "occurrenceId",
+        "slotNumber",
+        "acceptedAssignmentId",
+        "replacementForAssignmentId",
+        "applicationType",
+        "applicationRound",
+        "status",
+        "note",
+        "rejectedReason",
+        "withdrawalReason",
+        ...timestamps,
+      ]),
+      statusView: this.buildStatusView(application.status),
+      typeLabel:
+        application.applicationType === "replacement" ? "Replacement" : "Initial application",
+      scopeLabel:
+        application.applicationType !== "replacement"
+          ? "Full schedule"
+          : application.occurrenceId
+            ? "Single occurrence replacement"
+            : "Remaining schedule replacement",
+      detailsUrl: this.professionalDetailsUrl(application.shiftId),
+    };
+
+    for (const field of timestamps) {
+      view[`${field}Display`] = this.formatDateTime(application[field]);
+    }
+
+    return view;
+  }
+
+  static buildProfessionalSettlementView(component, currency = DEFAULT_CURRENCY) {
+    if (!component) {
+      return null;
+    }
+
+    const pay = this.buildProfessionalAmountView(component.professionalPay, currency);
+
+    const view = {
+      ...this.professionalViewFields(component, [
+        "status",
+        "earningType",
+        "approvedForReleaseAt",
+        "scheduledPayoutAt",
+        "releasePendingAt",
+        "releasedAt",
+      ]),
+      statusView: this.buildStatusView(component.status),
+      professionalPay: pay.value,
+      professionalPayDisplay: pay.display,
+      amountKnown: pay.known,
+      isReleased: component.status === "released",
+      isAwaitingRelease: ["approved_for_release", "release_pending"].includes(component.status),
+    };
+
+    for (const field of [
+      "approvedForReleaseAt",
+      "scheduledPayoutAt",
+      "releasePendingAt",
+      "releasedAt",
+    ]) {
+      view[`${field}Display`] = this.formatDateTime(component[field]);
+    }
+
+    return view;
+  }
+
+  static buildProfessionalOvertimeView(
+    overtime,
+    currency = DEFAULT_CURRENCY,
+    professionalPay = null
+  ) {
+    if (!overtime) {
+      return null;
+    }
+
+    const pay = this.buildProfessionalAmountView(professionalPay, currency);
+
+    const view = {
+      ...this.professionalViewFields(overtime, [
+        "status",
+        "requestedAt",
+        "approvedAt",
+        "rejectedAt",
+        "requestedMinutes",
+        "approvedMinutes",
+        "requestedHours",
+        "approvedHours",
+        "reason",
+      ]),
+      statusView: this.buildStatusView(overtime.status),
+      professionalPay: pay.value,
+      professionalPayDisplay: pay.display,
+    };
+
+    for (const field of ["requestedAt", "approvedAt", "rejectedAt"]) {
+      view[`${field}Display`] = this.formatDateTime(overtime[field]);
+    }
+
+    for (const field of ["requestedMinutes", "approvedMinutes"]) {
+      const value = overtime[field];
+
+      view[`${field}Display`] =
+        typeof value === "number" && Number.isFinite(value) && value >= 0
+          ? this.formatMinutes(value)
+          : "Not available";
+    }
+
+    return view;
+  }
+
+  static buildProfessionalOccurrenceView(occurrence, currency = DEFAULT_CURRENCY) {
+    // Ownership was checked in the query layer. Require its explicit DTO marker as well.
+    if (!occurrence || occurrence.assignedToProfessional !== true) {
+      return null;
+    }
+
+    const view = {
+      id: this.professionalViewId(occurrence),
+      assignedToProfessional: true,
+      ...this.professionalViewFields(occurrence, [
+        "shiftId",
+        "referenceCode",
+        "slotNumber",
+        "sequenceNumber",
+        "occurrenceDate",
+        "scheduleTimeZone",
+        "assignmentStatus",
+        "assignedAt",
+        "status",
+        "attendanceStatus",
+        "settlementStatus",
+        "startTime",
+        "endTime",
+        "scheduledMinutes",
+        "scheduledHours",
+        "breakDuration",
+        "baseBillableHours",
+        "billableHours",
+        "checkedInAt",
+        "checkedOutAt",
+        "absenceExplanation",
+        "absenceExplainedAt",
+        "cancellationCode",
+        "cancellationReason",
+        "cancelledAt",
+        "challengeWindowOpenedAt",
+        "challengeDeadlineAt",
+        "challengeWindowClosedAt",
+        "settledAt",
+      ]),
+      statusView: this.buildStatusView(occurrence.status),
+      attendanceStatusView: this.buildStatusView(occurrence.attendanceStatus),
+      settlementStatusView: this.buildStatusView(occurrence.settlementStatus),
+      detailsUrl: this.professionalDetailsUrl(
+        occurrence.shiftId,
+        this.professionalViewId(occurrence)
+      ),
+      occurrenceLabel: `Position ${occurrence.slotNumber ?? "-"} · Date ${occurrence.sequenceNumber ?? "-"}`,
+      baseSettlement: this.buildProfessionalSettlementView(occurrence.baseSettlement, currency),
+      overtimeSettlement: this.buildProfessionalSettlementView(
+        occurrence.overtimeSettlement,
+        currency
+      ),
+      overtime: this.buildProfessionalOvertimeView(
+        occurrence.overtime,
+        currency,
+        occurrence.overtimeProfessionalPay
+      ),
+    };
+
+    for (const field of [
+      "hourlyRate",
+      "estimatedProfessionalPay",
+      "baseProfessionalPay",
+      "overtimeProfessionalPay",
+    ]) {
+      const amount = this.buildProfessionalAmountView(occurrence[field], currency);
+
+      view[field] = amount.value;
+      view[`${field}Display`] = amount.display;
+    }
+
+    for (const field of [
+      "startTime",
+      "endTime",
+      "assignedAt",
+      "checkedInAt",
+      "checkedOutAt",
+      "absenceExplainedAt",
+      "cancelledAt",
+      "challengeWindowOpenedAt",
+      "challengeDeadlineAt",
+      "challengeWindowClosedAt",
+      "settledAt",
+    ]) {
+      view[`${field}Display`] = this.formatProfessionalDateTime(
+        occurrence[field],
+        occurrence.scheduleTimeZone
+      );
+    }
+
+    return view;
+  }
+
+  static buildProfessionalOpportunityView(opportunity, shiftId, timeZone = null) {
+    const application = this.buildProfessionalApplicationView(opportunity.application);
+
+    const target = opportunity.applicationTarget;
+
+    const hasMatchingTarget = Boolean(
+      target &&
+      this.professionalViewId(target.shiftId) === this.professionalViewId(shiftId) &&
+      this.professionalViewId(target.occurrenceId) ===
+        this.professionalViewId(opportunity.occurrenceId) &&
+      this.professionalViewId(target.replacementForAssignmentId) ===
+        this.professionalViewId(opportunity.replacementForAssignmentId)
+    );
+
+    // Only reflect the query service's advisory decision. POST handlers revalidate it.
+    const canApply =
+      opportunity.canApply === true &&
+      hasMatchingTarget &&
+      !application &&
+      !opportunity.unavailableReason;
+
+    return {
+      ...this.professionalViewFields(opportunity, [
+        "applicationType",
+        "applicationRound",
+        "occurrenceId",
+        "replacementForAssignmentId",
+        "slotNumber",
+        "startSequenceNumber",
+        "endSequenceNumber",
+      ]),
+      label:
+        opportunity.applicationType !== "replacement"
+          ? "Apply for the full schedule"
+          : opportunity.occurrenceId
+            ? "Apply for this occurrence"
+            : "Apply for the remaining schedule",
+      canApply,
+      application,
+      applicationTarget: hasMatchingTarget
+        ? this.professionalViewFields(target, [
+            "shiftId",
+            "occurrenceId",
+            "replacementForAssignmentId",
+          ])
+        : null,
+      unavailableReason: opportunity.unavailableReason
+        ? this.professionalViewFields(opportunity.unavailableReason, ["code", "message"])
+        : null,
+      intervals: (Array.isArray(opportunity.intervals) ? opportunity.intervals : []).map(
+        (interval) => ({
+          startTime: interval.startTime,
+          endTime: interval.endTime,
+          startTimeDisplay: this.formatProfessionalDateTime(interval.startTime, timeZone),
+          endTimeDisplay: this.formatProfessionalDateTime(interval.endTime, timeZone),
+        })
+      ),
+    };
+  }
+
+  static buildProfessionalShiftView(shift) {
+    const currency = shift.currency || DEFAULT_CURRENCY;
+
+    const id = this.professionalViewId(shift);
+
+    const opportunities = (Array.isArray(shift.opportunities) ? shift.opportunities : []).map(
+      (opportunity) =>
+        this.buildProfessionalOpportunityView(opportunity, id, shift.scheduleTimeZone)
+    );
+
+    const occurrences = (Array.isArray(shift.occurrences) ? shift.occurrences : [])
+      .filter((occurrence) => this.professionalViewId(occurrence.shiftId) === id)
+      .map((occurrence) => this.buildProfessionalOccurrenceView(occurrence, currency))
+      .filter(Boolean);
+
+    const applications = (Array.isArray(shift.applications) ? shift.applications : [])
+      .filter((application) => this.professionalViewId(application.shiftId) === id)
+      .map((application) => this.buildProfessionalApplicationView(application));
+
+    const rate = this.buildProfessionalAmountView(shift.hourlyRate, currency);
+
+    const distanceKnown =
+      typeof shift.distanceKm === "number" &&
+      Number.isFinite(shift.distanceKm) &&
+      shift.distanceKm >= 0;
+
+    return {
+      id,
+      ...this.professionalViewFields(shift, [
+        "referenceCode",
+        "roleTitle",
+        "professionalType",
+        "department",
+        "requiredSkills",
+        "dressCode",
+        "description",
+        "countryCode",
+        "scheduleMode",
+        "occurrenceCount",
+        "requiredProfessionals",
+        "repeatDays",
+        "startTime",
+        "endTime",
+        "firstOccurrenceDate",
+        "lastOccurrenceDate",
+        "scheduleTimeZone",
+        "dailyStartTimeMinutes",
+        "dailyEndTimeMinutes",
+        "endsNextDay",
+        "scheduledMinutesPerOccurrence",
+        "breakDuration",
+        "status",
+      ]),
+      currency,
+      detailsUrl: this.professionalDetailsUrl(id),
+      professionalTypeLabel:
+        PROFESSIONAL_TYPE_OPTIONS.find((option) => option.value === shift.professionalType)
+          ?.label || formatStatus(shift.professionalType),
+      statusView: this.buildStatusView(shift.status),
+      branch: this.buildProfessionalBranchView(shift.branch),
+      hourlyRate: rate.value,
+      hourlyRateDisplay: rate.display,
+      distanceKm: distanceKnown ? shift.distanceKm : null,
+      distanceDisplay: distanceKnown
+        ? `${shift.distanceKm.toFixed(1)} km away`
+        : "Distance unavailable",
+      startTimeDisplay: this.formatProfessionalDateTime(shift.startTime, shift.scheduleTimeZone),
+      endTimeDisplay: this.formatProfessionalDateTime(shift.endTime, shift.scheduleTimeZone),
+      applications,
+      occurrences,
+      opportunities,
+      canApply: opportunities.some((opportunity) => opportunity.canApply),
+      hasApplications: applications.length > 0,
+      hasAssignedOccurrences: occurrences.length > 0,
+    };
+  }
+
+  static buildProfessionalPaginationView(pagination) {
+    if (!pagination) {
+      return null;
+    }
+
+    return {
+      ...this.professionalViewFields(pagination, [
+        "currentPage",
+        "totalPages",
+        "totalItems",
+        "perPage",
+        "startItem",
+        "endItem",
+        "hasPreviousPage",
+        "hasNextPage",
+        "previousPageUrl",
+        "nextPageUrl",
+        "hasPagination",
+      ]),
+      pages: (Array.isArray(pagination.pages) ? pagination.pages : []).map((page) =>
+        this.professionalViewFields(page, ["page", "isActive", "url"])
+      ),
+    };
+  }
+
+  static buildProfessionalShiftsPageView(data) {
+    const shifts = (Array.isArray(data.shifts) ? data.shifts : []).map((shift) =>
+      this.buildProfessionalShiftView(shift)
+    );
+
+    return {
+      pageTitle: "Find Shifts",
+      shifts,
+      hasShifts: shifts.length > 0,
+      filters: this.professionalViewFields(data.filters, [
+        "page",
+        "state",
+        "lga",
+        "minHourlyRateMinor",
+        "maxHourlyRateMinor",
+        "dateFrom",
+        "dateTo",
+        "sortBy",
+        "maxDistanceKm",
+      ]),
+      distanceAvailable: data.distanceAvailable === true,
+      pagination: this.buildProfessionalPaginationView(data.pagination),
+      emptyState: { message: "No available shifts match your filters." },
+      actions: {
+        shiftsUrl: this.getProfessionalShiftsUrl(),
+        myShiftsUrl: this.getProfessionalMyShiftsUrl(),
+      },
+    };
+  }
+
+  static buildProfessionalMyShiftsPageView(data) {
+    const shifts = (Array.isArray(data.shifts) ? data.shifts : []).map((shift) =>
+      this.buildProfessionalShiftView(shift)
+    );
+
+    const emptyMessages = {
+      pending: "You have no pending applications.",
+      confirmed: "You have no confirmed shifts.",
+      completed: "You have no completed shifts yet.",
+    };
+
+    return {
+      pageTitle: "My Shifts",
+      selectedTab: data.selectedTab,
+      shifts,
+      hasShifts: shifts.length > 0,
+      tabs: (Array.isArray(data.tabs) ? data.tabs : []).map((tab) =>
+        this.professionalViewFields(tab, ["value", "label", "count", "isActive", "url"])
+      ),
+      pagination: this.buildProfessionalPaginationView(data.pagination),
+      emptyState: { message: emptyMessages[data.selectedTab] || "No shifts to display." },
+      actions: {
+        shiftsUrl: this.getProfessionalShiftsUrl(),
+        myShiftsUrl: this.getProfessionalMyShiftsUrl(),
+      },
+    };
+  }
+
+  static buildProfessionalShiftDetailsView(data, currentTime = new Date()) {
+    const shift = this.buildProfessionalShiftView(data.shift);
+
+    const selectedId = this.professionalViewId(data.selectedOccurrenceId);
+
+    const now = new Date(currentTime).getTime();
+
+    if (!Number.isFinite(now)) {
+      throw new TypeError("The current time is invalid.");
+    }
+
+    const ordered = [...shift.occurrences].sort(
+      (left, right) =>
+        new Date(left.startTime) - new Date(right.startTime) ||
+        String(left.id).localeCompare(String(right.id))
+    );
+
+    const selected = selectedId
+      ? ordered.find((occurrence) => occurrence.id === selectedId) || null
+      : ordered.find(
+          (occurrence) =>
+            !["completed", "cancelled", "no_show", "expired_unfilled"].includes(
+              occurrence.status
+            ) && new Date(occurrence.endTime).getTime() >= now
+        ) ||
+        ordered[ordered.length - 1] ||
+        null;
+
+    // An open replacement target is a schedule opportunity, not owned attendance data.
+    const selectedOpportunity = selectedId
+      ? shift.opportunities.find(
+          (opportunity) => this.professionalViewId(opportunity.occurrenceId) === selectedId
+        ) || null
+      : null;
+
+    return {
+      pageTitle: `${shift.referenceCode || "Shift"} · Shift Details`,
+      shift,
+      selectedOccurrenceId: selectedId || selected?.id || null,
+      selectedOccurrence: selected,
+      selectedOpportunity,
+      hasSelectedOccurrence: Boolean(selected),
+      actions: {
+        shiftsUrl: this.getProfessionalShiftsUrl(),
+        myShiftsUrl: this.getProfessionalMyShiftsUrl(),
+      },
+    };
+  }
+  /* ─────────────────────────────── ADMIN PRESENTATION ─────────────────────────────── */
+
+  // Call only after an authorized admin query. Presentation is not authorization.
+  // Explicit output fields keep PINs, provider data and command hashes out of views.
+  static buildAdminAmountView(amount, currency) {
+    const known =
+      Number.isSafeInteger(amount) &&
+      amount >= 0 &&
+      typeof currency === "string" &&
+      /^[A-Z]{3}$/.test(currency);
+
+    return {
+      value: known ? amount : null,
+      currency: currency || null,
+      known,
+      display: known ? this.formatAmount(amount, currency) : "Not available",
+    };
+  }
+
+  static buildAdminDateView(value, timeZone = "UTC") {
+    const date = value == null || value === "" ? null : new Date(value);
+    if (!date || !Number.isFinite(date.getTime())) {
+      return { value: null, display: "Not available", timeZone: null };
+    }
+
+    let zone = timeZone || "UTC";
+    let display;
+
+    try {
+      display = new Intl.DateTimeFormat("en-GB", {
+        dateStyle: "medium",
+        timeStyle: "short",
+        timeZone: zone,
+      }).format(date);
+    } catch {
+      zone = "UTC";
+      display = new Intl.DateTimeFormat("en-GB", {
+        dateStyle: "medium",
+        timeStyle: "short",
+        timeZone: zone,
+      }).format(date);
+    }
+
+    return { value: date.toISOString(), display, timeZone: zone };
+  }
+
+  static buildAdminPaginationView(value = {}) {
+    const number = (input, fallback) =>
+      Number.isSafeInteger(input) && input >= 0 ? input : fallback;
+    const page = Math.max(1, number(value.page, 1));
+    const pageSize = Math.max(1, number(value.pageSize, 25));
+    const totalItems = number(value.totalItems, 0);
+    const totalPages = Math.ceil(totalItems / pageSize);
+
+    return {
+      page,
+      pageSize,
+      totalItems,
+      totalPages,
+      hasPrevious: page > 1,
+      hasNext: page < totalPages,
+    };
+  }
+
+  static getAdminCancellationReasonOptions() {
+    return [
+      { value: "not_needed", label: "Shift no longer needed" },
+      { value: "staff_available", label: "Cover arranged" },
+      { value: "schedule_error", label: "Booking error" },
+      { value: "branch_closure", label: "Facility closure" },
+      { value: "safety_concern", label: "Safety concern" },
+      { value: "other", label: "Other" },
+    ];
+  }
+
+  static adminCancellationReasonLabel(code) {
+    return (
+      this.getAdminCancellationReasonOptions().find((option) => option.value === code)?.label ||
+      (code ? formatStatus(code) : "Not recorded")
+    );
+  }
+
+  static buildAdminCancellationAuditView(audit) {
+    if (!audit) return null;
+
+    return {
+      mode: audit.mode || null,
+      label:
+        audit.mode === "employer_assisted"
+          ? "Cancelled on employer's behalf"
+          : audit.mode === "platform_intervention"
+            ? "Platform intervention"
+            : "Administrative action",
+      requestedByUserId: this.toId(audit.requestedBy),
+      executedByAdminUserId: this.toId(audit.executedBy),
+      requestedAt: this.buildAdminDateView(audit.requestedAt),
+      executedAt: this.buildAdminDateView(audit.executedAt),
+      reason: audit.reason || null,
+      requestReference: audit.requestReference || null,
+      policyBasis: audit.policyBasis || null,
+    };
+  }
+
+  static buildAdminShiftView(shift = {}) {
+    const currency = shift.currency || null;
+    const zone = shift.scheduleTimeZone || "UTC";
+
+    return {
+      id: this.toId(shift._id),
+      referenceCode: shift.referenceCode || null,
+      employerProfileId: this.toId(shift.business),
+      branchId: this.toId(shift.branch),
+      roleTitle: shift.roleTitle || null,
+      status: this.buildStatusView(shift.status),
+      paymentStatus: this.buildStatusView(shift.paymentStatus),
+      scheduleMode: shift.scheduleMode || null,
+      occurrenceCount: shift.occurrenceCount ?? null,
+      totalOccurrenceCount: shift.totalOccurrenceCount ?? null,
+      requiredProfessionals: shift.requiredProfessionals ?? null,
+      start: this.buildAdminDateView(shift.startTime, zone),
+      end: this.buildAdminDateView(shift.endTime, zone),
+      currency,
+      estimatedProfessionalPay: this.buildAdminAmountView(shift.estimatedProfessionalPay, currency),
+      estimatedEmployerCharge: this.buildAdminAmountView(shift.estimatedEmployerCharge, currency),
+      fundedAmount: this.buildAdminAmountView(shift.fundedAmount, currency),
+      refundedAmount: this.buildAdminAmountView(shift.refundedAmount, currency),
+      cancellationCode: shift.cancellationCode || null,
+      cancelledAt: this.buildAdminDateView(shift.cancelledAt),
+      cancelledBy: shift.cancelledBy || null,
+      cancelledByUserId: this.toId(shift.cancelledByUser),
+      cancellationAudit: this.buildAdminCancellationAuditView(shift.cancellationAdministration),
+    };
+  }
+
+  static buildAdminOccurrenceView(occurrence = {}, currency = null, timeZone = "UTC") {
+    const resolvedCurrency = occurrence.currency || currency;
+
+    return {
+      id: this.toId(occurrence._id),
+      shiftId: this.toId(occurrence.shift),
+      referenceCode: occurrence.referenceCode || null,
+      slotNumber: occurrence.slotNumber ?? null,
+      sequenceNumber: occurrence.sequenceNumber ?? null,
+      status: this.buildStatusView(occurrence.status),
+      assignmentStatus: this.buildStatusView(occurrence.assignmentStatus),
+      attendanceStatus: this.buildStatusView(occurrence.attendanceStatus),
+      settlementStatus: this.buildStatusView(occurrence.settlementStatus),
+      professionalProfileId: this.toId(occurrence.assignedProfessional),
+      start: this.buildAdminDateView(occurrence.startTime, timeZone),
+      end: this.buildAdminDateView(occurrence.endTime, timeZone),
+      baseProfessionalPay: this.buildAdminAmountView(
+        occurrence.baseProfessionalPay,
+        resolvedCurrency
+      ),
+      overtimeProfessionalPay: this.buildAdminAmountView(
+        occurrence.overtimeProfessionalPay,
+        resolvedCurrency
+      ),
+      refundableAmount: this.buildAdminAmountView(occurrence.refundableAmount, resolvedCurrency),
+      refundedAmount: this.buildAdminAmountView(occurrence.refundedAmount, resolvedCurrency),
+      refundStatus: this.buildStatusView(occurrence.refundStatus),
+      refundHoldReason: occurrence.refundHoldReason
+        ? formatStatus(occurrence.refundHoldReason)
+        : null,
+      activeClaimId: this.toId(occurrence.activeClaim),
+      activeDisputeId: this.toId(occurrence.activeDispute),
+      cancellationCode: occurrence.cancellationCode || null,
+      cancellationReason: occurrence.cancellationReason || null,
+      cancellationAudit: this.buildAdminCancellationAuditView(
+        occurrence.cancellationAdministration
+      ),
+    };
+  }
+
+  static buildAdminShiftsPageView(data = {}) {
+    const items = (data.items || []).map((shift) => this.buildAdminShiftView(shift));
+    return {
+      pageTitle: "Shifts",
+      items,
+      isEmpty: items.length === 0,
+      pagination: this.buildAdminPaginationView(data.pagination),
+    };
+  }
+
+  static buildAdminShiftDetailsView(data = {}) {
+    const shift = data.shift || {};
+    return {
+      pageTitle: `${shift.referenceCode || "Shift"} · Details`,
+      shift: this.buildAdminShiftView(shift),
+      occurrences: (data.occurrences || []).map((occurrence) =>
+        this.buildAdminOccurrenceView(occurrence, shift.currency, shift.scheduleTimeZone)
+      ),
+      occurrencePagination: this.buildAdminPaginationView(data.occurrencePagination),
+      // This list is a page, not the complete engagement. Do not sum it to quote
+      // cancellation. The lifecycle preview recalculates authoritative totals.
+      cancellationReasonOptions: this.getAdminCancellationReasonOptions(),
+    };
+  }
+
+  static buildAdminCancellationRequestView(request = {}, includeEvidence = false) {
+    const view = {
+      id: this.toId(request._id),
+      employerProfileId: this.toId(request.business),
+      shiftId: this.toId(request.shift),
+      occurrenceId: this.toId(request.occurrence),
+      scope: request.scope || null,
+      status: this.buildStatusView(request.status),
+      reasonCode: request.cancellationReasonCode || null,
+      reasonLabel: this.adminCancellationReasonLabel(request.cancellationReasonCode),
+      requestedByUserId: this.toId(request.requestedBy),
+      recordedByAdminUserId: this.toId(request.recordedBy),
+      requestedAt: this.buildAdminDateView(request.requestedAt),
+      recordedAt: this.buildAdminDateView(request.recordedAt),
+      execution: request.execution?.adminUserId
+        ? {
+            adminUserId: this.toId(request.execution.adminUserId),
+            executedAt: this.buildAdminDateView(request.execution.executedAt),
+            reason: request.execution.reason || null,
+            professionalCompensation: this.buildAdminAmountView(
+              request.execution.professionalCompensationMinor,
+              request.execution.currency
+            ),
+          }
+        : null,
+      withdrawal: request.withdrawal?.adminUserId
+        ? {
+            adminUserId: this.toId(request.withdrawal.adminUserId),
+            withdrawnAt: this.buildAdminDateView(request.withdrawal.withdrawnAt),
+            reason: request.withdrawal.reason || null,
+          }
+        : null,
+    };
+
+    if (includeEvidence) {
+      view.reason = request.cancellationReason || null;
+      view.review = {
+        reviewedByAdminUserId: this.toId(request.evidenceReviewedBy),
+        reviewedAt: this.buildAdminDateView(request.evidenceReviewedAt),
+        notes: request.evidenceReviewNotes || null,
+      };
+      view.writtenInstructionAt = this.buildAdminDateView(request.consent?.confirmedAt);
+      const evidenceId = this.toId(request.consent?.evidenceId);
+      view.evidence = (request.evidence || []).map((item) => ({
+        id: this.toId(item._id),
+        type: item.type,
+        reference: item.reference,
+        description: item.description || null,
+        submittedByRole: item.submittedByRole,
+        submittedByUserId: this.toId(item.submittedByUser),
+        recordedAt: this.buildAdminDateView(item.recordedAt),
+        isWrittenInstruction: Boolean(evidenceId && this.toId(item._id) === evidenceId),
+      }));
+    }
+
+    return view;
+  }
+
+  static buildAdminCancellationRequestsPageView(data = {}) {
+    const items = (data.items || []).map((request) =>
+      this.buildAdminCancellationRequestView(request)
+    );
+    return {
+      pageTitle: "Cancellation history",
+      items,
+      isEmpty: items.length === 0,
+      pagination: this.buildAdminPaginationView(data.pagination),
+    };
+  }
+
+  static buildAdminCancellationRequestDetailsView(data = {}) {
+    return {
+      pageTitle: "Cancellation record",
+      request: this.buildAdminCancellationRequestView(data.request, true),
+    };
+  }
+
+  // currency must come from the loaded shift, not a client-supplied quote.
+  static buildAdminCancellationPreviewView(data = {}, currency = null) {
+    return {
+      pageTitle: "Review cancellation",
+      mode: data.mode || null,
+      scope: data.scope || "shift",
+      shiftId: this.toId(data.shiftId),
+      alreadyFinalized: data.alreadyFinalized === true,
+      affectedOccurrenceCount: data.affectedOccurrenceCount ?? null,
+      professionalPay: this.buildAdminAmountView(data.professionalCompensation?.amount, currency),
+      retainedPlatformFee: this.buildAdminAmountView(data.retainedPlatformFee?.amount, currency),
+      refund: this.buildAdminAmountView(data.refund?.amount, currency),
+      message:
+        data.mode === "active_work_cancellation"
+          ? "This ends all remaining engagement work, including work already started."
+          : "Review the affected work and financial consequences before confirming.",
+      // The authoritative service recalculates on execution. This view does not
+      // freeze a price or grant permission to cancel.
+    };
+  }
+
+  static buildAdminAttentionQueueView(data = {}) {
+    const descriptions = {
+      claims: ["Open claims", "Review claim status to determine whether admin action is needed."],
+      disputes: ["Open disputes", "Review the dispute and its current resolution stage."],
+      refund_holds: [
+        "Held refunds",
+        "A hold may be part of normal settlement or challenge processing. Check its reason.",
+      ],
+      overdue_funding: [
+        "Funding deadline passed",
+        "These shifts still await funding. Opening this page does not expire them.",
+      ],
+      funding_integrity: [
+        "Funding conflicts",
+        "Base-funding payments require reconciliation. Check the recorded payment and ledger state.",
+      ],
+    };
+    const category = data.category;
+    const description = descriptions[category];
+    if (!description) throw new Error("Unsupported admin attention category.");
+
+    const items = (data.items || []).map((item) => {
+      if (category === "overdue_funding") return this.buildAdminShiftView(item);
+      if (category !== "funding_integrity")
+        return this.buildAdminOccurrenceView(item, item.currency);
+
+      return {
+        transactionId: this.toId(item._id),
+        shiftId: this.toId(item.shift),
+        referenceCode: item.shiftSummary?.referenceCode || null,
+        employerProfileId: this.toId(item.shiftSummary?.business),
+        branchId: this.toId(item.shiftSummary?.branch),
+        missingShiftRecord: !item.shiftSummary?._id,
+        amount: this.buildAdminAmountView(item.amount, item.currency),
+        status: this.buildStatusView(item.status),
+        reason: item.metadata?.fundingIntegrityReason
+          ? formatStatus(item.metadata.fundingIntegrityReason)
+          : "Not recorded",
+        detectedAt: this.buildAdminDateView(item.metadata?.fundingIntegrityDetectedAt),
+      };
+    });
+
+    return {
+      pageTitle: description[0],
+      description: description[1],
+      category,
+      items,
+      isEmpty: items.length === 0,
+      pagination: this.buildAdminPaginationView(data.pagination),
+    };
+  }
+  /* ───────────────────── ADMIN APPLICATION PRESENTATION ───────────────────── */
+
+  // These builders accept authorized query results. They grant no hiring powers.
+  static buildAdminApplicationProfessionalView(profile) {
+    if (!profile) return null;
+
+    return {
+      id: this.toId(profile._id),
+      type: profile.type || null,
+      specialty: profile.specialty || null,
+      yearsOfExperience: Number.isFinite(profile.yearsOfExperience)
+        ? profile.yearsOfExperience
+        : null,
+      professionalApprovalStatus: profile.professionalApprovalStatus || null,
+      licenceVerificationStatus: profile.licenceVerificationStatus || null,
+    };
+  }
+
+  static buildAdminApplicationShiftView(shift = {}) {
+    return {
+      id: this.toId(shift._id),
+      referenceCode: shift.referenceCode || null,
+      employerProfileId: this.toId(shift.business),
+      branchId: this.toId(shift.branch),
+      roleTitle: shift.roleTitle || null,
+      professionalType: shift.professionalType || null,
+      status: shift.status || null,
+      statusLabel: shift.status ? formatStatus(shift.status) : "Not recorded",
+      scheduleMode: shift.scheduleMode || null,
+      start: this.buildAdminDateView(shift.startTime),
+      end: this.buildAdminDateView(shift.endTime),
+    };
+  }
+
+  static buildAdminApplicationView(application = {}, includeDetails = false) {
+    const positiveInteger = (value) => (Number.isSafeInteger(value) && value > 0 ? value : null);
+
+    const view = {
+      id: this.toId(application._id),
+      shiftId: this.toId(application.shift),
+      professionalProfileId: this.toId(application.professional),
+      occurrenceId: this.toId(application.occurrence),
+      slotNumber: positiveInteger(application.slotNumber),
+      applicationType: application.applicationType || null,
+      applicationTypeLabel: application.applicationType
+        ? formatStatus(application.applicationType)
+        : "Not recorded",
+      applicationRound: positiveInteger(application.applicationRound),
+      status: application.status || null,
+      statusLabel: application.status ? formatStatus(application.status) : "Not recorded",
+      replacementForAssignmentId: this.toId(application.replacementForAssignment),
+      acceptedAssignmentId: this.toId(application.acceptedAssignment),
+      createdAt: this.buildAdminDateView(application.createdAt),
+      updatedAt: this.buildAdminDateView(application.updatedAt),
+      reviewedAt: this.buildAdminDateView(application.reviewedAt),
+      reviewedByUserId: this.toId(application.reviewedBy),
+    };
+
+    if (includeDetails) {
+      view.professionalNote = application.note || null;
+      view.employerPrivateNote = application.employerPrivateNote || null;
+      view.rejectedReason = application.rejectedReason || null;
+      view.withdrawalReason = application.withdrawalReason || null;
+
+      const snapshot = application.matchSnapshot;
+      view.matchSnapshot = snapshot
+        ? {
+            professionalType: snapshot.professionalType || null,
+            specialty: snapshot.specialty || null,
+            yearsOfExperience: Number.isFinite(snapshot.yearsOfExperience)
+              ? snapshot.yearsOfExperience
+              : null,
+          }
+        : null;
+
+      // Stored milestones are not a complete transition log. Do not attribute
+      // acceptance/rejection or other transitions to the recorded reviewer.
+      view.recordedMilestones = [
+        ["createdAt", "Applied"],
+        ["shortlistedAt", "Shortlisted"],
+        ["acceptedAt", "Accepted"],
+        ["rejectedAt", "Rejected"],
+        ["withdrawnAt", "Withdrawn"],
+        ["expiredAt", "Expired"],
+        ["cancelledAt", "Cancelled"],
+      ]
+        .map(([field, label]) => ({
+          field,
+          label,
+          at: this.buildAdminDateView(application[field]),
+        }))
+        .filter((milestone) => milestone.at.value !== null)
+        .sort((a, b) => a.at.value.localeCompare(b.at.value));
+    }
+
+    return view;
+  }
+
+  static buildAdminShiftApplicationsPageView(data = {}) {
+    const items = (data.items || []).map((application) => ({
+      ...this.buildAdminApplicationView(application),
+      professional: this.buildAdminApplicationProfessionalView(application.professionalSummary),
+      professionalRecordAvailable: Boolean(application.professionalSummary),
+    }));
+
+    return {
+      pageTitle: "Shift Applications",
+      shift: this.buildAdminApplicationShiftView(data.shift),
+      items,
+      hasItems: items.length > 0,
+      pagination: this.buildAdminPaginationView(data.pagination),
+      historySource: "stored_status_timestamps",
+    };
+  }
+
+  static buildAdminShiftApplicationDetailsView(data = {}) {
+    const application = data.application || {};
+    const occurrence = data.occurrence;
+
+    return {
+      pageTitle: "Application Details",
+      shift: this.buildAdminApplicationShiftView(data.shift),
+      application: this.buildAdminApplicationView(application, true),
+      professional: this.buildAdminApplicationProfessionalView(data.professional),
+      professionalRecordAvailable: Boolean(data.professional),
+      occurrenceLinkStatus: !application.occurrence
+        ? "not_applicable"
+        : occurrence
+          ? "resolved"
+          : "unresolved",
+      occurrence: occurrence
+        ? {
+            id: this.toId(occurrence._id),
+            referenceCode: occurrence.referenceCode || null,
+            status: occurrence.status || null,
+            statusLabel: occurrence.status ? formatStatus(occurrence.status) : "Not recorded",
+            assignmentStatus: occurrence.assignmentStatus || null,
+            slotNumber: occurrence.slotNumber ?? null,
+            sequenceNumber: occurrence.sequenceNumber ?? null,
+            start: this.buildAdminDateView(occurrence.startTime),
+            end: this.buildAdminDateView(occurrence.endTime),
+          }
+        : null,
+      historySource: "stored_status_timestamps",
+      historyMessage: "Recorded application milestones; a complete event history is not available.",
+    };
+  }
 }
 
 module.exports = ShiftViewService;

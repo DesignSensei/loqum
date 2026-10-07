@@ -5,6 +5,10 @@ const mongoose = require("mongoose");
 const Shift = require("../models/Shift");
 const ShiftOccurrence = require("../models/ShiftOccurrence");
 const ShiftApplication = require("../models/ShiftApplication");
+const User = require("../models/User");
+
+// Only audits produced by the verified service entry point may reach mutation.
+const authorizedCancellationAudits = new WeakSet();
 
 const ShiftRefundService = require("./shiftRefundService");
 const ShiftSettlementService = require("./shiftSettlementService");
@@ -15,6 +19,9 @@ const {
 } = require("./helpers/transactionHelper");
 
 const {
+  CANCELLATION_ADMINISTRATION_MODES,
+  CANCELLATION_ADMINISTRATION_POLICY_BY_MODE,
+  CANCELLATION_ADMINISTRATION_ACTOR_BY_MODE,
   OCCURRENCE_CANCELLABLE_FROM_STATUSES,
   OCCURRENCE_CANCELLABLE_ASSIGNMENT_STATUSES,
   INDIVIDUAL_OCCURRENCE_CANCELLABLE_ASSIGNMENT_STATUSES,
@@ -1463,6 +1470,8 @@ class ShiftOccurrenceCancellationService {
     currentTime,
     session,
   }) {
+    const administration = occurrence.cancellationAdministration;
+
     return ShiftRefundService.reevaluateOccurrenceRefund(
       {
         shift,
@@ -1470,8 +1479,12 @@ class ShiftOccurrenceCancellationService {
         reason: "occurrence_cancelled",
         currentTime,
         initiatedBy: {
-          role: cancelledBy,
-          userId: cancelledBy === "system" ? null : cancelledByUserId,
+          role: administration ? "admin" : cancelledBy,
+          userId: administration
+            ? administration.executedBy
+            : cancelledBy === "system"
+              ? null
+              : cancelledByUserId,
         },
       },
       {
@@ -1516,12 +1529,239 @@ class ShiftOccurrenceCancellationService {
 
   /* ─────────────────────────────── IDEMPOTENCY ─────────────────────────────── */
 
+  /* ───────────────────── AUTHORIZED ADMIN ASSISTANCE ───────────────────── */
+
+  /**
+   * Server-side integration contract:
+   * options.verifyEmployerCancellationRequest must use the employer instruction
+   * recorded and validated in the supplied transaction. The owning service checks
+   * requester membership/branch authority, reviewed written evidence, exact scope
+   * and request status. There is no request-expiry or approved-compensation limit.
+   * Never build this verifier or its result from req.body or a client boolean.
+   *
+   * Return { authorized: true, requestReference, employerProfileId, shiftId,
+   * occurrenceId, requestedBy, requestedAt, cancellationReasonCode,
+   * cancellationReason }. A used request may be returned for the same operation
+   * so transaction retries can finish idempotently. Any other scope must fail.
+   *
+   * EmployerCancellationRequestService.recordAndExecute supplies this callback
+   * for individual occurrences. ShiftLifecycleService supplies a scoped adapter
+   * for whole-shift requests. Both persist fulfillment in the same transaction.
+   * Missing verification fails closed; a support-ticket string alone is not
+   * authorization. Public controllers should use the recordAndExecute entry point.
+   */
+  static async resolveAdminCancellation({
+    shift,
+    occurrence,
+    input,
+    options,
+    currentTime,
+    session,
+  }) {
+    this.assertActiveSession(session);
+
+    const adminUserId = this.normalizeObjectId(input.adminUserId, "admin user ID");
+    const businessId = this.normalizeObjectId(input.employerProfileId, "employer profile ID");
+
+    this.assertEmployerOwnsShift({ shift, businessId });
+    this.assertOccurrenceBelongsToShift({ shift, occurrence });
+
+    // Match the current admin middleware's role contract, re-reading the actor.
+    const admin = await User.findOne({ _id: adminUserId, role: "admin" })
+      .select("_id")
+      .session(session)
+      .lean();
+
+    if (!admin) {
+      throw this.createError({
+        message: "Admin access is required.",
+        code: "ADMIN_ACCESS_REQUIRED",
+        statusCode: 403,
+      });
+    }
+
+    const mode = this.normalizeEnum(
+      input.mode,
+      CANCELLATION_ADMINISTRATION_MODES,
+      "administrative cancellation mode"
+    );
+
+    if (mode === "platform_intervention") {
+      // The review label in the model is not a financial hold. Do not execute
+      // the old zero-compensation admin branch before an adjudication path exists.
+      throw this.createError({
+        message:
+          "Platform intervention requires a defined financial decision workflow before cancellation can proceed.",
+        code: "PLATFORM_CANCELLATION_FINANCIAL_POLICY_REQUIRED",
+        statusCode: 409,
+      });
+    }
+
+    const requestReference = this.normalizeRequiredText(
+      input.requestReference,
+      "request reference",
+      200
+    );
+    const reason = this.normalizeRequiredText(input.reason, "admin audit reason", 500);
+
+    if (reason.length < 10) {
+      throw this.createError({
+        message: "Admin audit reason must contain at least 10 characters.",
+        code: "ADMIN_CANCELLATION_REASON_TOO_SHORT",
+      });
+    }
+
+    if (typeof options.verifyEmployerCancellationRequest !== "function") {
+      throw this.createError({
+        message: "Employer cancellation request verification is not configured.",
+        code: "EMPLOYER_CANCELLATION_REQUEST_VERIFIER_REQUIRED",
+        statusCode: 503,
+      });
+    }
+
+    const request = await options.verifyEmployerCancellationRequest({
+      requestReference,
+      adminUserId,
+      employerProfileId: shift.business,
+      shiftId: shift._id,
+      occurrenceId: occurrence._id,
+      currentTime,
+      session,
+    });
+
+    if (
+      request?.authorized !== true ||
+      request.requestReference !== requestReference ||
+      !this.sameId(request.employerProfileId, shift.business) ||
+      !this.sameId(request.shiftId, shift._id) ||
+      !this.sameId(request.occurrenceId, occurrence._id)
+    ) {
+      throw this.createError({
+        message: "An authorized employer request for this occurrence is required.",
+        code: "EMPLOYER_CANCELLATION_REQUEST_NOT_AUTHORIZED",
+        statusCode: 403,
+      });
+    }
+
+    const requestedBy = this.normalizeObjectId(request.requestedBy, "requesting employer user ID");
+    const requestedAt = this.normalizeCurrentTime(request.requestedAt);
+
+    if (
+      !request.requestedAt ||
+      requestedAt > currentTime ||
+      this.sameId(requestedBy, adminUserId)
+    ) {
+      throw this.createError({
+        message: "The employer request has invalid attribution or timing.",
+        code: "INVALID_EMPLOYER_CANCELLATION_REQUEST",
+        statusCode: 403,
+      });
+    }
+
+    const cancellationInput = this.normalizeIndividualCancellationInput({
+      cancelledBy: CANCELLATION_ADMINISTRATION_ACTOR_BY_MODE[mode],
+      cancelledByUserId: requestedBy,
+      cancellationReasonCode: request.cancellationReasonCode,
+      cancellationReason: request.cancellationReason,
+    });
+
+    const administration = {
+      mode,
+      executedBy: adminUserId,
+      requestedBy,
+      requestedAt,
+      executedAt: currentTime,
+      reason,
+      requestReference,
+      policyBasis: CANCELLATION_ADMINISTRATION_POLICY_BY_MODE[mode],
+    };
+
+    authorizedCancellationAudits.add(administration);
+
+    return { cancellationInput, administration };
+  }
+
+  static sameCancellationAdministration(existing, incoming) {
+    if (!existing && !incoming) return true;
+    if (!existing || !incoming) return false;
+
+    // executedAt belongs to the first successful command, never to its retries.
+    return (
+      existing.mode === incoming.mode &&
+      existing.policyBasis === incoming.policyBasis &&
+      this.sameId(existing.executedBy, incoming.executedBy) &&
+      this.sameId(existing.requestedBy, incoming.requestedBy) &&
+      new Date(existing.requestedAt).getTime() === new Date(incoming.requestedAt).getTime() &&
+      existing.reason === incoming.reason &&
+      existing.requestReference === incoming.requestReference
+    );
+  }
+
+  static assertAuthorizedCancellationAdministration(administration, cancelledBy) {
+    if (administration && !authorizedCancellationAudits.has(administration)) {
+      throw this.createError({
+        message: "Administrative cancellation must use a verified service entry point.",
+        code: "ADMIN_CANCELLATION_AUTHORIZATION_REQUIRED",
+        statusCode: 403,
+      });
+    }
+
+    if (cancelledBy === "admin") {
+      throw this.createError({
+        message: "Platform cancellation financial policy has not been configured.",
+        code: "PLATFORM_CANCELLATION_FINANCIAL_POLICY_REQUIRED",
+        statusCode: 409,
+      });
+    }
+  }
+
+  static async cancelOccurrenceAsAdmin(input, options = {}) {
+    const currentTime = this.normalizeCurrentTime(input.currentTime);
+
+    return this.runWithOptionalTransaction(options, async (session) => {
+      const shift = await this.getShift(input.shiftId, session);
+      const occurrence = await this.getOccurrence({
+        shiftId: shift._id,
+        occurrenceId: input.occurrenceId,
+        session,
+      });
+      const { cancellationInput, administration } = await this.resolveAdminCancellation({
+        shift,
+        occurrence,
+        input,
+        options,
+        currentTime,
+        session,
+      });
+
+      // Completed retries must reach the core idempotency check even if parent
+      // reconciliation has already closed the engagement after the last date.
+      if (occurrence.status !== "cancelled") this.assertParentAllowsIndividualCancellation(shift);
+
+      return this.applyFutureOccurrenceCancellation(
+        {
+          shift,
+          occurrence,
+          fromParentCancellation: false,
+          ...cancellationInput,
+          cancellationAdministration: administration,
+          parentCancellationCode: null,
+          allowedAssignmentStatuses: INDIVIDUAL_OCCURRENCE_CANCELLABLE_ASSIGNMENT_STATUSES,
+          currentTime,
+          reconcileParent: true,
+        },
+        { session }
+      );
+    });
+  }
+
   static isSameCompletedCancellation({
     occurrence,
     cancelledBy,
     cancelledByUserId,
     cancellationAuditReason,
     parentCancellationCode = null,
+    cancellationAdministration = null,
   }) {
     if (occurrence.status !== "cancelled") {
       return false;
@@ -1538,6 +1778,10 @@ class ShiftOccurrenceCancellationService {
             "admin_cancelled",
             "system_cancelled",
           ].includes(occurrence.cancellationCode)) &&
+      this.sameCancellationAdministration(
+        occurrence.cancellationAdministration,
+        cancellationAdministration
+      ) &&
       occurrence.cancelledBy === cancelledBy &&
       ShiftOccurrenceCancellationService.sameNullableId(
         occurrence.cancelledByUser,
@@ -1711,10 +1955,12 @@ class ShiftOccurrenceCancellationService {
       allowedAssignmentStatuses,
       currentTime,
       reconcileParent = true,
+      cancellationAdministration = null,
     },
     { session }
   ) {
     ShiftOccurrenceCancellationService.assertActiveSession(session);
+    this.assertAuthorizedCancellationAdministration(cancellationAdministration, cancelledBy);
 
     if (!Array.isArray(allowedAssignmentStatuses) || allowedAssignmentStatuses.length === 0) {
       throw ShiftOccurrenceCancellationService.createError({
@@ -1740,6 +1986,7 @@ class ShiftOccurrenceCancellationService {
         cancelledByUserId,
         cancellationAuditReason,
         parentCancellationCode,
+        cancellationAdministration,
       })
     ) {
       return ShiftOccurrenceCancellationService.buildIdempotentResult({
@@ -1820,6 +2067,10 @@ class ShiftOccurrenceCancellationService {
       outcome,
       currentTime,
     });
+
+    if (cancellationAdministration) {
+      occurrence.cancellationAdministration = cancellationAdministration;
+    }
 
     let resolvedOccurrence = occurrence;
     let settlementResult = null;
@@ -1929,6 +2180,14 @@ class ShiftOccurrenceCancellationService {
     },
     options = {}
   ) {
+    if (cancelledBy === "admin") {
+      throw this.createError({
+        message: "Use the authorized admin cancellation entry point.",
+        code: "ADMIN_CANCELLATION_ENTRY_POINT_REQUIRED",
+        statusCode: 403,
+      });
+    }
+
     const normalizedCurrentTime =
       ShiftOccurrenceCancellationService.normalizeCurrentTime(currentTime);
 
@@ -2020,10 +2279,44 @@ class ShiftOccurrenceCancellationService {
           session,
         });
 
+        let cancellationAdministration = null;
+
+        if (options.adminCancellation) {
+          const resolved = await this.resolveAdminCancellation({
+            shift,
+            occurrence,
+            input: options.adminCancellation,
+            options,
+            currentTime: normalizedCancelledAt,
+            session,
+          });
+
+          if (
+            cancellationInput.cancelledBy !== resolved.cancellationInput.cancelledBy ||
+            !this.sameId(
+              cancellationInput.cancelledByUserId,
+              resolved.cancellationInput.cancelledByUserId
+            ) ||
+            cancellationInput.cancellationAuditReason !==
+              resolved.cancellationInput.cancellationAuditReason ||
+            cancellationInput.cancellationReasonCode !==
+              resolved.cancellationInput.cancellationReasonCode
+          ) {
+            throw this.createError({
+              message: "Parent cancellation does not match the verified employer request.",
+              code: "ADMIN_PARENT_CANCELLATION_REQUEST_MISMATCH",
+              statusCode: 403,
+            });
+          }
+
+          cancellationAdministration = resolved.administration;
+        }
+
         return ShiftOccurrenceCancellationService.applyFutureOccurrenceCancellation(
           {
             shift,
             occurrence,
+            cancellationAdministration,
             fromParentCancellation: true,
             cancelledBy: cancellationInput.cancelledBy,
             cancelledByUserId: cancellationInput.cancelledByUserId,

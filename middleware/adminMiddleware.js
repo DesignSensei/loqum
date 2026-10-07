@@ -60,9 +60,11 @@ function getEmployerProfileId(req) {
  * - replace req.user;
  * - impersonate an employer user;
  * - manufacture employerContext;
- * - grant branch-manager/business-admin permissions.
+ * - grant branch-manager/business-admin permissions;
+ * - authorize wallet spending or determine cancellation compensation.
  *
- * The admin remains the actual actor throughout the request.
+ * The admin remains the actual actor throughout the request. Individual admin
+ * operations must enforce their own authorization and business rules.
  */
 exports.attachAdminEmployerContext = async (req, res, next) => {
   try {
@@ -95,8 +97,9 @@ exports.attachAdminEmployerContext = async (req, res, next) => {
 };
 
 /**
- * Defensive middleware for routes that require an employer-targeted
- * admin operation after attachAdminEmployerContext has already run.
+ * Defensive middleware for employer-targeted admin routes, after
+ * attachAdminEmployerContext. Both middleware functions expect the route
+ * parameter employerProfileId to remain available at this point.
  */
 exports.requireAdminEmployerContext = (req, res, next) => {
   try {
@@ -132,6 +135,16 @@ exports.requireAdminEmployerContext = (req, res, next) => {
         message: "Admin employer context contains inconsistent employer identity.",
         code: "ADMIN_EMPLOYER_CONTEXT_EMPLOYER_MISMATCH",
         statusCode: 500,
+      });
+    }
+
+    const routeEmployerProfileId = getEmployerProfileId(req);
+
+    if (String(adminEmployerContext.employerProfileId) !== String(routeEmployerProfileId)) {
+      throw createAdminMiddlewareError({
+        message: "Admin employer context does not match the requested employer.",
+        code: "ADMIN_EMPLOYER_CONTEXT_TARGET_MISMATCH",
+        statusCode: 403,
       });
     }
 

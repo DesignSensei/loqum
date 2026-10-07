@@ -615,6 +615,48 @@ exports.USER_CANCELLATION_ACTORS = Object.freeze(["employer", "admin"]);
 
 exports.ACTIVE_WORK_CANCELLATION_INITIATORS = Object.freeze(["employer", "admin"]);
 
+/* ───────────────────── ADMINISTRATIVE CANCELLATION AUDIT ───────────────────── */
+
+/**
+ * Values for Shift/ShiftOccurrence.cancellationAdministration.
+ *
+ * These describe an authorized operation; selecting a mode never grants admin
+ * permission or proves that an employer requested cancellation.
+ *
+ * employer_assisted:
+ * - retain the employer cancellation classification and compensation policy;
+ * - keep the employer requester in cancelledByUser / initiatedByUser;
+ * - record the actual admin separately in cancellationAdministration.executedBy.
+ *
+ * platform_intervention:
+ * - retain the admin cancellation classification and actual admin actor;
+ * - record the need for a separate financial decision.
+ *
+ * platform_intervention_review is an audit policy basis, not a settlement status,
+ * compensation waiver, fund hold or permission to release/refund money.
+ */
+exports.CANCELLATION_ADMINISTRATION_MODES = Object.freeze([
+  "employer_assisted",
+  "platform_intervention",
+]);
+
+exports.CANCELLATION_ADMINISTRATION_POLICY_BASES = Object.freeze([
+  "employer_cancellation_policy",
+  "platform_intervention_review",
+]);
+
+exports.CANCELLATION_ADMINISTRATION_POLICY_BY_MODE = Object.freeze({
+  employer_assisted: "employer_cancellation_policy",
+  platform_intervention: "platform_intervention_review",
+});
+
+// This is the existing domain actor classification, not the assisting executor.
+// It applies to cancelledBy and activeWorkCancellation.initiatedBy.
+exports.CANCELLATION_ADMINISTRATION_ACTOR_BY_MODE = Object.freeze({
+  employer_assisted: "employer",
+  platform_intervention: "admin",
+});
+
 exports.OCCURRENCE_CANCELLABLE_FROM_STATUSES = Object.freeze(["scheduled"]);
 
 exports.OCCURRENCE_CANCELLABLE_ASSIGNMENT_STATUSES = Object.freeze([

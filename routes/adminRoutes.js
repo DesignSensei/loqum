@@ -20,6 +20,9 @@ const adminController = require("../controllers/adminController");
 const adminShiftClaimController = require("../controllers/adminShiftClaimController");
 const adminPlatformSettingsController = require("../controllers/adminPlatformSettingsController");
 
+const adminShiftController = require("../controllers/adminShiftController");
+const adminShiftApplicationController = require("../controllers/adminShiftApplicationController");
+
 const adminJobController = require("../controllers/adminJobController");
 const adminJobApplicationController = require("../controllers/adminJobApplicationController");
 const adminJobAppointmentController = require("../controllers/adminJobAppointmentController");
@@ -33,6 +36,93 @@ router.use(isAuthenticated, isAccountAllowed, isVerified, hasRole("admin"));
 router.get("/dashboard", adminController.getDashboard);
 
 router.get("/cases", adminShiftClaimController.getCases);
+
+/* ─────────────────────────────── SHIFT OVERSIGHT ─────────────────────────────── */
+
+/**
+ * Admin shift reads provide platform oversight without employer impersonation.
+ * Keep fixed paths before /shifts/:shiftId so they are not treated as shift IDs.
+ * Page handlers require the application's existing CSRF middleware and templates.
+ */
+router.get("/shifts", adminShiftController.getShifts);
+
+router.get("/shifts/data", adminShiftController.getShiftsData);
+
+router.get("/shifts/attention", adminShiftController.getAttentionQueue);
+
+router.get("/shifts/attention/data", adminShiftController.getAttentionQueueData);
+
+/* ─────────────────────────────── SHIFT CANCELLATION HISTORY ─────────────────────────────── */
+
+router.get("/shifts/cancellations", adminShiftController.getCancellationRequests);
+
+router.get("/shifts/cancellations/data", adminShiftController.getCancellationRequestsData);
+
+router.get(
+  "/shifts/cancellations/:requestReference/data",
+  adminShiftController.getCancellationRequestDetailsData
+);
+
+router.get(
+  "/shifts/cancellations/:requestReference",
+  adminShiftController.getCancellationRequestDetails
+);
+
+/* ─────────────────────────────── SHIFT APPLICATION OVERSIGHT ─────────────────────────────── */
+
+/**
+ * Application oversight is read-only and scoped to one shift.
+ * Shortlisting, acceptance and rejection remain employer-owned.
+ */
+router.get("/shifts/:shiftId/applications", adminShiftApplicationController.getApplications);
+
+router.get(
+  "/shifts/:shiftId/applications/data",
+  adminShiftApplicationController.getApplicationsData
+);
+
+router.get(
+  "/shifts/:shiftId/applications/:applicationId/data",
+  adminShiftApplicationController.getApplicationDetailsData
+);
+
+router.get(
+  "/shifts/:shiftId/applications/:applicationId",
+  adminShiftApplicationController.getApplicationDetails
+);
+
+/* ─────────────────────────────── SHIFT DETAILS ─────────────────────────────── */
+
+router.get("/shifts/:shiftId/data", adminShiftController.getShiftDetailsData);
+
+router.get("/shifts/:shiftId", adminShiftController.getShiftDetails);
+
+/* ─────────────────────────────── EMPLOYER-TARGETED SHIFT CANCELLATION ─────────────────────────────── */
+
+/**
+ * Preview is read-only. Confirm records the reviewed employer instruction and
+ * executes cancellation in one service transaction. There is no separate
+ * request-creation endpoint and no platform-initiated cancellation endpoint.
+ *
+ * Both routes retain the actual admin actor and verify the selected employer.
+ * The application's CSRF protection must run before the POST handler, as for
+ * the other mutation routes in this router. JSON parsing must also be mounted.
+ * For individual occurrence cancellation, supply occurrenceId and scope in the
+ * query (preview) or JSON body (Confirm); whole-shift cancellation uses scope=shift.
+ */
+router.get(
+  "/employers/:employerProfileId/shifts/:shiftId/cancellation-preview",
+  attachAdminEmployerContext,
+  requireAdminEmployerContext,
+  adminShiftController.getCancellationPreview
+);
+
+router.post(
+  "/employers/:employerProfileId/shifts/:shiftId/cancel",
+  attachAdminEmployerContext,
+  requireAdminEmployerContext,
+  adminShiftController.cancelOnEmployerBehalf
+);
 
 /* ─────────────────────────────── PLATFORM SETTINGS ─────────────────────────────── */
 

@@ -20,6 +20,8 @@ const professionalJobController = require("../controllers/professionalJobControl
 const professionalJobApplicationController = require("../controllers/professionalJobApplicationController");
 const professionalJobAppointmentController = require("../controllers/professionalJobAppointmentController");
 
+const professionalShiftController = require("../controllers/professionalShiftController");
+const professionalShiftApplicationController = require("../controllers/professionalShiftApplicationController");
 const professionalShiftAttendanceController = require("../controllers/professionalShiftAttendanceController");
 const professionalShiftClaimController = require("../controllers/professionalShiftClaimController");
 
@@ -87,6 +89,39 @@ router.post(
 router.post(
   "/job-appointments/:appointmentId/decline",
   professionalJobAppointmentController.declineAppointment
+);
+
+/* ─────────────────────────────── SHIFT PAGES ─────────────────────────────── */
+
+// Register the fixed My Shifts path before the dynamic shift details path.
+router.get("/shifts", professionalShiftController.getShifts);
+
+router.get("/shifts/my", professionalShiftController.getMyShifts);
+
+router.get("/shifts/:shiftId/occurrences", professionalShiftController.getShiftOccurrences);
+
+router.get("/shifts/:shiftId", professionalShiftController.getShiftDetails);
+
+/* ─────────────────────────────── SHIFT APPLICATIONS ─────────────────────────────── */
+
+/**
+ * The controller resolves the professional from the authenticated user.
+ * The service owns eligibility, capacity and replacement validation.
+ * Application withdrawal does not cancel an accepted assignment.
+ *
+ * The existing application-level CSRF protection and body parser must run
+ * before these POST routes. Page handlers also require req.csrfToken().
+ */
+router.post("/shifts/:shiftId/apply", professionalShiftApplicationController.createApplication);
+
+router.post(
+  "/shifts/:shiftId/occurrences/:occurrenceId/apply",
+  professionalShiftApplicationController.createApplication
+);
+
+router.post(
+  "/shifts/:shiftId/applications/:applicationId/withdraw",
+  professionalShiftApplicationController.withdrawApplication
 );
 
 /* ─────────────────────────────── SHIFT ATTENDANCE ─────────────────────────────── */

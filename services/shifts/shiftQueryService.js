@@ -2,6 +2,11 @@
 
 const mongoose = require("mongoose");
 
+const User = require("../../models/User");
+const EmployerCancellationRequest = require("../../models/EmployerCancellationRequest");
+const Transaction = require("../../models/Transaction");
+const { SHIFT_STATUSES: ADMIN_SHIFT_STATUSES } = require("../../constants/shiftLifecycle");
+
 const Shift = require("../../models/Shift");
 const ShiftOccurrence = require("../../models/ShiftOccurrence");
 const ShiftOccurrenceClaim = require("../../models/ShiftOccurrenceClaim");
@@ -9,6 +14,64 @@ const ShiftOccurrenceDispute = require("../../models/ShiftOccurrenceDispute");
 const Branch = require("../../models/Branch");
 const EmployerProfile = require("../../models/EmployerProfile");
 const EmployerMember = require("../../models/EmployerMember");
+
+const ProfessionalProfile = require("../../models/ProfessionalProfile");
+const ShiftApplication = require("../../models/ShiftApplication");
+const ShiftApplicationService = require("../shiftApplicationService");
+const {
+  ACTIVE_APPLICATION_STATUSES,
+  ACTIVE_OCCURRENCE_STATUSES,
+  REPLACEMENT_APPLICATION_PARENT_STATUSES,
+  REPLACEMENT_APPLICATION_BLOCKED_PAYMENT_STATUSES,
+} = require("../../constants/shiftApplication");
+
+const {
+  APPLICATION_STATUSES: ADMIN_APPLICATION_STATUSES,
+  APPLICATION_TYPES: ADMIN_APPLICATION_TYPES,
+  MAX_APPLICATION_ROUNDS: ADMIN_MAX_APPLICATION_ROUNDS,
+} = require("../../constants/shiftApplication");
+
+const PROFESSIONAL_SHIFT_TABS = Object.freeze(["pending", "confirmed", "completed"]);
+
+const PROFESSIONAL_PROFILE_FIELDS = [
+  "user",
+  "type",
+  "specialty",
+  "yearsOfExperience",
+  "state",
+  "lga",
+  "location",
+  "availabilityStatus",
+  "accountStatus",
+  "marketplaceStatus",
+  "licenceVerificationStatus",
+  "licenceExpiryDate",
+  "identityVerificationStatus",
+  "professionalApprovalStatus",
+];
+
+const PROFESSIONAL_APPLICATION_FIELDS = [
+  "shift",
+  "professional",
+  "occurrence",
+  "slotNumber",
+  "applicationType",
+  "applicationRound",
+  "replacementForAssignment",
+  "acceptedAssignment",
+  "status",
+  "note",
+  "createdAt",
+  "updatedAt",
+  "shortlistedAt",
+  "acceptedAt",
+  "rejectedAt",
+  "rejectedReason",
+  "withdrawnAt",
+  "withdrawalReason",
+  "expiredAt",
+  "cancelledAt",
+];
 
 const PlatformSettingsService = require("../platformSettingsService");
 const WalletService = require("../walletService");
@@ -27,7 +90,9 @@ const { normalizeObjectId } = require("../helpers/serviceValidationHelpers");
 const SHIFT_SERVICE_ERROR_NAME = "ShiftServiceError";
 
 const MAX_VISIBLE_PAGINATION_PAGES = 5;
+
 const UNFUNDED_SHIFT_EXPIRY_BATCH_LIMIT = 500;
+
 const MIN_MULTIPLE_OCCURRENCE_COUNT = 2;
 
 const ACTIVE_BRANCH_FIELDS = [
@@ -42,32 +107,44 @@ const ACTIVE_BRANCH_FIELDS = [
 const SHIFT_SUMMARY_CARD_DEFINITIONS = [
   {
     status: "all",
+
     label: "All Shifts",
+
     description: "Total engagements created",
   },
   {
     status: "open",
+
     label: "Open",
+
     description: "Available for applications",
   },
   {
     status: "confirmed",
+
     label: "Confirmed",
+
     description: "Professionals confirmed",
   },
   {
     status: "in_progress",
+
     label: "In Progress",
+
     description: "Currently underway",
   },
   {
     status: "pending_settlement",
+
     label: "Pending Settlement",
+
     description: "Awaiting settlement",
   },
   {
     status: "completed",
+
     label: "Completed",
+
     description: "Successfully completed",
   },
 ];
@@ -75,6 +152,7 @@ const SHIFT_SUMMARY_CARD_DEFINITIONS = [
 function createShiftError(options) {
   return createServiceError({
     ...options,
+
     name: SHIFT_SERVICE_ERROR_NAME,
   });
 }
@@ -534,13 +612,17 @@ const ACTIVE_DISPUTE_FIELDS = [
 const ACTIVE_CASE_POPULATES = Object.freeze([
   Object.freeze({
     path: "activeClaim",
+
     model: ShiftOccurrenceClaim,
+
     select: ACTIVE_CLAIM_FIELDS.join(" "),
   }),
 
   Object.freeze({
     path: "activeDispute",
+
     model: ShiftOccurrenceDispute,
+
     select: ACTIVE_DISPUTE_FIELDS.join(" "),
   }),
 ]);
@@ -554,7 +636,9 @@ class ShiftQueryService {
     if (Number.isNaN(currentTime.getTime())) {
       throw createShiftError({
         message: "The current time is invalid.",
+
         code: "INVALID_CURRENT_TIME",
+
         statusCode: 500,
       });
     }
@@ -567,14 +651,18 @@ class ShiftQueryService {
   static async getEmployerProfileForUser(userId, employerProfile = null, employerContext = null) {
     const normalizedUserId = normalizeObjectId({
       value: userId,
+
       fieldName: "user ID",
+
       createError: createShiftError,
     });
 
     if (employerProfile?._id) {
       const normalizedEmployerProfileId = normalizeObjectId({
         value: employerProfile._id,
+
         fieldName: "employer profile ID",
+
         createError: createShiftError,
       });
 
@@ -588,7 +676,9 @@ class ShiftQueryService {
       if (!profile) {
         throw createShiftError({
           message: "Employer profile not found.",
+
           code: "EMPLOYER_PROFILE_NOT_FOUND",
+
           statusCode: 404,
         });
       }
@@ -598,21 +688,28 @@ class ShiftQueryService {
       }
 
       const isBusinessAdmin = employerContext?.isBusinessAdmin === true;
+
       const isBranchManager = employerContext?.isBranchManager === true;
+
       const isBranchStaff = employerContext?.isBranchStaff === true;
 
       if (!isBusinessAdmin && !isBranchManager && !isBranchStaff) {
         throw createShiftError({
           message: "You are not authorized for this employer business.",
+
           code: "EMPLOYER_PROFILE_ACCESS_NOT_ALLOWED",
+
           statusCode: 403,
         });
       }
 
       const member = await EmployerMember.findOne({
         business: normalizedEmployerProfileId,
+
         user: normalizedUserId,
+
         accountStatus: "active",
+
         isCurrent: {
           $ne: false,
         },
@@ -630,7 +727,9 @@ class ShiftQueryService {
       if (!roleMatchesContext) {
         throw createShiftError({
           message: "You are not authorized for this employer business.",
+
           code: "EMPLOYER_PROFILE_ACCESS_NOT_ALLOWED",
+
           statusCode: 403,
         });
       }
@@ -654,7 +753,9 @@ class ShiftQueryService {
         if (contextContainsUnassignedBranch) {
           throw createShiftError({
             message: "Your employer branch access context is invalid.",
+
             code: "EMPLOYER_BRANCH_ACCESS_CONTEXT_INVALID",
+
             statusCode: 403,
           });
         }
@@ -670,7 +771,9 @@ class ShiftQueryService {
     if (!profile) {
       throw createShiftError({
         message: "Employer profile not found.",
+
         code: "EMPLOYER_PROFILE_NOT_FOUND",
+
         statusCode: 404,
       });
     }
@@ -724,7 +827,9 @@ class ShiftQueryService {
     if (employerContext?.canViewShifts !== true) {
       throw createShiftError({
         message: "You do not have permission to view Shifts.",
+
         code: "SHIFT_VIEW_NOT_ALLOWED",
+
         statusCode: 403,
       });
     }
@@ -761,12 +866,15 @@ class ShiftQueryService {
   }) {
     const normalizedEmployerProfileId = normalizeObjectId({
       value: employerProfileId,
+
       fieldName: "employer profile ID",
+
       createError: createShiftError,
     });
 
     const filter = {
       business: normalizedEmployerProfileId,
+
       isActive: true,
     };
 
@@ -841,6 +949,7 @@ class ShiftQueryService {
 
         url: ShiftQueryService.buildEmployerShiftsUrl({
           status,
+
           page,
         }),
       });
@@ -858,7 +967,9 @@ class ShiftQueryService {
   }) {
     const normalizedEmployerProfileId = normalizeObjectId({
       value: employerProfileId,
+
       fieldName: "employer profile ID",
+
       createError: createShiftError,
     });
 
@@ -869,7 +980,9 @@ class ShiftQueryService {
     if (shiftId) {
       filter._id = normalizeObjectId({
         value: shiftId,
+
         fieldName: "Shift ID",
+
         createError: createShiftError,
       });
     }
@@ -896,13 +1009,16 @@ class ShiftQueryService {
     if (!Number.isSafeInteger(normalizedLimit) || normalizedLimit < 1) {
       throw createShiftError({
         message: "The unfunded Shift expiry limit is invalid.",
+
         code: "INVALID_UNFUNDED_SHIFT_EXPIRY_LIMIT",
+
         statusCode: 500,
       });
     }
 
     const filter = ShiftQueryService.buildEmployerShiftAccessFilter({
       employerProfileId,
+
       employerContext,
     });
 
@@ -932,6 +1048,7 @@ class ShiftQueryService {
       .select("_id")
       .sort({
         startTime: 1,
+
         _id: 1,
       })
       .limit(normalizedLimit)
@@ -940,6 +1057,7 @@ class ShiftQueryService {
     for (const staleShift of staleShifts) {
       await ShiftLifecycleService.expireUnfundedShift({
         shiftId: staleShift._id,
+
         now: normalizedCurrentTime,
       });
     }
@@ -1010,7 +1128,9 @@ class ShiftQueryService {
     if (!currency) {
       throw createShiftError({
         message: "The employer currency could not be resolved.",
+
         code: "EMPLOYER_CURRENCY_NOT_RESOLVED",
+
         statusCode: 500,
       });
     }
@@ -1022,6 +1142,7 @@ class ShiftQueryService {
     const canOpenPostShiftModal = Boolean(canPostShifts && businessCanPostShifts);
 
     let branchOptions = [];
+
     let pricingView = null;
 
     if (canOpenPostShiftModal) {
@@ -1042,7 +1163,9 @@ class ShiftQueryService {
       if (!pricing || typeof pricing !== "object") {
         throw createShiftError({
           message: "The active Shift pricing settings could not be resolved.",
+
           code: "SHIFT_PRICING_SETTINGS_NOT_RESOLVED",
+
           statusCode: 500,
         });
       }
@@ -1060,7 +1183,9 @@ class ShiftQueryService {
       if (!platformCurrency) {
         throw createShiftError({
           message: "The active platform currency could not be resolved.",
+
           code: "PLATFORM_CURRENCY_NOT_RESOLVED",
+
           statusCode: 500,
         });
       }
@@ -1068,7 +1193,9 @@ class ShiftQueryService {
       if (currency !== platformCurrency) {
         throw createShiftError({
           message: "The employer currency does not match the active platform currency.",
+
           code: "EMPLOYER_CURRENCY_MISMATCH",
+
           statusCode: 500,
         });
       }
@@ -1173,6 +1300,7 @@ class ShiftQueryService {
       .populate("branch", "name address state lga geofenceRadiusMeters")
       .sort({
         startTime: -1,
+
         createdAt: -1,
       })
       .skip(skip)
@@ -1201,7 +1329,9 @@ class ShiftQueryService {
       occurrenceRows = await occurrenceQuery
         .sort({
           shift: 1,
+
           slotNumber: 1,
+
           sequenceNumber: 1,
         })
         .lean();
@@ -1362,7 +1492,9 @@ class ShiftQueryService {
         viewPermissions.canFundShifts && viewPermissions.canPostShifts
           ? ShiftViewService.buildFundingModalView({
               employerWallet,
+
               currency,
+
               permissions: viewPermissions,
             })
           : null,
@@ -1415,7 +1547,9 @@ class ShiftQueryService {
 
         pages: ShiftQueryService.buildPaginationPages({
           currentPage,
+
           totalPages,
+
           status: selectedStatus,
         }),
 
@@ -1474,7 +1608,9 @@ class ShiftQueryService {
     if (!existingShift) {
       throw createShiftError({
         message: "Shift not found.",
+
         code: "SHIFT_NOT_FOUND",
+
         statusCode: 404,
       });
     }
@@ -1502,7 +1638,9 @@ class ShiftQueryService {
     if (!shift) {
       throw createShiftError({
         message: "Shift not found.",
+
         code: "SHIFT_NOT_FOUND",
+
         statusCode: 404,
       });
     }
@@ -1553,6 +1691,7 @@ class ShiftQueryService {
     const occurrences = await occurrenceQuery
       .sort({
         slotNumber: 1,
+
         sequenceNumber: 1,
       })
       .lean();
@@ -1563,7 +1702,9 @@ class ShiftQueryService {
     ) {
       throw createShiftError({
         message: "The selected occurrence does not belong to this Shift.",
+
         code: "SHIFT_OCCURRENCE_NOT_FOUND",
+
         statusCode: 404,
       });
     }
@@ -1579,7 +1720,9 @@ class ShiftQueryService {
     if (!currency) {
       throw createShiftError({
         message: "The employer currency could not be resolved.",
+
         code: "EMPLOYER_CURRENCY_NOT_RESOLVED",
+
         statusCode: 500,
       });
     }
@@ -1631,7 +1774,9 @@ class ShiftQueryService {
         viewPermissions.canFundShifts && viewPermissions.canPostShifts
           ? ShiftViewService.buildFundingModalView({
               employerWallet,
+
               currency,
+
               permissions: viewPermissions,
             })
           : null,
@@ -1644,6 +1789,1753 @@ class ShiftQueryService {
             ? ShiftViewService.getFundShiftModalId()
             : null,
       },
+    };
+  }
+
+  /* ─────────────────────────────── PROFESSIONAL READ ACCESS ─────────────────────────────── */
+
+  // A supplied profile is only a lookup hint. Always verify ownership in the database.
+  static async getProfessionalProfileForUser(userId, professionalProfile = null) {
+    const filter = {
+      user: normalizeObjectId({
+        value: userId,
+        fieldName: "user ID",
+        createError: createShiftError,
+      }),
+    };
+
+    if (professionalProfile?._id) {
+      filter._id = normalizeObjectId({
+        value: professionalProfile._id,
+
+        fieldName: "professional profile ID",
+
+        createError: createShiftError,
+      });
+    }
+
+    const profile = await ProfessionalProfile.findOne(filter)
+      .select(PROFESSIONAL_PROFILE_FIELDS.join(" "))
+      .lean();
+
+    if (!profile) {
+      throw createShiftError({
+        message: "Professional profile not found or not owned by the authenticated user.",
+
+        code: "PROFESSIONAL_PROFILE_ACCESS_NOT_ALLOWED",
+
+        statusCode: 403,
+      });
+    }
+
+    return profile;
+  }
+
+  static assertProfessionalMarketplaceAccess(profile) {
+    if (
+      profile.professionalApprovalStatus !== "approved" ||
+      profile.accountStatus !== "active" ||
+      profile.marketplaceStatus !== "visible"
+    ) {
+      throw createShiftError({
+        message:
+          "An approved, active and visible professional profile is required to browse shifts.",
+
+        code: "PROFESSIONAL_MARKETPLACE_ACCESS_NOT_AVAILABLE",
+
+        statusCode: 403,
+      });
+    }
+  }
+
+  static professionalId(value) {
+    return value == null ? null : String(value._id || value);
+  }
+
+  static professionalInputError(message) {
+    return createShiftError({
+      message,
+      code: "INVALID_PROFESSIONAL_SHIFT_FILTER",
+      statusCode: 400,
+    });
+  }
+
+  static normalizeProfessionalFilters(input = {}) {
+    const text = (value, name) => {
+      if (value == null || value === "") return null;
+
+      if (typeof value !== "string" || value.length > 120) {
+        throw this.professionalInputError(`${name} must be text of at most 120 characters.`);
+      }
+
+      return value.trim() || null;
+    };
+
+    const number = (value, name, integer = true) => {
+      if (value == null || value === "") return null;
+
+      if (
+        (typeof value !== "string" && typeof value !== "number") ||
+        (typeof value === "string" && !/^\d+(?:\.\d+)?$/.test(value.trim()))
+      ) {
+        throw this.professionalInputError(`${name} must be a non-negative number.`);
+      }
+
+      const result = Number(value);
+
+      if (!Number.isFinite(result) || result < 0 || (integer && !Number.isSafeInteger(result))) {
+        throw this.professionalInputError(`${name} is invalid.`);
+      }
+
+      return result;
+    };
+
+    const date = (value, name, endOfDay = false) => {
+      if (value == null || value === "") return null;
+
+      // Date-only filters use UTC; timestamps must include an explicit timezone.
+      if (
+        !(value instanceof Date) &&
+        (typeof value !== "string" ||
+          !/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2}))?$/.test(
+            value
+          ))
+      ) {
+        throw this.professionalInputError(`${name} must be an ISO date or timestamp.`);
+      }
+
+      const result = new Date(value);
+
+      if (
+        Number.isNaN(result.getTime()) ||
+        (typeof value === "string" &&
+          value.length === 10 &&
+          result.toISOString().slice(0, 10) !== value)
+      ) {
+        throw this.professionalInputError(`${name} is invalid.`);
+      }
+
+      if (endOfDay && typeof value === "string" && value.length === 10) {
+        result.setUTCHours(23, 59, 59, 999);
+      }
+
+      return result;
+    };
+
+    const page = number(input.page, "Page") ?? 1;
+
+    if (page < 1) throw this.professionalInputError("Page must be at least 1.");
+
+    const sortBy = input.sortBy || "date";
+
+    if (!["date", "rate", "distance"].includes(sortBy)) {
+      throw this.professionalInputError("Sort must be date, rate or distance.");
+    }
+
+    const filters = {
+      page,
+      sortBy,
+
+      state: text(input.state, "State"),
+      lga: text(input.lga, "LGA"),
+
+      minHourlyRateMinor: number(input.minHourlyRateMinor, "Minimum hourly rate"),
+
+      maxHourlyRateMinor: number(input.maxHourlyRateMinor, "Maximum hourly rate"),
+
+      maxDistanceKm: number(input.maxDistanceKm, "Maximum distance", false),
+
+      dateFrom: date(input.dateFrom, "Start date"),
+      dateTo: date(input.dateTo, "End date", true),
+    };
+
+    if (
+      filters.minHourlyRateMinor != null &&
+      filters.maxHourlyRateMinor != null &&
+      filters.minHourlyRateMinor > filters.maxHourlyRateMinor
+    ) {
+      throw this.professionalInputError("Minimum hourly rate cannot exceed maximum hourly rate.");
+    }
+
+    if (filters.dateFrom && filters.dateTo && filters.dateFrom > filters.dateTo) {
+      throw this.professionalInputError("Start date cannot be later than end date.");
+    }
+
+    return filters;
+  }
+
+  static validProfessionalCoordinates(coordinates) {
+    return (
+      Array.isArray(coordinates) &&
+      coordinates.length === 2 &&
+      coordinates.every(Number.isFinite) &&
+      Math.abs(coordinates[0]) <= 180 &&
+      Math.abs(coordinates[1]) <= 90
+    );
+  }
+
+  static calculateDistanceKm(fromCoordinates, toCoordinates) {
+    if (
+      !this.validProfessionalCoordinates(fromCoordinates) ||
+      !this.validProfessionalCoordinates(toCoordinates)
+    )
+      return null;
+
+    const radians = (degrees) => (degrees * Math.PI) / 180;
+
+    const [lng1, lat1] = fromCoordinates.map(radians);
+
+    const [lng2, lat2] = toCoordinates.map(radians);
+
+    const a =
+      Math.sin((lat2 - lat1) / 2) ** 2 +
+      Math.cos(lat1) * Math.cos(lat2) * Math.sin((lng2 - lng1) / 2) ** 2;
+
+    return 6371 * 2 * Math.asin(Math.sqrt(Math.min(1, Math.max(0, a))));
+  }
+
+  static buildProfessionalShiftsUrl(filters = {}) {
+    const params = new URLSearchParams();
+
+    for (const key of [
+      "page",
+      "state",
+      "lga",
+      "minHourlyRateMinor",
+      "maxHourlyRateMinor",
+      "dateFrom",
+      "dateTo",
+      "sortBy",
+      "maxDistanceKm",
+    ]) {
+      const value = filters[key];
+
+      if (
+        value == null ||
+        value === "" ||
+        (key === "page" && Number(value) === 1) ||
+        (key === "sortBy" && value === "date")
+      )
+        continue;
+
+      params.set(key, value instanceof Date ? value.toISOString() : String(value));
+    }
+
+    return `/professional/shifts${params.size ? `?${params}` : ""}`;
+  }
+
+  static normalizeProfessionalShiftTab(value) {
+    const tab = value == null || value === "" ? "pending" : String(value).trim().toLowerCase();
+
+    if (!PROFESSIONAL_SHIFT_TABS.includes(tab)) {
+      throw this.professionalInputError("Tab must be pending, confirmed or completed.");
+    }
+
+    return tab;
+  }
+
+  static buildProfessionalMyShiftsUrl({ tab = "pending", page = 1 } = {}) {
+    const params = new URLSearchParams();
+
+    const normalizedTab = this.normalizeProfessionalShiftTab(tab);
+
+    if (normalizedTab !== "pending") params.set("tab", normalizedTab);
+
+    if (page > 1) params.set("page", String(page));
+
+    return `/professional/shifts/my${params.size ? `?${params}` : ""}`;
+  }
+
+  static buildProfessionalPagination({ totalItems, page, buildUrl }) {
+    const totalPages = Math.max(1, Math.ceil(totalItems / SHIFTS_PER_PAGE));
+
+    const currentPage = Math.min(page, totalPages);
+
+    let start = Math.max(1, currentPage - 2);
+
+    const end = Math.min(totalPages, start + MAX_VISIBLE_PAGINATION_PAGES - 1);
+
+    start = Math.max(1, end - MAX_VISIBLE_PAGINATION_PAGES + 1);
+
+    const pages = [];
+
+    for (let value = start; value <= end; value += 1) {
+      pages.push({
+        page: value,
+        isActive: value === currentPage,
+        url: buildUrl(value),
+      });
+    }
+
+    return {
+      currentPage,
+      totalPages,
+      totalItems,
+      perPage: SHIFTS_PER_PAGE,
+
+      startItem: totalItems ? (currentPage - 1) * SHIFTS_PER_PAGE + 1 : 0,
+
+      endItem: Math.min(currentPage * SHIFTS_PER_PAGE, totalItems),
+
+      hasPreviousPage: currentPage > 1,
+      hasNextPage: currentPage < totalPages,
+
+      previousPageUrl: currentPage > 1 ? buildUrl(currentPage - 1) : null,
+
+      nextPageUrl: currentPage < totalPages ? buildUrl(currentPage + 1) : null,
+
+      hasPagination: totalPages > 1,
+      pages,
+    };
+  }
+
+  /* ─────────────────────────────── PROFESSIONAL SAFE VIEWS ─────────────────────────────── */
+
+  // Use explicit response allowlists. Never return employer funding/wallet records,
+  // other applicants, employerPrivateNote, staff review IDs or PIN secrets.
+  static pickProfessionalFields(record, fields) {
+    const result = {};
+
+    for (const field of fields) {
+      if (record?.[field] !== undefined) result[field] = record[field];
+    }
+
+    return result;
+  }
+
+  static buildProfessionalApplicationView(application) {
+    if (!application) return null;
+
+    return {
+      id: this.professionalId(application),
+
+      shiftId: this.professionalId(application.shift),
+
+      occurrenceId: this.professionalId(application.occurrence),
+
+      acceptedAssignmentId: this.professionalId(application.acceptedAssignment),
+
+      replacementForAssignmentId: this.professionalId(application.replacementForAssignment),
+
+      ...this.pickProfessionalFields(application, [
+        "slotNumber",
+        "applicationType",
+        "applicationRound",
+        "status",
+        "note",
+        "createdAt",
+        "updatedAt",
+        "shortlistedAt",
+        "acceptedAt",
+        "rejectedAt",
+        "rejectedReason",
+        "withdrawnAt",
+        "withdrawalReason",
+        "expiredAt",
+        "cancelledAt",
+      ]),
+    };
+  }
+
+  static buildProfessionalSettlementView(component) {
+    if (!component) return null;
+
+    return this.pickProfessionalFields(component, [
+      "status",
+      "earningType",
+      "professionalPay",
+      "approvedForReleaseAt",
+      "scheduledPayoutAt",
+      "releasePendingAt",
+      "releasedAt",
+    ]);
+  }
+
+  static buildProfessionalOccurrenceView(occurrence, professionalProfileId) {
+    if (
+      this.professionalId(occurrence.assignedProfessional) !==
+      this.professionalId(professionalProfileId)
+    ) {
+      throw createShiftError({
+        message: "Occurrence is not assigned to this professional.",
+
+        code: "PROFESSIONAL_OCCURRENCE_ACCESS_NOT_ALLOWED",
+        statusCode: 403,
+      });
+    }
+
+    return {
+      id: this.professionalId(occurrence),
+      shiftId: this.professionalId(occurrence.shift),
+
+      assignedToProfessional: true,
+
+      ...this.pickProfessionalFields(occurrence, [
+        "referenceCode",
+        "slotNumber",
+        "sequenceNumber",
+        "occurrenceDate",
+        "scheduleTimeZone",
+        "assignmentStatus",
+        "assignedAt",
+        "status",
+        "attendanceStatus",
+        "settlementStatus",
+        "startTime",
+        "endTime",
+        "scheduledMinutes",
+        "scheduledHours",
+        "breakDuration",
+        "hourlyRate",
+        "estimatedProfessionalPay",
+        "baseProfessionalPay",
+        "overtimeProfessionalPay",
+        "baseBillableHours",
+        "billableHours",
+        "checkedInAt",
+        "checkedOutAt",
+        "absenceExplanation",
+        "absenceExplainedAt",
+        "cancellationCode",
+        "cancellationReason",
+        "cancelledAt",
+        "challengeWindowOpenedAt",
+        "challengeDeadlineAt",
+        "challengeWindowClosedAt",
+        "settledAt",
+      ]),
+      // Earnings are not reduced by employer platform fees. Unknown pay is not reported as zero.
+
+      baseSettlement: this.buildProfessionalSettlementView(occurrence.baseSettlement),
+
+      overtimeSettlement: this.buildProfessionalSettlementView(occurrence.overtimeSettlement),
+
+      overtime: occurrence.overtime
+        ? this.pickProfessionalFields(occurrence.overtime, [
+            "status",
+            "requestedAt",
+            "approvedAt",
+            "rejectedAt",
+            "requestedMinutes",
+            "approvedMinutes",
+            "requestedHours",
+            "approvedHours",
+            "reason",
+          ])
+        : null,
+    };
+  }
+
+  static buildProfessionalShiftSummaryView({
+    shift,
+    branch,
+    occurrences = [],
+    applications = [],
+    professionalProfileId,
+    distanceKm = null,
+    opportunities = [],
+  }) {
+    return {
+      id: this.professionalId(shift),
+      detailsUrl: `/professional/shifts/${shift._id}`,
+
+      ...this.pickProfessionalFields(shift, [
+        "referenceCode",
+        "roleTitle",
+        "professionalType",
+        "department",
+        "requiredSkills",
+        "dressCode",
+        "description",
+        "currency",
+        "countryCode",
+        "scheduleMode",
+        "occurrenceCount",
+        "requiredProfessionals",
+        "repeatDays",
+        "startTime",
+        "endTime",
+        "firstOccurrenceDate",
+        "lastOccurrenceDate",
+        "scheduleTimeZone",
+        "dailyStartTimeMinutes",
+        "dailyEndTimeMinutes",
+        "endsNextDay",
+        "scheduledMinutesPerOccurrence",
+        "breakDuration",
+        "hourlyRate",
+        "status",
+      ]),
+
+      branch: branch
+        ? {
+            id: this.professionalId(branch),
+
+            ...this.pickProfessionalFields(branch, ["name", "address", "state", "lga", "location"]),
+          }
+        : null,
+
+      distanceKm,
+
+      applications: applications.map((application) =>
+        this.buildProfessionalApplicationView(application)
+      ),
+
+      occurrences: occurrences
+        .filter(
+          (occurrence) =>
+            this.professionalId(occurrence.assignedProfessional) ===
+            this.professionalId(professionalProfileId)
+        )
+        .map((occurrence) =>
+          this.buildProfessionalOccurrenceView(occurrence, professionalProfileId)
+        ),
+
+      opportunities,
+      // All eligibility flags are advisory. The POST service rechecks within its transaction.
+
+      canApply: opportunities.some((opportunity) => opportunity.canApply),
+    };
+  }
+
+  static async getProfessionalApplications(professionalProfileId, shiftIds) {
+    if (!shiftIds.length) return [];
+
+    return ShiftApplication.find({
+      professional: professionalProfileId,
+      shift: { $in: shiftIds },
+    })
+      .select(PROFESSIONAL_APPLICATION_FIELDS.join(" "))
+      .sort({
+        createdAt: -1,
+        _id: -1,
+      })
+      .lean();
+  }
+
+  // Catch only expected application-domain denials. Database/programming errors must surface.
+  static isProfessionalOpportunityDenial(error) {
+    return (
+      error?.name === "ShiftApplicationServiceError" &&
+      [400, 403, 404, 409].includes(error.statusCode)
+    );
+  }
+
+  static async getProfessionalOpportunityContexts({ shift, currentTime }) {
+    const targets = [
+      {
+        occurrenceId: null,
+        replacementForAssignmentId: null,
+      },
+    ];
+
+    const replacementRows = await ShiftOccurrence.find({
+      shift: shift._id,
+      assignmentStatus: "replacement_required",
+      status: "scheduled",
+
+      fillCutoffAt: { $gt: currentTime },
+      replacementForAssignment: { $ne: null },
+    })
+      .select("_id replacementForAssignment replacementCase")
+      .sort({ _id: 1 })
+      .lean();
+
+    const tailIds = new Set();
+
+    for (const row of replacementRows) {
+      targets.push({
+        occurrenceId: row._id,
+        replacementForAssignmentId: row.replacementForAssignment,
+      });
+
+      if (row.replacementCase) tailIds.add(this.professionalId(row.replacementForAssignment));
+    }
+
+    for (const id of tailIds)
+      targets.push({
+        occurrenceId: null,
+        replacementForAssignmentId: id,
+      });
+
+    const contexts = [];
+
+    for (const target of targets) {
+      try {
+        const roundContext = await ShiftApplicationService.getApplicationRoundContext({
+          shift,
+          ...target,
+          now: currentTime,
+          session: null,
+        });
+
+        ShiftApplicationService.assertShiftAcceptingApplications({
+          shift,
+          roundContext,
+          now: currentTime,
+        });
+
+        if (roundContext.applicationType === "replacement") {
+          await ShiftApplicationService.assertReplacementOccurrencesAvailable({
+            shift,
+            roundContext,
+            now: currentTime,
+            session: null,
+          });
+        }
+
+        const intervals = await ShiftApplicationService.getCandidateIntervals({
+          shift,
+          roundContext,
+          now: currentTime,
+          session: null,
+        });
+
+        contexts.push({
+          roundContext,
+          intervals,
+        });
+      } catch (error) {
+        if (!this.isProfessionalOpportunityDenial(error)) throw error;
+      }
+    }
+
+    return contexts;
+  }
+
+  static async buildProfessionalOpportunityViews({
+    shift,
+    contexts,
+    professional,
+    applications,
+    currentTime,
+  }) {
+    const views = [];
+
+    for (const { roundContext, intervals } of contexts) {
+      const occurrenceId = this.professionalId(roundContext.occurrence);
+
+      const replacementForAssignmentId = this.professionalId(roundContext.replacementForAssignment);
+
+      const existing = applications.find(
+        (application) =>
+          application.applicationType === roundContext.applicationType &&
+          application.applicationRound === roundContext.applicationRound &&
+          this.professionalId(application.occurrence) === occurrenceId &&
+          this.professionalId(application.replacementForAssignment) === replacementForAssignmentId
+      );
+
+      let unavailableReason = existing
+        ? {
+            code: "SHIFT_APPLICATION_ALREADY_EXISTS",
+
+            message: "You have already applied for this opportunity.",
+          }
+        : null;
+
+      if (!unavailableReason) {
+        try {
+          ShiftApplicationService.assertProfessionalEligible({
+            professional,
+            shift,
+            now: currentTime,
+          });
+
+          await ShiftApplicationService.assertNoConfirmedScheduleConflict({
+            shift,
+            roundContext,
+
+            professionalProfileId: professional._id,
+            now: currentTime,
+            session: null,
+          });
+        } catch (error) {
+          if (!this.isProfessionalOpportunityDenial(error)) throw error;
+
+          unavailableReason = {
+            code: error.code,
+            message: error.message,
+          };
+        }
+      }
+
+      views.push({
+        applicationType: roundContext.applicationType,
+        applicationRound: roundContext.applicationRound,
+
+        occurrenceId,
+        replacementForAssignmentId,
+        slotNumber: roundContext.slotNumber ?? null,
+
+        startSequenceNumber: roundContext.startSequenceNumber,
+
+        endSequenceNumber: roundContext.endSequenceNumber,
+
+        intervals: intervals.map((interval) => ({
+          startTime: interval.startTime,
+          endTime: interval.endTime,
+        })),
+
+        applicationTarget: {
+          shiftId: this.professionalId(shift),
+          occurrenceId,
+          replacementForAssignmentId,
+        },
+
+        application: this.buildProfessionalApplicationView(existing),
+
+        canApply: !unavailableReason,
+        unavailableReason,
+      });
+    }
+
+    return views;
+  }
+
+  /* ─────────────────────────────── PROFESSIONAL MARKETPLACE ─────────────────────────────── */
+
+  static async getProfessionalShiftsPageData({
+    userId,
+    professionalProfile = null,
+    currentTime = new Date(),
+    ...input
+  } = {}) {
+    const now = this.normalizeCurrentTime(currentTime);
+
+    const professional = await this.getProfessionalProfileForUser(userId, professionalProfile);
+
+    this.assertProfessionalMarketplaceAccess(professional);
+
+    const filters = this.normalizeProfessionalFilters(input);
+
+    const coordinates = professional.location?.coordinates;
+
+    const distanceAvailable = this.validProfessionalCoordinates(coordinates);
+
+    if ((filters.sortBy === "distance" || filters.maxDistanceKm != null) && !distanceAvailable) {
+      throw this.professionalInputError(
+        "Save valid profile coordinates before using distance filters."
+      );
+    }
+
+    const branchFilter = { isActive: true };
+
+    for (const key of ["state", "lga"]) {
+      if (filters[key]) {
+        const literal = filters[key].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+        branchFilter[key] = {
+          $regex: `^${literal}$`,
+          $options: "i",
+        };
+      }
+    }
+
+    const branches = await Branch.find(branchFilter).select(ACTIVE_BRANCH_FIELDS.join(" ")).lean();
+
+    const branchMap = new Map();
+
+    for (const branch of branches) {
+      const distanceKm = this.calculateDistanceKm(coordinates, branch.location?.coordinates);
+
+      if (
+        filters.maxDistanceKm != null &&
+        (distanceKm == null || distanceKm > filters.maxDistanceKm)
+      )
+        continue;
+
+      branchMap.set(this.professionalId(branch), {
+        branch,
+        distanceKm,
+      });
+    }
+
+    const filter = {
+      professionalType: professional.type,
+
+      branch: { $in: [...branchMap.values()].map(({ branch }) => branch._id) },
+
+      status: { $in: [...new Set(["open", ...REPLACEMENT_APPLICATION_PARENT_STATUSES])] },
+
+      paymentStatus: { $nin: REPLACEMENT_APPLICATION_BLOCKED_PAYMENT_STATUSES },
+
+      publishedAt: { $ne: null },
+      fundedAt: { $ne: null },
+    };
+
+    if (filters.minHourlyRateMinor != null || filters.maxHourlyRateMinor != null) {
+      filter.hourlyRate = {};
+
+      if (filters.minHourlyRateMinor != null) filter.hourlyRate.$gte = filters.minHourlyRateMinor;
+
+      if (filters.maxHourlyRateMinor != null) filter.hourlyRate.$lte = filters.maxHourlyRateMinor;
+    }
+
+    // Date matching is against real candidate work intervals, not the span of a recurring parent.
+    // Scan eligible candidates before pagination so unavailable capacity cannot create empty pages
+    // or inflated counts. No arbitrary nearest-branch cap drops valid matches.
+    const candidates = [];
+
+    if (branchMap.size) {
+      const cursor = Shift.find(filter).select(SHIFT_DETAILS_FIELDS.join(" ")).lean().cursor();
+
+      try {
+        for await (const shift of cursor) {
+          const contexts = (
+            await this.getProfessionalOpportunityContexts({
+              shift,
+              currentTime: now,
+            })
+          ).filter(({ intervals }) =>
+            intervals.some(
+              (interval) =>
+                (!filters.dateFrom || new Date(interval.endTime) >= filters.dateFrom) &&
+                (!filters.dateTo || new Date(interval.startTime) <= filters.dateTo)
+            )
+          );
+
+          if (!contexts.length) continue;
+
+          const branchContext = branchMap.get(this.professionalId(shift.branch));
+
+          if (!branchContext) continue;
+
+          const nextStart = Math.min(
+            ...contexts.flatMap(({ intervals }) =>
+              intervals.map((interval) => new Date(interval.startTime).getTime())
+            )
+          );
+
+          candidates.push({
+            shift,
+            contexts,
+            nextStart,
+            ...branchContext,
+          });
+        }
+      } finally {
+        await cursor.close();
+      }
+    }
+
+    candidates.sort((a, b) => {
+      let difference = 0;
+
+      if (filters.sortBy === "distance") {
+        difference = (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity);
+      } else if (filters.sortBy === "rate") {
+        difference = Number(b.shift.hourlyRate) - Number(a.shift.hourlyRate);
+      }
+
+      return (
+        difference ||
+        a.nextStart - b.nextStart ||
+        this.professionalId(a.shift).localeCompare(this.professionalId(b.shift))
+      );
+    });
+
+    const pagination = this.buildProfessionalPagination({
+      totalItems: candidates.length,
+      page: filters.page,
+
+      buildUrl: (page) =>
+        this.buildProfessionalShiftsUrl({
+          ...filters,
+          page,
+        }),
+    });
+
+    const start = (pagination.currentPage - 1) * SHIFTS_PER_PAGE;
+
+    const pageRows = candidates.slice(start, start + SHIFTS_PER_PAGE);
+
+    const applications = await this.getProfessionalApplications(
+      professional._id,
+      pageRows.map(({ shift }) => shift._id)
+    );
+
+    const shifts = [];
+
+    for (const row of pageRows) {
+      const ownApplications = applications.filter(
+        (application) => this.professionalId(application.shift) === this.professionalId(row.shift)
+      );
+
+      const opportunities = await this.buildProfessionalOpportunityViews({
+        ...row,
+        professional,
+
+        applications: ownApplications,
+        currentTime: now,
+      });
+
+      shifts.push(
+        this.buildProfessionalShiftSummaryView({
+          ...row,
+          applications: ownApplications,
+
+          professionalProfileId: professional._id,
+          opportunities,
+        })
+      );
+    }
+
+    return {
+      pageTitle: "Find Shifts",
+      filters,
+      distanceAvailable,
+      pagination,
+      shifts,
+
+      hasShifts: shifts.length > 0,
+      actions: { myShiftsUrl: this.buildProfessionalMyShiftsUrl() },
+    };
+  }
+
+  /* ─────────────────────────────── PROFESSIONAL SHIFT DETAILS ─────────────────────────────── */
+
+  static async getProfessionalShiftDetailsPageData({
+    userId,
+    professionalProfile = null,
+    shiftId,
+    occurrenceId = null,
+    currentTime = new Date(),
+  } = {}) {
+    const now = this.normalizeCurrentTime(currentTime);
+
+    const professional = await this.getProfessionalProfileForUser(userId, professionalProfile);
+
+    const normalizedShiftId = normalizeObjectId({
+      value: shiftId,
+      fieldName: "Shift ID",
+      createError: createShiftError,
+    });
+
+    const normalizedOccurrenceId =
+      occurrenceId == null || occurrenceId === ""
+        ? null
+        : normalizeObjectId({
+            value: occurrenceId,
+            fieldName: "occurrence ID",
+            createError: createShiftError,
+          });
+
+    const shift = await Shift.findById(normalizedShiftId)
+      .select(SHIFT_DETAILS_FIELDS.join(" "))
+      .lean();
+
+    const notFound = () =>
+      createShiftError({
+        message: "Shift or selected occurrence not found.",
+
+        code: "PROFESSIONAL_SHIFT_NOT_FOUND",
+        statusCode: 404,
+      });
+
+    if (!shift) throw notFound();
+
+    const [applications, occurrences, branch] = await Promise.all([
+      this.getProfessionalApplications(professional._id, [shift._id]),
+      ShiftOccurrence.find({
+        shift: shift._id,
+        assignedProfessional: professional._id,
+      })
+        .select(SHIFT_DETAILS_OCCURRENCE_FIELDS.join(" "))
+        .sort({
+          startTime: 1,
+          _id: 1,
+        })
+        .lean(),
+      Branch.findById(shift.branch)
+        .select([...ACTIVE_BRANCH_FIELDS, "isActive"].join(" "))
+        .lean(),
+    ]);
+
+    let contexts = [];
+
+    const canBrowse =
+      professional.professionalApprovalStatus === "approved" &&
+      professional.accountStatus === "active" &&
+      professional.marketplaceStatus === "visible" &&
+      shift.professionalType === professional.type &&
+      branch?.isActive === true;
+
+    if (canBrowse)
+      contexts = await this.getProfessionalOpportunityContexts({
+        shift,
+        currentTime: now,
+      });
+
+    // Past applicants and assigned professionals retain their own history even after
+    // a licence expires or the listing closes. Marketplace access is a separate gate.
+    if (!applications.length && !occurrences.length && !contexts.length) throw notFound();
+
+    const selected = normalizedOccurrenceId
+      ? occurrences.find(
+          (occurrence) => this.professionalId(occurrence) === String(normalizedOccurrenceId)
+        )
+      : null;
+
+    const selectedIsOpportunity =
+      normalizedOccurrenceId &&
+      contexts.some(
+        ({ roundContext }) =>
+          this.professionalId(roundContext.occurrence) === String(normalizedOccurrenceId)
+      );
+
+    if (normalizedOccurrenceId && !selected && !selectedIsOpportunity) throw notFound();
+
+    const opportunities = await this.buildProfessionalOpportunityViews({
+      shift,
+      contexts,
+      professional,
+
+      applications,
+      currentTime: now,
+    });
+
+    return {
+      pageTitle: `${shift.referenceCode} · Shift Details`,
+
+      shift: this.buildProfessionalShiftSummaryView({
+        shift,
+        branch,
+        occurrences,
+        applications,
+
+        professionalProfileId: professional._id,
+        opportunities,
+
+        distanceKm: this.calculateDistanceKm(
+          professional.location?.coordinates,
+          branch?.location?.coordinates
+        ),
+      }),
+
+      selectedOccurrenceId: normalizedOccurrenceId ? String(normalizedOccurrenceId) : null,
+
+      selectedOccurrence: selected
+        ? this.buildProfessionalOccurrenceView(selected, professional._id)
+        : null,
+
+      actions: {
+        shiftsUrl: this.buildProfessionalShiftsUrl(),
+        myShiftsUrl: this.buildProfessionalMyShiftsUrl(),
+      },
+    };
+  }
+
+  /* ─────────────────────────────── PROFESSIONAL MY SHIFTS ─────────────────────────────── */
+
+  static async getProfessionalMyShiftsPageData({
+    userId,
+    professionalProfile = null,
+    tab = "pending",
+    page = 1,
+    currentTime = new Date(),
+  } = {}) {
+    this.normalizeCurrentTime(currentTime);
+
+    const professional = await this.getProfessionalProfileForUser(userId, professionalProfile);
+
+    const selectedTab = this.normalizeProfessionalShiftTab(tab);
+
+    const requestedPage = this.normalizeProfessionalFilters({ page }).page;
+
+    // Accepted applications record historical selection, not current assignment or completed work.
+    // These tabs are engagement lists: an engagement can have both completed and upcoming work.
+    const [pendingIds, confirmedIds, completedIds] = await Promise.all([
+      ShiftApplication.distinct("shift", {
+        professional: professional._id,
+
+        status: { $in: ACTIVE_APPLICATION_STATUSES },
+      }),
+      ShiftOccurrence.distinct("shift", {
+        assignedProfessional: professional._id,
+
+        assignmentStatus: "assigned",
+        status: { $in: ACTIVE_OCCURRENCE_STATUSES },
+      }),
+      ShiftOccurrence.distinct("shift", {
+        assignedProfessional: professional._id,
+        status: "completed",
+      }),
+    ]);
+
+    const groups = {
+      pending: pendingIds,
+      confirmed: confirmedIds,
+      completed: completedIds,
+    };
+
+    const counts = Object.fromEntries(
+      await Promise.all(
+        PROFESSIONAL_SHIFT_TABS.map(async (value) => [
+          value,
+          await Shift.countDocuments({ _id: { $in: groups[value] } }),
+        ])
+      )
+    );
+
+    const pagination = this.buildProfessionalPagination({
+      totalItems: counts[selectedTab],
+      page: requestedPage,
+
+      buildUrl: (value) =>
+        this.buildProfessionalMyShiftsUrl({
+          tab: selectedTab,
+          page: value,
+        }),
+    });
+
+    const shifts = await Shift.find({ _id: { $in: groups[selectedTab] } })
+      .select(SHIFT_DETAILS_FIELDS.join(" "))
+      .sort(
+        selectedTab === "completed"
+          ? {
+              endTime: -1,
+              _id: -1,
+            }
+          : {
+              startTime: 1,
+              _id: 1,
+            }
+      )
+      .skip((pagination.currentPage - 1) * SHIFTS_PER_PAGE)
+      .limit(SHIFTS_PER_PAGE)
+      .lean();
+
+    const shiftIds = shifts.map((shift) => shift._id);
+
+    const [applications, occurrences, branches] = shiftIds.length
+      ? await Promise.all([
+          this.getProfessionalApplications(professional._id, shiftIds),
+          ShiftOccurrence.find({
+            shift: { $in: shiftIds },
+            assignedProfessional: professional._id,
+          })
+            .select(SHIFT_DETAILS_OCCURRENCE_FIELDS.join(" "))
+            .sort({
+              startTime: 1,
+              _id: 1,
+            })
+            .lean(),
+          Branch.find({ _id: { $in: shifts.map((shift) => shift.branch) } })
+            .select(ACTIVE_BRANCH_FIELDS.join(" "))
+            .lean(),
+        ])
+      : [[], [], []];
+
+    const views = shifts.map((shift) =>
+      this.buildProfessionalShiftSummaryView({
+        shift,
+
+        branch: branches.find(
+          (branch) => this.professionalId(branch) === this.professionalId(shift.branch)
+        ),
+
+        applications: applications.filter(
+          (application) => this.professionalId(application.shift) === this.professionalId(shift)
+        ),
+
+        occurrences: occurrences.filter(
+          (occurrence) => this.professionalId(occurrence.shift) === this.professionalId(shift)
+        ),
+
+        professionalProfileId: professional._id,
+      })
+    );
+
+    return {
+      pageTitle: "My Shifts",
+      selectedTab,
+      shifts: views,
+      hasShifts: views.length > 0,
+      pagination,
+
+      tabs: PROFESSIONAL_SHIFT_TABS.map((value) => ({
+        value,
+        label: value[0].toUpperCase() + value.slice(1),
+
+        count: counts[value],
+        isActive: value === selectedTab,
+        url: this.buildProfessionalMyShiftsUrl({ tab: value }),
+      })),
+
+      actions: { shiftsUrl: this.buildProfessionalShiftsUrl() },
+    };
+  }
+  /* ─────────────────────────────── ADMIN VISIBILITY ─────────────────────────────── */
+
+  // Controllers supply adminUserId from authentication. These queries never
+  // manufacture employerContext or invoke lifecycle mutations on page load.
+  static async assertAdminQueryAccess(adminUserId) {
+    const id = this.adminQueryId(adminUserId, "admin user ID");
+    const admin = await User.findOne({ _id: id, role: "admin" }).select("_id").lean();
+
+    if (!admin) {
+      throw createShiftError({
+        message: "Admin access is required.",
+        code: "ADMIN_ACCESS_REQUIRED",
+        statusCode: 403,
+      });
+    }
+  }
+
+  static adminQueryId(value, fieldName) {
+    return normalizeObjectId({ value, fieldName, createError: createShiftError });
+  }
+
+  static adminQueryPagination(input = {}) {
+    const parse = (value, fallback, maximum) => {
+      if (value == null || value === "") return fallback;
+      if (!/^[1-9]\d*$/.test(String(value))) {
+        throw createShiftError({
+          message: "Pagination requires positive whole numbers.",
+          code: "INVALID_ADMIN_PAGINATION",
+        });
+      }
+      const number = Number(value);
+      if (!Number.isSafeInteger(number) || number > maximum) {
+        throw createShiftError({
+          message: "Pagination exceeds the supported limit.",
+          code: "INVALID_ADMIN_PAGINATION",
+        });
+      }
+      return number;
+    };
+
+    const page = parse(input.page, 1, 10000);
+    const pageSize = parse(input.pageSize, 25, 100);
+    const skip = (page - 1) * pageSize;
+
+    if (skip > 10000) {
+      throw createShiftError({
+        message: "Narrow the filters before requesting deeper pages.",
+        code: "ADMIN_PAGINATION_TOO_DEEP",
+      });
+    }
+
+    return { page, pageSize, skip };
+  }
+
+  static buildAdminQueryFilter(input = {}) {
+    const filter = {};
+
+    for (const [source, destination] of [
+      ["employerProfileId", "business"],
+      ["branchId", "branch"],
+      ["shiftId", "_id"],
+    ]) {
+      if (input[source] != null && input[source] !== "") {
+        filter[destination] = this.adminQueryId(input[source], source);
+      }
+    }
+
+    if (input.status != null && input.status !== "" && input.status !== "all") {
+      if (!ADMIN_SHIFT_STATUSES.includes(input.status)) {
+        throw createShiftError({
+          message: "Unknown shift status.",
+          code: "INVALID_ADMIN_SHIFT_STATUS",
+        });
+      }
+      filter.status = input.status;
+    }
+
+    if (input.referenceCode != null && input.referenceCode !== "") {
+      if (
+        typeof input.referenceCode !== "string" ||
+        !input.referenceCode.trim() ||
+        input.referenceCode.length > 100
+      ) {
+        throw createShiftError({
+          message: "Reference code must be text of at most 100 characters.",
+          code: "INVALID_SHIFT_REFERENCE",
+        });
+      }
+      filter.referenceCode = input.referenceCode.trim();
+    }
+
+    if (input.startFrom || input.startTo) {
+      filter.startTime = {};
+      if (input.startFrom) filter.startTime.$gte = this.normalizeCurrentTime(input.startFrom);
+      if (input.startTo) filter.startTime.$lte = this.normalizeCurrentTime(input.startTo);
+      if (filter.startTime.$gte > filter.startTime.$lte) {
+        throw createShiftError({
+          message: "Start-date range is reversed.",
+          code: "INVALID_ADMIN_DATE_RANGE",
+        });
+      }
+    }
+
+    return filter;
+  }
+
+  static async readAdminPage(model, filter, fields, input, sort) {
+    const { page, pageSize, skip } = this.adminQueryPagination(input);
+    const [items, totalItems] = await Promise.all([
+      model.find(filter).select(fields).sort(sort).skip(skip).limit(pageSize).lean(),
+      model.countDocuments(filter),
+    ]);
+
+    // Independent reads: counts may change during concurrent operational work.
+    return {
+      items,
+      pagination: {
+        page,
+        pageSize,
+        totalItems,
+        totalPages: Math.ceil(totalItems / pageSize),
+      },
+    };
+  }
+
+  static async getAdminShiftsPageData(input = {}) {
+    await this.assertAdminQueryAccess(input.adminUserId);
+    const filter = this.buildAdminQueryFilter(input);
+
+    return this.readAdminPage(
+      Shift,
+      filter,
+      [
+        ...new Set([
+          ...SHIFT_LIST_FIELDS,
+          "business",
+          "countryCode",
+          "currency",
+          "cancelledFromStatus",
+          "cancelledBy",
+          "cancelledByUser",
+          "cancellationAdministration",
+        ]),
+      ].join(" "),
+      input,
+      { createdAt: -1, _id: -1 }
+    );
+  }
+
+  static async getAdminShiftDetailsPageData(input = {}) {
+    await this.assertAdminQueryAccess(input.adminUserId);
+    const shiftId = this.adminQueryId(input.shiftId, "shift ID");
+    const filter = this.buildAdminQueryFilter({
+      shiftId,
+      employerProfileId: input.employerProfileId,
+      branchId: input.branchId,
+    });
+    const shift = await Shift.findOne(filter)
+      .select([...SHIFT_DETAILS_FIELDS, "cancellationAdministration"].join(" "))
+      .lean();
+
+    if (!shift) {
+      throw createShiftError({
+        message: "Shift not found.",
+        code: "SHIFT_NOT_FOUND",
+        statusCode: 404,
+      });
+    }
+
+    const occurrenceFilter = {
+      shift: shift._id,
+      business: shift.business,
+      branch: shift.branch,
+    };
+    if (input.occurrenceId)
+      occurrenceFilter._id = this.adminQueryId(input.occurrenceId, "occurrence ID");
+
+    const occurrences = await this.readAdminPage(
+      ShiftOccurrence,
+      occurrenceFilter,
+      [...SHIFT_DETAILS_OCCURRENCE_FIELDS, "cancellationAdministration"].join(" "),
+      input,
+      { slotNumber: 1, sequenceNumber: 1, _id: 1 }
+    );
+
+    if (input.occurrenceId && !occurrences.pagination.totalItems) {
+      throw createShiftError({
+        message: "Occurrence not found for this shift.",
+        code: "OCCURRENCE_NOT_FOUND",
+        statusCode: 404,
+      });
+    }
+
+    return {
+      shift,
+      occurrences: occurrences.items,
+      occurrencePagination: occurrences.pagination,
+    };
+  }
+
+  static async getAdminCancellationRequestsPageData(input = {}) {
+    await this.assertAdminQueryAccess(input.adminUserId);
+    const filter = {};
+
+    for (const [source, destination] of [
+      ["employerProfileId", "business"],
+      ["shiftId", "shift"],
+      ["occurrenceId", "occurrence"],
+    ]) {
+      if (input[source]) filter[destination] = this.adminQueryId(input[source], source);
+    }
+
+    if (input.status && input.status !== "all") {
+      if (!["pending", "fulfilled", "withdrawn"].includes(input.status)) {
+        throw createShiftError({
+          message: "Unknown request status.",
+          code: "INVALID_CANCELLATION_REQUEST_STATUS",
+        });
+      }
+      filter.status = input.status;
+    }
+
+    // History only. Pending records are not a new approval queue. Evidence
+    // references and review notes are available only on the dedicated detail read.
+    return this.readAdminPage(
+      EmployerCancellationRequest,
+      filter,
+      "business shift occurrence scope requestedBy requestedAt recordedBy recordedAt cancellationReasonCode status execution withdrawal createdAt updatedAt",
+      input,
+      { recordedAt: -1, _id: -1 }
+    );
+  }
+
+  static async getAdminCancellationRequestDetails(input = {}) {
+    await this.assertAdminQueryAccess(input.adminUserId);
+    const filter = {
+      _id: this.adminQueryId(input.requestReference, "request reference"),
+    };
+    if (input.employerProfileId)
+      filter.business = this.adminQueryId(input.employerProfileId, "employer profile ID");
+    if (input.shiftId) filter.shift = this.adminQueryId(input.shiftId, "shift ID");
+
+    const request = await EmployerCancellationRequest.findOne(filter)
+      .select(
+        "business shift occurrence scope requestedBy requestedAt recordedBy recordedAt cancellationReasonCode cancellationReason evidence evidenceReviewedBy evidenceReviewedAt evidenceReviewNotes consent status execution withdrawal createdAt updatedAt"
+      )
+      .lean();
+
+    if (!request) {
+      throw createShiftError({
+        message: "Cancellation request not found.",
+        code: "CANCELLATION_REQUEST_NOT_FOUND",
+        statusCode: 404,
+      });
+    }
+
+    return { request };
+  }
+
+  static async getAdminAttentionQueuePageData(input = {}) {
+    await this.assertAdminQueryAccess(input.adminUserId);
+    const categories = [
+      "claims",
+      "disputes",
+      "refund_holds",
+      "overdue_funding",
+      "funding_integrity",
+    ];
+    const category = input.category || "disputes";
+
+    if (!categories.includes(category)) {
+      throw createShiftError({
+        message: "Unknown attention category.",
+        code: "INVALID_ADMIN_ATTENTION_CATEGORY",
+      });
+    }
+
+    const targetFilter = this.buildAdminQueryFilter({
+      employerProfileId: input.employerProfileId,
+      branchId: input.branchId,
+      shiftId: input.shiftId,
+    });
+
+    if (category === "funding_integrity") {
+      const { page, pageSize, skip } = this.adminQueryPagination(input);
+      const shiftMatch = Object.fromEntries(
+        Object.entries(targetFilter).map(([key, value]) => [`shiftSummary.${key}`, value])
+      );
+      const pipeline = [
+        {
+          $match: {
+            type: "shift_funding",
+            purpose: "shift_base_funding",
+            provider: "paystack",
+            paymentRail: "paystack_checkout",
+            "metadata.fundingIntegrityConflict": true,
+          },
+        },
+        {
+          $lookup: {
+            from: Shift.collection.name,
+            localField: "shift",
+            foreignField: "_id",
+            as: "shiftSummary",
+          },
+        },
+        // Keep orphaned payments visible globally for investigation. Scoped views
+        // require a matching shift and cannot accidentally disclose another tenant.
+        { $unwind: { path: "$shiftSummary", preserveNullAndEmptyArrays: true } },
+        { $match: shiftMatch },
+        {
+          $facet: {
+            items: [
+              { $sort: { "metadata.fundingIntegrityDetectedAt": 1, _id: 1 } },
+              { $skip: skip },
+              { $limit: pageSize },
+              {
+                $project: {
+                  _id: 1,
+                  shift: 1,
+                  amount: 1,
+                  currency: 1,
+                  countryCode: 1,
+                  status: 1,
+                  "shiftSummary._id": 1,
+                  "shiftSummary.referenceCode": 1,
+                  "shiftSummary.business": 1,
+                  "shiftSummary.branch": 1,
+                  "metadata.fundingIntegrityReason": 1,
+                  "metadata.fundingIntegrityDetectedAt": 1,
+                  "metadata.fundingApplicationPending": 1,
+                },
+              },
+            ],
+            count: [{ $count: "total" }],
+          },
+        },
+      ];
+      const [result] = await Transaction.aggregate(pipeline);
+      const totalItems = result?.count?.[0]?.total || 0;
+      return {
+        category,
+        items: result?.items || [],
+        pagination: {
+          page,
+          pageSize,
+          totalItems,
+          totalPages: Math.ceil(totalItems / pageSize),
+        },
+      };
+    }
+
+    if (category === "overdue_funding") {
+      const page = await this.readAdminPage(
+        Shift,
+        {
+          ...targetFilter,
+          status: "pending_funding",
+          paymentStatus: "unpaid",
+          fundedAmount: 0,
+          startTime: { $lte: new Date() },
+        },
+        "referenceCode business branch countryCode currency status paymentStatus startTime fundedAmount fundingTransaction",
+        input,
+        { startTime: 1, _id: 1 }
+      );
+      return { category, ...page };
+    }
+
+    const filter = {};
+    if (targetFilter.business) filter.business = targetFilter.business;
+    if (targetFilter.branch) filter.branch = targetFilter.branch;
+    if (targetFilter._id) filter.shift = targetFilter._id;
+    if (category === "claims") filter.activeClaim = { $ne: null };
+    if (category === "disputes") filter.activeDispute = { $ne: null };
+    if (category === "refund_holds") filter.refundStatus = "held";
+
+    const page = await this.readAdminPage(
+      ShiftOccurrence,
+      filter,
+      "shift business branch referenceCode slotNumber sequenceNumber startTime endTime currency status attendanceStatus settlementStatus activeClaim activeDispute refundStatus refundHoldReason refundHeldAt updatedAt",
+      input,
+      { updatedAt: 1, _id: 1 }
+    );
+
+    // Active pointers are occurrence authority. Not every open claim or ordinary
+    // refund hold needs immediate admin action; the view must explain the state.
+    return { category, ...page };
+  }
+  /* ───────────────────── ADMIN APPLICATION OVERSIGHT ───────────────────── */
+
+  static async getAdminApplicationShift(input) {
+    const shiftId = this.adminQueryId(input.shiftId, "shift ID");
+    const filter = this.buildAdminQueryFilter({
+      shiftId,
+      employerProfileId: input.employerProfileId,
+      branchId: input.branchId,
+    });
+
+    const shift = await Shift.findOne(filter)
+      .select(
+        "referenceCode business branch roleTitle professionalType status paymentStatus currency scheduleMode requiredProfessionals occurrenceCount totalOccurrenceCount startTime endTime"
+      )
+      .lean();
+
+    if (!shift) {
+      throw createShiftError({
+        message: "Shift not found.",
+        code: "SHIFT_NOT_FOUND",
+        statusCode: 404,
+      });
+    }
+
+    return shift;
+  }
+
+  static buildAdminApplicationFilter(input, shiftId) {
+    const filter = { shift: shiftId };
+
+    if (input.status != null && input.status !== "" && input.status !== "all") {
+      if (!ADMIN_APPLICATION_STATUSES.includes(input.status)) {
+        throw createShiftError({
+          message: "Unknown application status.",
+          code: "INVALID_ADMIN_APPLICATION_STATUS",
+        });
+      }
+      filter.status = input.status;
+    }
+
+    if (
+      input.applicationType != null &&
+      input.applicationType !== "" &&
+      input.applicationType !== "all"
+    ) {
+      if (!ADMIN_APPLICATION_TYPES.includes(input.applicationType)) {
+        throw createShiftError({
+          message: "Unknown application type.",
+          code: "INVALID_ADMIN_APPLICATION_TYPE",
+        });
+      }
+      filter.applicationType = input.applicationType;
+    }
+
+    for (const [source, destination] of [
+      ["professionalProfileId", "professional"],
+      ["occurrenceId", "occurrence"],
+      ["replacementForAssignmentId", "replacementForAssignment"],
+    ]) {
+      if (input[source] != null && input[source] !== "")
+        filter[destination] = this.adminQueryId(input[source], source);
+    }
+
+    for (const field of ["slotNumber", "applicationRound"]) {
+      const value = input[field];
+      if (value == null || value === "") continue;
+      if (
+        !/^[1-9]\d*$/.test(String(value)) ||
+        !Number.isSafeInteger(Number(value)) ||
+        (field === "applicationRound" && Number(value) > ADMIN_MAX_APPLICATION_ROUNDS)
+      ) {
+        throw createShiftError({
+          message: `${field} must be a supported positive whole number.`,
+          code: "INVALID_ADMIN_APPLICATION_FILTER",
+        });
+      }
+      filter[field] = Number(value);
+    }
+
+    return filter;
+  }
+
+  static async getAdminShiftApplicationsPageData(input = {}) {
+    await this.assertAdminQueryAccess(input.adminUserId);
+    const shift = await this.getAdminApplicationShift(input);
+    const filter = this.buildAdminApplicationFilter(input, shift._id);
+
+    // occurrenceId is an exact application target, NOT a claim that an initial
+    // or remaining-schedule application does not cover that occurrence.
+    // Likewise, initial applications have no slot until they are accepted.
+    const page = await this.readAdminPage(
+      ShiftApplication,
+      filter,
+      "shift professional occurrence slotNumber applicationType applicationRound replacementForAssignment acceptedAssignment status reviewedAt reviewedBy shortlistedAt acceptedAt rejectedAt withdrawnAt expiredAt cancelledAt createdAt updatedAt",
+      input,
+      { createdAt: -1, _id: -1 }
+    );
+
+    const professionalIds = [
+      ...new Set(
+        page.items.map((item) => this.toAdminApplicationId(item.professional)).filter(Boolean)
+      ),
+    ];
+    const professionals = professionalIds.length
+      ? await ProfessionalProfile.find({ _id: { $in: professionalIds } })
+          .select(
+            "type specialty yearsOfExperience professionalApprovalStatus licenceVerificationStatus"
+          )
+          .lean()
+      : [];
+    const byId = new Map(professionals.map((profile) => [String(profile._id), profile]));
+
+    return {
+      shift,
+      items: page.items.map((application) => ({
+        ...application,
+        professionalSummary: byId.get(this.toAdminApplicationId(application.professional)) || null,
+      })),
+      pagination: page.pagination,
+      historySource: "stored_status_timestamps",
+    };
+  }
+
+  static toAdminApplicationId(value) {
+    return value ? String(value._id || value) : null;
+  }
+
+  static async getAdminShiftApplicationDetailsPageData(input = {}) {
+    await this.assertAdminQueryAccess(input.adminUserId);
+    const shift = await this.getAdminApplicationShift(input);
+    const application = await ShiftApplication.findOne({
+      _id: this.adminQueryId(input.applicationId, "application ID"),
+      shift: shift._id,
+    })
+      .select(
+        "shift professional occurrence slotNumber applicationType applicationRound replacementForAssignment acceptedAssignment status note reviewedAt reviewedBy employerPrivateNote shortlistedAt acceptedAt rejectedAt rejectedReason withdrawnAt withdrawalReason expiredAt cancelledAt matchSnapshot.professionalType matchSnapshot.specialty matchSnapshot.yearsOfExperience createdAt updatedAt"
+      )
+      .lean();
+
+    if (!application) {
+      throw createShiftError({
+        message: "Application not found for this shift.",
+        code: "SHIFT_APPLICATION_NOT_FOUND",
+        statusCode: 404,
+      });
+    }
+
+    const [professional, occurrence] = await Promise.all([
+      ProfessionalProfile.findById(application.professional)
+        .select(
+          "type specialty yearsOfExperience professionalApprovalStatus licenceVerificationStatus"
+        )
+        .lean(),
+      application.occurrence
+        ? ShiftOccurrence.findOne({
+            _id: application.occurrence,
+            shift: shift._id,
+            business: shift.business,
+            branch: shift.branch,
+          })
+            .select(
+              "shift business branch referenceCode slotNumber sequenceNumber status assignmentStatus startTime endTime"
+            )
+            .lean()
+        : Promise.resolve(null),
+    ]);
+
+    // Missing related records remain visible as unresolved links for oversight.
+    // No profile documents/contact details are populated, and no application
+    // expiry, acceptance, assignment repair or hiring decision happens here.
+    return {
+      shift,
+      application,
+      professional,
+      occurrence,
+      professionalRecordAvailable: Boolean(professional),
+      occurrenceLinkStatus: !application.occurrence
+        ? "not_applicable"
+        : occurrence
+          ? "resolved"
+          : "unresolved",
+      historySource: "stored_status_timestamps",
     };
   }
 }

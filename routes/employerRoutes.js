@@ -123,9 +123,15 @@ router.post("/business-profile/invites/revoke", inviteController.postRevokeInvit
 
 router.get("/jobs", employerJobController.getJobs);
 
+// Keep the Create Job page before the parameterized Job details route.
+
+router.get("/jobs/new", employerJobController.getCreateJob);
+
 // Keep the focused-applications route before /jobs/:jobId.
 
 router.get("/jobs/:jobId/applications", employerJobApplicationController.getApplications);
+
+router.get("/jobs/:jobId/edit", employerJobController.getEditJob);
 
 router.get("/jobs/:jobId", employerJobController.getJob);
 

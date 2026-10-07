@@ -1,0 +1,672 @@
+<!-- views/employer/jobs/edit.ejs -->
+
+<% const formView = jobEditView; %>
+
+<div class="d-flex flex-column gap-6">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-4">
+    <div>
+      <h1 class="fs-2 fw-bold mb-2"><%= formView.pageTitle %></h1>
+      <p class="text-gray-600 mb-0"><%= formView.draftMessage %></p>
+    </div>
+
+    <a
+      href="<%= formView.actions.detailsUrl || formView.actions.jobsUrl %>"
+      class="btn btn-light"
+    >
+      Back to job
+    </a>
+  </div>
+
+  <% if (!formView.permissions.canSaveChanges) { %>
+    <div class="card">
+      <div class="card-body">
+        <h2 class="fs-4">Job editing unavailable</h2>
+        <p class="text-gray-600 mb-0"><%= formView.unavailableMessage %></p>
+      </div>
+    </div>
+  <% } else { %>
+
+    <noscript>
+      <div class="alert alert-warning">
+        Enable JavaScript to load the saved job details and save changes.
+      </div>
+    </noscript>
+
+    <div
+      id="job-edit-feedback"
+      class="alert mb-0"
+      role="status"
+      aria-live="polite"
+      hidden
+    ></div>
+
+    <form
+      id="job-edit-form"
+      method="post"
+      action="<%= formView.actions.submitUrl %>"
+      data-currency="<%= formView.currency.code %>"
+      data-currency-decimals="<%= formView.currency.decimalPlaces %>"
+      data-max-list-items="<%= formView.limits.listItems %>"
+      data-max-questions="<%= formView.limits.screeningQuestions %>"
+      data-jobs-url="<%= formView.actions.jobsUrl %>"
+      data-details-url="<%= formView.actions.detailsUrl %>"
+      data-has-publication-history="<%= formView.hasPublicationHistory %>"
+    >
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+
+      <!-- Read escaped JSON through textarea.value, never as HTML. -->
+      <textarea id="job-edit-initial-values" hidden disabled><%= JSON.stringify(formView.values) %></textarea>
+
+      <!-- Enabled after the client restores values and installs submission. -->
+      <fieldset id="job-edit-fields" class="border-0 p-0 m-0" disabled>
+        <legend class="visually-hidden">Edit job details</legend>
+
+        <section class="card mb-6" aria-labelledby="job-details-heading">
+          <div class="card-header">
+            <h2 id="job-details-heading" class="card-title fs-4">
+              1. Job details
+            </h2>
+          </div>
+
+          <div class="card-body">
+            <p class="text-gray-600 mb-6">
+              Drafts may be incomplete. Previously published jobs must retain
+              the information required for publication.
+            </p>
+
+            <div class="row g-5">
+              <div class="col-12">
+                <label class="form-label" for="job-roleTitle">Job title</label>
+                <input
+                  id="job-roleTitle"
+                  name="roleTitle"
+                  class="form-control"
+                  maxlength="<%= formView.limits.roleTitle %>"
+                  placeholder="e.g. Medical Officer"
+                >
+              </div>
+
+              <div class="col-12">
+                <label class="form-label" for="job-branch">
+                  Branch<%= formView.branchRequired ? ' (required)' : '' %>
+                </label>
+
+                <select
+                  id="job-branch"
+                  name="branch"
+                  class="form-select"
+                  aria-describedby="job-branch-help"
+                  <%= formView.branchRequired ? 'required' : '' %>
+                >
+                  <option value=""><%= formView.branchPlaceholder %></option>
+
+                  <% if (formView.currentBranch?.retainOnly) { %>
+                    <option
+                      value="<%= formView.currentBranch.id %>"
+                      data-retain-only="true"
+                    >
+                      <%= formView.currentBranch.name %> (keep current branch)
+                    </option>
+                  <% } %>
+
+                  <% formView.branches.forEach((branch) => { %>
+                    <option value="<%= branch.id %>">
+                      <%= branch.name || 'Branch' %><%= branch.locationLabel ? ' — ' + branch.locationLabel : '' %>
+                    </option>
+                  <% }); %>
+                </select>
+
+                <div id="job-branch-help" class="form-text">
+                  <%= formView.branchHelp %>
+                </div>
+              </div>
+
+              <% [
+                ['professionalType', 'Profession', formView.options.professionalTypes],
+                ['employmentType', 'Employment type', formView.options.employmentTypes],
+                ['workplaceType', 'Workplace type', formView.options.workplaceTypes]
+              ].forEach(([name, label, options]) => { %>
+                <div class="col-12 col-md-4">
+                  <label class="form-label" for="job-<%= name %>">
+                    <%= label %>
+                  </label>
+
+                  <select
+                    id="job-<%= name %>"
+                    name="<%= name %>"
+                    class="form-select"
+                  >
+                    <option value="">Choose later</option>
+
+                    <% options.forEach((option) => { %>
+                      <option value="<%= option.value %>">
+                        <%= option.label %>
+                      </option>
+                    <% }); %>
+                  </select>
+                </div>
+              <% }); %>
+
+              <% [
+                ['specialty', 'Specialty'],
+                ['department', 'Department']
+              ].forEach(([name, label]) => { %>
+                <div class="col-12 col-md-6">
+                  <label class="form-label" for="job-<%= name %>">
+                    <%= label %>
+                  </label>
+
+                  <input
+                    id="job-<%= name %>"
+                    name="<%= name %>"
+                    class="form-control"
+                    maxlength="<%= formView.limits[name] %>"
+                  >
+                </div>
+              <% }); %>
+
+              <div class="col-12 col-md-6">
+                <label class="form-label" for="job-vacancyCount">
+                  Number of vacancies
+                </label>
+
+                <input
+                  id="job-vacancyCount"
+                  name="vacancyCount"
+                  type="number"
+                  min="1"
+                  step="1"
+                  required
+                  class="form-control"
+                  value="<%= formView.defaults.vacancyCount %>"
+                >
+              </div>
+
+              <div class="col-12 col-md-6">
+                <label class="form-label" for="job-employmentStartDate">
+                  Expected start date
+                </label>
+
+                <input
+                  id="job-employmentStartDate"
+                  name="employmentStartDate"
+                  type="date"
+                  class="form-control"
+                >
+              </div>
+
+              <% [
+                ['summary', 'Short summary', 3],
+                ['description', 'Job description', 7]
+              ].forEach(([name, label, rows]) => { %>
+                <div class="col-12">
+                  <label class="form-label" for="job-<%= name %>">
+                    <%= label %>
+                  </label>
+
+                  <textarea
+                    id="job-<%= name %>"
+                    name="<%= name %>"
+                    class="form-control"
+                    rows="<%= rows %>"
+                    maxlength="<%= formView.limits[name] %>"
+                  ></textarea>
+                </div>
+              <% }); %>
+            </div>
+          </div>
+        </section>
+
+        <section class="card mb-6" aria-labelledby="job-requirements-heading">
+          <div class="card-header">
+            <h2 id="job-requirements-heading" class="card-title fs-4">
+              2. Requirements and benefits
+            </h2>
+          </div>
+
+          <div class="card-body">
+            <div class="row g-5">
+              <div class="col-12 col-md-4">
+                <label class="form-label" for="job-minimumYearsOfExperience">
+                  Minimum years of experience
+                </label>
+
+                <input
+                  id="job-minimumYearsOfExperience"
+                  name="minimumYearsOfExperience"
+                  type="number"
+                  min="0"
+                  step="1"
+                  required
+                  class="form-control"
+                  value="<%= formView.defaults.minimumYearsOfExperience %>"
+                >
+              </div>
+
+              <div class="col-12 col-md-8">
+                <label class="form-label" for="job-educationRequirement">
+                  Education requirement
+                </label>
+
+                <textarea
+                  id="job-educationRequirement"
+                  name="educationRequirement"
+                  class="form-control"
+                  rows="2"
+                  maxlength="<%= formView.limits.educationRequirement %>"
+                ></textarea>
+              </div>
+
+              <% [
+                ['responsibilities', 'Responsibilities', formView.limits.sectionItem],
+                ['requirements', 'Requirements', formView.limits.sectionItem],
+                ['preferredQualifications', 'Preferred qualifications', formView.limits.sectionItem],
+                ['skills', 'Skills', formView.limits.skillItem],
+                ['benefits', 'Benefits', formView.limits.benefitItem]
+              ].forEach(([name, label, itemLimit]) => { %>
+                <div class="col-12">
+                  <label class="form-label" for="job-<%= name %>">
+                    <%= label %>
+                  </label>
+
+                  <textarea
+                    id="job-<%= name %>"
+                    name="<%= name %>"
+                    class="form-control"
+                    rows="4"
+                    data-list-field
+                    data-item-limit="<%= itemLimit %>"
+                    aria-describedby="job-<%= name %>-help"
+                  ></textarea>
+
+                  <div id="job-<%= name %>-help" class="form-text">
+                    One item per line. Up to <%= formView.limits.listItems %>
+                    items, <%= itemLimit %> characters per item.
+                  </div>
+                </div>
+              <% }); %>
+            </div>
+          </div>
+        </section>
+
+        <section class="card mb-6" aria-labelledby="job-compensation-heading">
+          <div class="card-header">
+            <h2 id="job-compensation-heading" class="card-title fs-4">
+              3. Compensation
+            </h2>
+          </div>
+
+          <div class="card-body">
+            <p class="text-gray-600">
+              Salary is shown to applicants.
+              Currency: <strong><%= formView.currency.code %></strong>.
+            </p>
+
+            <label class="form-check form-check-custom form-check-solid mb-6">
+              <input
+                id="job-include-compensation"
+                class="form-check-input"
+                type="checkbox"
+              >
+              <span class="form-check-label">Include compensation</span>
+            </label>
+
+            <div id="job-compensation-fields" class="row g-5" hidden>
+              <div class="col-12 col-md-6">
+                <label class="form-label" for="job-compensation-type">
+                  Salary type
+                </label>
+
+                <select
+                  id="job-compensation-type"
+                  name="compensationType"
+                  class="form-select"
+                >
+                  <% formView.options.compensationTypes.forEach((option) => { %>
+                    <option
+                      value="<%= option.value %>"
+                      <%= option.value === formView.defaults.compensationType ? 'selected' : '' %>
+                    >
+                      <%= option.label %>
+                    </option>
+                  <% }); %>
+                </select>
+              </div>
+
+              <div class="col-12 col-md-6">
+                <label class="form-label" for="job-compensation-period">
+                  Salary period
+                </label>
+
+                <select
+                  id="job-compensation-period"
+                  name="compensationPeriod"
+                  class="form-select"
+                >
+                  <% formView.options.salaryPeriods.forEach((option) => { %>
+                    <option
+                      value="<%= option.value %>"
+                      <%= option.value === formView.defaults.salaryPeriod ? 'selected' : '' %>
+                    >
+                      <%= option.label %>
+                    </option>
+                  <% }); %>
+                </select>
+              </div>
+
+              <div class="col-12 col-md-6">
+                <label
+                  id="job-minimum-amount-label"
+                  class="form-label"
+                  for="job-minimum-amount"
+                >
+                  <%= formView.currency.label %>
+                </label>
+
+                <input
+                  id="job-minimum-amount"
+                  name="minimumAmountDisplay"
+                  type="text"
+                  inputmode="decimal"
+                  class="form-control"
+                  aria-describedby="job-salary-help"
+                  autocomplete="off"
+                >
+              </div>
+
+              <div id="job-maximum-amount-group" class="col-12 col-md-6" hidden>
+                <label class="form-label" for="job-maximum-amount">
+                  Maximum salary (<%= formView.currency.code %>)
+                </label>
+
+                <input
+                  id="job-maximum-amount"
+                  name="maximumAmountDisplay"
+                  type="text"
+                  inputmode="decimal"
+                  class="form-control"
+                  autocomplete="off"
+                >
+              </div>
+
+              <div class="col-12">
+                <div id="job-salary-help" class="form-text mb-4">
+                  Enter amounts without commas, using up to
+                  <%= formView.currency.decimalPlaces %> decimal places.
+                </div>
+
+                <label class="form-check form-check-custom form-check-solid">
+                  <input
+                    name="negotiable"
+                    type="checkbox"
+                    class="form-check-input"
+                    <%= formView.defaults.negotiable ? 'checked' : '' %>
+                  >
+                  <span class="form-check-label">Negotiable</span>
+                </label>
+              </div>
+            </div>
+
+            <p class="form-text mt-5 mb-0">
+              Compensation is required for previously published jobs and
+              before publishing a draft.
+            </p>
+          </div>
+        </section>
+
+        <section class="card mb-6" aria-labelledby="job-screening-heading">
+          <div class="card-header">
+            <h2 id="job-screening-heading" class="card-title fs-4">
+              4. Screening questions
+            </h2>
+          </div>
+
+          <div class="card-body">
+            <p class="text-gray-600"><%= formView.screeningHelp %></p>
+            <p class="form-text">
+              Optional. Add up to <%= formView.limits.screeningQuestions %>
+              questions.
+            </p>
+
+            <div
+              id="job-screening-questions"
+              class="d-flex flex-column gap-5"
+            ></div>
+
+            <button
+              id="job-add-question"
+              type="button"
+              class="btn btn-light-primary mt-5"
+            >
+              Add question
+            </button>
+          </div>
+        </section>
+
+        <section class="card mb-6" aria-labelledby="job-deadline-heading">
+          <div class="card-header">
+            <h2 id="job-deadline-heading" class="card-title fs-4">
+              5. Application deadline
+            </h2>
+          </div>
+
+          <div class="card-body">
+            <label class="form-label" for="job-applicationDeadline">
+              Deadline (optional)
+            </label>
+
+            <input
+              id="job-applicationDeadline"
+              name="applicationDeadline"
+              type="datetime-local"
+              class="form-control"
+              aria-describedby="job-deadline-help"
+            >
+
+            <div id="job-deadline-help" class="form-text">
+              Use your device's local time. The deadline will be checked
+              against the publication period when you publish.
+            </div>
+          </div>
+        </section>
+
+        <div class="d-flex flex-wrap align-items-center gap-4">
+          <button
+            id="job-save-changes"
+            type="submit"
+            class="btn btn-primary"
+          >
+            <%= formView.actions.submitLabel %>
+          </button>
+
+          <a
+            href="<%= formView.actions.detailsUrl || formView.actions.jobsUrl %>"
+            class="btn btn-light"
+          >
+            Cancel
+          </a>
+
+          <span class="text-gray-600">
+            Saving changes does not publish or renew a listing or take payment.
+          </span>
+        </div>
+      </fieldset>
+    </form>
+
+    <!-- Existing questions retain their IDs; new questions have no IDs. -->
+    <template id="job-screening-question-template">
+      <fieldset class="border rounded p-5" data-screening-question>
+        <legend
+          class="float-none w-auto px-2 fs-6 fw-bold"
+          data-question-title
+        >
+          Question
+        </legend>
+
+        <div class="d-flex justify-content-end mb-3">
+          <button
+            type="button"
+            class="btn btn-sm btn-light-danger"
+            data-remove-question
+          >
+            Remove question
+          </button>
+        </div>
+
+        <div class="row g-5">
+          <div class="col-12">
+            <label class="form-label">
+              Question
+              <textarea
+                data-field="prompt"
+                class="form-control mt-2"
+                rows="2"
+                maxlength="<%= formView.limits.screeningPrompt %>"
+                required
+              ></textarea>
+            </label>
+          </div>
+
+          <div class="col-12 col-md-6">
+            <label class="form-label d-block">
+              Answer type
+
+              <select data-field="type" class="form-select mt-2">
+                <% formView.options.screeningQuestionTypes.forEach((option) => { %>
+                  <option value="<%= option.value %>">
+                    <%= option.label %>
+                  </option>
+                <% }); %>
+              </select>
+            </label>
+          </div>
+
+          <div class="col-12 col-md-6">
+            <label class="form-label d-block">
+              Criterion
+
+              <select data-field="requirementLevel" class="form-select mt-2">
+                <% formView.options.screeningRequirementLevels.forEach((option) => { %>
+                  <option
+                    value="<%= option.value %>"
+                    <%= option.value === formView.defaults.screeningRequirementLevel ? 'selected' : '' %>
+                  >
+                    <%= option.label %>
+                  </option>
+                <% }); %>
+              </select>
+            </label>
+          </div>
+
+          <div class="col-12">
+            <label class="form-check form-check-custom form-check-solid">
+              <input
+                data-field="isResponseRequired"
+                type="checkbox"
+                class="form-check-input"
+                <%= formView.defaults.screeningResponseRequired ? 'checked' : '' %>
+              >
+              <span class="form-check-label">
+                Applicant must answer this question
+              </span>
+            </label>
+          </div>
+
+          <div class="col-12" data-question-options hidden>
+            <label class="form-label d-block">
+              Answer options
+
+              <textarea
+                data-field="options"
+                class="form-control mt-2"
+                rows="3"
+                data-item-limit="<%= formView.limits.screeningOption %>"
+              ></textarea>
+            </label>
+
+            <div class="form-text">
+              One option per line; at least two unique options.
+              Up to <%= formView.limits.screeningOption %> characters each.
+            </div>
+          </div>
+
+          <div class="col-12" data-question-boolean hidden>
+            <label class="form-label d-block">
+              Qualifying answer
+
+              <select data-field="qualifyingBoolean" class="form-select mt-2">
+                <option value="">Choose an answer</option>
+                <option value="true">Yes</option>
+                <option value="false">No</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="col-12" data-question-numbers hidden>
+            <div class="row g-5">
+              <div class="col-md-6">
+                <label class="form-label d-block">
+                  Minimum qualifying value
+
+                  <input
+                    data-field="minimumNumber"
+                    type="number"
+                    step="any"
+                    class="form-control mt-2"
+                  >
+                </label>
+              </div>
+
+              <div class="col-md-6">
+                <label class="form-label d-block">
+                  Maximum qualifying value
+
+                  <input
+                    data-field="maximumNumber"
+                    type="number"
+                    step="any"
+                    class="form-control mt-2"
+                  >
+                </label>
+              </div>
+            </div>
+
+            <div class="form-text">
+              Provide at least one bound for a preferred or required criterion.
+            </div>
+          </div>
+
+          <div class="col-12" data-question-acceptable hidden>
+            <label class="form-label d-block">
+              Qualifying options
+
+              <textarea
+                data-field="acceptableOptions"
+                class="form-control mt-2"
+                rows="3"
+              ></textarea>
+            </label>
+
+            <div class="form-text">
+              One per line, copied exactly from the answer options.
+            </div>
+          </div>
+
+          <div class="col-12" data-question-all-options hidden>
+            <label class="form-check form-check-custom form-check-solid">
+              <input
+                data-field="requireAllOptions"
+                type="checkbox"
+                class="form-check-input"
+              >
+              <span class="form-check-label">
+                Require all qualifying options
+              </span>
+            </label>
+          </div>
+        </div>
+      </fieldset>
+    </template>
+
+  <% } %>
+</div>

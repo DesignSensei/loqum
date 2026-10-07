@@ -1,0 +1,373 @@
+<!-- views/employer/jobs/index.ejs -->
+
+<div class="d-flex flex-column gap-6">
+  <% if (jobsView.permissions.canViewJobs) { %>
+
+  <% if (jobsView.permissions.canManageJobs === true) { %>
+  <div class="d-flex justify-content-end">
+    <a href="/employer/jobs/new" class="btn btn-primary">
+      Create Job
+    </a>
+  </div>
+  <% } %>
+
+  <% if (jobsView.readOnlyNotice.visible) { %>
+  <div
+    class="notice d-flex rounded border border-dashed p-6 <%= jobsView.readOnlyNotice.noticeClass %>"
+  >
+    <div>
+      <h2 class="fs-5 fw-bold mb-2">
+        <%= jobsView.readOnlyNotice.title %>
+      </h2>
+
+      <p class="mb-0 text-gray-700">
+        <%= jobsView.readOnlyNotice.message %>
+      </p>
+    </div>
+  </div>
+  <% } %>
+
+  <!-- Filters submit a GET request and reset pagination. -->
+  <section class="card" aria-labelledby="job-filters-heading">
+    <div class="card-header">
+      <h2 id="job-filters-heading" class="card-title fs-5">
+        Filter jobs
+      </h2>
+    </div>
+
+    <div class="card-body">
+      <form method="get" action="<%= jobsView.actions.jobsUrl %>">
+        <div class="row g-5">
+          <div class="col-12 col-lg-6">
+            <label for="job-search" class="form-label">
+              Search
+            </label>
+
+            <input
+              id="job-search"
+              type="search"
+              class="form-control"
+              name="<%= jobsView.filters.search.name %>"
+              value="<%= jobsView.filters.search.value %>"
+              placeholder="<%= jobsView.filters.search.placeholder %>"
+            >
+          </div>
+
+          <div class="col-12 col-lg-6">
+            <label for="job-branch" class="form-label">
+              Branch
+            </label>
+
+            <select
+              id="job-branch"
+              name="branch"
+              class="form-select"
+            >
+              <% jobsView.filters.branches.forEach((filter) => { %>
+              <option
+                value="<%= filter.value || '' %>"
+                <%= filter.isActive ? 'selected' : '' %>
+              >
+                <%= filter.label %>
+              </option>
+              <% }); %>
+            </select>
+          </div>
+
+          <div class="col-12 col-md-6">
+            <label for="job-recruitment-status" class="form-label">
+              Recruitment status
+            </label>
+
+            <select
+              id="job-recruitment-status"
+              name="recruitmentStatus"
+              class="form-select"
+            >
+              <% jobsView.filters.recruitment.forEach((filter) => { %>
+              <option
+                value="<%= filter.key %>"
+                <%= filter.isActive ? 'selected' : '' %>
+              >
+                <%= filter.label %> (<%= filter.count %>)
+              </option>
+              <% }); %>
+            </select>
+          </div>
+
+          <div class="col-12 col-md-6">
+            <label for="job-publication-status" class="form-label">
+              Publication status
+            </label>
+
+            <select
+              id="job-publication-status"
+              name="publicationStatus"
+              class="form-select"
+            >
+              <% jobsView.filters.publication.forEach((filter) => { %>
+              <option
+                value="<%= filter.key %>"
+                <%= filter.isActive ? 'selected' : '' %>
+              >
+                <%= filter.label %> (<%= filter.count %>)
+              </option>
+              <% }); %>
+            </select>
+          </div>
+        </div>
+
+        <div class="d-flex flex-wrap gap-3 mt-6">
+          <button type="submit" class="btn btn-primary">
+            Apply filters
+          </button>
+
+          <% if (jobsView.filters.clearAction.visible) { %>
+          <a
+            href="<%= jobsView.filters.clearAction.url %>"
+            class="btn btn-light"
+          >
+            <%= jobsView.filters.clearAction.label %>
+          </a>
+          <% } %>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="job-results-heading">
+    <div class="card-header align-items-center py-4">
+      <div>
+        <h2 id="job-results-heading" class="fs-4 fw-bold mb-1">
+          <%= jobsView.resultsHeader.title %>
+        </h2>
+
+        <p class="text-gray-600 mb-0">
+          <%= jobsView.resultsHeader.subtitle %>
+        </p>
+      </div>
+    </div>
+
+    <div class="card-body">
+      <% if (jobsView.hasJobs) { %>
+
+      <div class="table-responsive">
+        <table class="table table-row-dashed align-middle gy-5">
+          <caption class="visually-hidden">
+            Permanent jobs matching your selected filters
+          </caption>
+
+          <thead>
+            <tr class="fw-bold text-gray-600">
+              <th scope="col" class="min-w-200px">
+                Job
+              </th>
+
+              <th scope="col" class="min-w-150px">
+                Branch and location
+              </th>
+
+              <th scope="col" class="min-w-150px">
+                Status
+              </th>
+
+              <th scope="col" class="min-w-150px">
+                Current publication
+              </th>
+
+              <th scope="col" class="min-w-100px text-end">
+                Links
+              </th>
+            </tr>
+          </thead>
+
+          <tbody>
+            <% jobsView.jobs.forEach((job) => { %>
+            <tr>
+              <th scope="row" class="fw-normal">
+                <% if (job.detailsUrl) { %>
+                <a
+                  href="<%= job.detailsUrl %>"
+                  class="fw-bold text-gray-900 text-hover-primary"
+                >
+                  <%= job.roleTitle || 'Untitled job' %>
+                </a>
+                <% } else { %>
+                <span class="fw-bold">
+                  <%= job.roleTitle || 'Untitled job' %>
+                </span>
+                <% } %>
+
+                <div class="text-gray-600 fs-7 mt-1">
+                  <%= job.referenceCode || 'No reference' %>
+                </div>
+
+                <div class="text-gray-600 fs-7 mt-1">
+                  <%= [
+                    job.professionalTypeLabel,
+                    job.employmentTypeLabel,
+                    job.workplaceTypeLabel
+                  ].filter(Boolean).join(' · ') %>
+                </div>
+              </th>
+
+              <td>
+                <div>
+                  <%= job.branch?.name || 'Not recorded' %>
+                </div>
+
+                <div class="text-gray-600 fs-7 mt-1">
+                  <%= job.locationLabel || 'Location not recorded' %>
+                </div>
+              </td>
+
+              <td>
+                <div class="fs-8 text-gray-600 mb-1">
+                  Recruitment
+                </div>
+
+                <span class="badge <%= job.recruitmentStatusBadgeClass %>">
+                  <%= job.recruitmentStatusLabel || 'Not recorded' %>
+                </span>
+
+                <div class="fs-8 text-gray-600 mt-3 mb-1">
+                  Publication
+                </div>
+
+                <span class="badge <%= job.publicationStatusBadgeClass %>">
+                  <%= job.publicationStatusLabel || 'Not recorded' %>
+                </span>
+              </td>
+
+              <td class="fs-7">
+                <% if (job.currentPublication) { %>
+                <div>
+                  Expires:
+                  <%= job.currentPublication.timing.expiresAtDisplay %>
+                </div>
+
+                <div class="text-gray-600 mt-1">
+                  Application deadline:
+                  <%= job.currentPublication.timing.deadline.display %>
+                </div>
+                <% } else { %>
+                <span class="text-gray-600">
+                  No current publication
+                </span>
+                <% } %>
+              </td>
+
+              <td class="text-end">
+                <div class="d-flex flex-column align-items-end gap-2">
+                  <% if (job.detailsUrl) { %>
+                  <a
+                    href="<%= job.detailsUrl %>"
+                    class="btn btn-sm btn-light-primary"
+                    aria-label="View <%= job.roleTitle || 'job' %>"
+                  >
+                    View job
+                  </a>
+                  <% } %>
+
+                  <% if (job.applicationsUrl) { %>
+                  <a
+                    href="<%= job.applicationsUrl %>"
+                    class="btn btn-sm btn-light"
+                    aria-label="Applications for <%= job.roleTitle || 'job' %>"
+                  >
+                    Applications
+                  </a>
+                  <% } %>
+                </div>
+              </td>
+            </tr>
+            <% }); %>
+          </tbody>
+        </table>
+      </div>
+
+      <% } else { %>
+
+      <div class="text-center py-12">
+        <h3 class="fs-3 mb-3">
+          <%= jobsView.emptyState.title %>
+        </h3>
+
+        <p class="text-gray-600 mb-5">
+          <%= jobsView.emptyState.message %>
+        </p>
+
+        <% if (jobsView.emptyState.action.visible) { %>
+        <a
+          href="<%= jobsView.emptyState.action.url %>"
+          class="btn <%= jobsView.emptyState.action.buttonClass %>"
+        >
+          <%= jobsView.emptyState.action.label %>
+        </a>
+        <% } %>
+      </div>
+
+      <% } %>
+    </div>
+
+    <% if (jobsView.pagination.hasPagination) { %>
+    <div
+      class="card-footer d-flex flex-wrap justify-content-between align-items-center gap-4"
+    >
+      <span class="text-gray-600">
+        <%= jobsView.pagination.pageText %>
+      </span>
+
+      <nav aria-label="Job results pages" class="d-flex gap-3">
+        <% if (jobsView.pagination.previous.enabled) { %>
+        <a
+          class="btn btn-sm btn-light"
+          href="<%= jobsView.pagination.previous.url %>"
+        >
+          <%= jobsView.pagination.previous.label %>
+        </a>
+        <% } else { %>
+        <span
+          class="btn btn-sm btn-light disabled"
+          aria-disabled="true"
+        >
+          Previous
+        </span>
+        <% } %>
+
+        <% if (jobsView.pagination.next.enabled) { %>
+        <a
+          class="btn btn-sm btn-light"
+          href="<%= jobsView.pagination.next.url %>"
+        >
+          <%= jobsView.pagination.next.label %>
+        </a>
+        <% } else { %>
+        <span
+          class="btn btn-sm btn-light disabled"
+          aria-disabled="true"
+        >
+          Next
+        </span>
+        <% } %>
+      </nav>
+    </div>
+    <% } %>
+  </section>
+
+  <% } else { %>
+
+  <div class="card">
+    <div class="card-body">
+      <h2 class="fs-4">
+        Jobs unavailable
+      </h2>
+
+      <p class="text-gray-600 mb-0">
+        You do not have access to view jobs in this workspace.
+      </p>
+    </div>
+  </div>
+
+  <% } %>
+</div>

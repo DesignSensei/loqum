@@ -265,6 +265,9 @@ class ShiftFundingService {
       "cancelledFromStatus",
       "cancellationCode",
       "cancelledAt",
+      "cancelledBy",
+      "cancelledByUser",
+      "cancellationAdministration",
 
       "fundingMethod",
       "fundingInitiatedAt",
@@ -1395,7 +1398,10 @@ class ShiftFundingService {
 
   static async clearFailedPaystackFundingSelection({ shiftId, transactionId }) {
     return runWithOptionalTransaction({}, async (session) => {
-      const shift = await ShiftFundingService.getSystemShiftForFunding({ shiftId, session });
+      const shift = await ShiftFundingService.getSystemShiftForFunding({
+        shiftId,
+        session,
+      });
 
       if (
         shift.status !== "pending_funding" ||
@@ -1406,7 +1412,10 @@ class ShiftFundingService {
         return;
       }
 
-      const openAttempt = await ShiftFundingService.getOpenPaystackAttempt({ shiftId, session });
+      const openAttempt = await ShiftFundingService.getOpenPaystackAttempt({
+        shiftId,
+        session,
+      });
       const latestAttempt = await ShiftFundingService.getLatestPaystackAttempt({
         shiftId,
         session,
@@ -1640,6 +1649,50 @@ class ShiftFundingService {
     );
   }
 
+  /**
+   * An unused initial payment can be returned after employer cancellation only
+   * when no funding has been applied. A contradictory record needs reconciliation.
+   * Admin-assisted cancellation intentionally keeps the employer cancellation code.
+   */
+  static isCancelledPendingFundingReturnSafe(shift) {
+    return (
+      shift.status === "cancelled" &&
+      shift.cancelledFromStatus === "pending_funding" &&
+      shift.cancellationCode === "employer_cancelled" &&
+      shift.paymentStatus === "unpaid" &&
+      Number.isSafeInteger(shift.fundedAmount) &&
+      shift.fundedAmount === 0 &&
+      !shift.fundingTransaction &&
+      !shift.fundedAt &&
+      !shift.publishedAt
+    );
+  }
+
+  static buildCancellationReturnAudit(shift) {
+    const administration = shift.cancellationAdministration;
+
+    // This copies attribution, not authorization or a new financial decision.
+    // Do not copy evidence locations or the employer's correspondence into money records.
+    return {
+      cancellationCode: shift.cancellationCode || null,
+      cancelledFromStatus: shift.cancelledFromStatus || null,
+      cancelledAt: shift.cancelledAt || null,
+      cancelledBy: shift.cancelledBy || null,
+      cancelledByUser: shift.cancelledByUser ? String(shift.cancelledByUser) : null,
+      administration: administration
+        ? {
+            mode: administration.mode,
+            executedBy: administration.executedBy ? String(administration.executedBy) : null,
+            requestedBy: administration.requestedBy ? String(administration.requestedBy) : null,
+            requestedAt: administration.requestedAt || null,
+            executedAt: administration.executedAt || null,
+            requestReference: administration.requestReference || null,
+            policyBasis: administration.policyBasis || null,
+          }
+        : null,
+    };
+  }
+
   static async returnSuccessfulPaystackPaymentToEmployer({
     transaction,
     shift,
@@ -1692,6 +1745,12 @@ class ShiftFundingService {
     WalletService.assertWalletIsActive(employerWallet);
 
     WalletService.assertSameCountryAndCurrency(escrowWallet, employerWallet);
+
+    // Preserve the first recorded cancellation snapshot during idempotent replay.
+    const cancellationAudit =
+      returnReason === "employer_cancelled"
+        ? transaction.metadata?.cancellationAudit || this.buildCancellationReturnAudit(shift)
+        : null;
 
     const recordedReturnPurpose = transaction.metadata?.returnPurpose || null;
 
@@ -1746,6 +1805,7 @@ class ShiftFundingService {
 
           returnReason,
           returnPurpose: purpose,
+          ...(cancellationAudit ? { cancellationAudit } : {}),
 
           verifiedPaymentTime,
           returnedAt: currentTime,
@@ -1772,6 +1832,7 @@ class ShiftFundingService {
       returnedToEmployerWallet: true,
       returnReason,
       returnPurpose: purpose,
+      ...(cancellationAudit ? { cancellationAudit } : {}),
 
       returnGroupReference: returnTransfer.groupReference,
 
@@ -3433,6 +3494,17 @@ class ShiftFundingService {
         shift.cancelledFromStatus === "pending_funding" &&
         shift.cancellationCode === "employer_cancelled"
       ) {
+        if (!ShiftFundingService.isCancelledPendingFundingReturnSafe(shift)) {
+          return ShiftFundingService.markPaystackFundingIntegrityConflict({
+            transaction: completedTransaction,
+            shift,
+            reason: "cancelled_pending_funding_state_conflict",
+            verifiedPaymentTime,
+            currentTime: normalizedCurrentTime,
+            session,
+          });
+        }
+
         return ShiftFundingService.returnSuccessfulPaystackPaymentToEmployer({
           transaction: completedTransaction,
           shift,

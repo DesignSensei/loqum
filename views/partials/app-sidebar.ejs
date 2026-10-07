@@ -20,6 +20,11 @@
 
     <% if (user && user.role === "professional") { %>
 
+    <!-- Work -->
+    <span class="d-block text-center text-uppercase fs-9 fw-semibold text-gray-500 py-2 w-100">
+      Work
+    </span>
+
     <!--begin::Find Shifts-->
     <a
       href="/professional/shifts"
@@ -105,6 +110,40 @@
     </div>
     <!--end::My Shifts-->
 
+    <!--begin::Find Jobs-->
+    <a
+      href="/jobs"
+      class="loqum-sidebar-link"
+      data-bs-toggle="tooltip"
+      data-bs-placement="right"
+      title="Find Jobs"
+      aria-label="Find Jobs"
+    >
+      <i class="ki-duotone ki-magnifier fs-1" aria-hidden="true">
+        <span class="path1"></span>
+        <span class="path2"></span>
+      </i>
+    </a>
+    <!--end::Find Jobs-->
+
+    <!--begin::My Applications-->
+    <a
+      href="/professional/job-applications"
+      class="loqum-sidebar-link"
+      data-bs-toggle="tooltip"
+      data-bs-placement="right"
+      title="My Applications"
+      aria-label="My Applications"
+    >
+      <i class="ki-duotone ki-notepad-edit fs-1" aria-hidden="true">
+        <span class="path1"></span>
+        <span class="path2"></span>
+        <span class="path3"></span>
+        <span class="path4"></span>
+      </i>
+    </a>
+    <!--end::My Applications-->
+
     <!--begin::Cases-->
     <a
       href="/professional/cases"
@@ -140,6 +179,11 @@
     <!--end::Billing-->
 
     <% } else if (user && user.role === "employer") { %>
+
+    <!-- Hiring -->
+    <span class="d-block text-center text-uppercase fs-9 fw-semibold text-gray-500 py-2 w-100">
+      Hiring
+    </span>
 
     <!--begin::Manage Shifts-->
     <div
@@ -206,18 +250,6 @@
         </div>
         <!--end::Post a Shift-->
 
-        <!--begin::Applications-->
-        <div class="menu-item">
-          <a class="menu-link" href="/employer/shifts/applications">
-            <span class="menu-bullet">
-              <span class="bullet bullet-dot"></span>
-            </span>
-
-            <span class="menu-title"> Applications </span>
-          </a>
-        </div>
-        <!--end::Applications-->
-
         <!--begin::Assignments-->
         <div class="menu-item">
           <a class="menu-link" href="/employer/shifts/assignments">
@@ -245,6 +277,84 @@
       <!--end::Menu sub-->
     </div>
     <!--end::Manage Shifts-->
+
+    <!--begin::Manage Jobs-->
+    <a
+      href="/employer/jobs"
+      class="loqum-sidebar-link"
+      data-bs-toggle="tooltip"
+      data-bs-placement="right"
+      title="Manage Jobs"
+      aria-label="Manage Jobs"
+    >
+      <i class="ki-duotone ki-shop fs-1" aria-hidden="true">
+        <span class="path1"></span>
+        <span class="path2"></span>
+        <span class="path3"></span>
+        <span class="path4"></span>
+        <span class="path5"></span>
+      </i>
+    </a>
+    <!--end::Manage Jobs-->
+
+    <!--begin::Applications-->
+    <div
+      class="menu menu-item loqum-sidebar-menu-item"
+      data-kt-menu-trigger="{default: 'click', lg: 'hover'}"
+      data-kt-menu-placement="right-start"
+      data-kt-menu-attach="parent"
+    >
+      <span
+        class="menu-link menu-center loqum-sidebar-link"
+        data-bs-toggle="tooltip"
+        data-bs-placement="right"
+        title="Applications"
+        aria-label="Applications"
+      >
+        <span class="menu-icon me-0">
+          <i class="ki-duotone ki-notepad-edit fs-1" aria-hidden="true">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+            <span class="path4"></span>
+          </i>
+        </span>
+      </span>
+
+      <div
+        class="menu-sub menu-sub-dropdown menu-sub-indention px-2 py-4 w-175px"
+        data-kt-menu="true"
+      >
+        <div class="menu-item">
+          <div class="menu-content">
+            <span class="menu-section fs-5 fw-bolder ps-1 py-1"> Applications </span>
+          </div>
+        </div>
+
+        <div class="separator my-2"></div>
+
+        <div class="menu-item">
+          <a class="menu-link" href="/employer/shifts/applications">
+            <span class="menu-bullet">
+              <span class="bullet bullet-dot"></span>
+            </span>
+
+            <span class="menu-title"> Shift Applications </span>
+          </a>
+        </div>
+
+        <div class="menu-item">
+          <a class="menu-link" href="/employer/job-applications">
+            <span class="menu-bullet">
+              <span class="bullet bullet-dot"></span>
+            </span>
+
+            <span class="menu-title"> Job Applications </span>
+          </a>
+        </div>
+      </div>
+    </div>
+    <!--end::Applications-->
 
     <!--begin::Cases-->
     <a
@@ -299,6 +409,84 @@
     <!--end::Business Profile-->
 
     <% } else if (user && user.role === "admin") { %>
+
+    <!-- Operations -->
+    <span class="d-block text-center text-uppercase fs-9 fw-semibold text-gray-500 py-2 w-100">
+      Operations
+    </span>
+
+    <!--begin::Shift Management-->
+    <div
+      class="menu menu-item loqum-sidebar-menu-item"
+      data-kt-menu-trigger="{default: 'click', lg: 'hover'}"
+      data-kt-menu-placement="right-start"
+      data-kt-menu-attach="parent"
+    >
+      <!--begin::Menu link-->
+      <span
+        class="menu-link menu-center loqum-sidebar-link"
+        data-bs-toggle="tooltip"
+        data-bs-placement="right"
+        title="Shifts"
+      >
+        <span class="menu-icon me-0">
+          <i class="ki-duotone ki-calendar-tick fs-2x">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+            <span class="path4"></span>
+            <span class="path5"></span>
+            <span class="path6"></span>
+          </i>
+        </span>
+      </span>
+      <!--end::Menu link-->
+
+      <!--begin::Menu sub-->
+      <div
+        class="menu-sub menu-sub-dropdown menu-sub-indention px-2 py-4 w-175px"
+        data-kt-menu="true"
+      >
+        <div class="menu-item">
+          <div class="menu-content">
+            <span class="menu-section fs-5 fw-bolder ps-1 py-1"> Shifts </span>
+          </div>
+        </div>
+
+        <div class="separator my-2"></div>
+
+        <div class="menu-item">
+          <a class="menu-link" href="/admin/shifts">
+            <span class="menu-bullet">
+              <span class="bullet bullet-dot"></span>
+            </span>
+
+            <span class="menu-title"> All Shifts </span>
+          </a>
+        </div>
+      </div>
+      <!--end::Menu sub-->
+    </div>
+    <!--end::Shift Management-->
+
+    <!--begin::Jobs-->
+    <a
+      href="/admin/jobs"
+      class="loqum-sidebar-link"
+      data-bs-toggle="tooltip"
+      data-bs-placement="right"
+      title="Jobs"
+      aria-label="Jobs"
+    >
+      <i class="ki-duotone ki-shop fs-1" aria-hidden="true">
+        <span class="path1"></span>
+        <span class="path2"></span>
+        <span class="path3"></span>
+        <span class="path4"></span>
+        <span class="path5"></span>
+      </i>
+    </a>
+    <!--end::Jobs-->
 
     <!--begin::User Management-->
     <div
@@ -362,60 +550,6 @@
       <!--end::Menu sub-->
     </div>
     <!--end::User Management-->
-
-    <!--begin::Shift Management-->
-    <div
-      class="menu menu-item loqum-sidebar-menu-item"
-      data-kt-menu-trigger="{default: 'click', lg: 'hover'}"
-      data-kt-menu-placement="right-start"
-      data-kt-menu-attach="parent"
-    >
-      <!--begin::Menu link-->
-      <span
-        class="menu-link menu-center loqum-sidebar-link"
-        data-bs-toggle="tooltip"
-        data-bs-placement="right"
-        title="Shifts"
-      >
-        <span class="menu-icon me-0">
-          <i class="ki-duotone ki-calendar-tick fs-2x">
-            <span class="path1"></span>
-            <span class="path2"></span>
-            <span class="path3"></span>
-            <span class="path4"></span>
-            <span class="path5"></span>
-            <span class="path6"></span>
-          </i>
-        </span>
-      </span>
-      <!--end::Menu link-->
-
-      <!--begin::Menu sub-->
-      <div
-        class="menu-sub menu-sub-dropdown menu-sub-indention px-2 py-4 w-175px"
-        data-kt-menu="true"
-      >
-        <div class="menu-item">
-          <div class="menu-content">
-            <span class="menu-section fs-5 fw-bolder ps-1 py-1"> Shifts </span>
-          </div>
-        </div>
-
-        <div class="separator my-2"></div>
-
-        <div class="menu-item">
-          <a class="menu-link" href="/admin/shifts">
-            <span class="menu-bullet">
-              <span class="bullet bullet-dot"></span>
-            </span>
-
-            <span class="menu-title"> All Shifts </span>
-          </a>
-        </div>
-      </div>
-      <!--end::Menu sub-->
-    </div>
-    <!--end::Shift Management-->
 
     <!--begin::Case Management-->
     <div
@@ -508,7 +642,7 @@
 
     <!--begin::Platform Settings-->
     <a
-      href="/admin/settings"
+      href="/admin/platform-settings"
       class="loqum-sidebar-link"
       data-bs-toggle="tooltip"
       data-bs-placement="right"

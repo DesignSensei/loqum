@@ -1,0 +1,287 @@
+<!-- views/employer/jobs/show.ejs -->
+
+<% const job = jobView.job; %>
+
+<div class="d-flex flex-column gap-6">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-4">
+    <a href="<%= jobView.actions.jobsUrl %>" class="btn btn-light"> Back to jobs </a>
+
+    <% if (job && jobView.permissions.canViewJobs) { %>
+    <div class="d-flex flex-wrap gap-3">
+      <% if (jobView.permissions.canEditJob && jobView.actions.editUrl) { %>
+      <a href="<%= jobView.actions.editUrl %>" class="btn btn-light-primary"> Edit job </a>
+      <% } %> <% if (jobView.actions.applicationsUrl) { %>
+      <a href="<%= jobView.actions.applicationsUrl %>" class="btn btn-primary">
+        View applications
+      </a>
+      <% } %>
+    </div>
+    <% } %>
+  </div>
+
+  <% if (!job || !jobView.permissions.canViewJobs) { %>
+  <div class="card">
+    <div class="card-body">
+      <h1 class="fs-3">Job unavailable</h1>
+
+      <p class="text-gray-600 mb-0">This job is not available in your workspace.</p>
+    </div>
+  </div>
+  <% } else { %> <% if (jobView.readOnlyNotice.visible) { %>
+  <div class="notice rounded border border-dashed p-6 <%= jobView.readOnlyNotice.noticeClass %>">
+    <h2 class="fs-5 mb-2"><%= jobView.readOnlyNotice.title %></h2>
+    <p class="text-gray-700 mb-0"><%= jobView.readOnlyNotice.message %></p>
+  </div>
+  <% } %>
+
+  <section class="card" aria-labelledby="job-title">
+    <div class="card-body">
+      <div class="text-gray-600 fs-7 mb-2"><%= job.referenceCode || 'No reference' %></div>
+
+      <h1 id="job-title" class="fs-2 fw-bold mb-4"><%= job.roleTitle || 'Untitled job' %></h1>
+
+      <div class="d-flex flex-wrap gap-5 mb-6">
+        <div>
+          <span class="text-gray-600 me-2">Recruitment</span>
+
+          <span class="badge <%= job.recruitmentStatusBadgeClass %>">
+            <%= job.recruitmentStatusLabel || 'Not recorded' %>
+          </span>
+        </div>
+
+        <div>
+          <span class="text-gray-600 me-2">Publication</span>
+
+          <span class="badge <%= job.publicationStatusBadgeClass %>">
+            <%= job.publicationStatusLabel || 'Not recorded' %>
+          </span>
+        </div>
+      </div>
+
+      <% if (job.recruitmentStatus === 'draft') { %>
+      <p class="text-gray-600">
+        This is an unpublished draft. Missing details can be completed before publication.
+      </p>
+      <% } %>
+
+      <dl class="row gy-4 mb-0">
+        <% [ ['Profession', job.professionalTypeLabel], ['Specialty', job.specialty], ['Department',
+        job.department], ['Employment type', job.employmentTypeLabel], ['Workplace type',
+        job.workplaceTypeLabel], ['Branch', job.branch?.name], ['Location', job.locationLabel],
+        ['Vacancies', job.vacancyCount], ['Minimum years of experience',
+        job.minimumYearsOfExperience], ['Expected start date', job.employmentStartDateDisplay],
+        ['Application deadline (UTC)', job.applicationDeadline ? job.applicationDeadlineDisplay :
+        'Not set'], ['Created', job.createdAtDisplay], ['Last updated', job.updatedAtDisplay]
+        ].forEach(([label, value]) => { %>
+        <div class="col-12 col-md-6 col-xl-4">
+          <dt class="text-gray-600 fw-normal fs-7 mb-1"><%= label %></dt>
+
+          <dd class="fw-semibold mb-0 text-break">
+            <%= value === null || value === undefined || value === '' ? 'Not provided' : value %>
+          </dd>
+        </div>
+        <% }); %>
+      </dl>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="job-compensation-title">
+    <div class="card-header">
+      <h2 id="job-compensation-title" class="card-title fs-4">Compensation</h2>
+    </div>
+
+    <div class="card-body">
+      <p class="fs-4 fw-bold mb-2">
+        <%= job.compensation ? job.compensation.display : 'Not provided' %>
+      </p>
+
+      <% if (job.compensation?.available) { %>
+      <p class="text-gray-600 mb-0">
+        <%= job.compensation.currency %> · <%= job.compensation.negotiable ? 'Negotiable' : 'Not marked as negotiable' %>
+      </p>
+      <% } %>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="job-content-title">
+    <div class="card-header">
+      <h2 id="job-content-title" class="card-title fs-4">Job content</h2>
+    </div>
+
+    <div class="card-body">
+      <p class="text-gray-600 mb-6">
+        These are the saved job details. Publication history below records listing periods.
+      </p>
+
+      <% [ ['Summary', job.summary], ['Description', job.description], ['Education requirement',
+      job.educationRequirement] ].forEach(([label, text]) => { %>
+      <div class="mb-6">
+        <h3 class="fs-5 mb-3"><%= label %></h3>
+
+        <div class="text-gray-700 text-break" style="white-space: pre-wrap">
+          <%= text || 'Not provided' %>
+        </div>
+      </div>
+      <% }); %> <% [ ['Responsibilities', job.responsibilities], ['Requirements', job.requirements],
+      ['Preferred qualifications', job.preferredQualifications], ['Skills', job.skills],
+      ['Benefits', job.benefits] ].forEach(([label, items]) => { %>
+      <div class="mb-6">
+        <h3 class="fs-5 mb-3"><%= label %></h3>
+
+        <% if (items.length) { %>
+        <ul class="ps-5 mb-0">
+          <% items.forEach((item) => { %>
+          <li class="text-gray-700 text-break mb-2"><%= item %></li>
+          <% }); %>
+        </ul>
+        <% } else { %>
+        <p class="text-gray-600 mb-0">Not provided</p>
+        <% } %>
+      </div>
+      <% }); %>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="job-screening-title">
+    <div class="card-header">
+      <h2 id="job-screening-title" class="card-title fs-4">Screening questions</h2>
+    </div>
+
+    <div class="card-body">
+      <% if (!job.screeningQuestions.length) { %>
+      <p class="text-gray-600 mb-0">No screening questions have been added.</p>
+      <% } else { %>
+      <p class="text-gray-600 mb-6">
+        Qualification criteria flag applications for review. They do not automatically reject
+        candidates.
+      </p>
+
+      <% job.screeningQuestions.forEach((question, index) => { %>
+      <article class="border rounded p-5 mb-5">
+        <h3 class="fs-5 text-break mb-3">
+          <%= index + 1 %>. <%= question.prompt || 'Question not provided' %>
+        </h3>
+
+        <div class="d-flex flex-wrap gap-3 text-gray-600 fs-7 mb-4">
+          <span> Answer: <%= question.typeLabel || 'Not recorded' %> </span>
+
+          <span> Criterion: <%= question.requirementLevelLabel || 'Not recorded' %> </span>
+
+          <span>
+            <%= question.isResponseRequired ? 'Response required' : 'Response optional' %>
+          </span>
+        </div>
+
+        <% if (question.options.length) { %>
+        <h4 class="fs-6">Answer options</h4>
+
+        <ul class="ps-5">
+          <% question.options.forEach((option) => { %>
+          <li class="text-break"><%= option %></li>
+          <% }); %>
+        </ul>
+        <% } %> <% if (question.qualifyingBoolean !== null) { %>
+        <p class="mb-0">
+          Qualifying answer:
+          <strong><%= question.qualifyingBoolean ? 'Yes' : 'No' %></strong>
+        </p>
+        <% } %> <% if (question.minimumNumber !== null || question.maximumNumber !== null) { %>
+        <dl class="row mb-0">
+          <% if (question.minimumNumber !== null) { %>
+          <div class="col-md-6">
+            <dt>Minimum qualifying value</dt>
+            <dd><%= question.minimumNumber %></dd>
+          </div>
+          <% } %> <% if (question.maximumNumber !== null) { %>
+          <div class="col-md-6">
+            <dt>Maximum qualifying value</dt>
+            <dd><%= question.maximumNumber %></dd>
+          </div>
+          <% } %>
+        </dl>
+        <% } %> <% if (question.acceptableOptions.length) { %>
+        <h4 class="fs-6">Qualifying options</h4>
+
+        <ul class="ps-5">
+          <% question.acceptableOptions.forEach((option) => { %>
+          <li class="text-break"><%= option %></li>
+          <% }); %>
+        </ul>
+
+        <% if (question.type === 'multi_select') { %>
+        <p class="text-gray-600 mb-0">
+          <%= question.requireAllOptions ? 'All qualifying options are required.' : 'At least one qualifying option is required.' %>
+        </p>
+        <% } %> <% } %> <% if (question.type === 'short_text' && ['preferred',
+        'required'].includes(question.requirementLevel)) { %>
+        <p class="text-gray-600 mb-0">
+          Text responses require employer review; no automatic qualification criterion is
+          configured.
+        </p>
+        <% } %>
+      </article>
+      <% }); %> <% } %>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="job-publications-title">
+    <div class="card-header">
+      <h2 id="job-publications-title" class="card-title fs-4">Publication history</h2>
+    </div>
+
+    <div class="card-body">
+      <% if (!jobView.hasPublicationHistory) { %>
+      <p class="text-gray-600 mb-0">This job has no publication history.</p>
+      <% } else { %>
+      <p class="text-gray-600 mb-5">
+        Publication expiry stops new applications; existing recruitment can continue.
+      </p>
+
+      <div class="table-responsive">
+        <table class="table table-row-dashed align-middle gy-4">
+          <caption class="visually-hidden">
+            Publication periods for this job
+          </caption>
+
+          <thead>
+            <tr class="text-gray-600">
+              <th scope="col">Cycle</th>
+              <th scope="col">Status</th>
+              <th scope="col">Published</th>
+              <th scope="col">Expires</th>
+              <th scope="col">Application deadline</th>
+              <th scope="col">Ended</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            <% jobView.publications.forEach((publication) => { %>
+            <tr>
+              <th scope="row">
+                <%= publication.cycleNumber || 'Not recorded' %> <% if (publication.id &&
+                publication.id === job.currentPublication?.id) { %>
+                <span class="badge badge-light-primary ms-2"> Current </span>
+                <% } %>
+              </th>
+
+              <td>
+                <span class="badge <%= publication.statusBadgeClass %>">
+                  <%= publication.statusLabel || 'Not recorded' %>
+                </span>
+              </td>
+
+              <td><%= publication.timing.publishedAtDisplay %></td>
+              <td><%= publication.timing.expiresAtDisplay %></td>
+              <td><%= publication.timing.deadline.display %></td>
+              <td><%= publication.endedAtDisplay %></td>
+            </tr>
+            <% }); %>
+          </tbody>
+        </table>
+      </div>
+      <% } %>
+    </div>
+  </section>
+
+  <% } %>
+</div>

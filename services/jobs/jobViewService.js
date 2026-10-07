@@ -2,6 +2,23 @@
 
 const { badgeClass, formatStatus } = require("../../utils/statusHelper");
 
+const Job = require("../../models/Job");
+
+const {
+  JOB_EMPLOYMENT_TYPES,
+  JOB_WORKPLACE_TYPES,
+  JOB_COMPENSATION_TYPES,
+  JOB_SALARY_PERIODS,
+  JOB_SCREENING_QUESTION_TYPES,
+  JOB_SCREENING_REQUIREMENT_LEVELS,
+  MAX_JOB_TITLE_LENGTH,
+  MAX_JOB_SUMMARY_LENGTH,
+  MAX_JOB_DESCRIPTION_LENGTH,
+  MAX_JOB_SECTION_LENGTH,
+  MAX_SCREENING_QUESTION_LENGTH,
+  MAX_SCREENING_OPTION_LENGTH,
+} = require("../../constants/jobPosting");
+
 const EMPLOYER_JOBS_URL = "/employer/jobs";
 const ADMIN_JOBS_URL = "/admin/jobs";
 const MARKETPLACE_JOBS_URL = "/jobs";
@@ -833,6 +850,441 @@ class JobViewService {
     };
   }
 
+  /* ─────────────────────────────── EMPLOYER JOB CREATION ─────────────────────────────── */
+
+  // Presentation only: the controller must first obtain authorized creation data.
+  static buildEmployerJobCreatePageView(pageData = {}) {
+    const canManageJobs = pageData.canManageJobs === true;
+
+    const branchRequired = pageData.branchRequired === true;
+
+    const branches = (Array.isArray(pageData.branches) ? pageData.branches : [])
+      .filter((branch) => branch && branch.isActive === true)
+      .map((branch) => this.buildBranchView(branch))
+      .filter((branch) => branch?.id);
+
+    const currencyCode = pageData.employer?.currency || null;
+
+    let currency = null;
+
+    if (typeof currencyCode === "string" && /^[A-Z]{3}$/.test(currencyCode)) {
+      const formatter = new Intl.NumberFormat("en-NG", {
+        style: "currency",
+        currency: currencyCode,
+      });
+
+      const decimalPlaces = formatter.resolvedOptions().maximumFractionDigits;
+
+      currency = {
+        code: currencyCode,
+
+        decimalPlaces,
+
+        minorUnitFactor: 10 ** decimalPlaces,
+
+        inputStep: decimalPlaces === 0 ? "1" : `0.${"0".repeat(decimalPlaces - 1)}1`,
+
+        label: `Salary (${currencyCode})`,
+      };
+    }
+
+    const options = (values) =>
+      values
+        .filter((value) => typeof value === "string" && value.length > 0)
+        .map((value) => ({
+          value,
+
+          label: this.formatStatusLabel(value) || value,
+        }));
+
+    const professionalTypes = options(Job.schema.path("professionalType").enumValues);
+
+    const canCreateDraft = Boolean(
+      canManageJobs &&
+      pageData.canCreateDraft === true &&
+      currency &&
+      (!branchRequired || branches.length > 0)
+    );
+
+    let unavailableMessage = null;
+
+    if (!canManageJobs) {
+      unavailableMessage = "You do not have permission to create jobs.";
+    } else if (!currency) {
+      unavailableMessage =
+        "Your business currency is unavailable. Contact support before creating a job.";
+    } else if (branchRequired && branches.length === 0) {
+      unavailableMessage = "You need an active assigned branch before you can create a job.";
+    } else if (!canCreateDraft) {
+      unavailableMessage = "Job creation is currently unavailable.";
+    }
+
+    return {
+      pageTitle: "Create Job",
+
+      employer: {
+        id: this.toId(pageData.employer?.id),
+
+        businessName: pageData.employer?.businessName || null,
+
+        countryCode: pageData.employer?.countryCode || null,
+      },
+
+      currency,
+
+      branches,
+
+      branchRequired,
+
+      branchPlaceholder: branchRequired ? "Select a branch" : "Choose a branch later",
+
+      branchHelp:
+        "A branch is required before publication. The job location comes from that branch.",
+
+      permissions: {
+        canManageJobs,
+
+        canCreateDraft,
+
+        canManageAllBranches: pageData.canManageAllBranches === true,
+      },
+
+      unavailableMessage,
+
+      options: {
+        professionalTypes,
+
+        employmentTypes: options(JOB_EMPLOYMENT_TYPES),
+
+        workplaceTypes: options(JOB_WORKPLACE_TYPES),
+
+        compensationTypes: options(JOB_COMPENSATION_TYPES),
+
+        salaryPeriods: options(JOB_SALARY_PERIODS),
+
+        screeningQuestionTypes: options(JOB_SCREENING_QUESTION_TYPES),
+
+        screeningRequirementLevels: options(JOB_SCREENING_REQUIREMENT_LEVELS),
+      },
+
+      limits: {
+        roleTitle: MAX_JOB_TITLE_LENGTH,
+        specialty: Job.schema.path("specialty").options.maxlength,
+        department: Job.schema.path("department").options.maxlength,
+        educationRequirement: Job.schema.path("educationRequirement").options.maxlength,
+        summary: MAX_JOB_SUMMARY_LENGTH,
+        description: MAX_JOB_DESCRIPTION_LENGTH,
+        sectionItem: MAX_JOB_SECTION_LENGTH,
+        skillItem: 500,
+        benefitItem: 1000,
+        listItems: 50,
+        screeningQuestions: 20,
+        screeningPrompt: MAX_SCREENING_QUESTION_LENGTH,
+        screeningOption: MAX_SCREENING_OPTION_LENGTH,
+      },
+
+      defaults: {
+        minimumYearsOfExperience: 0,
+        vacancyCount: 1,
+        compensationType: "fixed",
+        salaryPeriod: "month",
+        negotiable: false,
+        screeningRequirementLevel: "informational",
+        screeningResponseRequired: true,
+      },
+
+      draftMessage:
+        "Save your progress as a draft. Review publication and payment options separately when the job is ready.",
+
+      screeningHelp:
+        "Required criteria can flag an application for review; they do not automatically reject a candidate.",
+
+      actions: {
+        jobsUrl: EMPLOYER_JOBS_URL,
+
+        submitUrl: canCreateDraft ? EMPLOYER_JOBS_URL : null,
+
+        submitMethod: "POST",
+
+        submitLabel: "Save draft",
+      },
+    };
+  }
+
+  /* ─────────────────────────────── EMPLOYER JOB EDIT FORM ─────────────────────────────── */
+
+  static buildEmployerJobEditPageView(pageData = {}) {
+    const job = pageData.job;
+
+    // Reuse creation options and limits, without treating a retained inactive
+    // branch as a new selection. The edit client omits an unchanged branch.
+    const form = this.buildEmployerJobCreatePageView({
+      ...pageData,
+      branchRequired: false,
+      canCreateDraft: true,
+    });
+
+    const jobId = this.toId(job?._id);
+    const currentBranchId = pageData.currentBranchId || null;
+    const branchRequired = pageData.branchRequired === true;
+    const branchAvailable = Boolean(currentBranchId || form.branches.length > 0 || !branchRequired);
+    const currencyChanged = pageData.currencyChanged === true;
+    const canSaveChanges = Boolean(
+      jobId &&
+      pageData.canManageJobs === true &&
+      pageData.canSaveChanges === true &&
+      form.currency &&
+      !currencyChanged &&
+      branchAvailable
+    );
+
+    let unavailableMessage = null;
+
+    if (!jobId) {
+      unavailableMessage = "The job is unavailable.";
+    } else if (pageData.canManageJobs !== true) {
+      unavailableMessage = "You do not have permission to edit this job.";
+    } else if (currencyChanged) {
+      unavailableMessage =
+        "The business currency has changed since this salary was saved. Contact support to review the salary before editing this job.";
+    } else if (!form.currency) {
+      unavailableMessage =
+        "Your business currency is unavailable. Contact support before editing this job.";
+    } else if (!branchAvailable) {
+      unavailableMessage = "An active assigned branch is required before you can save this job.";
+    } else if (!canSaveChanges) {
+      unavailableMessage = "This job is currently unavailable for editing.";
+    }
+
+    const text = (value) => (typeof value === "string" ? value : "");
+    const list = (value) =>
+      Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
+    const dateISO = (value) => {
+      if (!value) return null;
+      const date = new Date(value);
+      return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+    };
+    const amountText = (value) => {
+      if (!form.currency || currencyChanged || !Number.isSafeInteger(value) || value < 1) return "";
+      const decimals = form.currency.decimalPlaces;
+      const digits = BigInt(value)
+        .toString()
+        .padStart(decimals + 1, "0");
+      return decimals ? `${digits.slice(0, -decimals)}.${digits.slice(-decimals)}` : digits;
+    };
+
+    const values = {
+      branch: currentBranchId || "",
+      roleTitle: text(job?.roleTitle),
+      professionalType: text(job?.professionalType),
+      specialty: text(job?.specialty),
+      department: text(job?.department),
+      employmentType: text(job?.employmentType),
+      workplaceType: text(job?.workplaceType),
+      minimumYearsOfExperience: job?.minimumYearsOfExperience ?? "",
+      educationRequirement: text(job?.educationRequirement),
+      vacancyCount: job?.vacancyCount ?? "",
+      summary: text(job?.summary),
+      description: text(job?.description),
+      employmentStartDate: dateISO(job?.employmentStartDate)?.slice(0, 10) || "",
+      // Client converts this instant to device-local datetime-local input. If
+      // unchanged, retain this original ISO value to avoid precision loss.
+      applicationDeadlineISO: dateISO(job?.applicationDeadline),
+      includeCompensation: Boolean(job?.compensation),
+      compensationType: job?.compensation?.type || form.defaults.compensationType,
+      compensationPeriod: job?.compensation?.period || form.defaults.salaryPeriod,
+      minimumAmountDisplay: amountText(job?.compensation?.minimumAmount),
+      maximumAmountDisplay: amountText(job?.compensation?.maximumAmount),
+      negotiable: job?.compensation?.negotiable === true,
+      screeningQuestions: (Array.isArray(job?.screeningQuestions) ? job.screeningQuestions : [])
+        .filter(Boolean)
+        .map((question) => ({
+          _id: this.toId(question._id),
+          prompt: text(question.prompt),
+          type: text(question.type),
+          requirementLevel: text(question.requirementLevel),
+          isResponseRequired: question.isResponseRequired === true,
+          options: list(question.options),
+          acceptableOptions: list(question.acceptableOptions),
+          qualifyingBoolean:
+            typeof question.qualifyingBoolean === "boolean" ? question.qualifyingBoolean : null,
+          minimumNumber: Number.isFinite(question.minimumNumber) ? question.minimumNumber : null,
+          maximumNumber: Number.isFinite(question.maximumNumber) ? question.maximumNumber : null,
+          requireAllOptions: question.requireAllOptions === true,
+        })),
+    };
+
+    for (const field of [
+      "responsibilities",
+      "requirements",
+      "preferredQualifications",
+      "skills",
+      "benefits",
+    ]) {
+      // Keep arrays intact: stored items may contain embedded line breaks.
+      values[field] = list(job?.[field]);
+    }
+
+    return {
+      ...form,
+      pageTitle: "Edit Job",
+      mode: "edit",
+      jobId,
+      referenceCode: job?.referenceCode || null,
+      recruitmentStatus: job?.recruitmentStatus || null,
+      publicationStatus: job?.publicationStatus || null,
+      branchRequired,
+      branchPlaceholder: branchRequired ? "Select a branch" : "No branch selected",
+      branchHelp:
+        "Keep the current branch or choose an accessible active branch. An unchanged branch will be retained.",
+      currentBranch: currentBranchId
+        ? {
+            id: currentBranchId,
+            name: job?.branch?.name || "Current branch",
+            selectable: pageData.currentBranchIsSelectable === true,
+            retainOnly: pageData.currentBranchIsSelectable !== true,
+          }
+        : null,
+      hasPublicationHistory: pageData.hasPublicationHistory === true,
+      currencyChanged,
+      permissions: {
+        canManageJobs: pageData.canManageJobs === true,
+        canManageAllBranches: pageData.canManageAllBranches === true,
+        canSaveChanges,
+      },
+      unavailableMessage,
+      values,
+      draftMessage:
+        "Save changes to the job. This does not publish or renew a listing or take payment.",
+      actions: {
+        jobsUrl: EMPLOYER_JOBS_URL,
+        detailsUrl: jobId ? `${EMPLOYER_JOBS_URL}/${jobId}` : null,
+        submitUrl: canSaveChanges ? `${EMPLOYER_JOBS_URL}/${jobId}/update` : null,
+        submitMethod: "POST",
+        submitLabel: "Save changes",
+      },
+    };
+  }
+
+  static buildEmployerJobCompensationView(compensation, currency) {
+    if (!compensation) return null;
+
+    const minimum = compensation.minimumAmount;
+    const maximum = compensation.maximumAmount;
+    const valid =
+      typeof currency === "string" &&
+      /^[A-Z]{3}$/.test(currency) &&
+      Number.isSafeInteger(minimum) &&
+      minimum > 0 &&
+      Number.isSafeInteger(maximum) &&
+      maximum >= minimum &&
+      JOB_COMPENSATION_TYPES.includes(compensation.type) &&
+      JOB_SALARY_PERIODS.includes(compensation.period) &&
+      (compensation.type !== "fixed" || minimum === maximum);
+
+    let minimumDisplay = null;
+    let maximumDisplay = null;
+
+    if (valid) {
+      const formatter = new Intl.NumberFormat("en-NG", { style: "currency", currency });
+      const decimals = formatter.resolvedOptions().maximumFractionDigits;
+      const factor = 10n ** BigInt(decimals);
+
+      // Format integer and fractional parts independently to avoid rounding
+      // a safe-integer minor amount through floating-point division.
+      const formatAmount = (amount) => {
+        const units = BigInt(amount);
+        const fraction = (units % factor).toString().padStart(decimals, "0");
+        return formatter
+          .formatToParts(units / factor)
+          .map((part) => (part.type === "fraction" ? fraction : part.value))
+          .join("");
+      };
+
+      minimumDisplay = formatAmount(minimum);
+      maximumDisplay = formatAmount(maximum);
+    }
+
+    return {
+      available: Boolean(valid),
+      type: compensation.type || null,
+      currency: currency || null,
+      minimumAmount: Number.isSafeInteger(minimum) ? minimum : null,
+      maximumAmount: Number.isSafeInteger(maximum) ? maximum : null,
+      period: compensation.period || null,
+      periodLabel: this.formatStatusLabel(compensation.period),
+      negotiable: compensation.negotiable === true,
+      display: !valid
+        ? "Not available"
+        : `${compensation.type === "fixed" ? minimumDisplay : `${minimumDisplay} – ${maximumDisplay}`} per ${compensation.period}`,
+    };
+  }
+
+  static buildEmployerJobContentView(job) {
+    if (!job) return null;
+
+    const textList = (value) =>
+      Array.isArray(value)
+        ? value.filter((item) => typeof item === "string" && item.trim().length > 0)
+        : [];
+
+    return {
+      summary: job.summary || null,
+      description: job.description || null,
+      educationRequirement: job.educationRequirement || null,
+      minimumYearsOfExperience:
+        Number.isSafeInteger(job.minimumYearsOfExperience) && job.minimumYearsOfExperience >= 0
+          ? job.minimumYearsOfExperience
+          : null,
+      vacancyCount: this.toPositiveSafeInteger(job.vacancyCount, null),
+      responsibilities: textList(job.responsibilities),
+      requirements: textList(job.requirements),
+      preferredQualifications: textList(job.preferredQualifications),
+      skills: textList(job.skills),
+      benefits: textList(job.benefits),
+      currency: job.currency || null,
+      compensation: this.buildEmployerJobCompensationView(job.compensation, job.currency),
+      employmentStartDate: job.employmentStartDate || null,
+      employmentStartDateDisplay: this.formatDate(job.employmentStartDate, "UTC"),
+      applicationDeadline: job.applicationDeadline || null,
+      applicationDeadlineDisplay: this.formatDateTime(job.applicationDeadline, "UTC"),
+      applicationDeadlineTimeZone: "UTC",
+      screeningQuestions: (Array.isArray(job.screeningQuestions) ? job.screeningQuestions : [])
+        .filter(Boolean)
+        .map((question) => {
+          const criterion = ["preferred", "required"].includes(question.requirementLevel);
+          const select = ["single_select", "multi_select"].includes(question.type);
+          return {
+            id: this.toId(question._id),
+            prompt: question.prompt || null,
+            type: question.type || null,
+            typeLabel: this.formatStatusLabel(question.type),
+            requirementLevel: question.requirementLevel || null,
+            requirementLevelLabel: this.formatStatusLabel(question.requirementLevel),
+            isResponseRequired: question.isResponseRequired === true,
+            options: select ? textList(question.options) : [],
+            qualifyingBoolean:
+              criterion &&
+              question.type === "yes_no" &&
+              typeof question.qualifyingBoolean === "boolean"
+                ? question.qualifyingBoolean
+                : null,
+            minimumNumber:
+              criterion && question.type === "number" && Number.isFinite(question.minimumNumber)
+                ? question.minimumNumber
+                : null,
+            maximumNumber:
+              criterion && question.type === "number" && Number.isFinite(question.maximumNumber)
+                ? question.maximumNumber
+                : null,
+            acceptableOptions: criterion && select ? textList(question.acceptableOptions) : [],
+            requireAllOptions:
+              criterion && question.type === "multi_select" && question.requireAllOptions === true,
+          };
+        }),
+    };
+  }
+
   static buildEmployerJobDetailView(pageData = {}) {
     const {
       employer = null,
@@ -853,12 +1305,20 @@ class JobViewService {
 
     const readOnly = canViewJobs === true && canManageJobs !== true;
 
+    const editableState =
+      (job?.recruitmentStatus === "draft" && job?.publicationStatus === "unpublished") ||
+      (job?.recruitmentStatus === "active" &&
+        ["expired", "ended"].includes(job?.publicationStatus));
+
+    const canEditJob =
+      canViewJobs === true && canManageJobs === true && Boolean(jobView?.id) && editableState;
+
     return {
       pageTitle: jobView?.roleTitle || "Job Details",
 
       employer,
 
-      job: jobView,
+      job: jobView ? { ...jobView, ...this.buildEmployerJobContentView(job) } : null,
 
       publications: publicationViews,
 
@@ -868,6 +1328,8 @@ class JobViewService {
         canViewJobs: canViewJobs === true,
 
         canManageJobs: canManageJobs === true,
+
+        canEditJob,
 
         canViewAllBranches: canViewAllBranches === true,
 
@@ -897,8 +1359,7 @@ class JobViewService {
       actions: {
         jobsUrl: EMPLOYER_JOBS_URL,
 
-        editUrl:
-          canManageJobs === true && jobView?.id ? `${EMPLOYER_JOBS_URL}/${jobView.id}` : null,
+        editUrl: canEditJob ? `${EMPLOYER_JOBS_URL}/${jobView.id}/edit` : null,
 
         applicationsUrl: jobView?.applicationsUrl || null,
       },

@@ -152,6 +152,37 @@ const cancellationCompensationSchema = new mongoose.Schema(
 
 /* ───────────────────── ACTIVE-WORK CANCELLATION ───────────────────── */
 
+// Optional for existing records. New admin cancellation commands must supply this
+// complete record. This records attribution; it does not grant admin authority.
+const cancellationAdministrationSchema = new mongoose.Schema(
+  {
+    mode: {
+      type: String,
+      enum: ["employer_assisted", "platform_intervention"],
+      required: true,
+    },
+
+    executedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+
+    requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+
+    requestedAt: { type: Date, required: true },
+
+    executedAt: { type: Date, required: true },
+
+    reason: { type: String, trim: true, minlength: 10, maxlength: 500, required: true },
+
+    requestReference: { type: String, trim: true, maxlength: 200, default: null },
+
+    policyBasis: {
+      type: String,
+      enum: ["employer_cancellation_policy", "platform_intervention_review"],
+      required: true,
+    },
+  },
+  { _id: false }
+);
+
 const activeWorkCancellationSchema = new mongoose.Schema(
   {
     occurred: {
@@ -1335,6 +1366,14 @@ const shiftOccurrenceSchema = new mongoose.Schema(
     cancellationCompensation: {
       type: cancellationCompensationSchema,
       default: () => ({}),
+    },
+
+    // Requester and admin executor are separate from financial-policy actors.
+    // This audit also applies to activeWorkCancellation without changing status
+    // to cancelled or overwriting attendance and settlement records.
+    cancellationAdministration: {
+      type: cancellationAdministrationSchema,
+      default: null,
     },
 
     activeWorkCancellation: {
@@ -4438,6 +4477,140 @@ function validateActiveWorkCancellation(document, assignmentContext) {
   }
 }
 
+function validateCancellationAdministration(document) {
+  const administration = document.cancellationAdministration;
+
+  // Legacy cancellations and active terminations remain valid without it.
+  if (!administration) return;
+
+  const invalidate = (field, message) =>
+    document.invalidate(`cancellationAdministration.${field}`, message);
+
+  const active = document.activeWorkCancellation;
+  const isActiveTermination = active?.occurred === true;
+
+  if (isActiveTermination) {
+    if (!["pending_settlement", "completed", "disputed"].includes(document.status)) {
+      invalidate("mode", "Active termination audit requires a worked occurrence state.");
+    }
+  } else if (document.status !== "cancelled") {
+    invalidate(
+      "mode",
+      "Administrative cancellation audit requires cancellation or active-work termination."
+    );
+  }
+
+  // Active termination preserves worked attendance and uses its existing actor
+  // fields. Do not put ordinary cancellation facts on a worked occurrence.
+  const actor = isActiveTermination ? active.initiatedBy : document.cancelledBy;
+  const actorUser = isActiveTermination ? active.initiatedByUser : document.cancelledByUser;
+  // requestedAt is the active-work command timestamp; effectiveAt may be later.
+  const commandTime = isActiveTermination ? active.requestedAt : document.cancelledAt;
+
+  for (const field of [
+    "mode",
+    "executedBy",
+    "requestedBy",
+    "requestedAt",
+    "executedAt",
+    "reason",
+    "policyBasis",
+  ]) {
+    if (!administration[field])
+      invalidate(field, `${field} is required for administrative cancellation.`);
+  }
+
+  const sameId = (left, right) =>
+    Boolean(left && right && String(left._id || left) === String(right._id || right));
+
+  const requestedAt = administration.requestedAt
+    ? new Date(administration.requestedAt).getTime()
+    : NaN;
+  const executedAt = administration.executedAt
+    ? new Date(administration.executedAt).getTime()
+    : NaN;
+  const cancelledAt = commandTime ? new Date(commandTime).getTime() : NaN;
+
+  if (!Number.isFinite(requestedAt)) invalidate("requestedAt", "A valid request time is required.");
+  if (!Number.isFinite(executedAt)) invalidate("executedAt", "A valid execution time is required.");
+
+  if (requestedAt > executedAt) {
+    invalidate("requestedAt", "The request cannot follow execution.");
+  }
+
+  if (!Number.isFinite(cancelledAt) || executedAt !== cancelledAt) {
+    invalidate(
+      "executedAt",
+      "Execution time must match the cancellation time or active-work request time."
+    );
+  }
+
+  if (
+    typeof administration.reason !== "string" ||
+    administration.reason.trim().length < 10 ||
+    administration.reason.trim().length > 500
+  ) {
+    invalidate("reason", "An audit reason of 10 to 500 characters is required.");
+  }
+
+  if (administration.mode === "employer_assisted") {
+    // The existing employer classification and requester identity continue to
+    // drive compensation. The actual admin executor is recorded separately.
+    if (actor !== "employer") {
+      invalidate("mode", "Employer-assisted cancellation must retain the employer classification.");
+    }
+
+    if (!sameId(administration.requestedBy, actorUser)) {
+      invalidate("requestedBy", "The requester must match the employer cancellation user.");
+    }
+
+    if (sameId(administration.executedBy, administration.requestedBy)) {
+      invalidate(
+        "executedBy",
+        "The assisting admin and employer requester must be distinct users."
+      );
+    }
+
+    if (
+      !administration.requestReference ||
+      typeof administration.requestReference !== "string" ||
+      !administration.requestReference.trim()
+    ) {
+      invalidate(
+        "requestReference",
+        "Employer assistance requires a reference to the recorded request."
+      );
+    }
+
+    if (administration.policyBasis !== "employer_cancellation_policy") {
+      invalidate(
+        "policyBasis",
+        "Employer assistance must preserve the employer cancellation policy."
+      );
+    }
+  } else if (administration.mode === "platform_intervention") {
+    if (actor !== "admin") {
+      invalidate(
+        "mode",
+        "Platform intervention must retain the admin cancellation classification."
+      );
+    }
+
+    if (!sameId(administration.executedBy, actorUser)) {
+      invalidate("executedBy", "The executor must match the recorded cancelling admin.");
+    }
+
+    if (administration.policyBasis !== "platform_intervention_review") {
+      invalidate(
+        "policyBasis",
+        "Platform intervention requires an explicit financial review basis."
+      );
+    }
+  } else {
+    invalidate("mode", "Unsupported administrative cancellation mode.");
+  }
+}
+
 function validateCancellation(document) {
   const cancellationAuditValues = [
     document.cancellationCode,
@@ -4933,6 +5106,7 @@ shiftOccurrenceSchema.pre("validate", function validateShiftOccurrence() {
   validateCancellationCompensation(this, assignmentContext);
   validateActiveWorkCancellation(this, assignmentContext);
   validateCancellation(this);
+  validateCancellationAdministration(this);
   validateSettlementState(this);
   validateRefundWorkflow(this);
 });

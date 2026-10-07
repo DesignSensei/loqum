@@ -591,6 +591,184 @@ class JobQueryService {
       .lean();
   }
 
+  /* ─────────────────────────────── EMPLOYER JOB CREATION ─────────────────────────────── */
+
+  static async getEmployerJobCreatePageData({
+    userId,
+    employerProfile = null,
+    employerContext = null,
+  }) {
+    const profile = await JobQueryService.getEmployerProfileForRead({
+      userId,
+
+      employerProfile,
+
+      employerContext,
+    });
+
+    if (!JobQueryService.canManageJobs(employerContext)) {
+      throw createJobQueryError({
+        message: "You do not have permission to create permanent Jobs.",
+
+        code: "JOB_CREATE_NOT_ALLOWED",
+
+        statusCode: 403,
+      });
+    }
+
+    const branches = await JobQueryService.getAccessibleBranches({
+      employerProfileId: profile._id,
+
+      employerContext,
+    });
+
+    // Match JobService.createDraft: branch managers must select a branch,
+    // while other authorized employers may begin an unassigned draft.
+    const branchRequired = employerContext?.isBranchManager === true;
+
+    return {
+      employer: {
+        id: String(profile._id),
+
+        businessName: profile.businessName || null,
+
+        countryCode: profile.countryCode || null,
+
+        currency: profile.currency || null,
+      },
+
+      branches,
+
+      branchRequired,
+
+      canManageJobs: true,
+
+      canManageAllBranches: JobQueryService.canManageAllBranches(employerContext),
+
+      canCreateDraft: !branchRequired || branches.length > 0,
+    };
+  }
+
+  /* ─────────────────────────────── EMPLOYER JOB EDITING ─────────────────────────────── */
+
+  static async getEmployerJobEditPageData({
+    userId,
+    employerProfile = null,
+    employerContext = null,
+    jobId,
+  }) {
+    const normalizedJobId = normalizeObjectId({
+      value: jobId,
+
+      fieldName: "Job ID",
+
+      createError: createJobQueryError,
+    });
+
+    const profile = await JobQueryService.getEmployerProfileForRead({
+      userId,
+
+      employerProfile,
+
+      employerContext,
+    });
+
+    if (!JobQueryService.canManageJobs(employerContext)) {
+      throw createJobQueryError({
+        message: "You do not have permission to edit permanent Jobs.",
+
+        code: "JOB_EDIT_NOT_ALLOWED",
+
+        statusCode: 403,
+      });
+    }
+
+    const filter = JobQueryService.buildAccessibleJobFilter({
+      employerProfileId: profile._id,
+
+      employerContext,
+
+      jobId: normalizedJobId,
+    });
+
+    const job = await JobQueryService.buildEmployerJobQuery(filter).lean();
+
+    if (!job) {
+      throw createJobQueryError({
+        message: "Job was not found or is not available to you.",
+
+        code: "JOB_NOT_FOUND",
+
+        statusCode: 404,
+      });
+    }
+
+    // Mirrors JobService.assertJobContentEditable for form access.
+    // The update service must still recheck state when the employer saves.
+    const editable =
+      (job.recruitmentStatus === "draft" && job.publicationStatus === "unpublished") ||
+      (job.recruitmentStatus === "active" && ["expired", "ended"].includes(job.publicationStatus));
+
+    if (!editable) {
+      throw createJobQueryError({
+        message: "This Job is not currently open for content editing.",
+
+        code: "JOB_EDIT_STATE_INVALID",
+
+        statusCode: 409,
+      });
+    }
+
+    const branches = await JobQueryService.getAccessibleBranches({
+      employerProfileId: profile._id,
+
+      employerContext,
+    });
+
+    const currentBranchId = job.branch ? String(job.branch._id || job.branch) : null;
+
+    const hasPublicationHistory =
+      Number(job.publicationCount || 0) > 0 || Boolean(job.currentPublication);
+
+    // updateJob refreshes currency from EmployerProfile. Do not silently display
+    // old salary amounts as a different currency when preparing this form.
+    const currencyChanged = Boolean(job.compensation && job.currency !== profile.currency);
+
+    return {
+      employer: {
+        id: String(profile._id),
+
+        businessName: profile.businessName || null,
+
+        countryCode: profile.countryCode || null,
+
+        currency: profile.currency || null,
+      },
+
+      job,
+
+      branches,
+
+      currentBranchId,
+
+      currentBranchIsSelectable: Boolean(
+        currentBranchId && branches.some((branch) => String(branch._id) === currentBranchId)
+      ),
+
+      branchRequired: employerContext?.isBranchManager === true || hasPublicationHistory,
+
+      hasPublicationHistory,
+
+      currencyChanged,
+
+      canManageJobs: true,
+
+      canManageAllBranches: JobQueryService.canManageAllBranches(employerContext),
+
+      canSaveChanges: !currencyChanged,
+    };
+  }
+
   /* ─────────────────────────────── PROFESSIONAL READ ACCESS ─────────────────────────────── */
 
   static async getProfessionalProfileForRead({ userId, professionalProfile = null }) {

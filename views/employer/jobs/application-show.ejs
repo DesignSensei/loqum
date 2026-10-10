@@ -1,0 +1,915 @@
+
+<!-- views/employer/jobs/application-show.ejs -->
+
+<div id="jobApplicationDetailPage" class="d-flex flex-column gap-6">
+
+  <% if (!applicationView.permissions.canViewApplications || !applicationView.application) { %>
+    <div class="card">
+      <div class="card-body">
+        <h2 class="fs-4">Application unavailable</h2>
+
+        <p class="text-gray-600 mb-0">
+          This application could not be displayed in your employer workspace.
+        </p>
+      </div>
+    </div>
+  <% } else { %>
+
+    <!-- ───────────────────── PAGE FEEDBACK ───────────────────── -->
+
+    <div
+      id="job-application-feedback"
+      class="alert mb-0"
+      role="status"
+      aria-live="polite"
+      hidden
+    ></div>
+
+    <!-- ───────────────────── READ-ONLY NOTICE ───────────────────── -->
+
+    <% if (applicationView.readOnlyNotice.visible) { %>
+      <div class="notice d-flex rounded border border-dashed p-6 <%= applicationView.readOnlyNotice.noticeClass %>">
+        <i class="ki-duotone ki-information-5 fs-2tx text-info me-5">
+          <span class="path1"></span>
+          <span class="path2"></span>
+          <span class="path3"></span>
+        </i>
+
+        <div>
+          <div class="fw-bold text-gray-900 mb-1">
+            <%= applicationView.readOnlyNotice.title %>
+          </div>
+
+          <div class="fs-7 text-gray-700">
+            <%= applicationView.readOnlyNotice.message %>
+          </div>
+        </div>
+      </div>
+    <% } %>
+
+    <!-- ───────────────────── APPLICANT OVERVIEW ───────────────────── -->
+
+    <section class="card card-flush">
+      <div class="card-body p-6 p-lg-8">
+
+        <div class="d-flex flex-column flex-lg-row justify-content-between gap-6">
+          <div class="d-flex align-items-start gap-5">
+
+            <div class="symbol symbol-75px symbol-circle flex-shrink-0">
+              <% if (applicationView.application.candidate?.avatar?.photo) { %>
+                <img
+                  src="<%= applicationView.application.candidate.avatar.photo %>"
+                  alt="<%= applicationView.application.candidate.avatar.alt || 'Applicant' %>"
+                >
+              <% } else { %>
+                <div class="symbol-label bg-light-primary text-primary fs-2 fw-bold">
+                  <%= applicationView.application.candidate?.avatar?.initials || 'P' %>
+                </div>
+              <% } %>
+            </div>
+
+            <div>
+              <div class="d-flex flex-wrap align-items-center gap-3 mb-2">
+                <h2 class="fw-bold fs-2 text-gray-900 mb-0">
+                  <%= applicationView.application.candidate?.name || 'Applicant' %>
+                </h2>
+
+                <span class="badge <%= applicationView.application.statusBadgeClass %>">
+                  <%= applicationView.application.statusLabel || 'Unknown status' %>
+                </span>
+              </div>
+
+              <div class="d-flex flex-wrap gap-3 fs-6 text-gray-600 mb-3">
+                <% if (applicationView.application.candidate?.professionalTypeLabel) { %>
+                  <span>
+                    <%= applicationView.application.candidate.professionalTypeLabel %>
+                  </span>
+                <% } %>
+
+                <% if (applicationView.application.candidate?.specialty) { %>
+                  <span>
+                    <%= applicationView.application.candidate.specialty %>
+                  </span>
+                <% } %>
+
+                <% if (applicationView.application.candidate?.locationLabel) { %>
+                  <span>
+                    <%= applicationView.application.candidate.locationLabel %>
+                  </span>
+                <% } %>
+              </div>
+
+              <div class="text-gray-500 fs-7">
+                Applied:
+                <span class="fw-semibold text-gray-800">
+                  <%= applicationView.application.audit?.submittedAtDisplay || 'Not recorded' %>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="d-flex flex-wrap align-items-start gap-3">
+            <a
+              href="<%= applicationView.actions.applicationsUrl %>"
+              class="btn btn-sm btn-light"
+            >
+              Back to Applications
+            </a>
+
+            <% if (applicationView.actions.jobUrl) { %>
+              <a
+                href="<%= applicationView.actions.jobUrl %>"
+                class="btn btn-sm btn-light-primary"
+              >
+                View Job
+              </a>
+            <% } %>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <div class="row g-6">
+
+      <!-- ───────────────────── MAIN CONTENT ───────────────────── -->
+
+      <div class="col-12 col-xl-8">
+        <div class="d-flex flex-column gap-6">
+
+          <!-- Applied job -->
+          <section class="card card-flush" aria-labelledby="application-position-heading">
+            <div class="card-header">
+              <h3 id="application-position-heading" class="card-title fw-bold fs-4">
+                Applied Position
+              </h3>
+            </div>
+
+            <div class="card-body pt-4">
+              <div class="border border-dashed border-gray-300 rounded p-5">
+
+                <div class="d-flex flex-wrap align-items-center gap-3 mb-3">
+                  <div class="fw-bold text-gray-900 fs-5">
+                    <%= applicationView.application.publication?.roleTitle
+                      || applicationView.job?.roleTitle
+                      || 'Untitled job' %>
+                  </div>
+
+                  <% if (applicationView.job?.referenceCode) { %>
+                    <span class="badge badge-light">
+                      <%= applicationView.job.referenceCode %>
+                    </span>
+                  <% } %>
+                </div>
+
+                <div class="row g-4">
+                  <% if (applicationView.job?.branch?.name) { %>
+                    <div class="col-sm-6">
+                      <div class="text-gray-500 fs-8 mb-1">
+                        Branch
+                      </div>
+
+                      <div class="fw-semibold text-gray-800 fs-7">
+                        <%= applicationView.job.branch.name %>
+                      </div>
+                    </div>
+                  <% } %>
+
+                  <% if (applicationView.application.publication?.employmentTypeLabel) { %>
+                    <div class="col-sm-6">
+                      <div class="text-gray-500 fs-8 mb-1">
+                        Employment Type
+                      </div>
+
+                      <div class="fw-semibold text-gray-800 fs-7">
+                        <%= applicationView.application.publication.employmentTypeLabel %>
+                      </div>
+                    </div>
+                  <% } %>
+
+                  <% if (applicationView.application.publication?.workplaceTypeLabel) { %>
+                    <div class="col-sm-6">
+                      <div class="text-gray-500 fs-8 mb-1">
+                        Workplace Type
+                      </div>
+
+                      <div class="fw-semibold text-gray-800 fs-7">
+                        <%= applicationView.application.publication.workplaceTypeLabel %>
+                      </div>
+                    </div>
+                  <% } %>
+
+                  <% if (applicationView.application.publication?.locationLabel) { %>
+                    <div class="col-sm-6">
+                      <div class="text-gray-500 fs-8 mb-1">
+                        Published Job Location
+                      </div>
+
+                      <div class="fw-semibold text-gray-800 fs-7">
+                        <%= applicationView.application.publication.locationLabel %>
+                      </div>
+                    </div>
+                  <% } %>
+                </div>
+
+              </div>
+
+              <p class="form-text mt-4 mb-0">
+                The position details above reflect the publication
+                associated with this application.
+              </p>
+            </div>
+          </section>
+
+          <!-- Cover note -->
+          <section class="card card-flush" aria-labelledby="application-cover-note-heading">
+            <div class="card-header">
+              <h3 id="application-cover-note-heading" class="card-title fw-bold fs-4">
+                Applicant's Cover Note
+              </h3>
+            </div>
+
+            <div class="card-body pt-4">
+              <% if (applicationView.application.coverNote) { %>
+                <div class="bg-light rounded p-5 text-gray-800 fs-6 text-break" style="white-space: pre-wrap;"><%= applicationView.application.coverNote %></div>
+              <% } else { %>
+                <p class="text-gray-500 mb-0">
+                  No cover note was submitted with this application.
+                </p>
+              <% } %>
+            </div>
+          </section>
+
+          <!-- Screening assessment -->
+          <section class="card card-flush" aria-labelledby="application-screening-heading">
+            <div class="card-header">
+              <h3 id="application-screening-heading" class="card-title fw-bold fs-4">
+                Screening Assessment
+              </h3>
+            </div>
+
+            <div class="card-body pt-4">
+
+              <div class="d-flex flex-wrap align-items-center gap-3 mb-6">
+                <span class="text-gray-600 fs-7">
+                  Evaluation outcome:
+                </span>
+
+                <% if (applicationView.application.screeningOutcome) { %>
+                  <span class="badge badge-light-info">
+                    <%= applicationView.application.screeningOutcomeLabel
+                      || applicationView.application.screeningOutcome %>
+                  </span>
+                <% } else { %>
+                  <span class="badge badge-light-secondary">
+                    Not evaluated
+                  </span>
+                <% } %>
+              </div>
+
+              <% if (applicationView.application.screeningSummary) { %>
+                <div class="row g-4 mb-6">
+                  <div class="col-sm-6">
+                    <div class="border border-dashed border-gray-300 rounded p-5 h-100">
+                      <div class="text-gray-500 fs-7 mb-2">
+                        Required Criteria Met
+                      </div>
+
+                      <div class="fw-bold fs-2 text-gray-900">
+                        <%= applicationView.application.screeningSummary.requiredCriteriaMetCount %>
+                        <span class="fs-6 text-gray-500 fw-semibold">
+                          /
+                          <%= applicationView.application.screeningSummary.requiredCriteriaCount %>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="col-sm-6">
+                    <div class="border border-dashed border-gray-300 rounded p-5 h-100">
+                      <div class="text-gray-500 fs-7 mb-2">
+                        Preferred Criteria Met
+                      </div>
+
+                      <div class="fw-bold fs-2 text-gray-900">
+                        <%= applicationView.application.screeningSummary.preferredCriteriaMetCount %>
+                        <span class="fs-6 text-gray-500 fw-semibold">
+                          /
+                          <%= applicationView.application.screeningSummary.preferredCriteriaCount %>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              <% } %>
+
+              <% if (applicationView.application.screeningAnswers.length) { %>
+                <div class="d-flex flex-column gap-4">
+
+                  <% applicationView.application.screeningAnswers.forEach((answer, index) => { %>
+                    <div class="border border-gray-300 rounded p-5">
+
+                      <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-4">
+                        <div class="flex-grow-1">
+                          <div class="text-gray-500 fs-8 fw-semibold mb-1">
+                            Question <%= index + 1 %>
+                          </div>
+
+                          <h4 class="fw-semibold fs-6 text-gray-900 mb-0 text-break">
+                            <%= answer.prompt || 'Screening question' %>
+                          </h4>
+                        </div>
+
+                        <div class="d-flex flex-wrap gap-2">
+                          <% if (answer.requirementLevelLabel) { %>
+                            <span class="badge badge-light">
+                              <%= answer.requirementLevelLabel %>
+                            </span>
+                          <% } %>
+
+                          <% if (answer.criterionMet === true) { %>
+                            <span class="badge badge-light-success">
+                              Criterion met
+                            </span>
+                          <% } else if (answer.criterionMet === false) { %>
+                            <span class="badge badge-light-warning">
+                              Criterion not met
+                            </span>
+                          <% } %>
+                        </div>
+                      </div>
+
+                      <div class="text-gray-500 fs-8 mb-2">
+                        Applicant's Answer
+                      </div>
+
+                      <% if (answer.type === 'yes_no' && answer.booleanAnswer !== null) { %>
+                        <div class="fw-semibold text-gray-800">
+                          <%= answer.booleanAnswer ? 'Yes' : 'No' %>
+                        </div>
+
+                      <% } else if (answer.type === 'number' &&
+                                     answer.numberAnswer !== null &&
+                                     answer.numberAnswer !== undefined) { %>
+                        <div class="fw-semibold text-gray-800">
+                          <%= answer.numberAnswer %>
+                        </div>
+
+                      <% } else if (answer.selectedOptions?.length) { %>
+                        <div class="d-flex flex-wrap gap-2">
+                          <% answer.selectedOptions.forEach((option) => { %>
+                            <span class="badge badge-light-primary text-break">
+                              <%= option %>
+                            </span>
+                          <% }); %>
+                        </div>
+
+                      <% } else if (answer.textAnswer) { %>
+                        <div class="text-gray-800 text-break" style="white-space: pre-wrap;"><%= answer.textAnswer %></div>
+
+                      <% } else { %>
+                        <span class="text-gray-500">
+                          No answer recorded
+                        </span>
+                      <% } %>
+
+                    </div>
+                  <% }); %>
+
+                </div>
+              <% } else { %>
+                <p class="text-gray-500 mb-0">
+                  No screening-question responses were recorded.
+                </p>
+              <% } %>
+
+              <div class="notice d-flex rounded border border-dashed border-info bg-light-info p-5 mt-6">
+                <div class="fs-7 text-gray-700">
+                  Screening results assist recruitment decisions.
+                  They do not automatically reject an applicant.
+                  Review the applicant's full qualifications and experience
+                  before taking action.
+                </div>
+              </div>
+
+            </div>
+          </section>
+
+          <!-- Professional profile -->
+          <section class="card card-flush" aria-labelledby="application-qualifications-heading">
+            <div class="card-header">
+              <h3 id="application-qualifications-heading" class="card-title fw-bold fs-4">
+                Professional Qualifications
+              </h3>
+            </div>
+
+            <div class="card-body pt-4">
+
+              <% if (applicationView.application.candidate?.bio) { %>
+                <div class="mb-6">
+                  <div class="fw-semibold text-gray-700 mb-2">
+                    Professional Summary
+                  </div>
+
+                  <div class="text-gray-800 text-break" style="white-space: pre-wrap;"><%= applicationView.application.candidate.bio %></div>
+                </div>
+              <% } %>
+
+              <div class="fw-semibold text-gray-700 mb-4">
+                Certifications
+              </div>
+
+              <% if (applicationView.application.candidate?.certifications?.length) { %>
+                <div class="d-flex flex-column gap-3">
+
+                  <% applicationView.application.candidate.certifications.forEach((certification) => { %>
+                    <div class="border border-gray-300 rounded p-4">
+                      <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
+
+                        <div>
+                          <div class="fw-bold text-gray-900 mb-1">
+                            <%= certification.name %>
+                          </div>
+
+                          <% if (certification.issuingBody) { %>
+                            <div class="text-gray-600 fs-7">
+                              <%= certification.issuingBody %>
+                            </div>
+                          <% } %>
+
+                          <% if (certification.dateObtained) { %>
+                            <div class="text-gray-500 fs-7 mt-2">
+                              Obtained:
+                              <%= certification.dateObtainedDisplay %>
+                            </div>
+                          <% } %>
+
+                          <% if (certification.expiryDate) { %>
+                            <div class="text-gray-500 fs-7 mt-1">
+                              Expires:
+                              <%= certification.expiryDateDisplay %>
+                            </div>
+                          <% } %>
+                        </div>
+
+                        <% if (certification.verified) { %>
+                          <span class="badge badge-light-success">
+                            Verified
+                          </span>
+                        <% } %>
+
+                      </div>
+                    </div>
+                  <% }); %>
+
+                </div>
+              <% } else { %>
+                <p class="text-gray-500 mb-0">
+                  No certifications are available in the applicant's
+                  submitted or current professional information.
+                </p>
+              <% } %>
+
+            </div>
+          </section>
+
+          <!-- Application history -->
+          <section class="card card-flush" aria-labelledby="application-history-heading">
+            <div class="card-header">
+              <h3 id="application-history-heading" class="card-title fw-bold fs-4">
+                Application History
+              </h3>
+            </div>
+
+            <div class="card-body pt-4">
+              <% if (applicationView.application.audit?.statusHistory?.length) { %>
+                <div class="d-flex flex-column gap-4">
+
+                  <% applicationView.application.audit.statusHistory.forEach((entry) => { %>
+                    <div class="border-start border-3 border-primary ps-5 py-1">
+                      <div class="d-flex flex-wrap align-items-center gap-3 mb-2">
+                        <span class="badge <%= entry.statusBadgeClass %>">
+                          <%= entry.statusLabel || 'Status update' %>
+                        </span>
+
+                        <span class="text-gray-500 fs-7">
+                          <%= entry.occurredAtDisplay %>
+                        </span>
+                      </div>
+
+                      <% if (entry.fromStatusLabel) { %>
+                        <div class="text-gray-600 fs-7 mb-2">
+                          Previous stage:
+                          <%= entry.fromStatusLabel %>
+                        </div>
+                      <% } %>
+
+                      <% if (entry.note) { %>
+                        <div class="text-gray-800 fs-7 text-break" style="white-space: pre-wrap;"><%= entry.note %></div>
+                      <% } %>
+                    </div>
+                  <% }); %>
+
+                </div>
+              <% } else { %>
+                <p class="text-gray-500 mb-0">
+                  No additional status history has been recorded.
+                </p>
+              <% } %>
+            </div>
+          </section>
+
+        </div>
+      </div>
+
+      <!-- ───────────────────── SIDEBAR ───────────────────── -->
+
+      <div class="col-12 col-xl-4">
+        <div class="d-flex flex-column gap-6">
+
+          <!-- Candidate information -->
+          <section class="card card-flush" aria-labelledby="application-candidate-heading">
+            <div class="card-header">
+              <h3 id="application-candidate-heading" class="card-title fw-bold fs-4">
+                Candidate Information
+              </h3>
+            </div>
+
+            <div class="card-body pt-4">
+
+              <div class="d-flex flex-column gap-4">
+
+                <% if (applicationView.application.candidate?.email) { %>
+                  <div>
+                    <div class="text-gray-500 fs-8 mb-1">
+                      Email
+                    </div>
+
+                    <div class="fw-semibold text-gray-800 fs-7 text-break">
+                      <%= applicationView.application.candidate.email %>
+                    </div>
+                  </div>
+                <% } %>
+
+                <% if (applicationView.application.candidate?.professionalTypeLabel) { %>
+                  <div>
+                    <div class="text-gray-500 fs-8 mb-1">
+                      Profession
+                    </div>
+
+                    <div class="fw-semibold text-gray-800 fs-7">
+                      <%= applicationView.application.candidate.professionalTypeLabel %>
+                    </div>
+                  </div>
+                <% } %>
+
+                <% if (applicationView.application.candidate?.yearsOfExperience !== null &&
+                       applicationView.application.candidate?.yearsOfExperience !== undefined) { %>
+                  <div>
+                    <div class="text-gray-500 fs-8 mb-1">
+                      Years of Experience
+                    </div>
+
+                    <div class="fw-semibold text-gray-800 fs-7">
+                      <%= applicationView.application.candidate.yearsOfExperience %>
+                    </div>
+                  </div>
+                <% } %>
+
+                <% if (applicationView.application.candidate?.locationLabel) { %>
+                  <div>
+                    <div class="text-gray-500 fs-8 mb-1">
+                      Location
+                    </div>
+
+                    <div class="fw-semibold text-gray-800 fs-7">
+                      <%= applicationView.application.candidate.locationLabel %>
+                    </div>
+                  </div>
+                <% } %>
+
+                <% if (applicationView.application.candidate?.licenceVerificationStatusLabel) { %>
+                  <div>
+                    <div class="text-gray-500 fs-8 mb-1">
+                      Licence Verification
+                    </div>
+
+                    <span class="badge <%= applicationView.application.candidate.licenceVerificationBadgeClass %>">
+                      <%= applicationView.application.candidate.licenceVerificationStatusLabel %>
+                    </span>
+                  </div>
+                <% } %>
+
+                <% if (applicationView.application.candidate?.identityVerificationStatusLabel) { %>
+                  <div>
+                    <div class="text-gray-500 fs-8 mb-1">
+                      Identity Verification
+                    </div>
+
+                    <span class="badge <%= applicationView.application.candidate.identityVerificationBadgeClass %>">
+                      <%= applicationView.application.candidate.identityVerificationStatusLabel %>
+                    </span>
+                  </div>
+                <% } %>
+
+                <% if (applicationView.application.candidate?.tierLabel) { %>
+                  <div>
+                    <div class="text-gray-500 fs-8 mb-1">
+                      Professional Tier
+                    </div>
+
+                    <div class="fw-semibold text-gray-800 fs-7">
+                      <%= applicationView.application.candidate.tierLabel %>
+                    </div>
+                  </div>
+                <% } %>
+
+              </div>
+
+              <p class="form-text mt-5 mb-0">
+                Applicant details include information recorded when the
+                application was submitted and permitted current profile data.
+              </p>
+
+            </div>
+          </section>
+
+          <!-- CV -->
+          <section class="card card-flush" aria-labelledby="application-resume-heading">
+            <div class="card-header">
+              <h3 id="application-resume-heading" class="card-title fw-bold fs-4">
+                Curriculum Vitae
+              </h3>
+            </div>
+
+            <div class="card-body pt-4">
+
+              <% if (applicationView.application.resume) { %>
+                <div class="border border-dashed border-gray-300 rounded p-5">
+
+                  <div class="d-flex align-items-start gap-4 mb-4">
+                    <div class="symbol symbol-45px flex-shrink-0">
+                      <span class="symbol-label bg-light-primary">
+                        <i class="ki-duotone ki-document fs-2x text-primary">
+                          <span class="path1"></span>
+                          <span class="path2"></span>
+                        </i>
+                      </span>
+                    </div>
+
+                    <div class="flex-grow-1 min-w-0">
+                      <div class="fw-bold text-gray-900 text-break">
+                        <%= applicationView.application.resume.fileName || 'Applicant CV' %>
+                      </div>
+
+                      <div class="text-gray-500 fs-7 mt-1">
+                        <%= applicationView.application.resume.sourceLabel || 'Submitted document' %>
+                      </div>
+
+                      <% if (applicationView.application.resume.sizeDisplay) { %>
+                        <div class="text-gray-500 fs-7 mt-1">
+                          <%= applicationView.application.resume.sizeDisplay %>
+                        </div>
+                      <% } %>
+                    </div>
+                  </div>
+
+                  <% if (applicationView.application.resume.canAccessDocument) { %>
+                    <a
+                      href="<%= applicationView.application.resume.documentUrl %>"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="btn btn-sm btn-light-primary w-100"
+                    >
+                      View CV
+                    </a>
+                  <% } else { %>
+                    <div class="text-gray-500 fs-7">
+                      The saved CV document is not currently available to open.
+                    </div>
+                  <% } %>
+
+                </div>
+              <% } else { %>
+                <p class="text-gray-500 mb-0">
+                  No CV snapshot is available for this application.
+                </p>
+              <% } %>
+
+            </div>
+          </section>
+
+          <!-- Recruitment decisions -->
+          <section class="card card-flush" aria-labelledby="application-actions-heading">
+            <div class="card-header">
+              <h3 id="application-actions-heading" class="card-title fw-bold fs-4">
+                Recruitment Actions
+              </h3>
+            </div>
+
+            <div class="card-body pt-4">
+
+              <div class="d-flex flex-wrap align-items-center gap-2 mb-5">
+                <span class="text-gray-600 fs-7">
+                  Current stage:
+                </span>
+
+                <span class="badge <%= applicationView.application.statusBadgeClass %>">
+                  <%= applicationView.application.statusLabel || 'Unknown' %>
+                </span>
+              </div>
+
+              <% if (
+                applicationView.permissions.canManageApplications &&
+                applicationView.application.actions.hasManagementActions
+              ) { %>
+
+                <div class="d-flex flex-column gap-3">
+                  <% applicationView.application.actions.managementItems.forEach((action) => { %>
+                    <button
+                      type="button"
+                      class="btn btn-sm <%= action.buttonClass %> js-job-application-action-trigger"
+                      data-bs-toggle="modal"
+                      data-bs-target="#jobApplicationActionModal"
+                      data-action-config="<%= JSON.stringify(action) %>"
+                      disabled
+                    >
+                      <%= action.label %>
+                    </button>
+                  <% }); %>
+                </div>
+
+                <p class="form-text mt-5 mb-0">
+                  Recruitment decisions require confirmation.
+                  Moving an applicant to the interview stage does not
+                  automatically schedule an interview meeting.
+                </p>
+
+              <% } else if (applicationView.permissions.readOnly) { %>
+                <div class="notice rounded border border-dashed bg-light-info border-info p-4">
+                  <div class="fs-7 text-gray-700">
+                    You can review this application but cannot make
+                    recruitment decisions in your current role.
+                  </div>
+                </div>
+
+              <% } else { %>
+                <p class="text-gray-500 mb-0">
+                  No further recruitment transitions are currently available
+                  for this application.
+                </p>
+              <% } %>
+
+            </div>
+          </section>
+
+          <!-- Employer notes -->
+          <% if (applicationView.application.employerPrivateNote || applicationView.application.statusNote) { %>
+            <section class="card card-flush" aria-labelledby="application-notes-heading">
+              <div class="card-header">
+                <h3 id="application-notes-heading" class="card-title fw-bold fs-4">
+                  Employer Review Notes
+                </h3>
+              </div>
+
+              <div class="card-body pt-4">
+
+                <% if (applicationView.application.employerPrivateNote) { %>
+                  <div class="mb-5">
+                    <div class="text-gray-500 fs-8 fw-semibold mb-2">
+                      Private Note
+                    </div>
+
+                    <div class="bg-light rounded p-4 text-gray-800 fs-7 text-break" style="white-space: pre-wrap;"><%= applicationView.application.employerPrivateNote %></div>
+                  </div>
+                <% } %>
+
+                <% if (applicationView.application.statusNote) { %>
+                  <div>
+                    <div class="text-gray-500 fs-8 fw-semibold mb-2">
+                      Latest Status Note
+                    </div>
+
+                    <div class="text-gray-800 fs-7 text-break" style="white-space: pre-wrap;"><%= applicationView.application.statusNote %></div>
+                  </div>
+                <% } %>
+
+              </div>
+            </section>
+          <% } %>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- ───────────────────── RECRUITMENT ACTION MODAL ───────────────────── -->
+    <!-- Buttons stay disabled until the action browser script is initialized. -->
+
+    <% if (
+      applicationView.permissions.canManageApplications &&
+      applicationView.application.actions.hasManagementActions
+    ) { %>
+
+      <div
+        class="modal fade"
+        id="jobApplicationActionModal"
+        tabindex="-1"
+        aria-labelledby="jobApplicationActionModalLabel"
+        aria-hidden="true"
+      >
+        <div class="modal-dialog modal-dialog-centered mw-600px">
+          <div class="modal-content">
+
+            <form id="jobApplicationActionForm" novalidate>
+              <input
+                type="hidden"
+                name="_csrf"
+                value="<%= csrfToken %>"
+              >
+
+              <input
+                type="hidden"
+                id="jobApplicationActionType"
+                value=""
+              >
+
+              <input
+                type="hidden"
+                id="jobApplicationActionUrl"
+                value=""
+              >
+
+              <div class="modal-header">
+                <h2
+                  class="fw-bold text-gray-900 mb-0"
+                  id="jobApplicationActionModalLabel"
+                >
+                  Manage Application
+                </h2>
+
+                <button
+                  type="button"
+                  class="btn btn-icon btn-sm btn-active-light-primary"
+                  data-bs-dismiss="modal"
+                  aria-label="Close"
+                >
+                  <i class="ki-duotone ki-cross fs-2">
+                    <span class="path1"></span>
+                    <span class="path2"></span>
+                  </i>
+                </button>
+              </div>
+
+              <div class="modal-body py-8 px-lg-10">
+
+                <div
+                  id="jobApplicationActionAlert"
+                  class="alert alert-danger d-none"
+                  role="alert"
+                ></div>
+
+                <div
+                  id="jobApplicationActionNotice"
+                  class="notice rounded border border-dashed p-5 mb-6 d-none"
+                ></div>
+
+                <div id="jobApplicationActionFields"></div>
+
+              </div>
+
+              <div class="modal-footer">
+                <button
+                  type="button"
+                  class="btn btn-light"
+                  data-bs-dismiss="modal"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  id="jobApplicationActionSubmit"
+                  class="btn btn-primary"
+                  disabled
+                >
+                  <span class="indicator-label">
+                    Confirm Action
+                  </span>
+
+                  <span class="indicator-progress">
+                    Please wait...
+
+                    <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+                  </span>
+                </button>
+              </div>
+            </form>
+
+          </div>
+        </div>
+      </div>
+
+    <% } %>
+
+  <% } %>
+</div>

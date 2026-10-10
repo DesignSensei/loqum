@@ -908,7 +908,7 @@ class JobQueryService {
       .populate("branch", "name address state lga isActive")
       .populate(
         "currentPublication",
-        "job cycleNumber status applicationDeadline publishedAt expiresAt pauseHistory endedAt createdAt updatedAt"
+        "job cycleNumber status applicationDeadline publishedAt expiresAt pauseHistory endedAt createdAt updatedAt entitlementSnapshot.source"
       );
   }
 
@@ -1148,7 +1148,7 @@ class JobQueryService {
       job: job._id,
     })
       .select(
-        "job cycleNumber status applicationDeadline publishedAt expiresAt pauseHistory endedAt createdAt updatedAt"
+        "job cycleNumber status applicationDeadline publishedAt expiresAt pauseHistory endedAt createdAt updatedAt entitlementSnapshot.source"
       )
       .sort({
         publishedAt: -1,

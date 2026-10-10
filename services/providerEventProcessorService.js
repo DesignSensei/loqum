@@ -6,6 +6,7 @@ const Transaction = require("../models/Transaction");
 const Wallet = require("../models/Wallet");
 const EmployerRefundBatch = require("../models/EmployerRefundBatch");
 
+const DVAService = require("./dvaService");
 const ProviderEventService = require("./providerEventService");
 const ShiftFundingService = require("./shiftFundingService");
 const WalletFundingService = require("./walletFundingService");
@@ -71,6 +72,8 @@ const NON_RETRYABLE_SUBSCRIPTION_APPLICATION_CODES = Object.freeze([
  */
 class ProviderEventProcessorService {
   static eventCategories = {
+    dvaAssignment: ["dva_assignment"],
+
     employerWalletFunding: ["employer_wallet_funding"],
 
     shiftCheckoutPayment: ["shift_checkout_payment"],
@@ -1339,6 +1342,27 @@ class ProviderEventProcessorService {
       });
     }
 
+    /*
+     * DVA assignment reconciliation owns its own durable state transition.
+     *
+     * Do not let an external transaction roll back the event state while
+     * its associated DVA update has already been committed.
+     */
+    if (
+      options.session &&
+      ProviderEventProcessorService.isCategory(
+        providerEvent,
+        ProviderEventProcessorService.eventCategories.dvaAssignment
+      )
+    ) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "DVA assignment event processing does not accept an external session.",
+        code: "DVA_ASSIGNMENT_EXTERNAL_SESSION_NOT_SUPPORTED",
+        statusCode: 500,
+        retryable: false,
+      });
+    }
+
     const processingResult = await ProviderEventService.markProcessing(
       {
         providerEventRecordId: providerEvent._id,
@@ -1384,6 +1408,26 @@ class ProviderEventProcessorService {
     }
 
     try {
+      /* ---------- DVA ASSIGNMENT ---------- */
+
+      if (
+        ProviderEventProcessorService.isCategory(
+          providerEvent,
+          ProviderEventProcessorService.eventCategories.dvaAssignment
+        )
+      ) {
+        return await ProviderEventProcessorService.processDVAAssignmentEvent(
+          providerEvent,
+          processingClaimId,
+          {
+            ...options,
+            currentTime: normalizedCurrentTime,
+          }
+        );
+      }
+
+      /* ---------- EMPLOYER REFUNDS ---------- */
+
       if (
         ProviderEventProcessorService.isCategory(
           providerEvent,
@@ -1399,6 +1443,8 @@ class ProviderEventProcessorService {
           }
         );
       }
+
+      /* ---------- SHIFT CHECKOUT PAYMENTS ---------- */
 
       if (
         ProviderEventProcessorService.isCategory(
@@ -1416,6 +1462,8 @@ class ProviderEventProcessorService {
         );
       }
 
+      /* ---------- JOB PUBLICATION PAYMENTS ---------- */
+
       if (
         ProviderEventProcessorService.isCategory(
           providerEvent,
@@ -1431,6 +1479,8 @@ class ProviderEventProcessorService {
           }
         );
       }
+
+      /* ---------- SUBSCRIPTION PAYMENTS ---------- */
 
       if (
         ProviderEventProcessorService.isCategory(
@@ -1448,6 +1498,8 @@ class ProviderEventProcessorService {
         );
       }
 
+      /* ---------- EMPLOYER WALLET FUNDING ---------- */
+
       if (
         ProviderEventProcessorService.isCategory(
           providerEvent,
@@ -1463,6 +1515,8 @@ class ProviderEventProcessorService {
           }
         );
       }
+
+      /* ---------- WITHDRAWAL PAYOUT ---------- */
 
       if (
         ProviderEventProcessorService.isCategory(
@@ -1480,6 +1534,8 @@ class ProviderEventProcessorService {
         );
       }
 
+      /* ---------- WITHDRAWAL REVERSAL ---------- */
+
       if (
         ProviderEventProcessorService.isCategory(
           providerEvent,
@@ -1495,6 +1551,8 @@ class ProviderEventProcessorService {
           }
         );
       }
+
+      /* ---------- UNHANDLED PROVIDER EVENTS ---------- */
 
       const ignoredResult = await ProviderEventService.markIgnored(
         {
@@ -1516,6 +1574,8 @@ class ProviderEventProcessorService {
         ignored: true,
       };
     } catch (error) {
+      /* ---------- PROCESSING CLAIM LOST ---------- */
+
       if (ProviderEventProcessorService.isProcessingClaimError(error)) {
         return ProviderEventProcessorService.getProcessingClaimLostResult(
           providerEvent._id,
@@ -1523,6 +1583,8 @@ class ProviderEventProcessorService {
           options
         );
       }
+
+      /* ---------- RETRY CLASSIFICATION ---------- */
 
       const shiftFundingRecoveryRequired =
         ProviderEventProcessorService.isShiftFundingRecoveryError(error);
@@ -1582,6 +1644,122 @@ class ProviderEventProcessorService {
     }
   }
 
+  /* ─────────────────────────────── PAYSTACK DVA ASSIGNMENT ─────────────────────────────── */
+
+  static async processDVAAssignmentEvent(providerEvent, processingClaimId, options = {}) {
+    const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
+
+    const currentTime = ProviderEventProcessorService.getOperationCurrentTime(options);
+
+    const eventName = ProviderEventProcessorService.cleanString(
+      providerEvent.eventName
+    )?.toLowerCase();
+
+    if (
+      providerEvent.provider !== "paystack" ||
+      !["dedicatedaccount.assign.success", "dedicatedaccount.assign.failed"].includes(eventName)
+    ) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Unsupported Paystack dedicated-account assignment event.",
+        code: "UNSUPPORTED_PAYSTACK_DVA_ASSIGNMENT_EVENT",
+        statusCode: 422,
+        retryable: false,
+      });
+    }
+
+    const customerId = ProviderEventProcessorService.cleanString(payload.paystackCustomerId);
+
+    const customerCode = ProviderEventProcessorService.cleanString(payload.paystackCustomerCode);
+
+    const customerEmail = ProviderEventProcessorService.cleanString(
+      payload.customerEmail
+    )?.toLowerCase();
+
+    const dedicatedAccountId = ProviderEventProcessorService.cleanString(
+      payload.paystackDedicatedAccountId
+    );
+
+    if (!customerId && !customerCode && !customerEmail && !dedicatedAccountId) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message:
+          "Paystack DVA assignment webhook contains no provider customer or account identity.",
+        code: "PAYSTACK_DVA_ASSIGNMENT_IDENTITY_REQUIRED",
+        statusCode: 422,
+        retryable: false,
+      });
+    }
+
+    const result = await DVAService.applyPaystackAssignmentEvent({
+      eventName,
+      normalizedPayload: payload,
+      rawPayload: providerEvent.rawPayload,
+      providerEventRecordId: providerEvent._id,
+      providerEventMarker: ProviderEventProcessorService.getProviderEventMarker(providerEvent),
+      currentTime,
+    });
+
+    if (!result?.dva?._id || !["active", "failed"].includes(result.dva.status)) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Paystack DVA assignment has not reached a durable terminal state.",
+        code: "PAYSTACK_DVA_ASSIGNMENT_FINALIZATION_PENDING",
+        statusCode: 503,
+        retryable: true,
+      });
+    }
+
+    if (
+      (eventName === "dedicatedaccount.assign.success" && result.dva.status !== "active") ||
+      (eventName === "dedicatedaccount.assign.failed" && result.dva.status !== "failed")
+    ) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Paystack DVA webhook outcome conflicts with the resolved DVA status.",
+        code: "PAYSTACK_DVA_ASSIGNMENT_STATE_MISMATCH",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
+    const dva = result.dva;
+
+    const processedResult = await ProviderEventService.markProcessed(
+      {
+        providerEventRecordId: providerEvent._id,
+        processingClaimId,
+        employer: dva.employer,
+        wallet: dva.wallet,
+        dva: dva._id,
+
+        normalizedPayload: {
+          ...payload,
+          employerProfileId: String(dva.employer),
+          dvaId: String(dva._id),
+          paystackCustomerCode: dva.paystackCustomerCode || customerCode || null,
+          paystackDedicatedAccountId: dva.paystackDedicatedAccountId || dedicatedAccountId || null,
+        },
+
+        metadata: {
+          processor: "ProviderEventProcessorService",
+          dvaAssignmentStatus: dva.status,
+          idempotentDVAAssignment: result.idempotent === true,
+          resolutionSource: result.resolutionSource || null,
+        },
+
+        currentTime,
+      },
+      {
+        session: options.session,
+      }
+    );
+
+    return {
+      providerEvent: processedResult.providerEvent,
+      dva,
+      processed: true,
+      dvaAssignmentStatus: dva.status,
+      idempotentDVAAssignment: result.idempotent === true,
+    };
+  }
+
   /* ─────────────────────────────── EMPLOYER PAYSTACK REFUND ─────────────────────────────── */
 
   static async processEmployerRefundEvent(providerEvent, processingClaimId, options = {}) {
@@ -1610,6 +1788,8 @@ class ProviderEventProcessorService {
       providerEvent.employerRefundBatchLineId
     );
 
+    /* ---------- VALIDATE REFUND RECONCILIATION IDENTITY ---------- */
+
     if (
       !linkedBatchId &&
       !linkedLineId &&
@@ -1626,12 +1806,16 @@ class ProviderEventProcessorService {
       });
     }
 
+    /* ---------- RESOLVE REFUND EXECUTION ---------- */
+
     const execution = await ProviderEventProcessorService.resolveEmployerRefundExecution(
       providerEvent,
       {
         session: options.session,
       }
     );
+
+    /* ---------- VALIDATE REFUND AGAINST EXECUTION ---------- */
 
     ProviderEventProcessorService.assertEmployerRefundEventMatchesExecution({
       providerEvent,
@@ -1656,6 +1840,8 @@ class ProviderEventProcessorService {
           "Paystack reported that the employer refund failed."
         : null;
 
+    /* ---------- LINK PROVIDER EVENT TO REFUND EXECUTION ---------- */
+
     await ProviderEventService.linkEmployerRefundExecution(
       {
         providerEventRecordId: providerEvent._id,
@@ -1672,6 +1858,8 @@ class ProviderEventProcessorService {
       }
     );
 
+    /* ---------- SYNCHRONIZE PAYSTACK REFUND STATUS ---------- */
+
     const syncResult = await EmployerRefundBatchService.syncPaystackRefundStatus({
       batchId,
       lineId,
@@ -1683,6 +1871,8 @@ class ProviderEventProcessorService {
       currentTime,
     });
 
+    /* ---------- MARK PROVIDER EVENT PROCESSED ---------- */
+
     const processedResult = await ProviderEventService.markProcessed(
       {
         providerEventRecordId: providerEvent._id,
@@ -1693,6 +1883,7 @@ class ProviderEventProcessorService {
         providerRefundReference,
         employerRefundBatch: batchId,
         employerRefundBatchLineId: lineId,
+
         normalizedPayload: {
           ...payload,
           refundStatus,
@@ -1706,6 +1897,7 @@ class ProviderEventProcessorService {
           employerRefundBatchId: String(batchId),
           employerRefundBatchLineId: String(lineId),
         },
+
         metadata: {
           processor: "ProviderEventProcessorService",
           employerRefundSynchronized: true,
@@ -1715,6 +1907,7 @@ class ProviderEventProcessorService {
           resolutionSource: execution.resolutionSource,
           providerEventMarker,
         },
+
         currentTime,
       },
       {

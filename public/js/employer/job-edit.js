@@ -686,6 +686,13 @@ var EmployerJobEdit = (function () {
     form.dataset.initialized = "true";
 
     fields.disabled = false;
+
+    if (window.FormControls) {
+      FormControls.init(form, {
+        selects: "select",
+        dates: 'input[type="date"], input[type="datetime-local"]',
+      });
+    }
   }
 
   if (typeof module !== "undefined" && module.exports) {

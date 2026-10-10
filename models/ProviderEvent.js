@@ -1,4 +1,5 @@
 // models/ProviderEvent.js
+
 const mongoose = require("mongoose");
 
 /**
@@ -18,6 +19,7 @@ const mongoose = require("mongoose");
  * - Fence each active processing attempt with a unique ownership claim.
  * - Keep provider webhook logic separate from wallet ledger logic.
  * - Preserve provider-side refund state independently from Loqum refund obligations.
+ * - Track Paystack dedicated-account assignment events before DVA activation.
  *
  * EMPLOYER COMMERCIAL PAYMENT FLOW:
  *
@@ -87,6 +89,11 @@ const PAYSTACK_REFUND_EVENT_NAMES = Object.freeze([
   "refund.processed",
 ]);
 
+const PAYSTACK_DVA_ASSIGNMENT_EVENT_NAMES = Object.freeze([
+  "dedicatedaccount.assign.success",
+  "dedicatedaccount.assign.failed",
+]);
+
 const providerEventSchema = new mongoose.Schema(
   {
     // --- PROVIDER IDENTITY ---
@@ -154,6 +161,8 @@ const providerEventSchema = new mongoose.Schema(
       // refund.needs-attention
       // refund.failed
       // refund.processed
+      // dedicatedaccount.assign.success
+      // dedicatedaccount.assign.failed
     },
 
     eventCategory: {
@@ -161,18 +170,14 @@ const providerEventSchema = new mongoose.Schema(
       enum: [
         "employer_wallet_funding",
         "shift_checkout_payment",
-
         "job_publication_purchase",
         "subscription_payment",
-
         "employer_refund",
-
+        "dva_assignment",
         "employer_withdrawal_payout",
         "employer_withdrawal_reversal",
-
         "professional_withdrawal_payout",
         "professional_withdrawal_reversal",
-
         "other",
       ],
       default: "other",
@@ -451,7 +456,6 @@ providerEventSchema.index(
   },
   {
     unique: true,
-
     partialFilterExpression: {
       providerEventId: {
         $type: "string",
@@ -588,9 +592,16 @@ providerEventSchema.index({
 
 // Equality prefix and ID order used by bounded recovery sweeps.
 // Date deadlines remain query filters; deployment must build this index.
+
 providerEventSchema.index(
-  { isVerified: 1, status: 1, _id: 1 },
-  { name: "provider_event_recovery_sweep" }
+  {
+    isVerified: 1,
+    status: 1,
+    _id: 1,
+  },
+  {
+    name: "provider_event_recovery_sweep",
+  }
 );
 
 // --- VALIDATION / NORMALIZATION ---
@@ -708,6 +719,26 @@ providerEventSchema.pre("validate", function () {
   }
 
   /*
+   * Paystack DVA assignment webhooks change account setup state only.
+   * They do not credit the employer wallet or escrow.
+   */
+
+  if (
+    this.eventCategory === "dva_assignment" &&
+    (this.provider !== "paystack" || !PAYSTACK_DVA_ASSIGNMENT_EVENT_NAMES.includes(this.eventName))
+  ) {
+    throw new Error("DVA assignment category requires a supported Paystack assignment event.");
+  }
+
+  if (
+    this.provider === "paystack" &&
+    PAYSTACK_DVA_ASSIGNMENT_EVENT_NAMES.includes(this.eventName) &&
+    this.eventCategory !== "dva_assignment"
+  ) {
+    throw new Error("Paystack DVA assignment events must use dva_assignment category.");
+  }
+
+  /*
    * PAYG Job-publication and subscription payments currently enter through
    * Paystack charge.success. The normalized metadata may distinguish the exact
    * commercial payment kind, but lifecycle semantics remain service-owned.
@@ -797,9 +828,7 @@ providerEventSchema.pre("validate", function () {
 
   const terminalFields = {
     processed: ["processedAt", null],
-
     failed: ["failedAt", "failureReason"],
-
     ignored: ["ignoredAt", "ignoredReason"],
   };
 

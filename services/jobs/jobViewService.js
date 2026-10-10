@@ -223,7 +223,10 @@ class JobViewService {
       publishedAtDisplay: this.formatDateTime(publication.publishedAt),
 
       expiresAt: publication.expiresAt || null,
-      expiresAtDisplay: this.formatDateTime(publication.expiresAt),
+      expiresAtDisplay:
+        publication.entitlementSnapshot?.source === "subscription_slot"
+          ? "No fixed expiry (subscription slot)"
+          : this.formatDateTime(publication.expiresAt),
 
       hasExpiredByTime,
 
@@ -1285,6 +1288,81 @@ class JobViewService {
     };
   }
 
+  static buildEmployerJobPublicationReviewView(data) {
+    const detail = this.buildEmployerJobDetailView(data.detail);
+    const jobId = detail.job.id;
+    const preview = data.preview;
+
+    const labels = {
+      free: "Free publication",
+      free_monthly: "Monthly free posting",
+      subscription_slot: "Available subscription job slot",
+      paid_single_post: "Previously paid posting",
+    };
+
+    const price = (amount, currency) => {
+      const formatter = new Intl.NumberFormat("en-NG", {
+        style: "currency",
+        currency,
+      });
+
+      const digits = formatter.resolvedOptions().maximumFractionDigits;
+      const scale = 10n ** BigInt(digits);
+      const value = BigInt(amount);
+      const fraction = String(value % scale).padStart(digits, "0");
+
+      return formatter
+        .formatToParts(value / scale)
+        .map((part) => (part.type === "fraction" ? fraction : part.value))
+        .join("");
+    };
+
+    return {
+      pageTitle: "Review and publish job",
+      detail,
+      issues: data.issues,
+      selectedSource: labels[preview?.sourceType] || "No posting available",
+      sourceType: preview?.sourceType || null,
+      duration:
+        preview?.sourceType === "subscription_slot"
+          ? "No fixed expiry. Visibility depends on your active subscription, slot capacity and recruitment status."
+          : `${data.periodDays} days from publication.`,
+      guaranteedUntil:
+        preview?.sourceType === "subscription_slot"
+          ? this.formatDateTime(preview.subscription.currentPeriodEnd)
+          : null,
+      monthlyFree: preview?.monthlyFree || null,
+      subscription: preview?.subscription || null,
+      paidPurchase: preview?.paidPurchase || null,
+      canPublish: data.issues.length === 0 && Boolean(preview?.sourceType),
+      canPurchase: data.canPurchase,
+      canPayFromWallet: data.canPayFromWallet,
+      plans: data.plans.map((plan) => ({
+        id: String(plan._id),
+        name: plan.name,
+        description: plan.description,
+        priceMinor: plan.priceMinor,
+        currency: plan.currency,
+        price: price(plan.priceMinor, plan.currency),
+        days: plan.publicationPeriodDays,
+      })),
+      pendingPayments: data.pendingPayments.map((payment) => ({
+        ...payment,
+        price: price(payment.priceMinor, payment.currency),
+      })),
+      review: data.review,
+      actions: {
+        detailsUrl: `${EMPLOYER_JOBS_URL}/${jobId}`,
+        reviewUrl: `${EMPLOYER_JOBS_URL}/${jobId}/publish`,
+        confirmUrl: `${EMPLOYER_JOBS_URL}/${jobId}/publish/confirm`,
+        walletUrl: "/employer/billing/job-publications/purchase/wallet",
+        checkoutUrl: "/employer/billing/job-publications/initialize-checkout",
+        verifyUrl: "/employer/billing/job-publications/verify",
+        billingUrl: "/employer/billing#subscription",
+      },
+    };
+  }
+
   static buildEmployerJobDetailView(pageData = {}) {
     const {
       employer = null,
@@ -1312,6 +1390,18 @@ class JobViewService {
 
     const canEditJob =
       canViewJobs === true && canManageJobs === true && Boolean(jobView?.id) && editableState;
+
+    const publicationExpiredByTime =
+      job?.recruitmentStatus === "active" &&
+      ["live", "paused"].includes(job?.publicationStatus) &&
+      job?.currentPublication?.expiresAt &&
+      new Date(job.currentPublication.expiresAt) <= currentTime;
+
+    const canReviewPublication =
+      canViewJobs === true &&
+      canManageJobs === true &&
+      Boolean(jobView?.id) &&
+      (editableState || publicationExpiredByTime);
 
     return {
       pageTitle: jobView?.roleTitle || "Job Details",
@@ -1357,6 +1447,10 @@ class JobViewService {
           },
 
       actions: {
+        publicationReviewUrl: canReviewPublication
+          ? `${EMPLOYER_JOBS_URL}/${jobView.id}/publish`
+          : null,
+
         jobsUrl: EMPLOYER_JOBS_URL,
 
         editUrl: canEditJob ? `${EMPLOYER_JOBS_URL}/${jobView.id}/edit` : null,

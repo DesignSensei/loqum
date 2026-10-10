@@ -93,6 +93,7 @@ class PaystackService {
 
   static cleanString(value) {
     if (value === null || value === undefined) return null;
+
     if (typeof value !== "string" && !(typeof value === "number" && Number.isSafeInteger(value))) {
       throw PaystackService.createPaystackError({
         message: "Expected text or a safe integer identifier.",
@@ -100,6 +101,7 @@ class PaystackService {
         statusCode: 400,
       });
     }
+
     const cleaned = String(value).trim();
 
     return cleaned || null;
@@ -114,6 +116,7 @@ class PaystackService {
   }
 
   /* Provider amounts may be decimal digit strings, but never coerced booleans or blanks. */
+
   static normalizeProviderAmount(value, { required = false } = {}) {
     if (value === null || value === undefined) {
       if (!required) return null;
@@ -134,12 +137,14 @@ class PaystackService {
 
   static normalizeProviderId(value) {
     if (value === null || value === undefined) return null;
+
     if (
       (typeof value === "number" && Number.isSafeInteger(value) && value > 0) ||
       (typeof value === "string" && /^[1-9]\d*$/.test(value))
     ) {
       return String(value);
     }
+
     throw PaystackService.createPaystackError({
       message: "Paystack returned an invalid or unsafe provider ID.",
       code: "INVALID_PAYSTACK_PROVIDER_ID",
@@ -151,6 +156,7 @@ class PaystackService {
     if (value === null || value === undefined) return null;
     if (value === true || value === 1) return true;
     if (value === false || value === 0) return false;
+
     throw PaystackService.createPaystackError({
       message: "Paystack returned an invalid boolean value.",
       code: "INVALID_PAYSTACK_PROVIDER_BOOLEAN",
@@ -166,6 +172,7 @@ class PaystackService {
         statusCode: 502,
       });
     }
+
     return value;
   }
 
@@ -177,6 +184,7 @@ class PaystackService {
       !transaction ||
       refund.transaction?.id === transaction ||
       refund.transaction?.reference === transaction;
+
     if (
       !refund.id ||
       !refund.status ||
@@ -280,6 +288,7 @@ class PaystackService {
      * alphanumeric characters and:
      * hyphen, period and equals sign.
      */
+
     if (!/^[A-Za-z0-9.=-]+$/.test(reference)) {
       throw PaystackService.createPaystackError({
         message: "The Paystack transaction reference contains unsupported characters.",
@@ -561,7 +570,6 @@ class PaystackService {
       .toLowerCase();
 
     const countryByCode = PaystackService.supportedBankCountries;
-
     const normalizedCode = rawValue.toUpperCase();
 
     if (countryByCode[normalizedCode]) {
@@ -846,17 +854,11 @@ class PaystackService {
     metadata = {},
   }) {
     const normalizedEmail = PaystackService.normalizeEmail(email);
-
     const normalizedAmount = PaystackService.normalizeAmount(amount);
-
     const normalizedReference = PaystackService.normalizeReference(reference);
-
     const normalizedCurrency = PaystackService.normalizeCurrency(currency);
-
     const normalizedCallbackUrl = PaystackService.normalizeCallbackUrl(callbackUrl);
-
     const normalizedChannels = PaystackService.normalizeChannels(channels);
-
     const normalizedMetadata = PaystackService.normalizeMetadata(metadata);
 
     const payload = {
@@ -869,9 +871,7 @@ class PaystackService {
       amount: String(normalizedAmount),
 
       reference: normalizedReference,
-
       currency: normalizedCurrency,
-
       metadata: normalizedMetadata,
     };
 
@@ -954,33 +954,19 @@ class PaystackService {
 
     return {
       id: PaystackService.normalizeProviderId(transaction.id),
-
       reference: returnedReference,
-
       status: PaystackService.cleanString(transaction.status),
-
       amount: PaystackService.normalizeProviderAmount(transaction.amount, { required: true }),
-
       currency: PaystackService.normalizeCurrency(transaction.currency, ""),
-
       channel: PaystackService.cleanString(transaction.channel),
-
       domain: PaystackService.cleanString(transaction.domain),
-
       paidAt: transaction.paid_at || transaction.paidAt || null,
-
       createdAt: transaction.created_at || transaction.createdAt || null,
-
       gatewayResponse: PaystackService.cleanString(transaction.gateway_response),
-
       fees: PaystackService.normalizeProviderAmount(transaction.fees),
-
       customerEmail: PaystackService.cleanString(transaction.customer?.email),
-
       metadata: transaction.metadata || null,
-
       authorization: transaction.authorization || null,
-
       raw: transaction,
     };
   }
@@ -1043,17 +1029,12 @@ class PaystackService {
       value.transaction && typeof value.transaction === "object"
         ? {
             id: PaystackService.normalizeProviderId(value.transaction.id),
-
             reference: PaystackService.cleanString(value.transaction.reference),
-
             amount: PaystackService.normalizeProviderAmount(value.transaction.amount),
-
             currency: PaystackService.cleanString(value.transaction.currency)
               ? PaystackService.normalizeCurrency(value.transaction.currency)
               : null,
-
             status: PaystackService.cleanString(value.transaction.status),
-
             raw: value.transaction,
           }
         : value.transaction !== null && value.transaction !== undefined
@@ -1071,43 +1052,25 @@ class PaystackService {
 
     return {
       id: PaystackService.normalizeProviderId(value.id),
-
       transaction,
-
       status: status ? status.toLowerCase() : null,
-
       amount: PaystackService.normalizeProviderAmount(value.amount),
-
       deductedAmount: PaystackService.normalizeProviderAmount(value.deducted_amount),
-
       currency: PaystackService.cleanString(value.currency)
         ? PaystackService.normalizeCurrency(value.currency)
         : null,
-
       channel: PaystackService.cleanString(value.channel),
-
       domain: PaystackService.cleanString(value.domain),
-
       customerNote: PaystackService.cleanString(value.customer_note),
-
       merchantNote: PaystackService.cleanString(value.merchant_note),
-
       refundedBy: PaystackService.cleanString(value.refunded_by),
-
       refundedAt: value.refunded_at || value.refundedAt || null,
-
       expectedAt: value.expected_at || value.expectedAt || null,
-
       fullyDeducted: PaystackService.normalizeProviderBoolean(value.fully_deducted),
-
       bankReference: PaystackService.cleanString(value.bank_reference),
-
       reason: PaystackService.cleanString(value.reason),
-
       createdAt: value.created_at || value.createdAt || null,
-
       updatedAt: value.updated_at || value.updatedAt || null,
-
       raw: value,
     };
   }
@@ -1118,26 +1081,7 @@ class PaystackService {
     currency = null,
     customerNote = null,
     merchantNote = null,
-
-    /*
-     * Loqum trace key only.
-     *
-     * Paystack's documented Create Refund
-     * request does not expose an
-     * idempotency-key field.
-     *
-     * We therefore place this value in
-     * merchant_note for reconciliation.
-     */
     idempotencyKey = null,
-
-    /*
-     * Loqum-only trace metadata.
-     *
-     * This is not sent as a Paystack
-     * "metadata" field because the Refund
-     * API does not document one.
-     */
     metadata = {},
   }) {
     const normalizedTransaction = PaystackService.normalizeTransactionIdentifier(transaction);
@@ -1206,7 +1150,6 @@ class PaystackService {
 
     return {
       ...refund,
-
       trace: {
         idempotencyKey: normalizedTraceKey,
         metadata: normalizedMetadata,
@@ -1223,7 +1166,11 @@ class PaystackService {
     });
 
     const refund = PaystackService.normalizeRefundRecord(response.data);
-    PaystackService.assertRefundIdentity(refund, { id: normalizedRefundId });
+
+    PaystackService.assertRefundIdentity(refund, {
+      id: normalizedRefundId,
+    });
+
     return refund;
   }
 
@@ -1252,9 +1199,7 @@ class PaystackService {
     const normalizedPerPage = PaystackService.normalizePositiveInteger(
       perPage,
       "refunds per page",
-      {
-        defaultValue: 50,
-      }
+      { defaultValue: 50 }
     );
 
     const normalizedPage = PaystackService.normalizePositiveInteger(page, "refund page", {
@@ -1292,9 +1237,7 @@ class PaystackService {
 
     return {
       refunds: records.map((record) => PaystackService.normalizeRefundRecord(record)),
-
       meta: response.meta || null,
-
       raw: response,
     };
   }
@@ -1304,14 +1247,6 @@ class PaystackService {
     currency,
     accountNumber,
     bankId,
-
-    /*
-     * Loqum trace key only.
-     *
-     * Paystack's documented Retry Refund request does not expose an
-     * idempotency-key field. Keep this value only in Loqum's execution audit;
-     * do not send it to Paystack.
-     */
     idempotencyKey = null,
   }) {
     const normalizedRefundId = PaystackService.normalizeRefundId(refundId);
@@ -1326,9 +1261,7 @@ class PaystackService {
 
     const response = await PaystackService.request({
       method: "post",
-
       path: `/refund/retry_with_customer_details/${encodeURIComponent(normalizedRefundId)}`,
-
       data: {
         refund_account_details: {
           currency: normalizedCurrency,
@@ -1360,7 +1293,6 @@ class PaystackService {
 
     return {
       ...refund,
-
       trace: {
         idempotencyKey: normalizedTraceKey,
       },
@@ -1388,12 +1320,11 @@ class PaystackService {
     let transactionId = normalizedTransaction;
 
     /*
-     * Paystack's refund-list transaction
-     * filter is provider-transaction based.
-     *
-     * If Loqum has only the Checkout
-     * reference, resolve it first.
+     * Paystack's refund-list transaction filter is
+     * provider-transaction based. Resolve a Checkout
+     * reference to its provider transaction ID first.
      */
+
     if (!/^\d+$/.test(normalizedTransaction)) {
       const verifiedTransaction = await PaystackService.verifyTransaction(normalizedTransaction);
 
@@ -1412,12 +1343,13 @@ class PaystackService {
     const pageSize = PaystackService.normalizePositiveInteger(perPage, "refunds per page", {
       defaultValue: 50,
     });
+
     const normalizedCurrency = PaystackService.normalizeOptionalCurrency(currency);
+
     const marker = `key=${normalizedTraceKey}`;
     const matches = new Map();
     let lastMeta = null;
 
-    // Scan every page before accepting a unique match. A cap is an error, not "not found".
     for (let page = 1; page <= 100; page += 1) {
       const result = await PaystackService.listRefunds({
         transaction: transactionId,
@@ -1425,19 +1357,23 @@ class PaystackService {
         perPage: pageSize,
         page,
       });
+
       lastMeta = result.meta;
 
       for (const refund of result.refunds) {
         const noteParts = String(refund.merchantNote || "")
           .split("|")
           .map((part) => part.trim());
+
         if (!noteParts.includes(marker)) continue;
 
         PaystackService.assertRefundIdentity(refund, {
           transaction: transactionId,
           currency: normalizedCurrency,
         });
+
         matches.set(refund.id, refund);
+
         if (matches.size > 1) {
           throw PaystackService.createPaystackError({
             message:
@@ -1450,6 +1386,7 @@ class PaystackService {
 
       const pageCount = result.meta?.pageCount;
       const hasPageCount = pageCount !== null && pageCount !== undefined;
+
       if (
         hasPageCount &&
         (!Number.isSafeInteger(pageCount) ||
@@ -1468,6 +1405,7 @@ class PaystackService {
         (!hasPageCount && result.refunds.length < pageSize)
       ) {
         const refund = matches.values().next().value || null;
+
         return {
           found: Boolean(refund),
           refund,
@@ -1506,39 +1444,24 @@ class PaystackService {
 
     return {
       id: PaystackService.normalizeProviderId(value.id),
-
       recipientCode,
-
       type: PaystackService.cleanString(value.type)
         ? String(value.type).trim().toLowerCase()
         : null,
-
       name: PaystackService.cleanString(value.name),
-
       description: PaystackService.cleanString(value.description),
-
       currency: PaystackService.cleanString(value.currency)
         ? PaystackService.normalizeCurrency(value.currency)
         : null,
-
       active: PaystackService.normalizeProviderBoolean(value.active),
-
       isDeleted: PaystackService.normalizeProviderBoolean(value.is_deleted ?? value.isDeleted),
-
       accountNumber: PaystackService.cleanString(details.account_number || details.accountNumber),
-
       accountName: PaystackService.cleanString(details.account_name || details.accountName),
-
       bankCode: PaystackService.cleanString(details.bank_code || details.bankCode),
-
       bankName: PaystackService.cleanString(details.bank_name || details.bankName),
-
       metadata: value.metadata && typeof value.metadata === "object" ? value.metadata : null,
-
       createdAt: value.createdAt || value.created_at || null,
-
       updatedAt: value.updatedAt || value.updated_at || null,
-
       raw: value,
     };
   }
@@ -1578,37 +1501,22 @@ class PaystackService {
 
     return {
       id: PaystackService.normalizeProviderId(value.id),
-
       domain: PaystackService.cleanString(value.domain),
-
       amount: PaystackService.normalizeProviderAmount(value.amount),
-
       currency: PaystackService.cleanString(value.currency)
         ? PaystackService.normalizeCurrency(value.currency)
         : null,
-
       reference: PaystackService.cleanString(value.reference),
-
       source: PaystackService.cleanString(value.source),
-
       reason: PaystackService.cleanString(value.reason),
-
       status: rawStatus ? rawStatus.toLowerCase() : null,
-
       transferCode: PaystackService.cleanString(value.transfer_code || value.transferCode),
-
       recipientCode,
-
       recipientId,
-
       failures: value.failures === null || value.failures === undefined ? null : value.failures,
-
       transferredAt: value.transferred_at || value.transferredAt || null,
-
       createdAt: value.createdAt || value.created_at || null,
-
       updatedAt: value.updatedAt || value.updated_at || null,
-
       raw: value,
     };
   }
@@ -1932,13 +1840,10 @@ class PaystackService {
       first_name: cleanFirstName,
       last_name: cleanLastName,
       phone: cleanPhone,
-
       preferred_bank: PaystackService.getPreferredDVABank(preferredBank),
-
       country: String(countryCode || "NG")
         .toUpperCase()
         .trim(),
-
       metadata: PaystackService.normalizeMetadata(metadata),
     };
 
@@ -1947,6 +1852,66 @@ class PaystackService {
       path: "/dedicated_account/assign",
       data: payload,
     });
+
+    /*
+     * Paystack may acknowledge DVA assignment before
+     * account information is available.
+     *
+     * Preserve an immediate account response if provided.
+     * Otherwise return a pending result when Paystack
+     * confirms that assignment is in progress.
+     */
+
+    if (response.data && typeof response.data === "object" && !Array.isArray(response.data)) {
+      return response.data;
+    }
+
+    const message = PaystackService.cleanString(response.message);
+
+    if (
+      response.status === true &&
+      message &&
+      /assign dedicated account in progress/i.test(message)
+    ) {
+      return {
+        pending: true,
+        message,
+        mode: PaystackService.getMode(),
+      };
+    }
+
+    throw PaystackService.createPaystackError({
+      message: "Paystack returned an unrecognized DVA assignment response.",
+      code: "INVALID_PAYSTACK_DVA_ASSIGNMENT_RESPONSE",
+      statusCode: 502,
+      providerResponse: response,
+    });
+  }
+
+  static async fetchPaystackCustomer(emailOrCode) {
+    const identifier = PaystackService.cleanString(emailOrCode);
+
+    if (!identifier || identifier.length > 254 || /[\r\n\/]/.test(identifier)) {
+      throw PaystackService.createPaystackError({
+        message: "A valid Paystack customer email or customer code is required.",
+        code: "INVALID_PAYSTACK_CUSTOMER_IDENTIFIER",
+        statusCode: 400,
+      });
+    }
+
+    const response = await PaystackService.request({
+      method: "get",
+      path: `/customer/${encodeURIComponent(identifier)}`,
+    });
+
+    if (!response.data || typeof response.data !== "object" || Array.isArray(response.data)) {
+      throw PaystackService.createPaystackError({
+        message: "Paystack returned an invalid customer response.",
+        code: "INVALID_PAYSTACK_CUSTOMER_RESPONSE",
+        statusCode: 502,
+        providerResponse: response,
+      });
+    }
 
     return response.data;
   }
@@ -1978,31 +1943,19 @@ class PaystackService {
 
     return {
       id,
-
       name: PaystackService.cleanString(value.name),
-
       slug: PaystackService.cleanString(value.slug),
-
       code,
-
       longCode: PaystackService.cleanString(value.longcode),
-
       gateway: PaystackService.cleanString(value.gateway),
-
       payWithBank: PaystackService.normalizeProviderBoolean(value.pay_with_bank),
-
       active: PaystackService.normalizeProviderBoolean(value.active),
-
       isDeleted: PaystackService.normalizeProviderBoolean(value.is_deleted),
-
       country: PaystackService.cleanString(value.country),
-
       currency: PaystackService.cleanString(value.currency)
         ? PaystackService.normalizeCurrency(value.currency)
         : null,
-
       type: PaystackService.cleanString(value.type),
-
       raw: value,
     };
   }
@@ -2068,15 +2021,10 @@ class PaystackService {
 
     return {
       banks: records.map((record) => PaystackService.normalizeBankRecord(record)),
-
       meta: response.meta || null,
-
       countryCode: normalizedCountry.countryCode,
-
       country: normalizedCountry.country,
-
       currency: normalizedCurrency,
-
       raw: response,
     };
   }
@@ -2090,9 +2038,10 @@ class PaystackService {
     });
 
     /*
-     * Compatibility wrapper. Existing callers of fetchBanks() receive the
-     * provider-style bank objects rather than the richer listBanks() envelope.
+     * Compatibility wrapper. Existing callers
+     * receive provider-style bank objects.
      */
+
     return result.banks.map((bank) => bank.raw);
   }
 
@@ -2107,12 +2056,6 @@ class PaystackService {
     let nextCursor = null;
     let pageCount = 0;
 
-    /*
-     * List Banks is cursor-paginated and returns both `code` and provider `id`.
-     * Retry Refund requires the provider bank ID, while Loqum stores the bank
-     * code used for ordinary account resolution. Resolve the ID at execution
-     * time instead of treating these two identifiers as interchangeable.
-     */
     do {
       pageCount += 1;
 
@@ -2156,18 +2099,15 @@ class PaystackService {
           id: bank.id,
           bankCode: bank.code,
           bankName: bank.name,
-
           countryCode: normalizedCountry.countryCode,
-
           country: normalizedCountry.country,
-
           currency: normalizedCurrency,
-
           raw: bank.raw,
         };
       }
 
       nextCursor = PaystackService.cleanString(result.meta?.next);
+
       if (nextCursor && seenCursors.has(nextCursor)) {
         throw PaystackService.createPaystackError({
           message: "Paystack repeated a bank-list cursor.",
@@ -2175,21 +2115,20 @@ class PaystackService {
           statusCode: 502,
         });
       }
-      if (nextCursor) seenCursors.add(nextCursor);
+
+      if (nextCursor) {
+        seenCursors.add(nextCursor);
+      }
     } while (nextCursor);
 
     throw PaystackService.createPaystackError({
       message: "Paystack bank ID could not be found for the supplied bank code.",
       code: "PAYSTACK_BANK_ID_NOT_FOUND",
       statusCode: 404,
-
       providerResponse: {
         bankCode: normalizedBankCode,
-
         countryCode: normalizedCountry.countryCode,
-
         country: normalizedCountry.country,
-
         currency: normalizedCurrency,
       },
     });
@@ -2203,10 +2142,8 @@ class PaystackService {
     const response = await PaystackService.request({
       method: "get",
       path: "/bank/resolve",
-
       params: {
         account_number: cleanAccountNumber,
-
         bank_code: cleanBankCode,
       },
     });

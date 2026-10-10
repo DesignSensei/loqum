@@ -588,6 +588,8 @@ exports.purchaseJobPublicationFromWallet = async (req, res) => {
       employerContext: req.employerContext || null,
 
       planId: req.body.planId,
+      expectedPriceMinor: req.body.expectedPriceMinor ?? null,
+      expectedCurrency: req.body.expectedCurrency ?? null,
 
       purchasedByUserId: req.user._id,
 
@@ -632,6 +634,8 @@ exports.initializeJobPublicationCheckout = async (req, res) => {
       employerContext: req.employerContext || null,
 
       planId: req.body.planId,
+      expectedPriceMinor: req.body.expectedPriceMinor ?? null,
+      expectedCurrency: req.body.expectedCurrency ?? null,
 
       purchasedByUserId: req.user._id,
 
@@ -663,6 +667,34 @@ exports.initializeJobPublicationCheckout = async (req, res) => {
         "Paystack Checkout could not be initialized for the Job publication purchase.",
 
       fallbackCode: "JOB_PUBLICATION_CHECKOUT_INITIALIZATION_FAILED",
+    });
+  }
+};
+
+exports.verifyJobPublicationPayment = async (req, res) => {
+  try {
+    const employerProfile = getEmployerProfileFromRequest(req);
+
+    const data = await JobPublicationPaymentService.verifyEmployerPurchase({
+      employerProfileId: employerProfile._id,
+      employerContext: req.employerContext || null,
+      paymentId: req.body?.paymentId,
+    });
+
+    setNoStoreHeaders(res);
+
+    return res.status(200).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    return handleCommercialJsonError({
+      res,
+      error,
+      logContext: "Employer Job payment verification",
+      fallbackMessage:
+        "Payment verification is unavailable. Check again before making another payment.",
+      fallbackCode: "JOB_PAYMENT_VERIFICATION_FAILED",
     });
   }
 };

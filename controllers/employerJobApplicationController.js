@@ -4,26 +4,21 @@ const JobApplicationService = require("../services/jobApplicationService");
 const JobPublicationService = require("../services/jobPublicationService");
 
 const JobApplicationQueryService = require("../services/jobs/applications/jobApplicationQueryService");
-
 const JobApplicationViewService = require("../services/jobs/applications/jobApplicationViewService");
 
 const logger = require("../utils/logger");
 
-const EMPLOYER_APPLICATIONS_VIEW = "employer/job-applications/index";
-
-const EMPLOYER_APPLICATION_DETAIL_VIEW = "employer/job-applications/show";
+const EMPLOYER_APPLICATIONS_VIEW = "employer/jobs/applications";
+const EMPLOYER_APPLICATION_DETAIL_VIEW = "employer/jobs/application-show";
 
 const EMPLOYER_JOBS_URL = "/employer/jobs";
-
 const EMPLOYER_APPLICATIONS_URL = "/employer/job-applications";
 
 /* ─────────────────────────────── HELPERS ─────────────────────────────── */
 
 function setNoStoreHeaders(res) {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
-
   res.set("Pragma", "no-cache");
-
   res.set("Expires", "0");
 }
 
@@ -54,9 +49,7 @@ function handleJsonError({ res, error, logContext, fallbackMessage, fallbackCode
 
   const response = {
     success: false,
-
     message: isOperationalError ? error.message : fallbackMessage,
-
     code: isOperationalError ? error.code : fallbackCode,
   };
 
@@ -72,7 +65,6 @@ function handleJsonError({ res, error, logContext, fallbackMessage, fallbackCode
 function getEmployerServiceContext(req) {
   return {
     employerProfileId: req.employerProfile._id,
-
     employerContext: req.employerContext || null,
   };
 }
@@ -84,7 +76,6 @@ function getActorUserId(req) {
 function getTransitionNotes(req) {
   return {
     employerPrivateNote: req.body?.employerPrivateNote,
-
     statusNote: req.body?.statusNote ?? null,
   };
 }
@@ -105,7 +96,6 @@ function getPublicServiceResult(result) {
  * Employer Job-application page reads are orchestrated here.
  *
  * JobApplicationQueryService owns:
- *
  * - employer/business authorization;
  * - primary/admin/branch-manager/branch-staff read scope;
  * - optional focused Job scope;
@@ -117,7 +107,6 @@ function getPublicServiceResult(result) {
  * - read vs management capability.
  *
  * JobApplicationViewService owns:
- *
  * - candidate presentation;
  * - Job/publication presentation;
  * - CV presentation;
@@ -130,23 +119,18 @@ function getPublicServiceResult(result) {
  *
  * EJS receives only the finalized applicationsView.
  */
+
 exports.getApplications = async (req, res, next) => {
   try {
     const currentTime = new Date();
 
     const applicationPageData = await JobApplicationQueryService.getEmployerApplicationsPageData({
       userId: getActorUserId(req),
-
       employerProfile: req.employerProfile,
-
       employerContext: req.employerContext || null,
-
       status: req.query.status,
-
       jobId: req.params.jobId || null,
-
       page: req.query.page,
-
       currentTime,
     });
 
@@ -162,7 +146,6 @@ exports.getApplications = async (req, res, next) => {
         label: "Home",
         url: "/employer/dashboard",
       },
-
       {
         label: "Permanent Jobs",
         url: EMPLOYER_JOBS_URL,
@@ -172,7 +155,6 @@ exports.getApplications = async (req, res, next) => {
     if (focusedJob?.id) {
       breadcrumbs.push({
         label: focusedJob.roleTitle || "Job",
-
         url: `${EMPLOYER_JOBS_URL}/${focusedJob.id}`,
       });
     }
@@ -184,13 +166,9 @@ exports.getApplications = async (req, res, next) => {
 
     return res.render(EMPLOYER_APPLICATIONS_VIEW, {
       layout: "layouts/app-layout",
-
       title: applicationsView.pageTitle || "Job Applications",
-
       breadcrumbs,
-
       csrfToken: req.csrfToken(),
-
       applicationsView,
     });
   } catch (error) {
@@ -203,23 +181,20 @@ exports.getApplications = async (req, res, next) => {
 /**
  * Employer applicant-detail read.
  *
- * Authorization and branch scope are resolved by the QueryService before the
- * application, candidate profile, private note or CV document may reach the
- * presentation layer.
+ * Authorization and branch scope are resolved by the QueryService before
+ * the application, candidate profile, private note or CV document may
+ * reach the presentation layer.
  */
+
 exports.getApplication = async (req, res, next) => {
   try {
     const currentTime = new Date();
 
     const applicationData = await JobApplicationQueryService.getEmployerApplicationDetailData({
       userId: getActorUserId(req),
-
       employerProfile: req.employerProfile,
-
       employerContext: req.employerContext || null,
-
       applicationId: req.params.applicationId,
-
       currentTime,
     });
 
@@ -235,7 +210,6 @@ exports.getApplication = async (req, res, next) => {
         label: "Home",
         url: "/employer/dashboard",
       },
-
       {
         label: "Permanent Jobs",
         url: EMPLOYER_JOBS_URL,
@@ -245,13 +219,11 @@ exports.getApplication = async (req, res, next) => {
     if (job?.id) {
       breadcrumbs.push({
         label: job.roleTitle || "Job",
-
         url: `${EMPLOYER_JOBS_URL}/${job.id}`,
       });
 
       breadcrumbs.push({
         label: "Applications",
-
         url: `${EMPLOYER_JOBS_URL}/${job.id}/applications`,
       });
     } else {
@@ -263,20 +235,24 @@ exports.getApplication = async (req, res, next) => {
 
     breadcrumbs.push({
       label: applicationView.application?.candidate?.name || "Applicant",
-
       url: null,
     });
 
     return res.render(EMPLOYER_APPLICATION_DETAIL_VIEW, {
       layout: "layouts/app-layout",
-
       title: applicationView.pageTitle || "Application Details",
-
       breadcrumbs,
-
       csrfToken: req.csrfToken(),
-
       applicationView,
+
+      // Recruitment actions are enabled only after the browser script
+      // has installed its confirmation and submission handlers.
+      scripts: [
+        {
+          src: "/js/employer/job-application-show.js",
+          defer: true,
+        },
+      ],
     });
   } catch (error) {
     logger.error("Employer Job application detail page error:", error);
@@ -291,11 +267,8 @@ exports.markUnderReview = async (req, res) => {
   try {
     const result = await JobApplicationService.markUnderReview({
       applicationId: req.params.applicationId,
-
       ...getEmployerServiceContext(req),
-
       changedByUserId: getActorUserId(req),
-
       ...getTransitionNotes(req),
     });
 
@@ -303,18 +276,14 @@ exports.markUnderReview = async (req, res) => {
 
     return res.json({
       success: true,
-
       data: getPublicServiceResult(result),
     });
   } catch (error) {
     return handleJsonError({
       res,
       error,
-
       logContext: "Employer Job application review transition",
-
       fallbackMessage: "The application could not be moved under review. Please try again.",
-
       fallbackCode: "JOB_APPLICATION_REVIEW_TRANSITION_FAILED",
     });
   }
@@ -326,11 +295,8 @@ exports.shortlistApplication = async (req, res) => {
   try {
     const result = await JobApplicationService.shortlistApplication({
       applicationId: req.params.applicationId,
-
       ...getEmployerServiceContext(req),
-
       changedByUserId: getActorUserId(req),
-
       ...getTransitionNotes(req),
     });
 
@@ -338,18 +304,14 @@ exports.shortlistApplication = async (req, res) => {
 
     return res.json({
       success: true,
-
       data: getPublicServiceResult(result),
     });
   } catch (error) {
     return handleJsonError({
       res,
       error,
-
       logContext: "Employer Job application shortlist",
-
       fallbackMessage: "The application could not be shortlisted. Please try again.",
-
       fallbackCode: "JOB_APPLICATION_SHORTLIST_FAILED",
     });
   }
@@ -362,15 +324,13 @@ exports.shortlistApplication = async (req, res) => {
  *
  * Interview meeting records are owned separately by AppointmentService.
  */
+
 exports.moveApplicationToInterview = async (req, res) => {
   try {
     const result = await JobApplicationService.moveApplicationToInterview({
       applicationId: req.params.applicationId,
-
       ...getEmployerServiceContext(req),
-
       changedByUserId: getActorUserId(req),
-
       ...getTransitionNotes(req),
     });
 
@@ -378,18 +338,14 @@ exports.moveApplicationToInterview = async (req, res) => {
 
     return res.json({
       success: true,
-
       data: getPublicServiceResult(result),
     });
   } catch (error) {
     return handleJsonError({
       res,
       error,
-
       logContext: "Employer Job application interview transition",
-
       fallbackMessage: "The application could not be moved to interview. Please try again.",
-
       fallbackCode: "JOB_APPLICATION_INTERVIEW_TRANSITION_FAILED",
     });
   }
@@ -401,11 +357,8 @@ exports.offerApplication = async (req, res) => {
   try {
     const result = await JobApplicationService.offerApplication({
       applicationId: req.params.applicationId,
-
       ...getEmployerServiceContext(req),
-
       changedByUserId: getActorUserId(req),
-
       ...getTransitionNotes(req),
     });
 
@@ -413,18 +366,14 @@ exports.offerApplication = async (req, res) => {
 
     return res.json({
       success: true,
-
       data: getPublicServiceResult(result),
     });
   } catch (error) {
     return handleJsonError({
       res,
       error,
-
       logContext: "Employer Job application offer",
-
       fallbackMessage: "The application could not be moved to offer. Please try again.",
-
       fallbackCode: "JOB_APPLICATION_OFFER_FAILED",
     });
   }
@@ -436,15 +385,10 @@ exports.rejectApplication = async (req, res) => {
   try {
     const result = await JobApplicationService.rejectApplication({
       applicationId: req.params.applicationId,
-
       ...getEmployerServiceContext(req),
-
       rejectedByUserId: getActorUserId(req),
-
       reason: req.body?.reason,
-
       reasonDetails: req.body?.reasonDetails ?? null,
-
       ...getTransitionNotes(req),
     });
 
@@ -452,18 +396,14 @@ exports.rejectApplication = async (req, res) => {
 
     return res.json({
       success: true,
-
       data: getPublicServiceResult(result),
     });
   } catch (error) {
     return handleJsonError({
       res,
       error,
-
       logContext: "Employer Job application rejection",
-
       fallbackMessage: "The application could not be rejected. Please try again.",
-
       fallbackCode: "JOB_APPLICATION_REJECTION_FAILED",
     });
   }
@@ -474,8 +414,8 @@ exports.rejectApplication = async (req, res) => {
 /**
  * Hiring MUST pass through JobPublicationService.
  *
- * JobPublicationService.hireApplicationAndFinalize() owns the authoritative
- * finalization flow:
+ * JobPublicationService.hireApplicationAndFinalize() owns the
+ * authoritative finalization flow:
  *
  * - hire the selected JobApplication;
  * - determine remaining vacancy capacity;
@@ -483,17 +423,16 @@ exports.rejectApplication = async (req, res) => {
  * - reject remaining applicants when recruitment is filled; and
  * - close the Job as filled.
  *
- * Never replace this with a bare JobApplicationService.hireApplication() call.
+ * Never replace this with a bare
+ * JobApplicationService.hireApplication() call.
  */
+
 exports.hireApplication = async (req, res) => {
   try {
     const result = await JobPublicationService.hireApplicationAndFinalize({
       applicationId: req.params.applicationId,
-
       ...getEmployerServiceContext(req),
-
       hiredByUserId: getActorUserId(req),
-
       ...getTransitionNotes(req),
     });
 
@@ -501,18 +440,14 @@ exports.hireApplication = async (req, res) => {
 
     return res.json({
       success: true,
-
       data: getPublicServiceResult(result),
     });
   } catch (error) {
     return handleJsonError({
       res,
       error,
-
       logContext: "Employer Job application hire",
-
       fallbackMessage: "The applicant could not be hired. Please try again.",
-
       fallbackCode: "JOB_APPLICATION_HIRE_FAILED",
     });
   }

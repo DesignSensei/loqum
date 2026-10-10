@@ -7,6 +7,8 @@ const JobPublicationEntitlementService = require("../services/jobPublicationEnti
 const JobQueryService = require("../services/jobs/jobQueryService");
 const JobViewService = require("../services/jobs/jobViewService");
 
+const JobPublicationReviewService = require("../services/jobs/jobPublicationReviewService");
+
 const logger = require("../utils/logger");
 
 const EMPLOYER_JOBS_VIEW = "employer/jobs/index";
@@ -153,6 +155,10 @@ exports.getJobs = async (req, res, next) => {
 
       csrfToken: req.csrfToken(),
       jobsView,
+      scripts: [
+        '<script src="/js/form-controls.js" defer></script>',
+        '<script src="/js/employer/job-list.js" defer></script>',
+      ].join("\n"),
     });
   } catch (error) {
     logger.error("Employer Jobs page error:", error);
@@ -251,7 +257,10 @@ exports.getCreateJob = async (req, res, next) => {
 
       jobCreateView,
 
-      scripts: '<script src="/js/employer/job-create.js" defer></script>',
+      scripts: [
+        '<script src="/js/form-controls.js" defer></script>',
+        '<script src="/js/employer/job-create.js" defer></script>',
+      ].join("\n"),
     });
   } catch (error) {
     logger.error("Employer Create Job page error:", error);
@@ -311,12 +320,97 @@ exports.getEditJob = async (req, res, next) => {
 
       jobEditView,
 
-      scripts: '<script src="/js/employer/job-edit.js" defer></script>',
+      scripts: [
+        '<script src="/js/form-controls.js" defer></script>',
+        '<script src="/js/employer/job-edit.js" defer></script>',
+      ].join("\n"),
     });
   } catch (error) {
     logger.error("Employer Edit Job page error:", error);
 
     return next(error);
+  }
+};
+
+/* ─────────────────────────────── PUBLICATION REVIEW ─────────────────────────────── */
+
+exports.getPublicationReview = async (req, res, next) => {
+  setNoStoreHeaders(res);
+
+  try {
+    const data = await JobPublicationReviewService.getPageData({
+      userId: req.user._id,
+      employerProfile: req.employerProfile,
+      employerContext: req.employerContext || null,
+      jobId: req.params.jobId,
+    });
+
+    const publicationView = JobViewService.buildEmployerJobPublicationReviewView(data);
+
+    return res.render("employer/jobs/publish", {
+      layout: "layouts/app-layout",
+      title: publicationView.pageTitle,
+      breadcrumbs: [
+        { label: "Jobs", url: "/employer/jobs" },
+        { label: "Review and publish", url: null },
+      ],
+      csrfToken: req.csrfToken(),
+      publicationView,
+      scripts: [
+        '<script src="https://js.paystack.co/v2/inline.js" defer></script>',
+        '<script src="/js/form-controls.js" defer></script>',
+        '<script src="/js/employer/job-publish.js" defer></script>',
+      ].join("\n"),
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+exports.confirmPublication = async (req, res) => {
+  try {
+    const review = req.body?.review;
+
+    if (
+      !review ||
+      typeof review !== "object" ||
+      Array.isArray(review) ||
+      typeof review.sourceType !== "string" ||
+      typeof review.sourceReference !== "string" ||
+      typeof review.jobUpdatedAt !== "string"
+    ) {
+      throw JobPublicationEntitlementService.createError({
+        message: "Review the job before publishing.",
+        code: "JOB_PUBLICATION_REVIEW_REQUIRED",
+        statusCode: 400,
+      });
+    }
+
+    const result = await JobPublicationEntitlementService.publishJobWithEntitlement({
+      ...getEmployerServiceContext(req),
+      jobId: req.params.jobId,
+      publishedByUserId: getActorUserId(req),
+      review,
+    });
+
+    setNoStoreHeaders(res);
+
+    return res.json({
+      success: true,
+      data: {
+        published: result.published,
+        publicationId: String(result.publication._id),
+      },
+      redirectUrl: `/employer/jobs/${result.job._id}`,
+    });
+  } catch (error) {
+    return handleJsonError({
+      res,
+      error,
+      logContext: "Employer reviewed Job publication",
+      fallbackMessage: "Publication could not be confirmed. Check the job before trying again.",
+      fallbackCode: "JOB_PUBLICATION_CONFIRM_FAILED",
+    });
   }
 };
 

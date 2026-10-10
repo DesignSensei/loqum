@@ -113,12 +113,20 @@ class OnboardingService {
       logger.info(`Employer wallet ready for profile: ${profile._id}, wallet: ${wallet._id}`);
 
       try {
-        await DVAService.createEmployerDVA({
+        const dva = await DVAService.createEmployerDVA({
           userId,
           employerProfileId: profile._id,
         });
 
-        logger.info(`Employer DVA created for profile: ${profile._id}`);
+        if (dva.status === "active") {
+          logger.info(`Employer DVA active for profile: ${profile._id}`);
+        } else if (dva.status === "pending") {
+          logger.info(`Employer DVA provisioning pending for profile: ${profile._id}`);
+        } else if (dva.status === "failed") {
+          logger.warn(`Employer DVA provisioning failed for profile: ${profile._id}`);
+        } else {
+          logger.info(`Employer DVA status for profile ${profile._id}: ${dva.status}`);
+        }
       } catch (error) {
         logger.error(`Employer DVA creation failed for profile ${profile._id}: ${error.message}`);
       }

@@ -2,6 +2,9 @@
 
 const crypto = require("crypto");
 
+const JobPayment = require("../models/JobPayment");
+const JobService = require("./jobService");
+
 const JobPublication = require("../models/JobPublication");
 const Subscription = require("../models/Subscription");
 
@@ -842,6 +845,7 @@ class JobPublicationEntitlementService {
       subscriptionSlot: result.slot
         ? {
             subscriptionId: result.subscription?._id || null,
+            authorityEnd: result.subscription?.currentPeriodEnd || null,
             slotNumber: result.slot.slotNumber,
             generation: result.slot.generation,
             capacity: result.slot.capacity,
@@ -865,6 +869,136 @@ class JobPublicationEntitlementService {
   }
 
   /* ─────────────────────────────── ENTITLEMENT RESOLUTION ─────────────────────────────── */
+
+  /** Read-only estimate. Publication rechecks and consumes authority in its transaction. */
+  static async getPublicationPreview({ employerProfileId, currentTime = new Date() }) {
+    const employerId = this.normalizeObjectId(employerProfileId, "employerProfileId");
+    const now = this.normalizeCurrentTime(currentTime);
+    const policy = await this.getPublicationPolicy();
+    const preview = {
+      publicationMode: policy.publicationMode,
+      sourceType: null,
+      sourceReference: null,
+      monthlyFree: null,
+      subscription: null,
+      paidPurchase: null,
+      canPurchase: ["paid", "hybrid"].includes(policy.publicationMode),
+    };
+
+    if (policy.publicationMode === "free") {
+      return { ...preview, sourceType: "free", sourceReference: "free" };
+    }
+
+    if (policy.publicationMode === "hybrid") {
+      if (
+        policy.freeJobPostsPerMonth !== MONTHLY_FREE_JOB_PUBLICATION_LIMIT ||
+        policy.freeJobPostRolloverEnabled !== false
+      ) {
+        throw this.createError({
+          message: "The monthly free publication policy is invalid.",
+          code: "INVALID_FREE_JOB_POSTING_ALLOWANCE",
+          statusCode: 500,
+        });
+      }
+      const period = this.buildMonthlyAllowancePeriod(now);
+      const used = await this.countConsumedMonthlyFreeEntitlements({
+        employerProfileId: employerId,
+        ...period,
+      });
+      preview.monthlyFree = {
+        ...period,
+        used,
+        remaining: Math.max(MONTHLY_FREE_JOB_PUBLICATION_LIMIT - used, 0),
+      };
+      if (preview.monthlyFree.remaining > 0) {
+        preview.sourceType = "free_monthly";
+        preview.sourceReference = period.periodKey;
+      }
+    }
+
+    if (["hybrid", "subscription"].includes(policy.publicationMode)) {
+      const benefits = await SubscriptionService.getActiveSubscriptionBenefits({
+        employerProfileId: employerId,
+        currentTime: now,
+      });
+      if (benefits?.subscription) {
+        const capacity = Number(benefits.activeJobSlots);
+        if (!Number.isSafeInteger(capacity) || capacity < 0) {
+          throw this.createError({
+            message: "Subscription slot capacity is invalid.",
+            code: "INVALID_SUBSCRIPTION_JOB_SLOT_CAPACITY",
+            statusCode: 500,
+          });
+        }
+        const publications = await this.getActiveSubscriptionFundedPublications({
+          employerProfileId: employerId,
+          subscriptionId: benefits.subscriptionId,
+        });
+        const restriction = this.getPendingDowngradeSlotRestriction({
+          benefits,
+          activeJobSlots: capacity,
+        });
+        preview.subscription = {
+          id: String(benefits.subscriptionId),
+          name: benefits.planName,
+          capacity,
+          occupied: publications.length,
+          remaining: restriction ? 0 : Math.max(capacity - publications.length, 0),
+          downgradePending: Boolean(restriction),
+          currentPeriodEnd: benefits.currentPeriodEnd,
+        };
+        if (!preview.sourceType && preview.subscription.remaining > 0) {
+          preview.sourceType = "subscription_slot";
+          preview.sourceReference = `${preview.subscription.id}:${new Date(benefits.currentPeriodEnd).toISOString()}`;
+        }
+      }
+    }
+
+    if (preview.canPurchase) {
+      const payment = await JobPayment.findOne({
+        business: employerId,
+        paymentStatus: "paid",
+        paidAt: { $lte: now },
+        consumedAt: null,
+        consumedForJob: null,
+        consumedByPublication: null,
+      })
+        .sort({ paidAt: 1, createdAt: 1 })
+        .select("_id purchaseReference planSnapshot paidAt")
+        .lean();
+      if (payment) {
+        preview.paidPurchase = {
+          id: String(payment._id),
+          reference: payment.purchaseReference,
+          planName: payment.planSnapshot.name,
+        };
+        if (!preview.sourceType) {
+          preview.sourceType = "paid_single_post";
+          preview.sourceReference = preview.paidPurchase.id;
+        }
+      }
+    }
+    return preview;
+  }
+
+  static assertReviewedEntitlement(review, entitlement) {
+    const reference =
+      entitlement.sourceType === "free"
+        ? "free"
+        : entitlement.sourceType === "free_monthly"
+          ? entitlement.freeAllowance?.periodKey
+          : entitlement.sourceType === "subscription_slot"
+            ? `${entitlement.subscriptionSlot?.subscriptionId}:${new Date(entitlement.subscriptionSlot?.authorityEnd).toISOString()}`
+            : String(entitlement.paygPaymentId);
+    if (review.sourceType !== entitlement.sourceType || review.sourceReference !== reference) {
+      throw this.createError({
+        message:
+          "Publication availability has changed. Review the current terms before confirming again.",
+        code: "JOB_PUBLICATION_REVIEW_CHANGED",
+        statusCode: 409,
+      });
+    }
+  }
 
   static async obtainPublicationEntitlement(
     { employerProfileId, jobId, currentTime = new Date() },
@@ -1068,6 +1202,7 @@ class JobPublicationEntitlementService {
    */
   static async publishJobWithEntitlement(
     {
+      review = null,
       jobId,
       employerProfileId,
       employerContext = null,
@@ -1080,6 +1215,25 @@ class JobPublicationEntitlementService {
     const publishedAt = this.normalizeCurrentTime(currentTime);
 
     return this.runWithOptionalTransaction(options, async (session) => {
+      if (review) {
+        const job = await JobService.getEmployerJob({
+          jobId,
+          employerProfileId,
+          employerContext,
+          adminEmployerContext,
+          session,
+        });
+        if (
+          typeof review.jobUpdatedAt !== "string" ||
+          new Date(job.updatedAt).toISOString() !== review.jobUpdatedAt
+        ) {
+          throw this.createError({
+            message: "The job changed after review. Reload and review it again.",
+            code: "JOB_PUBLICATION_REVIEW_CHANGED",
+            statusCode: 409,
+          });
+        }
+      }
       const entitlement = await this.obtainPublicationEntitlement(
         {
           employerProfileId,
@@ -1090,6 +1244,10 @@ class JobPublicationEntitlementService {
           session,
         }
       );
+
+      if (review) {
+        this.assertReviewedEntitlement(review, entitlement);
+      }
 
       const publicationResult = await JobPublicationService.publishJob(
         {

@@ -133,6 +133,10 @@ router.get("/jobs/:jobId/applications", employerJobApplicationController.getAppl
 
 router.get("/jobs/:jobId/edit", employerJobController.getEditJob);
 
+router.get("/jobs/:jobId/publish", employerJobController.getPublicationReview);
+
+router.post("/jobs/:jobId/publish/confirm", employerJobController.confirmPublication);
+
 router.get("/jobs/:jobId", employerJobController.getJob);
 
 /* ───────────────────── PERMANENT JOB MASTER COMMANDS ───────────────────── */
@@ -513,6 +517,11 @@ router.post(
  * business-level purchase authority and permits only the primary employer or a
  * business admin.
  */
+
+router.post(
+  "/billing/job-publications/verify",
+  employerBillingController.verifyJobPublicationPayment
+);
 
 router.post(
   "/billing/job-publications/initialize-checkout",

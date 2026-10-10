@@ -1,0 +1,380 @@
+
+<!-- views/employer/jobs/applications.ejs -->
+
+<div id="jobApplicationsPage" class="d-flex flex-column gap-6">
+  <% if (!applicationsView.permissions.canViewApplications) { %>
+    <div class="card">
+      <div class="card-body">
+        <h2 class="fs-4">Job applications unavailable</h2>
+        <p class="text-gray-600 mb-0">You do not have permission to view permanent job applications in this workspace.</p>
+      </div>
+    </div>
+  <% } else { %>
+
+    <!-- FOCUSED JOB -->
+    <% if (applicationsView.isFocusedJobView && applicationsView.focusedJob) { %>
+      <div class="card card-flush">
+        <div class="card-body py-6">
+          <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-5">
+            <div class="d-flex align-items-start gap-4">
+              <div class="symbol symbol-50px flex-shrink-0">
+                <div class="symbol-label bg-light-primary">
+                  <i class="ki-duotone ki-briefcase fs-2x text-primary"><span class="path1"></span><span class="path2"></span></i>
+                </div>
+              </div>
+              <div>
+                <div class="text-gray-500 fs-7 fw-semibold mb-1">Applications for</div>
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                  <span class="fw-bold fs-4 text-gray-900"><%= applicationsView.focusedJob.roleTitle || 'Untitled job' %></span>
+                  <% if (applicationsView.focusedJob.referenceCode) { %>
+                    <span class="badge badge-light"><%= applicationsView.focusedJob.referenceCode %></span>
+                  <% } %>
+                  <% if (applicationsView.focusedJob.recruitmentStatusLabel) { %>
+                    <span class="badge <%= applicationsView.focusedJob.recruitmentStatusBadgeClass %>">
+                      <%= applicationsView.focusedJob.recruitmentStatusLabel %>
+                    </span>
+                  <% } %>
+                </div>
+                <div class="d-flex flex-wrap gap-4 fs-7 text-gray-600">
+                  <% if (applicationsView.focusedJob.branch?.name) { %>
+                    <span><%= applicationsView.focusedJob.branch.name %></span>
+                  <% } %>
+                  <% if (applicationsView.focusedJob.professionalTypeLabel) { %>
+                    <span><%= applicationsView.focusedJob.professionalTypeLabel %></span>
+                  <% } %>
+                  <% if (applicationsView.focusedJob.employmentTypeLabel) { %>
+                    <span><%= applicationsView.focusedJob.employmentTypeLabel %></span>
+                  <% } %>
+                </div>
+              </div>
+            </div>
+            <div class="d-flex flex-wrap gap-3">
+              <% if (applicationsView.actions.focusedJobUrl) { %>
+                <a href="<%= applicationsView.actions.focusedJobUrl %>" class="btn btn-sm btn-light-primary">View Job</a>
+              <% } %>
+              <a href="<%= applicationsView.actions.applicationsUrl %>" class="btn btn-sm btn-light">All Applications</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    <% } %>
+
+    <!-- READ-ONLY NOTICE -->
+    <% if (applicationsView.readOnlyNotice.visible) { %>
+      <div class="notice d-flex rounded border border-dashed p-6 <%= applicationsView.readOnlyNotice.noticeClass %>">
+        <i class="ki-duotone <%= applicationsView.readOnlyNotice.icon %> fs-2tx me-5 <%= applicationsView.readOnlyNotice.iconClass %>">
+          <span class="path1"></span><span class="path2"></span><span class="path3"></span>
+        </i>
+        <div>
+          <div class="fw-bold text-gray-900 mb-1"><%= applicationsView.readOnlyNotice.title %></div>
+          <div class="fs-7 text-gray-700"><%= applicationsView.readOnlyNotice.message %></div>
+        </div>
+      </div>
+    <% } %>
+
+    <!-- RECRUITMENT SUMMARY: CONFIGURATION COMES FROM THE VIEW SERVICE -->
+    <div class="row g-5">
+      <% applicationsView.summaryCards.forEach((card) => { %>
+        <div class="col-sm-6 col-lg-4 col-xl-2">
+          <div class="card card-flush h-100">
+            <div class="card-body d-flex flex-column align-items-center justify-content-center text-center p-5">
+              <div class="symbol symbol-50px mb-4">
+                <span class="symbol-label <%= card.symbolClass %>">
+                  <i class="ki-duotone <%= card.icon %> fs-2x <%= card.iconClass %>">
+                    <% card.iconPaths.forEach((path) => { %>
+                      <span class="path<%= path %>"></span>
+                    <% }); %>
+                  </i>
+                </span>
+              </div>
+              <div class="fs-2 fw-bold text-gray-900 mb-1"><%= card.value %></div>
+              <div class="fs-7 fw-semibold text-gray-600"><%= card.label %></div>
+            </div>
+          </div>
+        </div>
+      <% }); %>
+    </div>
+
+    <!-- RESULTS HEADER / FILTERS -->
+    <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-4">
+      <div>
+        <h2 class="fw-bold fs-4 text-gray-900 mb-1"><%= applicationsView.resultsHeader.title %></h2>
+        <div class="fs-7 text-muted"><%= applicationsView.resultsHeader.subtitle %></div>
+      </div>
+      <div class="d-flex flex-wrap align-items-center gap-3">
+        <button
+          type="button"
+          class="btn btn-sm btn-light btn-active-light-primary"
+          data-kt-menu-trigger="click"
+          data-kt-menu-placement="bottom-end"
+          aria-label="Filter job applications by status"
+        >
+          <i class="ki-duotone ki-filter fs-3 me-1"><span class="path1"></span><span class="path2"></span></i>
+          <%= applicationsView.filters.status.find((filter) => filter.isActive)?.label || 'All Statuses' %>
+          <i class="ki-duotone ki-down fs-5 ms-2"></i>
+        </button>
+        <div
+          class="menu menu-sub menu-sub-dropdown menu-column menu-rounded menu-gray-600 menu-state-bg-light-primary fw-semibold fs-7 w-250px py-3"
+          data-kt-menu="true"
+          style="max-width: calc(100vw - 32px);"
+        >
+          <% applicationsView.filters.status.forEach((filter) => { %>
+            <div class="menu-item px-3">
+              <a
+                href="<%= filter.url %>"
+                class="menu-link px-3 <%= filter.isActive ? 'active' : '' %>"
+                <%= filter.isActive ? 'aria-current="page"' : '' %>
+              >
+                <span class="menu-title"><%= filter.label %></span>
+                <span class="badge badge-light ms-2"><%= filter.count %></span>
+              </a>
+            </div>
+          <% }); %>
+        </div>
+        <% if (applicationsView.filters.clearAction.visible) { %>
+          <a href="<%= applicationsView.filters.clearAction.url %>" class="btn btn-sm btn-light">
+            <%= applicationsView.filters.clearAction.label %>
+          </a>
+        <% } %>
+      </div>
+    </div>
+
+    <!-- APPLICATION CARDS -->
+    <% if (applicationsView.hasApplications) { %>
+      <div class="d-flex flex-column gap-6">
+        <% applicationsView.applications.forEach((application) => { %>
+          <article
+            class="card card-flush"
+            data-application-id="<%= application.id %>"
+            data-application-status="<%= application.status || '' %>"
+          >
+            <div class="card-body p-6 p-lg-8">
+              <!-- APPLICANT HEADER -->
+              <div class="d-flex flex-column flex-lg-row justify-content-between gap-5 mb-7">
+                <div class="d-flex align-items-start gap-4">
+                  <div class="symbol symbol-60px symbol-circle flex-shrink-0">
+                    <% if (application.candidate?.avatar?.photo) { %>
+                      <img src="<%= application.candidate.avatar.photo %>" alt="<%= application.candidate.avatar.alt || 'Applicant' %>">
+                    <% } else { %>
+                      <div class="symbol-label bg-light-primary text-primary fs-3 fw-bold">
+                        <%= application.candidate?.avatar?.initials || 'P' %>
+                      </div>
+                    <% } %>
+                  </div>
+                  <div>
+                    <div class="d-flex flex-wrap align-items-center gap-3 mb-2">
+                      <% if (application.detailsUrl) { %>
+                        <a href="<%= application.detailsUrl %>" class="fw-bold fs-3 text-gray-900 text-hover-primary">
+                          <%= application.candidate?.name || 'Applicant' %>
+                        </a>
+                      <% } else { %>
+                        <span class="fw-bold fs-3 text-gray-900"><%= application.candidate?.name || 'Applicant' %></span>
+                      <% } %>
+                      <span class="badge <%= application.statusBadgeClass %>"><%= application.statusLabel || 'Unknown status' %></span>
+                    </div>
+                    <div class="d-flex flex-wrap align-items-center gap-3 fs-7 text-gray-600">
+                      <% if (application.candidate?.professionalTypeLabel) { %>
+                        <span><%= application.candidate.professionalTypeLabel %></span>
+                      <% } %>
+                      <% if (application.candidate?.specialty) { %>
+                        <span><%= application.candidate.specialty %></span>
+                      <% } %>
+                      <% if (application.candidate?.locationLabel) { %>
+                        <span><%= application.candidate.locationLabel %></span>
+                      <% } %>
+                    </div>
+                  </div>
+                </div>
+                <div class="text-lg-end">
+                  <div class="text-gray-500 fs-8 fw-semibold mb-1">Applied</div>
+                  <div class="fw-semibold text-gray-800 fs-7"><%= application.audit?.submittedAtDisplay || 'Not recorded' %></div>
+                </div>
+              </div>
+
+              <!-- JOB AND APPLICANT DETAILS -->
+              <div class="row g-5 mb-7">
+                <div class="col-md-6 col-xl-4">
+                  <div class="border border-gray-300 border-dashed rounded p-5 h-100">
+                    <div class="text-gray-500 fs-8 fw-semibold text-uppercase mb-3">Applied Position</div>
+                    <% if (application.job?.detailsUrl) { %>
+                      <a href="<%= application.job.detailsUrl %>" class="fw-bold text-gray-900 text-hover-primary fs-6">
+                        <%= application.job.roleTitle || 'Untitled job' %>
+                      </a>
+                    <% } else { %>
+                      <div class="fw-bold text-gray-900 fs-6"><%= application.job?.roleTitle || 'Untitled job' %></div>
+                    <% } %>
+                    <div class="text-gray-500 fs-7 mt-2"><%= application.job?.referenceCode || 'No reference' %></div>
+                    <% if (application.job?.branch?.name) { %>
+                      <div class="text-gray-600 fs-7 mt-2"><%= application.job.branch.name %></div>
+                    <% } %>
+                    <% if (application.job?.employmentTypeLabel) { %>
+                      <div class="text-gray-600 fs-7 mt-2"><%= application.job.employmentTypeLabel %></div>
+                    <% } %>
+                  </div>
+                </div>
+
+                <div class="col-md-6 col-xl-4">
+                  <div class="border border-gray-300 border-dashed rounded p-5 h-100">
+                    <div class="text-gray-500 fs-8 fw-semibold text-uppercase mb-3">Professional Background</div>
+                    <div class="d-flex flex-column gap-3">
+                      <% if (application.candidate?.yearsOfExperience !== null && application.candidate?.yearsOfExperience !== undefined) { %>
+                        <div>
+                          <div class="text-gray-500 fs-8">Experience</div>
+                          <div class="fw-semibold text-gray-800 fs-7"><%= application.candidate.yearsOfExperience %> years</div>
+                        </div>
+                      <% } %>
+                      <% if (application.candidate?.tierLabel) { %>
+                        <div>
+                          <div class="text-gray-500 fs-8">Professional Tier</div>
+                          <div class="fw-semibold text-gray-800 fs-7"><%= application.candidate.tierLabel %></div>
+                        </div>
+                      <% } %>
+                      <% if (application.candidate?.licenceVerificationStatusLabel) { %>
+                        <div>
+                          <div class="text-gray-500 fs-8 mb-1">Licence Verification</div>
+                          <span class="badge <%= application.candidate.licenceVerificationBadgeClass %>">
+                            <%= application.candidate.licenceVerificationStatusLabel %>
+                          </span>
+                        </div>
+                      <% } %>
+                      <% if (application.candidate?.averageRating !== null && application.candidate?.averageRating !== undefined && application.candidate?.totalReviews > 0) { %>
+                        <div>
+                          <div class="text-gray-500 fs-8">Professional Rating</div>
+                          <div class="fw-semibold text-gray-800 fs-7">
+                            <%= application.candidate.averageRating %> (<%= application.candidate.totalReviews %> reviews)
+                          </div>
+                        </div>
+                      <% } %>
+                      <% if (application.candidate?.yearsOfExperience == null && !application.candidate?.tierLabel && !application.candidate?.licenceVerificationStatusLabel && !(application.candidate?.totalReviews > 0)) { %>
+                        <span class="text-gray-500 fs-7">View the application for additional professional details.</span>
+                      <% } %>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="col-md-12 col-xl-4">
+                  <div class="border border-gray-300 border-dashed rounded p-5 h-100">
+                    <div class="text-gray-500 fs-8 fw-semibold text-uppercase mb-3">Screening Assessment</div>
+                    <% if (application.screeningOutcome) { %>
+                      <div class="mb-4">
+                        <span class="badge badge-light-info">
+                          <%= application.screeningOutcomeLabel || application.screeningOutcome %>
+                        </span>
+                      </div>
+                    <% } else { %>
+                      <div class="text-gray-500 fs-7 mb-4">No screening outcome recorded</div>
+                    <% } %>
+                    <% if (application.screeningSummary) { %>
+                      <div class="d-flex flex-column gap-3">
+                        <div>
+                          <div class="text-gray-500 fs-8">Required Criteria</div>
+                          <div class="fw-semibold text-gray-800 fs-7">
+                            <%= application.screeningSummary.requiredCriteriaMetCount %> of
+                            <%= application.screeningSummary.requiredCriteriaCount %> met
+                          </div>
+                        </div>
+                        <div>
+                          <div class="text-gray-500 fs-8">Preferred Criteria</div>
+                          <div class="fw-semibold text-gray-800 fs-7">
+                            <%= application.screeningSummary.preferredCriteriaMetCount %> of
+                            <%= application.screeningSummary.preferredCriteriaCount %> met
+                          </div>
+                        </div>
+                      </div>
+                    <% } %>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ADDITIONAL APPLICATION INFORMATION -->
+              <% if (application.coverNote || application.resume?.fileName) { %>
+                <div class="d-flex flex-wrap gap-3 mb-6">
+                  <% if (application.coverNote) { %>
+                    <span class="badge badge-light-secondary">Cover note provided</span>
+                  <% } %>
+                  <% if (application.resume?.fileName) { %>
+                    <span class="badge badge-light-primary">CV: <%= application.resume.fileName %></span>
+                  <% } %>
+                </div>
+              <% } %>
+
+              <!-- APPLICATION FOOTER -->
+              <div class="d-flex flex-column flex-sm-row align-items-sm-center justify-content-between gap-4 border-top pt-5">
+                <div class="d-flex flex-wrap align-items-center gap-3">
+                  <span class="text-gray-500 fs-8">Current stage:</span>
+                  <span class="badge <%= application.statusBadgeClass %>"><%= application.statusLabel || 'Unknown' %></span>
+                </div>
+                <% if (application.detailsUrl) { %>
+                  <a
+                    href="<%= application.detailsUrl %>"
+                    class="btn btn-sm btn-light-primary"
+                    aria-label="Review application from <%= application.candidate?.name || 'applicant' %>"
+                  >
+                    <i class="ki-duotone ki-eye fs-5 me-1">
+                      <span class="path1"></span><span class="path2"></span><span class="path3"></span>
+                    </i>
+                    Review Application
+                  </a>
+                <% } %>
+              </div>
+            </div>
+          </article>
+        <% }); %>
+        <div class="form-text">
+          Screening criteria support employer assessment and can flag applications for review.
+          They do not automatically reject applicants.
+        </div>
+      </div>
+    <% } else { %>
+
+      <!-- EMPTY STATE -->
+      <div class="card card-flush">
+        <div class="card-body py-15 text-center">
+          <div class="symbol symbol-75px mb-6">
+            <span class="symbol-label bg-light-primary">
+              <i class="ki-duotone <%= applicationsView.emptyState.icon %> fs-3x text-primary">
+                <span class="path1"></span><span class="path2"></span><span class="path3"></span><span class="path4"></span>
+              </i>
+            </span>
+          </div>
+          <h3 class="fw-bold text-gray-900 mb-3"><%= applicationsView.emptyState.title %></h3>
+          <p class="text-gray-600 fs-6 mb-6"><%= applicationsView.emptyState.message %></p>
+          <% if (applicationsView.emptyState.action.visible) { %>
+            <a href="<%= applicationsView.emptyState.action.url %>" class="btn <%= applicationsView.emptyState.action.buttonClass %>">
+              <%= applicationsView.emptyState.action.label %>
+            </a>
+          <% } else if (!applicationsView.isFocusedJobView) { %>
+            <a href="<%= applicationsView.actions.jobsUrl %>" class="btn btn-light-primary">View Permanent Jobs</a>
+          <% } %>
+        </div>
+      </div>
+    <% } %>
+
+    <!-- PAGINATION -->
+    <% if (applicationsView.pagination.hasPagination) { %>
+      <div class="d-flex flex-column flex-md-row align-items-md-center justify-content-between gap-4">
+        <div class="fs-7 text-muted"><%= applicationsView.pagination.pageText %></div>
+        <nav class="d-flex align-items-center gap-3" aria-label="Job application results pages">
+          <% if (applicationsView.pagination.previous.enabled) { %>
+            <a href="<%= applicationsView.pagination.previous.url %>" class="btn btn-sm btn-light">
+              <%= applicationsView.pagination.previous.label %>
+            </a>
+          <% } else { %>
+            <button type="button" class="btn btn-sm btn-light" disabled>
+              <%= applicationsView.pagination.previous.label %>
+            </button>
+          <% } %>
+          <% if (applicationsView.pagination.next.enabled) { %>
+            <a href="<%= applicationsView.pagination.next.url %>" class="btn btn-sm btn-light">
+              <%= applicationsView.pagination.next.label %>
+            </a>
+          <% } else { %>
+            <button type="button" class="btn btn-sm btn-light" disabled>
+              <%= applicationsView.pagination.next.label %>
+            </button>
+          <% } %>
+        </nav>
+      </div>
+    <% } %>
+  <% } %>
+</div>

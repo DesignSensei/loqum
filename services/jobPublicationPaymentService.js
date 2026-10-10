@@ -466,6 +466,8 @@ class JobPublicationPaymentService {
       employerProfileId,
       employerContext = null,
       planId,
+      expectedPriceMinor = null,
+      expectedCurrency = null,
       purchasedByUserId,
       idempotencyKey,
       currentTime = new Date(),
@@ -500,6 +502,18 @@ class JobPublicationPaymentService {
           planId: normalizedPlanId,
           paymentMethod: "wallet",
         });
+        if (
+          expectedPriceMinor !== null &&
+          (Number(expectedPriceMinor) !== existingPayment.planSnapshot.priceMinor ||
+            expectedCurrency !== existingPayment.planSnapshot.currency)
+        ) {
+          throw this.createError({
+            message:
+              "This payment attempt has different saved terms. Check the existing purchase before paying.",
+            code: "JOB_PAYMENT_REVIEW_TERMS_CHANGED",
+            statusCode: 409,
+          });
+        }
 
         this.assertExistingPurchaseReusable(existingPayment);
 
@@ -525,6 +539,16 @@ class JobPublicationPaymentService {
 
       const employerProfile = await this.getEmployerProfile(normalizedEmployerProfileId, session);
       const plan = await this.getPlan(normalizedPlanId, session);
+      if (
+        expectedPriceMinor !== null &&
+        (Number(expectedPriceMinor) !== plan.priceMinor || expectedCurrency !== plan.currency)
+      ) {
+        throw this.createError({
+          message: "The posting price changed. Reload the review page before paying.",
+          code: "JOB_POSTING_PRICE_CHANGED",
+          statusCode: 409,
+        });
+      }
 
       this.assertPlanAvailableForEmployer({
         plan,
@@ -669,6 +693,7 @@ class JobPublicationPaymentService {
 
       checkout: {
         authorizationUrl,
+        accessCode: checkout?.accessCode || transaction?.metadata?.accessCode || null,
         reference: payment.providerReference,
         mode: checkout?.mode || transaction?.metadata?.paystackMode || null,
       },
@@ -680,6 +705,8 @@ class JobPublicationPaymentService {
       employerProfileId,
       employerContext = null,
       planId,
+      expectedPriceMinor = null,
+      expectedCurrency = null,
       purchasedByUserId,
       idempotencyKey,
       callbackUrl = null,
@@ -726,6 +753,18 @@ class JobPublicationPaymentService {
           planId: normalizedPlanId,
           paymentMethod: "paystack_checkout",
         });
+        if (
+          expectedPriceMinor !== null &&
+          (Number(expectedPriceMinor) !== existingPayment.planSnapshot.priceMinor ||
+            expectedCurrency !== existingPayment.planSnapshot.currency)
+        ) {
+          throw this.createError({
+            message:
+              "This payment attempt has different saved terms. Check the existing purchase before paying.",
+            code: "JOB_PAYMENT_REVIEW_TERMS_CHANGED",
+            statusCode: 409,
+          });
+        }
 
         this.assertExistingPurchaseReusable(existingPayment);
 
@@ -790,6 +829,16 @@ class JobPublicationPaymentService {
 
       const employerProfile = await this.getEmployerProfile(normalizedEmployerProfileId, session);
       const plan = await this.getPlan(normalizedPlanId, session);
+      if (
+        expectedPriceMinor !== null &&
+        (Number(expectedPriceMinor) !== plan.priceMinor || expectedCurrency !== plan.currency)
+      ) {
+        throw this.createError({
+          message: "The posting price changed. Reload the review page before paying.",
+          code: "JOB_POSTING_PRICE_CHANGED",
+          statusCode: 409,
+        });
+      }
 
       this.assertPlanAvailableForEmployer({
         plan,
@@ -1457,6 +1506,75 @@ class JobPublicationPaymentService {
         idempotent: completedCredit.idempotent === true,
       };
     });
+  }
+
+  /* ─────────────────────────────── PURCHASE STATUS ─────────────────────────────── */
+
+  static async getPendingPurchasesForEmployer({ employerProfileId, employerContext }) {
+    this.assertCanPurchaseJobPublication(employerContext);
+
+    const id = this.normalizeObjectId(employerProfileId, "employer profile ID");
+
+    const payments = await JobPayment.find({ business: id, paymentStatus: "pending" })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean();
+
+    return Promise.all(
+      payments.map(async (payment) => {
+        const transaction = payment.paymentTransaction
+          ? await Transaction.findById(payment.paymentTransaction).select("metadata status").lean()
+          : null;
+
+        return {
+          id: String(payment._id),
+          reference: payment.purchaseReference,
+          name: payment.planSnapshot.name,
+          priceMinor: payment.planSnapshot.priceMinor,
+          currency: payment.planSnapshot.currency,
+          paymentMethod: payment.paymentMethod,
+          accessCode: ["pending", "processing"].includes(transaction?.status)
+            ? transaction?.metadata?.accessCode || null
+            : null,
+        };
+      })
+    );
+  }
+
+  static async verifyEmployerPurchase({ employerProfileId, employerContext, paymentId }) {
+    this.assertCanPurchaseJobPublication(employerContext);
+
+    let payment = await JobPayment.findOne({
+      _id: this.normalizeObjectId(paymentId, "Job payment ID"),
+      business: this.normalizeObjectId(employerProfileId, "employer profile ID"),
+    });
+
+    if (!payment) {
+      throw this.createError({
+        message: "Payment was not found.",
+        code: "JOB_PAYMENT_NOT_FOUND",
+        statusCode: 404,
+      });
+    }
+
+    if (payment.paymentMethod === "paystack_checkout" && payment.paymentStatus === "pending") {
+      try {
+        await this.finalizePaystackPayment({ reference: payment.providerReference });
+      } catch (error) {
+        const latest = await JobPayment.findById(payment._id);
+
+        if (!["failed", "cancelled", "refunded"].includes(latest?.paymentStatus)) {
+          throw error;
+        }
+      }
+
+      payment = await JobPayment.findById(payment._id);
+    }
+
+    return {
+      paymentStatus: payment.paymentStatus,
+      consumed: Boolean(payment.consumedAt),
+    };
   }
 
   /* ─────────────────────────────── ENTITLEMENT CONSUMPTION ─────────────────────────────── */

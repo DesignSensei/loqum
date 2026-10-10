@@ -311,7 +311,7 @@ protectedShiftFacilityPolicySchema.pre("validate", function validateProtectedShi
 const protectedShiftLimitsSchema = new mongoose.Schema(
   {
     pharmacy: {
-      type: protectedShiftLimitsSchema,
+      type: protectedShiftFacilityPolicySchema,
       required: true,
     },
 

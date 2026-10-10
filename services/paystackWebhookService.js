@@ -23,10 +23,16 @@ class PaystackWebhookService {
     "transfer.reversed",
   ]);
 
+  static dvaAssignmentEventNames = Object.freeze([
+    "dedicatedaccount.assign.success",
+    "dedicatedaccount.assign.failed",
+  ]);
+
   /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
 
   static cleanString(value) {
     if (typeof value !== "string") return null;
+
     const cleanValue = value.trim();
 
     return cleanValue || null;
@@ -46,6 +52,7 @@ class PaystackWebhookService {
 
   static normalizeCurrentTime(value) {
     if (value === undefined) return new Date();
+
     if (!(value instanceof Date) && typeof value !== "string" && typeof value !== "number") {
       throw new Error("Paystack webhook current time is invalid.");
     }
@@ -74,12 +81,17 @@ class PaystackWebhookService {
   /* ─────────────────────────────── SIGNATURE VERIFICATION ─────────────────────────────── */
 
   static getSignature(headers = {}) {
-    if (!headers || typeof headers !== "object" || Array.isArray(headers)) return null;
+    if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
+      return null;
+    }
 
     const entries = Object.entries(headers).filter(
       ([name]) => name.toLowerCase() === "x-paystack-signature"
     );
-    if (entries.length !== 1 || typeof entries[0][1] !== "string") return null;
+
+    if (entries.length !== 1 || typeof entries[0][1] !== "string") {
+      return null;
+    }
 
     return PaystackWebhookService.normalizeSignature(entries[0][1]);
   }
@@ -87,15 +99,13 @@ class PaystackWebhookService {
   static normalizeSignature(value) {
     const signature = PaystackWebhookService.cleanString(value);
 
-    if (!signature) {
-      return null;
-    }
+    if (!signature) return null;
 
     const normalizedSignature = signature.toLowerCase();
 
     /*
-     * SHA-512 produces 64 bytes,
-     * represented as 128 hexadecimal characters.
+     * SHA-512 produces 64 bytes, represented as
+     * 128 hexadecimal characters.
      */
     if (!/^[a-f0-9]{128}$/.test(normalizedSignature)) {
       return null;
@@ -105,19 +115,26 @@ class PaystackWebhookService {
   }
 
   static getSignaturePayload({ rawBody = null }) {
-    if (Buffer.isBuffer(rawBody)) return Buffer.from(rawBody);
-    if (typeof rawBody === "string") return Buffer.from(rawBody, "utf8");
+    if (Buffer.isBuffer(rawBody)) {
+      return Buffer.from(rawBody);
+    }
+
+    if (typeof rawBody === "string") {
+      return Buffer.from(rawBody, "utf8");
+    }
 
     throw new Error("Preserve the raw request body before parsing the Paystack webhook.");
   }
 
   static parseVerifiedPayload(signaturePayload) {
     const text = signaturePayload.toString("utf8");
+
     if (!Buffer.from(text, "utf8").equals(signaturePayload)) {
       throw new Error("Paystack webhook body is not valid UTF-8.");
     }
 
     let payload;
+
     try {
       payload = JSON.parse(text);
     } catch {
@@ -150,7 +167,6 @@ class PaystackWebhookService {
     }
 
     const expectedBuffer = Buffer.from(normalizedExpected, "hex");
-
     const receivedBuffer = Buffer.from(normalizedReceived, "hex");
 
     if (expectedBuffer.length !== receivedBuffer.length) {
@@ -163,9 +179,7 @@ class PaystackWebhookService {
   static verifySignature({ rawBody = null, payload = null, rawHeaders = {}, secretKey = null }) {
     const receivedSignature = PaystackWebhookService.getSignature(rawHeaders);
 
-    if (!receivedSignature) {
-      return false;
-    }
+    if (!receivedSignature) return false;
 
     const activeSecretKey = secretKey || PaystackWebhookService.getSecretKey();
 
@@ -209,9 +223,7 @@ class PaystackWebhookService {
     const countrySettings = Array.isArray(settings.countrySettings) ? settings.countrySettings : [];
 
     countrySettings.forEach((countrySetting) => {
-      if (!countrySetting.isActive) {
-        return;
-      }
+      if (!countrySetting.isActive) return;
 
       const countryCode = PaystackWebhookService.cleanUpperString(countrySetting.countryCode);
 
@@ -223,6 +235,7 @@ class PaystackWebhookService {
             `Currency ${currency} maps to multiple active countries; explicit country resolution is required.`
           );
         }
+
         currencyCountryMap[currency] = countryCode;
       }
     });
@@ -304,6 +317,15 @@ class PaystackWebhookService {
     );
   }
 
+  static isDVAAssignmentEvent(eventName) {
+    const normalizedEventName = PaystackWebhookService.cleanLowerString(eventName);
+
+    return (
+      Boolean(normalizedEventName) &&
+      PaystackWebhookService.dvaAssignmentEventNames.includes(normalizedEventName)
+    );
+  }
+
   static getNormalizedTransferReference(normalizedEvent = {}) {
     const normalizedPayload =
       normalizedEvent.normalizedPayload &&
@@ -358,18 +380,28 @@ class PaystackWebhookService {
 
     if (PaystackWebhookService.isRefundLifecycleEvent(eventName)) {
       /*
-       * Fail closed rather than accidentally recording a
-       * refund webhook as "other".
-       *
-       * paystackEventNormalizerService owns the provider
-       * payload shape. This webhook service should not
-       * independently reinterpret Paystack's refund payload.
+       * Fail closed instead of recording a refund webhook
+       * under the wrong category.
        */
       if (eventCategory !== "employer_refund") {
         throw new Error(
           `Paystack refund event ${eventName} was not normalized as employer_refund.`
         );
       }
+    }
+
+    /*
+     * Dedicated-account assignment events are not payments.
+     * They must never enter the wallet-funding route.
+     */
+    if (PaystackWebhookService.isDVAAssignmentEvent(eventName)) {
+      if (eventCategory !== "dva_assignment") {
+        throw new Error(
+          `Paystack DVA assignment event ${eventName} was not normalized as dva_assignment.`
+        );
+      }
+    } else if (eventCategory === "dva_assignment") {
+      throw new Error(`Unexpected Paystack DVA assignment category for event ${eventName}.`);
     }
 
     if (PaystackWebhookService.isTransferLifecycleEvent(eventName)) {
@@ -404,10 +436,20 @@ class PaystackWebhookService {
   static async normalizePaystackEvent({ payload, rawHeaders = {} }, options = {}) {
     const settings = await PaystackWebhookService.getPlatformSettings(options);
 
-    const normalizedEvent = PaystackEventNormalizerService.normalize(payload, rawHeaders, {
-      defaultCountryCode: settings.defaultCountryCode,
+    const isDVAAssignment = PaystackWebhookService.isDVAAssignmentEvent(payload?.event);
 
-      defaultCurrency: settings.defaultCurrency,
+    /*
+     * Paystack Dedicated Virtual Accounts are Nigerian NGN accounts.
+     * Assignment webhooks may omit currency/country; use NG/NGN only
+     * for this event type, rather than the platform's default country.
+     *
+     * The normalizer still rejects an explicitly conflicting currency
+     * or country, and platform settings must allow NG/NGN.
+     */
+    const normalizedEvent = PaystackEventNormalizerService.normalize(payload, rawHeaders, {
+      defaultCountryCode: isDVAAssignment ? "NG" : settings.defaultCountryCode,
+
+      defaultCurrency: isDVAAssignment ? "NGN" : settings.defaultCurrency,
 
       currencyCountryMap: PaystackWebhookService.buildCurrencyCountryMap(settings),
     });
@@ -415,9 +457,11 @@ class PaystackWebhookService {
     const compatibility = PaystackWebhookService.assertNormalizedEventCompatibility({
       normalizedEvent,
     });
+
     if (compatibility.eventName !== PaystackWebhookService.cleanLowerString(payload.event)) {
       throw new Error("Normalized event name does not match the signed webhook event.");
     }
+
     if (
       normalizedEvent.normalizedPayload != null &&
       (typeof normalizedEvent.normalizedPayload !== "object" ||
@@ -435,14 +479,12 @@ class PaystackWebhookService {
       ...normalizedEvent,
 
       countryCode: validated.countryCode,
-
       currency: validated.currency,
 
       normalizedPayload: {
         ...(normalizedEvent.normalizedPayload || {}),
 
         countryCode: validated.countryCode,
-
         currency: validated.currency,
       },
     };
@@ -459,13 +501,9 @@ class PaystackWebhookService {
   static async recordPaystackWebhookEvent(
     {
       payload,
-
       rawBody = null,
-
       rawHeaders = {},
-
       processImmediately = false,
-
       currentTime = new Date(),
     },
     options = {}
@@ -475,24 +513,26 @@ class PaystackWebhookService {
         "Webhook ingestion must record its event independently; do not supply a session."
       );
     }
+
     if (typeof processImmediately !== "boolean") {
       throw new Error("processImmediately must be a boolean.");
     }
 
     const normalizedCurrentTime = PaystackWebhookService.normalizeCurrentTime(currentTime);
+
     // Keep verification and normalization tied to the same immutable byte snapshot.
-    const signaturePayload = PaystackWebhookService.getSignaturePayload({ rawBody });
+    const signaturePayload = PaystackWebhookService.getSignaturePayload({
+      rawBody,
+    });
 
     /*
      * SECURITY BOUNDARY:
      *
-     * Never create a ProviderEvent for an unverified
-     * request.
-     *
+     * Never create a ProviderEvent for an unverified request.
      * ProviderEvent.eventKey is an idempotency key.
-     * Allowing an unsigned request to claim that key
-     * could prevent a later legitimate Paystack
-     * webhook from being recorded.
+     *
+     * Allowing an unsigned request to claim that key could
+     * prevent a later legitimate Paystack webhook from being recorded.
      */
     const isVerified = PaystackWebhookService.verifySignature({
       rawBody: signaturePayload,
@@ -502,27 +542,22 @@ class PaystackWebhookService {
     if (!isVerified) {
       return {
         providerEvent: null,
-
         created: false,
-
         idempotent: false,
-
         recorded: false,
-
         isVerified: false,
-
         processedImmediately: false,
-
         skippedProcessingReason: "Invalid Paystack webhook signature.",
       };
     }
 
     /*
-     * Only verified provider requests are permitted to
-     * trigger platform-setting lookups, normalization
+     * Only verified provider requests may trigger
+     * platform-setting lookups, normalization,
      * and ProviderEvent persistence.
      */
     const verifiedPayload = PaystackWebhookService.parseVerifiedPayload(signaturePayload);
+
     const normalizedEvent = await PaystackWebhookService.normalizePaystackEvent(
       {
         payload: verifiedPayload,
@@ -532,30 +567,23 @@ class PaystackWebhookService {
     );
 
     /*
-     * Record the provider event through its own
-     * transaction boundary.
+     * Record the provider event through its own transaction boundary.
      *
-     * Do not wrap both recording and all downstream
-     * financial processing inside one broad webhook
-     * transaction. The durable provider event should
-     * exist independently before ledger/refund work
-     * begins.
-     *
-     * Supplied sessions are rejected above so downstream failure cannot
-     * roll back recording through an outer transaction.
+     * Do not wrap recording and downstream financial processing
+     * inside a single broad webhook transaction.
      */
     const recordResult = await ProviderEventService.recordProviderEvent(
       {
         ...normalizedEvent,
 
         isVerified: true,
-
         currentTime: normalizedCurrentTime,
       },
       options
     );
 
     const providerEvent = recordResult?.providerEvent;
+
     if (!providerEvent?._id) {
       throw new Error("Provider event recording did not return a persisted event ID.");
     }
@@ -565,9 +593,7 @@ class PaystackWebhookService {
         ...recordResult,
 
         recorded: true,
-
         isVerified: true,
-
         processedImmediately: false,
       };
     }
@@ -583,11 +609,8 @@ class PaystackWebhookService {
       ...recordResult,
 
       recorded: true,
-
       isVerified: true,
-
       processedImmediately: true,
-
       processResult,
     };
   }

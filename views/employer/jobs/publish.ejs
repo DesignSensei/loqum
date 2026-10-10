@@ -1,0 +1,254 @@
+<!-- views/employer/jobs/publish.ejs -->
+
+<div class="d-flex flex-column gap-6">
+  <div class="d-flex justify-content-end">
+    <a href="<%= publicationView.actions.detailsUrl %>" class="btn btn-light"> Back to job </a>
+  </div>
+
+  <div id="job-publish-feedback" class="alert mb-0" role="status" aria-live="polite" hidden></div>
+
+  <% if (publicationView.issues.length) { %>
+  <div class="alert alert-warning">
+    <h2 class="fs-5">This job is not ready to publish</h2>
+
+    <ul class="mb-0">
+      <% publicationView.issues.forEach((issue) => { %>
+      <li><%= issue %></li>
+      <% }); %>
+    </ul>
+
+    <% if (publicationView.detail.actions.editUrl) { %>
+    <a href="<%= publicationView.detail.actions.editUrl %>" class="btn btn-light mt-4">
+      Edit job
+    </a>
+    <% } %>
+  </div>
+  <% } %>
+
+  <!-- Job review -->
+  <section class="card">
+    <div class="card-body">
+      <h2 class="fs-3 mb-3"><%= publicationView.detail.job.roleTitle || 'Untitled job' %></h2>
+
+      <p class="text-gray-600">
+        <%= publicationView.detail.job.branch?.name || 'No branch selected' %> · <%=
+        publicationView.detail.job.locationLabel || 'Location not provided' %>
+      </p>
+
+      <p>
+        <%= publicationView.detail.job.employmentTypeLabel %> · <%=
+        publicationView.detail.job.workplaceTypeLabel %>
+      </p>
+
+      <p class="fw-bold">
+        <%= publicationView.detail.job.compensation?.display || 'Compensation not provided' %>
+      </p>
+
+      <div class="text-break mb-5" style="white-space: pre-wrap">
+        <%= publicationView.detail.job.description || 'Description not provided' %>
+      </div>
+
+      <h3 class="fs-5">Requirements</h3>
+
+      <ul>
+        <% publicationView.detail.job.requirements.forEach((item) => { %>
+        <li class="text-break"><%= item %></li>
+        <% }); %>
+      </ul>
+
+      <p>Screening questions: <%= publicationView.detail.job.screeningQuestions.length %></p>
+
+      <p>
+        Application deadline (UTC): <%= publicationView.detail.job.applicationDeadline ?
+        publicationView.detail.job.applicationDeadlineDisplay : 'Not set' %>
+      </p>
+
+      <a href="<%= publicationView.actions.detailsUrl %>"> View all saved job details </a>
+    </div>
+  </section>
+
+  <!-- Publication terms -->
+  <% if (!publicationView.issues.length) { %>
+  <section class="card">
+    <div class="card-body">
+      <h2 class="fs-4">Publishing terms</h2>
+
+      <p class="fw-bold"><%= publicationView.selectedSource %></p>
+
+      <p><%= publicationView.duration %></p>
+
+      <% if (publicationView.guaranteedUntil) { %>
+      <p>Current subscription period ends: <%= publicationView.guaranteedUntil %></p>
+      <% } %> <% if (publicationView.monthlyFree) { %>
+      <p>
+        Free postings remaining this UTC calendar month: <%= publicationView.monthlyFree.remaining
+        %>.
+      </p>
+      <% } %> <% if (publicationView.subscription) { %>
+      <p>
+        <%= publicationView.subscription.name %>: <%= publicationView.subscription.occupied %> of
+        <%= publicationView.subscription.capacity %> slots occupied.
+      </p>
+
+      <% if (publicationView.subscription.downgradePending) { %>
+      <p class="text-warning">
+        New subscription publications are unavailable while a capacity-reducing plan change is
+        pending.
+      </p>
+      <% } %> <% } %> <% if (publicationView.paidPurchase) { %>
+      <p>
+        Unused paid posting: <%= publicationView.paidPurchase.planName %> (<%=
+        publicationView.paidPurchase.reference %>).
+      </p>
+      <% } %>
+
+      <p class="text-gray-600">
+        Available free posting first, then a subscription slot, then an unused paid posting, where
+        your publication policy permits them. Availability is checked again when you confirm.
+      </p>
+
+      <% if (publicationView.sourceType === 'paid_single_post') { %>
+      <p>
+        Publishing uses the oldest unused paid posting. Ending the listing early does not restore
+        it.
+      </p>
+      <% } %>
+    </div>
+  </section>
+  <% } %>
+
+  <noscript>
+    <div class="alert alert-warning">Enable JavaScript to confirm publication or payment.</div>
+  </noscript>
+
+  <!-- Publication and payment controls -->
+  <div id="job-publication-controls" data-business-id="<%= publicationView.detail.employer.id %>">
+    <input id="job-publication-csrf" type="hidden" value="<%= csrfToken %>" />
+
+    <textarea id="job-publication-data" hidden disabled>
+<%= JSON.stringify({
+      review: publicationView.review,
+      actions: publicationView.actions,
+      pendingPayments: publicationView.pendingPayments
+    }) %></textarea>
+
+    <!-- Explicit publication confirmation -->
+    <% if (publicationView.canPublish) { %>
+    <form
+      id="job-confirm-publication-form"
+      method="post"
+      action="<%= publicationView.actions.confirmUrl %>"
+    >
+      <button type="submit" class="btn btn-primary" disabled>Confirm and publish</button>
+
+      <p class="form-text mt-3">
+        This confirms publication using the terms above. It does not charge your wallet or start a
+        new payment.
+      </p>
+    </form>
+    <% } %>
+
+    <!-- Pending purchases -->
+    <% if (publicationView.pendingPayments.length) { %>
+    <section class="card">
+      <div class="card-body">
+        <h2 class="fs-4">Pending posting purchases</h2>
+
+        <p>
+          These purchases belong to your business. Check or continue an existing payment before
+          starting another.
+        </p>
+
+        <% publicationView.pendingPayments.forEach((payment) => { %>
+        <div class="border rounded p-4 mb-4">
+          <p class="fw-bold mb-2"><%= payment.name %> — <%= payment.price %></p>
+
+          <p class="text-gray-600"><%= payment.reference %></p>
+
+          <% if (payment.accessCode) { %>
+          <button
+            type="button"
+            class="btn btn-light-primary"
+            data-resume-payment="<%= payment.id %>"
+            disabled
+          >
+            Continue payment
+          </button>
+          <% } %>
+
+          <button
+            type="button"
+            class="btn btn-light"
+            data-verify-payment="<%= payment.id %>"
+            disabled
+          >
+            Check payment
+          </button>
+        </div>
+        <% }); %>
+      </div>
+    </section>
+    <% } %>
+
+    <!-- Purchase posting -->
+    <% if (publicationView.plans.length) { %>
+    <section class="card">
+      <div class="card-body">
+        <h2 class="fs-4">Buy a posting</h2>
+
+        <p>
+          Payment buys one posting for your business. After payment is verified, return here to
+          confirm publication.
+        </p>
+
+        <form id="job-publication-purchase-form">
+          <div class="mb-4">
+            <label class="form-label" for="publication-plan"> Posting product </label>
+
+            <select id="publication-plan" class="form-select" required disabled>
+              <% publicationView.plans.forEach((plan) => { %>
+              <option
+                value="<%= plan.id %>"
+                data-price="<%= plan.priceMinor %>"
+                data-currency="<%= plan.currency %>"
+              >
+                <%= plan.name %> — <%= plan.price %> — <%= plan.days %> days
+              </option>
+              <% }); %>
+            </select>
+          </div>
+
+          <div class="mb-5">
+            <label class="form-label" for="publication-payment-method"> Payment method </label>
+
+            <select id="publication-payment-method" class="form-select" disabled>
+              <option value="paystack_checkout">Paystack</option>
+
+              <% if (publicationView.canPayFromWallet) { %>
+              <option value="wallet">Employer wallet</option>
+              <% } %>
+            </select>
+          </div>
+
+          <button type="submit" class="btn btn-primary" disabled>Pay for posting</button>
+        </form>
+      </div>
+    </section>
+    <% } %>
+
+    <!-- Publishing capacity information -->
+    <% if (!publicationView.canPublish && !publicationView.issues.length) { %>
+    <div class="alert alert-info mt-5">
+      <% if (!publicationView.canPurchase) { %> Ask the business owner or a business administrator
+      to arrange publishing capacity or payment. <% } else { %>
+      <p>
+        Use an available posting product above, or manage your subscription and purchases in
+        Billing.
+      </p>
+
+      <a href="<%= publicationView.actions.billingUrl %>" class="btn btn-light"> Open Billing </a>
+      <% } %>
+    </div>
+    <% } %>
+  </div>
+</div>

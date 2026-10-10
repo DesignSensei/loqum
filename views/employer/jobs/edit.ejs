@@ -1,27 +1,13 @@
+
 <!-- views/employer/jobs/edit.ejs -->
 
-<% const formView = jobEditView; %>
-
 <div class="d-flex flex-column gap-6">
-  <div class="d-flex flex-wrap justify-content-between align-items-center gap-4">
-    <div>
-      <h1 class="fs-2 fw-bold mb-2"><%= formView.pageTitle %></h1>
-      <p class="text-gray-600 mb-0"><%= formView.draftMessage %></p>
-    </div>
 
-    <a
-      href="<%= formView.actions.detailsUrl || formView.actions.jobsUrl %>"
-      class="btn btn-light"
-    >
-      Back to job
-    </a>
-  </div>
-
-  <% if (!formView.permissions.canSaveChanges) { %>
+  <% if (!jobEditView.permissions.canSaveChanges) { %>
     <div class="card">
       <div class="card-body">
         <h2 class="fs-4">Job editing unavailable</h2>
-        <p class="text-gray-600 mb-0"><%= formView.unavailableMessage %></p>
+        <p class="text-gray-600 mb-0"><%= jobEditView.unavailableMessage %></p>
       </div>
     </div>
   <% } else { %>
@@ -43,19 +29,19 @@
     <form
       id="job-edit-form"
       method="post"
-      action="<%= formView.actions.submitUrl %>"
-      data-currency="<%= formView.currency.code %>"
-      data-currency-decimals="<%= formView.currency.decimalPlaces %>"
-      data-max-list-items="<%= formView.limits.listItems %>"
-      data-max-questions="<%= formView.limits.screeningQuestions %>"
-      data-jobs-url="<%= formView.actions.jobsUrl %>"
-      data-details-url="<%= formView.actions.detailsUrl %>"
-      data-has-publication-history="<%= formView.hasPublicationHistory %>"
+      action="<%= jobEditView.actions.submitUrl %>"
+      data-currency="<%= jobEditView.currency.code %>"
+      data-currency-decimals="<%= jobEditView.currency.decimalPlaces %>"
+      data-max-list-items="<%= jobEditView.limits.listItems %>"
+      data-max-questions="<%= jobEditView.limits.screeningQuestions %>"
+      data-jobs-url="<%= jobEditView.actions.jobsUrl %>"
+      data-details-url="<%= jobEditView.actions.detailsUrl %>"
+      data-has-publication-history="<%= jobEditView.hasPublicationHistory %>"
     >
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
 
       <!-- Read escaped JSON through textarea.value, never as HTML. -->
-      <textarea id="job-edit-initial-values" hidden disabled><%= JSON.stringify(formView.values) %></textarea>
+      <textarea id="job-edit-initial-values" hidden disabled><%= JSON.stringify(jobEditView.values) %></textarea>
 
       <!-- Enabled after the client restores values and installs submission. -->
       <fieldset id="job-edit-fields" class="border-0 p-0 m-0" disabled>
@@ -81,14 +67,14 @@
                   id="job-roleTitle"
                   name="roleTitle"
                   class="form-control"
-                  maxlength="<%= formView.limits.roleTitle %>"
+                  maxlength="<%= jobEditView.limits.roleTitle %>"
                   placeholder="e.g. Medical Officer"
                 >
               </div>
 
               <div class="col-12">
                 <label class="form-label" for="job-branch">
-                  Branch<%= formView.branchRequired ? ' (required)' : '' %>
+                  Branch<%= jobEditView.branchRequired ? ' (required)' : '' %>
                 </label>
 
                 <select
@@ -96,20 +82,20 @@
                   name="branch"
                   class="form-select"
                   aria-describedby="job-branch-help"
-                  <%= formView.branchRequired ? 'required' : '' %>
+                  <%= jobEditView.branchRequired ? 'required' : '' %>
                 >
-                  <option value=""><%= formView.branchPlaceholder %></option>
+                  <option value=""><%= jobEditView.branchPlaceholder %></option>
 
-                  <% if (formView.currentBranch?.retainOnly) { %>
+                  <% if (jobEditView.currentBranch?.retainOnly) { %>
                     <option
-                      value="<%= formView.currentBranch.id %>"
+                      value="<%= jobEditView.currentBranch.id %>"
                       data-retain-only="true"
                     >
-                      <%= formView.currentBranch.name %> (keep current branch)
+                      <%= jobEditView.currentBranch.name %> (keep current branch)
                     </option>
                   <% } %>
 
-                  <% formView.branches.forEach((branch) => { %>
+                  <% jobEditView.branches.forEach((branch) => { %>
                     <option value="<%= branch.id %>">
                       <%= branch.name || 'Branch' %><%= branch.locationLabel ? ' — ' + branch.locationLabel : '' %>
                     </option>
@@ -117,14 +103,14 @@
                 </select>
 
                 <div id="job-branch-help" class="form-text">
-                  <%= formView.branchHelp %>
+                  <%= jobEditView.branchHelp %>
                 </div>
               </div>
 
               <% [
-                ['professionalType', 'Profession', formView.options.professionalTypes],
-                ['employmentType', 'Employment type', formView.options.employmentTypes],
-                ['workplaceType', 'Workplace type', formView.options.workplaceTypes]
+                ['professionalType', 'Profession', jobEditView.options.professionalTypes],
+                ['employmentType', 'Employment type', jobEditView.options.employmentTypes],
+                ['workplaceType', 'Workplace type', jobEditView.options.workplaceTypes]
               ].forEach(([name, label, options]) => { %>
                 <div class="col-12 col-md-4">
                   <label class="form-label" for="job-<%= name %>">
@@ -160,7 +146,7 @@
                     id="job-<%= name %>"
                     name="<%= name %>"
                     class="form-control"
-                    maxlength="<%= formView.limits[name] %>"
+                    maxlength="<%= jobEditView.limits[name] %>"
                   >
                 </div>
               <% }); %>
@@ -178,7 +164,7 @@
                   step="1"
                   required
                   class="form-control"
-                  value="<%= formView.defaults.vacancyCount %>"
+                  value="<%= jobEditView.defaults.vacancyCount %>"
                 >
               </div>
 
@@ -209,7 +195,7 @@
                     name="<%= name %>"
                     class="form-control"
                     rows="<%= rows %>"
-                    maxlength="<%= formView.limits[name] %>"
+                    maxlength="<%= jobEditView.limits[name] %>"
                   ></textarea>
                 </div>
               <% }); %>
@@ -239,7 +225,7 @@
                   step="1"
                   required
                   class="form-control"
-                  value="<%= formView.defaults.minimumYearsOfExperience %>"
+                  value="<%= jobEditView.defaults.minimumYearsOfExperience %>"
                 >
               </div>
 
@@ -253,16 +239,16 @@
                   name="educationRequirement"
                   class="form-control"
                   rows="2"
-                  maxlength="<%= formView.limits.educationRequirement %>"
+                  maxlength="<%= jobEditView.limits.educationRequirement %>"
                 ></textarea>
               </div>
 
               <% [
-                ['responsibilities', 'Responsibilities', formView.limits.sectionItem],
-                ['requirements', 'Requirements', formView.limits.sectionItem],
-                ['preferredQualifications', 'Preferred qualifications', formView.limits.sectionItem],
-                ['skills', 'Skills', formView.limits.skillItem],
-                ['benefits', 'Benefits', formView.limits.benefitItem]
+                ['responsibilities', 'Responsibilities', jobEditView.limits.sectionItem],
+                ['requirements', 'Requirements', jobEditView.limits.sectionItem],
+                ['preferredQualifications', 'Preferred qualifications', jobEditView.limits.sectionItem],
+                ['skills', 'Skills', jobEditView.limits.skillItem],
+                ['benefits', 'Benefits', jobEditView.limits.benefitItem]
               ].forEach(([name, label, itemLimit]) => { %>
                 <div class="col-12">
                   <label class="form-label" for="job-<%= name %>">
@@ -280,7 +266,7 @@
                   ></textarea>
 
                   <div id="job-<%= name %>-help" class="form-text">
-                    One item per line. Up to <%= formView.limits.listItems %>
+                    One item per line. Up to <%= jobEditView.limits.listItems %>
                     items, <%= itemLimit %> characters per item.
                   </div>
                 </div>
@@ -299,7 +285,7 @@
           <div class="card-body">
             <p class="text-gray-600">
               Salary is shown to applicants.
-              Currency: <strong><%= formView.currency.code %></strong>.
+              Currency: <strong><%= jobEditView.currency.code %></strong>.
             </p>
 
             <label class="form-check form-check-custom form-check-solid mb-6">
@@ -322,10 +308,10 @@
                   name="compensationType"
                   class="form-select"
                 >
-                  <% formView.options.compensationTypes.forEach((option) => { %>
+                  <% jobEditView.options.compensationTypes.forEach((option) => { %>
                     <option
                       value="<%= option.value %>"
-                      <%= option.value === formView.defaults.compensationType ? 'selected' : '' %>
+                      <%= option.value === jobEditView.defaults.compensationType ? 'selected' : '' %>
                     >
                       <%= option.label %>
                     </option>
@@ -343,10 +329,10 @@
                   name="compensationPeriod"
                   class="form-select"
                 >
-                  <% formView.options.salaryPeriods.forEach((option) => { %>
+                  <% jobEditView.options.salaryPeriods.forEach((option) => { %>
                     <option
                       value="<%= option.value %>"
-                      <%= option.value === formView.defaults.salaryPeriod ? 'selected' : '' %>
+                      <%= option.value === jobEditView.defaults.salaryPeriod ? 'selected' : '' %>
                     >
                       <%= option.label %>
                     </option>
@@ -360,7 +346,7 @@
                   class="form-label"
                   for="job-minimum-amount"
                 >
-                  <%= formView.currency.label %>
+                  <%= jobEditView.currency.label %>
                 </label>
 
                 <input
@@ -376,7 +362,7 @@
 
               <div id="job-maximum-amount-group" class="col-12 col-md-6" hidden>
                 <label class="form-label" for="job-maximum-amount">
-                  Maximum salary (<%= formView.currency.code %>)
+                  Maximum salary (<%= jobEditView.currency.code %>)
                 </label>
 
                 <input
@@ -392,7 +378,7 @@
               <div class="col-12">
                 <div id="job-salary-help" class="form-text mb-4">
                   Enter amounts without commas, using up to
-                  <%= formView.currency.decimalPlaces %> decimal places.
+                  <%= jobEditView.currency.decimalPlaces %> decimal places.
                 </div>
 
                 <label class="form-check form-check-custom form-check-solid">
@@ -400,7 +386,7 @@
                     name="negotiable"
                     type="checkbox"
                     class="form-check-input"
-                    <%= formView.defaults.negotiable ? 'checked' : '' %>
+                    <%= jobEditView.defaults.negotiable ? 'checked' : '' %>
                   >
                   <span class="form-check-label">Negotiable</span>
                 </label>
@@ -422,9 +408,9 @@
           </div>
 
           <div class="card-body">
-            <p class="text-gray-600"><%= formView.screeningHelp %></p>
+            <p class="text-gray-600"><%= jobEditView.screeningHelp %></p>
             <p class="form-text">
-              Optional. Add up to <%= formView.limits.screeningQuestions %>
+              Optional. Add up to <%= jobEditView.limits.screeningQuestions %>
               questions.
             </p>
 
@@ -476,11 +462,11 @@
             type="submit"
             class="btn btn-primary"
           >
-            <%= formView.actions.submitLabel %>
+            <%= jobEditView.actions.submitLabel %>
           </button>
 
           <a
-            href="<%= formView.actions.detailsUrl || formView.actions.jobsUrl %>"
+            href="<%= jobEditView.actions.detailsUrl || jobEditView.actions.jobsUrl %>"
             class="btn btn-light"
           >
             Cancel
@@ -521,7 +507,7 @@
                 data-field="prompt"
                 class="form-control mt-2"
                 rows="2"
-                maxlength="<%= formView.limits.screeningPrompt %>"
+                maxlength="<%= jobEditView.limits.screeningPrompt %>"
                 required
               ></textarea>
             </label>
@@ -532,7 +518,7 @@
               Answer type
 
               <select data-field="type" class="form-select mt-2">
-                <% formView.options.screeningQuestionTypes.forEach((option) => { %>
+                <% jobEditView.options.screeningQuestionTypes.forEach((option) => { %>
                   <option value="<%= option.value %>">
                     <%= option.label %>
                   </option>
@@ -546,10 +532,10 @@
               Criterion
 
               <select data-field="requirementLevel" class="form-select mt-2">
-                <% formView.options.screeningRequirementLevels.forEach((option) => { %>
+                <% jobEditView.options.screeningRequirementLevels.forEach((option) => { %>
                   <option
                     value="<%= option.value %>"
-                    <%= option.value === formView.defaults.screeningRequirementLevel ? 'selected' : '' %>
+                    <%= option.value === jobEditView.defaults.screeningRequirementLevel ? 'selected' : '' %>
                   >
                     <%= option.label %>
                   </option>
@@ -564,7 +550,7 @@
                 data-field="isResponseRequired"
                 type="checkbox"
                 class="form-check-input"
-                <%= formView.defaults.screeningResponseRequired ? 'checked' : '' %>
+                <%= jobEditView.defaults.screeningResponseRequired ? 'checked' : '' %>
               >
               <span class="form-check-label">
                 Applicant must answer this question
@@ -580,13 +566,13 @@
                 data-field="options"
                 class="form-control mt-2"
                 rows="3"
-                data-item-limit="<%= formView.limits.screeningOption %>"
+                data-item-limit="<%= jobEditView.limits.screeningOption %>"
               ></textarea>
             </label>
 
             <div class="form-text">
               One option per line; at least two unique options.
-              Up to <%= formView.limits.screeningOption %> characters each.
+              Up to <%= jobEditView.limits.screeningOption %> characters each.
             </div>
           </div>
 

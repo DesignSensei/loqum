@@ -3,41 +3,85 @@
 const mongoose = require("mongoose");
 
 /**
- * PROFESSIONAL PROFILE:
- * Stores the professional's work profile, verification summary, location,
- * availability, reputation, and platform activity.
+ * PROFESSIONAL PROFILE ARCHITECTURE
  *
- * PLATFORM FEE DIRECTION:
- * Loqum's platform fee is paid by the employer.
+ * Stores the professional's profile, verification summaries,
+ * location, availability, reputation, marketplace visibility,
+ * approval status, and operational activity.
+ *
+ * VERIFICATION RESPONSIBILITIES
+ *
+ * ProfessionalProfile stores verification summaries.
+ * KYCVerification stores individual verification records.
+ * ProfessionalVerificationService owns verification transitions.
+ *
+ * Identity, professional licence, payout KYC, platform approval,
+ * and marketplace visibility remain separate states.
+ *
+ * ONE-TIME VERIFICATION POLICY
+ *
+ * Identity and professional licence verification are one-time.
+ *
+ * A verified identity does not require periodic re-verification.
+ *
+ * A verified professional licence does not require annual,
+ * periodic, or expiry-driven re-verification.
+ *
+ * A change to the professional's licence number requires:
+ *
+ * - Resetting existing licence verification;
+ * - Fresh verification of the new licence number;
+ * - Resetting professional platform approval; and
+ * - Subsequent administrative approval.
+ *
+ * A licence number change does not invalidate identity verification.
+ *
+ * licenceExpiryDate remains available as informational metadata.
+ * It must not trigger automatic verification expiry or renewal.
+ *
+ * MARKETPLACE ELIGIBILITY
+ *
+ * Marketplace visibility requires:
+ *
+ * - Verified identity;
+ * - Verified professional licence;
+ * - Approved professional account; and
+ * - Active account status.
+ *
+ * Meeting these requirements does not automatically set
+ * marketplaceStatus to visible.
+ *
+ * Hidden and paused preferences must be preserved.
+ *
+ * FINANCIAL POLICY
+ *
+ * Loqum's platform fees are paid by employers.
  * Professionals receive their agreed or approved pay.
- * No pharmacist-side commission deduction at launch.
  *
- * TIER SYSTEM:
- * Tier is evaluated periodically by the service layer or cron job using live
- * profile metrics such as completed shifts, average rating, reliability score,
- * and strike history.
+ * Payout accounts are managed by BankAccount.
+ * Wallet balances are managed by Wallet.
  *
- * Tier should control trust, visibility, active shift limits, and possible
- * priority placement. It should not control pharmacist-side commission at launch.
+ * DATA PROTECTION
  *
- * LOCATION:
- * The saved profile location can help Loqum show nearby shifts by default.
- * MVP should still rely mainly on filters such as state, LGA, date, rate,
- * professional type, and specialty.
- *
- * PAYOUT ACCOUNT:
- * Managed through the BankAccount model.
- * No bank account details are embedded here.
- *
- * BVN / KYC:
- * Do not store raw BVN directly in this profile.
- * Store only a verification summary here.
- * Detailed KYC records should live in KYCVerification.
+ * Never store raw NIN/BVN values in this profile.
+ * Detailed verification evidence belongs in KYCVerification.
  */
+
+const PROFESSIONAL_TYPES = [
+  "pharmacist",
+  "pharmacy_technician",
+  "nurse",
+  "doctor",
+  "lab_scientist",
+  "radiographer",
+  "physiotherapist",
+];
+
+const VERIFICATION_STATUSES = ["pending", "verified", "rejected", "needs_review"];
 
 const professionalProfileSchema = new mongoose.Schema(
   {
-    // --- IDENTITY ---
+    // ───────────────────────── IDENTITY ─────────────────────────
 
     user: {
       type: mongoose.Schema.Types.ObjectId,
@@ -47,15 +91,7 @@ const professionalProfileSchema = new mongoose.Schema(
 
     type: {
       type: String,
-      enum: [
-        "pharmacist",
-        "pharmacy_technician",
-        "nurse",
-        "doctor",
-        "lab_scientist",
-        "radiographer",
-        "physiotherapist",
-      ],
+      enum: PROFESSIONAL_TYPES,
       required: true,
     },
 
@@ -90,7 +126,7 @@ const professionalProfileSchema = new mongoose.Schema(
       default: 0,
     },
 
-    // --- LOCATION ---
+    // ───────────────────────── LOCATION ─────────────────────────
 
     address: {
       type: String,
@@ -115,15 +151,26 @@ const professionalProfileSchema = new mongoose.Schema(
       coordinates: {
         type: [Number],
         required: true,
-        // [longitude, latitude]
+
+        // Coordinates use [longitude, latitude].
         validate: {
           validator: function (value) {
-            if (!Array.isArray(value) || value.length !== 2) return false;
+            if (!Array.isArray(value) || value.length !== 2) {
+              return false;
+            }
 
             const [lng, lat] = value;
 
-            return lng >= -180 && lng <= 180 && lat >= -90 && lat <= 90;
+            return (
+              Number.isFinite(lng) &&
+              Number.isFinite(lat) &&
+              lng >= -180 &&
+              lng <= 180 &&
+              lat >= -90 &&
+              lat <= 90
+            );
           },
+
           message: "Coordinates must be [longitude, latitude] with valid ranges.",
         },
       },
@@ -141,7 +188,7 @@ const professionalProfileSchema = new mongoose.Schema(
       required: true,
     },
 
-    // --- LICENCE VERIFICATION ---
+    // ───────────────────────── LICENCE VERIFICATION ─────────────────────────
 
     licenceNumber: {
       type: String,
@@ -153,12 +200,13 @@ const professionalProfileSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: null,
-      // Example: PCN, NMCN, MDCN, MLSCN, RRBN, or another relevant council.
+
+      // Examples: PCN, NMCN, MDCN, MLSCN, RRBN.
     },
 
     licenceVerificationStatus: {
       type: String,
-      enum: ["pending", "verified", "rejected", "needs_review"],
+      enum: VERIFICATION_STATUSES,
       default: "pending",
     },
 
@@ -194,6 +242,13 @@ const professionalProfileSchema = new mongoose.Schema(
       select: false,
     },
 
+    /*
+     * Informational field only.
+     *
+     * Its date must not automatically invalidate
+     * a previously verified licence.
+     */
+
     licenceExpiryDate: {
       type: Date,
       default: null,
@@ -222,7 +277,16 @@ const professionalProfileSchema = new mongoose.Schema(
       default: null,
     },
 
-    // --- CERTIFICATIONS ---
+    // ───────────────────────── CERTIFICATIONS ─────────────────────────
+
+    /*
+     * Certification validity is separate from
+     * Loqum's one-time professional licence
+     * verification policy.
+     *
+     * Certification expiry dates remain available
+     * for their respective certification records.
+     */
 
     certifications: [
       {
@@ -271,11 +335,11 @@ const professionalProfileSchema = new mongoose.Schema(
       },
     ],
 
-    // --- IDENTITY VERIFICATION ---
+    // ───────────────────────── IDENTITY VERIFICATION ─────────────────────────
 
     identityVerificationStatus: {
       type: String,
-      enum: ["pending", "verified", "rejected", "needs_review"],
+      enum: VERIFICATION_STATUSES,
       default: "pending",
     },
 
@@ -341,9 +405,18 @@ const professionalProfileSchema = new mongoose.Schema(
       default: null,
     },
 
-    // --- BVN / KYC VERIFICATION SUMMARY ---
-    // Full KYC records live in KYCVerification.
-    // This summary is only for quick profile and payout readiness checks.
+    // ───────────────────────── BVN / KYC SUMMARY ─────────────────────────
+
+    /*
+     * Full verification records belong in KYCVerification.
+     *
+     * This object is a profile-level summary for
+     * payout readiness and identity-related workflows.
+     *
+     * Registry matching alone must not set status
+     * to verified unless the domain's requirements
+     * for that particular verification are satisfied.
+     */
 
     bvnVerification: {
       status: {
@@ -354,9 +427,16 @@ const professionalProfileSchema = new mongoose.Schema(
 
       provider: {
         type: String,
-        enum: ["paystack", "dojah", "smile_identity", "manual", null],
+        enum: ["ninja", "dojah", "paystack", "smile_identity", "manual", null],
         default: null,
       },
+
+      /*
+       * Only use a genuine provider-issued ID.
+       *
+       * Internal request references must not
+       * be copied into this field.
+       */
 
       providerReference: {
         type: String,
@@ -368,9 +448,9 @@ const professionalProfileSchema = new mongoose.Schema(
       last4: {
         type: String,
         trim: true,
+        maxlength: 4,
         default: null,
         select: false,
-        // Optional masked BVN ending only.
       },
 
       verifiedAt: {
@@ -397,14 +477,69 @@ const professionalProfileSchema = new mongoose.Schema(
       },
     },
 
-    // --- AVAILABILITY ---
+    // ───────────────────────── AVAILABILITY ─────────────────────────
 
     availabilityStatus: {
       type: String,
       enum: ["available", "unavailable", "busy", "paused"],
       default: "available",
-      // Professionals can pause availability without being suspended.
     },
+
+    /*
+     * NEW: AVAILABILITY MODE
+     *
+     * weekly: Regularly available days of the week.
+     * dates: Specific selected calendar dates.
+     *
+     * Default null preserves compatibility with existing
+     * professional profiles until a mode is selected.
+     *
+     * The profile service will determine the appropriate
+     * initial display mode.
+     */
+
+    availabilityMode: {
+      type: String,
+      enum: ["weekly", "dates"],
+      default: null,
+    },
+
+    /*
+     * NEW: RECURRING WEEKDAY PREFERENCES
+     *
+     * ISO weekday numbering:
+     *
+     * Monday    = 1
+     * Tuesday   = 2
+     * Wednesday = 3
+     * Thursday  = 4
+     * Friday    = 5
+     * Saturday  = 6
+     * Sunday    = 7
+     *
+     * These are availability preferences, not guaranteed
+     * shift assignments or automatic booking rules.
+     *
+     * The profile service will validate and normalise
+     * submitted selections before saving them.
+     */
+
+    availableWeekdays: {
+      type: [
+        {
+          type: Number,
+          enum: [1, 2, 3, 4, 5, 6, 7],
+        },
+      ],
+      default: [],
+    },
+
+    /*
+     * Existing specific-date preferences.
+     *
+     * Retained for professionals who prefer selecting
+     * individual dates instead of weekly weekdays.
+     */
 
     availableDates: [
       {
@@ -419,20 +554,34 @@ const professionalProfileSchema = new mongoose.Schema(
       default: null,
     },
 
-    // --- FINANCIAL SUMMARY ---
-    // Payout account is managed through BankAccount.
-    // Wallet balance is managed through Wallet.
-    // This profile only stores high-level professional earnings metrics.
+    // ───────────────────────── FINANCIAL SUMMARY ─────────────────────────
+
+    /*
+     * Payout account: BankAccount.
+     * Wallet balance: Wallet.
+     *
+     * Professionals do not pay Loqum's
+     * platform commission at launch.
+     */
 
     totalEarnings: {
       type: Number,
       default: 0,
       min: 0,
-      // Cumulative approved professional pay credited from completed shifts.
-      // This does not include Loqum platform fee.
     },
 
-    // --- TIER ---
+    // ───────────────────────── TIER ─────────────────────────
+
+    /*
+     * Tier is periodically evaluated using
+     * professional performance metrics.
+     *
+     * Tier influences trust, visibility and
+     * active shift limits.
+     *
+     * It does not determine a pharmacist-side
+     * platform commission.
+     */
 
     tier: {
       type: String,
@@ -465,9 +614,6 @@ const professionalProfileSchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
-
-      // Captured each time tier is evaluated and assigned.
-      // Audit trail for why a professional is at their current tier.
     },
 
     tierUpdatedAt: {
@@ -475,7 +621,7 @@ const professionalProfileSchema = new mongoose.Schema(
       default: null,
     },
 
-    // --- ACCOUNT STATUS ---
+    // ───────────────────────── ACCOUNT STATUS ─────────────────────────
 
     accountStatus: {
       type: String,
@@ -501,18 +647,15 @@ const professionalProfileSchema = new mongoose.Schema(
       default: null,
     },
 
-    // --- MARKETPLACE VISIBILITY ---
+    // ───────────────────────── MARKETPLACE VISIBILITY ─────────────────────────
 
     marketplaceStatus: {
       type: String,
       enum: ["hidden", "visible", "paused"],
       default: "hidden",
-      // hidden: not shown to employers or matching suggestions.
-      // visible: can appear in matching, suggestions, and employer-side views.
-      // paused: professional temporarily paused visibility.
     },
 
-    // --- STRIKES ---
+    // ───────────────────────── STRIKES ─────────────────────────
 
     strikes: {
       noShows: {
@@ -538,12 +681,9 @@ const professionalProfileSchema = new mongoose.Schema(
         default: 0,
         min: 0,
       },
-
-      // Feeds into tier evaluation and reliabilityScore.
-      // A strike threshold breach can trigger restriction or tier demotion.
     },
 
-    // --- SHIFT ACTIVITY ---
+    // ───────────────────────── SHIFT ACTIVITY ─────────────────────────
 
     totalShiftsCompleted: {
       type: Number,
@@ -555,8 +695,6 @@ const professionalProfileSchema = new mongoose.Schema(
       type: Number,
       default: 0,
       min: 0,
-      // Incremented on assignment, decremented on completion or cancellation.
-      // Checked against tier limits before new assignment.
     },
 
     totalHoursWorked: {
@@ -570,7 +708,7 @@ const professionalProfileSchema = new mongoose.Schema(
       default: null,
     },
 
-    // --- REPUTATION ---
+    // ───────────────────────── REPUTATION ─────────────────────────
 
     reviews: [
       {
@@ -597,11 +735,18 @@ const professionalProfileSchema = new mongoose.Schema(
       default: 100,
       min: 0,
       max: 100,
-      // Starts at 100. Decremented by strikes or poor attendance behaviour.
-      // Used in tier evaluation and employer confidence signals.
     },
 
-    // --- PROFESSIONAL APPROVAL ---
+    // ───────────────────────── PROFESSIONAL APPROVAL ─────────────────────────
+
+    /*
+     * Final approval is performed through the
+     * professional verification/administration
+     * service after required checks are satisfied.
+     *
+     * Approval alone does not make the professional
+     * visible in the marketplace.
+     */
 
     professionalApprovalStatus: {
       type: String,
@@ -639,30 +784,76 @@ const professionalProfileSchema = new mongoose.Schema(
   }
 );
 
-// --- INDEXES ---
+// ───────────────────────── INDEXES ─────────────────────────
 
 professionalProfileSchema.index({ user: 1 }, { unique: true });
 
-professionalProfileSchema.index({ type: 1 });
-professionalProfileSchema.index({ specialty: 1 });
-professionalProfileSchema.index({ tier: 1 });
+professionalProfileSchema.index({
+  type: 1,
+});
 
-professionalProfileSchema.index({ accountStatus: 1 });
-professionalProfileSchema.index({ marketplaceStatus: 1 });
-professionalProfileSchema.index({ availabilityStatus: 1 });
+professionalProfileSchema.index({
+  specialty: 1,
+});
 
-professionalProfileSchema.index({ averageRating: -1 });
-professionalProfileSchema.index({ reliabilityScore: -1 });
+professionalProfileSchema.index({
+  tier: 1,
+});
 
-professionalProfileSchema.index({ state: 1, lga: 1 });
-professionalProfileSchema.index({ location: "2dsphere" });
+professionalProfileSchema.index({
+  accountStatus: 1,
+});
 
-professionalProfileSchema.index({ type: 1, licenceNumber: 1 }, { unique: true });
+professionalProfileSchema.index({
+  marketplaceStatus: 1,
+});
 
-professionalProfileSchema.index({ licenceVerificationStatus: 1 });
-professionalProfileSchema.index({ identityVerificationStatus: 1 });
-professionalProfileSchema.index({ "bvnVerification.status": 1 });
-professionalProfileSchema.index({ professionalApprovalStatus: 1 });
+professionalProfileSchema.index({
+  availabilityStatus: 1,
+});
+
+professionalProfileSchema.index({
+  averageRating: -1,
+});
+
+professionalProfileSchema.index({
+  reliabilityScore: -1,
+});
+
+professionalProfileSchema.index({
+  state: 1,
+  lga: 1,
+});
+
+professionalProfileSchema.index({
+  location: "2dsphere",
+});
+
+professionalProfileSchema.index(
+  {
+    type: 1,
+    licenceNumber: 1,
+  },
+  {
+    unique: true,
+  }
+);
+
+professionalProfileSchema.index({
+  licenceVerificationStatus: 1,
+});
+
+professionalProfileSchema.index({
+  identityVerificationStatus: 1,
+});
+
+professionalProfileSchema.index({
+  "bvnVerification.status": 1,
+});
+
+professionalProfileSchema.index({
+  professionalApprovalStatus: 1,
+});
 
 professionalProfileSchema.index({
   type: 1,
@@ -673,9 +864,16 @@ professionalProfileSchema.index({
   marketplaceStatus: 1,
 });
 
-// --- VALIDATION / AUTO-CLEANUP ---
+// ───────────────────────── VALIDATION / AUTO-CLEANUP ─────────────────────────
 
 professionalProfileSchema.pre("validate", function () {
+  /*
+   * STRIKE TOTAL
+   *
+   * Maintain the total strike count from
+   * its component values.
+   */
+
   if (this.strikes) {
     const noShows = Number(this.strikes.noShows || 0);
     const lateArrivals = Number(this.strikes.lateArrivals || 0);
@@ -684,19 +882,109 @@ professionalProfileSchema.pre("validate", function () {
     this.strikes.total = noShows + lateArrivals + earlyDepartures;
   }
 
-  if (this.professionalApprovalStatus === "approved") {
-    if (!this.approvedForShiftsAt) {
-      this.approvedForShiftsAt = new Date();
-    }
+  /*
+   * LICENCE NUMBER CHANGE
+   *
+   * A change to licenceNumber invalidates
+   * the previous licence verification.
+   *
+   * It also invalidates the previous platform
+   * approval and hides the professional.
+   *
+   * Identity verification remains unchanged.
+   *
+   * This is a defensive document-save safeguard.
+   * ProfessionalVerificationService remains
+   * responsible for the authoritative transition
+   * and corresponding KYC audit records.
+   */
 
-    if (this.marketplaceStatus === "hidden") {
-      this.marketplaceStatus = "visible";
-    }
+  if (!this.isNew && this.isModified("licenceNumber")) {
+    this.licenceVerificationStatus = "pending";
+
+    this.licenceVerificationMethod = "not_checked";
+    this.licenceVerificationSource = "not_checked";
+
+    this.licenceNameOnRecord = null;
+    this.licenceDocumentUrl = null;
+
+    this.licenceExpiryDate = null;
+    this.licenceVerifiedAt = null;
+
+    this.licenceLastCheckedAt = null;
+    this.licenceVerifiedBy = null;
+
+    this.licenceVerificationNote = null;
+
+    this.professionalApprovalStatus = "pending";
+
+    this.approvedForShiftsAt = null;
+    this.approvedForShiftsBy = null;
+
+    this.approvalNote = null;
+    this.rejectionReason = null;
+
+    this.marketplaceStatus = "hidden";
   }
 
-  if (["restricted", "suspended"].includes(this.accountStatus)) {
+  /*
+   * ONE-TIME VERIFICATION POLICY
+   *
+   * Licence verification is determined by its
+   * recorded verification status.
+   *
+   * licenceExpiryDate does not automatically
+   * invalidate a completed verification.
+   */
+
+  const hasVerifiedLicence = this.licenceVerificationStatus === "verified";
+
+  const hasVerifiedIdentity = this.identityVerificationStatus === "verified";
+
+  const hasCoreVerification = hasVerifiedLicence && hasVerifiedIdentity;
+
+  const isApproved = this.professionalApprovalStatus === "approved";
+
+  const accountActive = this.accountStatus === "active";
+
+  /*
+   * Preserve existing approval timestamp behavior.
+   *
+   * This is not an authorization decision.
+   * Administrative approval must be granted
+   * through the appropriate service.
+   */
+
+  if (isApproved && !this.approvedForShiftsAt) {
+    this.approvedForShiftsAt = new Date();
+  }
+
+  /*
+   * MARKETPLACE SAFETY
+   *
+   * Marketplace eligibility requires:
+   *
+   * - Verified identity;
+   * - Verified licence;
+   * - Approved professional status;
+   * - Active account.
+   *
+   * Do not require an unexpired licenceExpiryDate
+   * because licence verification is one-time.
+   *
+   * Do not automatically activate visibility.
+   *
+   * Preserve hidden/paused preferences when
+   * the professional is eligible.
+   */
+
+  const canRemainMarketplaceEligible = isApproved && accountActive && hasCoreVerification;
+
+  if (!canRemainMarketplaceEligible) {
     this.marketplaceStatus = "hidden";
   }
 });
+
+// ───────────────────────── EXPORT ─────────────────────────
 
 module.exports = mongoose.model("ProfessionalProfile", professionalProfileSchema);

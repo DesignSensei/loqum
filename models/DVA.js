@@ -243,6 +243,23 @@ dvaSchema.index(
   }
 );
 
+// Prevent duplicate accounts when Paystack supplies a provider slug
+// but does not supply a numeric bank ID.
+dvaSchema.index(
+  {
+    provider: 1,
+    providerSlug: 1,
+    accountNumber: 1,
+  },
+  {
+    unique: true,
+    partialFilterExpression: {
+      providerSlug: { $type: "string" },
+      accountNumber: { $type: "string" },
+    },
+  }
+);
+
 dvaSchema.index({ ownerUser: 1, status: 1 });
 dvaSchema.index({ employer: 1, status: 1 });
 dvaSchema.index({ wallet: 1, status: 1 });

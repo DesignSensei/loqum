@@ -1,0 +1,256 @@
+<!-- views/professional/profile/partials/professional-details.ejs -->
+
+<!-- ───────────────────── PROFESSIONAL INFORMATION ───────────────────── -->
+
+<div class="card mb-5 mb-xl-8">
+  <div class="card-header">
+    <div class="card-title">
+      <div class="d-flex align-items-center gap-3">
+        <div class="symbol symbol-45px flex-shrink-0">
+          <span class="symbol-label bg-light-primary">
+            <i class="ki-duotone ki-award fs-2x text-primary">
+              <span class="path1"></span>
+              <span class="path2"></span>
+              <span class="path3"></span>
+            </i>
+          </span>
+        </div>
+
+        <div>
+          <h3 class="fw-bold text-gray-900 fs-5 mb-1">Professional Information</h3>
+
+          <div class="fs-7 text-muted">
+            Your qualifications, experience and professional registration
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card-body p-5 p-lg-8">
+    <div class="row g-4 g-xl-6">
+      <% professionalDetailsView.fields.forEach(function (field) { %>
+
+      <div class="col-12 col-md-6">
+        <div class="border border-gray-300 border-dashed rounded p-4 p-lg-5 h-100">
+          <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+            <span class="fw-semibold text-gray-500 fs-7"> <%= field.label %> </span>
+
+            <% if (field.locked) { %>
+
+            <span
+              class="d-inline-flex align-items-center gap-1 text-gray-500"
+              title="Protected professional information"
+            >
+              <i class="ki-duotone ki-lock fs-5">
+                <span class="path1"></span>
+                <span class="path2"></span>
+                <span class="path3"></span>
+              </i>
+
+              <span class="fs-8 fw-semibold"> Protected </span>
+            </span>
+
+            <% } %>
+          </div>
+
+          <div class="fw-bold text-gray-800 fs-6 text-break"><%= field.value %></div>
+        </div>
+      </div>
+
+      <% }) %>
+    </div>
+
+    <div class="separator separator-dashed my-7"></div>
+
+    <div
+      class="notice d-flex align-items-start bg-light-info border border-info border-dashed rounded p-4 p-lg-5"
+    >
+      <i class="ki-duotone ki-shield-tick fs-2x text-info me-4 flex-shrink-0">
+        <span class="path1"></span>
+        <span class="path2"></span>
+        <span class="path3"></span>
+      </i>
+
+      <div class="flex-grow-1 min-w-0">
+        <div class="fw-bold text-gray-800 fs-6 mb-2">Protected Professional Credentials</div>
+
+        <div class="fw-semibold text-gray-600 fs-7">
+          <%= professionalDetailsView.protectedFieldsMessage %>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ───────────────────── PROFESSIONAL BIO ───────────────────── -->
+
+<div class="card mb-5 mb-xl-8">
+  <div class="card-header">
+    <div class="card-title">
+      <div class="d-flex align-items-center gap-3">
+        <div class="symbol symbol-45px flex-shrink-0">
+          <span class="symbol-label bg-light-info">
+            <i class="ki-duotone ki-notepad-edit fs-2x text-info">
+              <span class="path1"></span>
+              <span class="path2"></span>
+            </i>
+          </span>
+        </div>
+
+        <div>
+          <h3 class="fw-bold text-gray-900 fs-5 mb-1">Professional Bio</h3>
+
+          <div class="fs-7 text-muted">A brief summary of your professional background</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card-body p-5 p-lg-8">
+    <% if (professionalDetailsView.bio) { %>
+
+    <div class="text-gray-700 fs-6 lh-lg text-break" style="white-space: pre-line">
+      <%= professionalDetailsView.bio %>
+    </div>
+
+    <% } else { %>
+
+    <div class="d-flex flex-column flex-center text-center py-7">
+      <div class="symbol symbol-60px mb-4">
+        <span class="symbol-label bg-light">
+          <i class="ki-duotone ki-notepad-edit fs-2x text-gray-400">
+            <span class="path1"></span>
+            <span class="path2"></span>
+          </i>
+        </span>
+      </div>
+
+      <div class="fw-bold text-gray-700 fs-6 mb-2">No Professional Bio Yet</div>
+
+      <div class="text-gray-500 fs-7">
+        Your professional summary will appear here when available.
+      </div>
+    </div>
+
+    <% } %>
+  </div>
+</div>
+
+<!-- ───────────────────── CERTIFICATIONS ───────────────────── -->
+
+<div class="card mb-5 mb-xl-8">
+  <div class="card-header">
+    <div class="card-title">
+      <div class="d-flex align-items-center gap-3">
+        <div class="symbol symbol-45px flex-shrink-0">
+          <span class="symbol-label bg-light-success">
+            <i class="ki-duotone ki-medal-star fs-2x text-success">
+              <span class="path1"></span>
+              <span class="path2"></span>
+              <span class="path3"></span>
+            </i>
+          </span>
+        </div>
+
+        <div>
+          <h3 class="fw-bold text-gray-900 fs-5 mb-1">Certifications</h3>
+
+          <div class="fs-7 text-muted">
+            Additional qualifications and professional certifications
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card-body p-5 p-lg-8">
+    <% if (professionalDetailsView.certifications.length > 0) { %>
+
+    <div class="d-flex flex-column gap-4">
+      <% professionalDetailsView.certifications.forEach(function (certification) { %>
+
+      <div class="border border-gray-300 border-dashed rounded p-4 p-lg-6">
+        <div
+          class="d-flex flex-column flex-sm-row align-items-start justify-content-between gap-3 mb-4"
+        >
+          <div class="d-flex align-items-start gap-3 min-w-0">
+            <div class="symbol symbol-40px flex-shrink-0">
+              <span class="symbol-label bg-light-primary">
+                <i class="ki-duotone ki-award fs-2 text-primary">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                </i>
+              </span>
+            </div>
+
+            <div class="min-w-0">
+              <div class="fw-bold text-gray-900 fs-6 text-break mb-1">
+                <%= certification.name %>
+              </div>
+
+              <% if (certification.issuingBody) { %>
+              <div class="fw-semibold text-gray-500 fs-7 text-break">
+                <%= certification.issuingBody %>
+              </div>
+              <% } %>
+            </div>
+          </div>
+
+          <span class="badge <%= certification.verificationBadgeClass %> fw-bold flex-shrink-0">
+            <%= certification.verificationLabel %>
+          </span>
+        </div>
+
+        <% if (certification.dateObtainedLabel || certification.expiryDateLabel) { %>
+
+        <div class="separator separator-dashed mb-4"></div>
+
+        <div class="row g-4">
+          <% if (certification.dateObtainedLabel) { %>
+
+          <div class="col-12 col-sm-6">
+            <div class="fw-semibold text-gray-500 fs-7 mb-1">Date Obtained</div>
+
+            <div class="fw-bold text-gray-800 fs-7"><%= certification.dateObtainedLabel %></div>
+          </div>
+
+          <% } %> <% if (certification.expiryDateLabel) { %>
+
+          <div class="col-12 col-sm-6">
+            <div class="fw-semibold text-gray-500 fs-7 mb-1">Expiry Date</div>
+
+            <div class="fw-bold text-gray-800 fs-7"><%= certification.expiryDateLabel %></div>
+          </div>
+
+          <% } %>
+        </div>
+
+        <% } %>
+      </div>
+
+      <% }) %>
+    </div>
+
+    <% } else { %>
+
+    <div class="d-flex flex-column flex-center text-center py-8">
+      <div class="symbol symbol-70px mb-5">
+        <span class="symbol-label bg-light">
+          <i class="ki-duotone ki-award fs-3x text-gray-400">
+            <span class="path1"></span>
+            <span class="path2"></span>
+          </i>
+        </span>
+      </div>
+
+      <div class="fw-bold text-gray-700 fs-6 mb-2">No Additional Certifications Recorded</div>
+
+      <div class="text-gray-500 fs-7">
+        Your additional professional certifications will appear here.
+      </div>
+    </div>
+
+    <% } %>
+  </div>
+</div>

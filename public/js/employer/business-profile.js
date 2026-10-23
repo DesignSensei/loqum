@@ -1,7 +1,5 @@
 // public/js/employer/business-profile.js
 
-"use strict";
-
 var EmployerBusinessProfile = (function () {
   var addBranchForm = null;
   var addBranchSubmitButton = null;
@@ -14,6 +12,47 @@ var EmployerBusinessProfile = (function () {
   var businessDetailsForm = null;
   var businessDetailsSubmitButton = null;
   var businessDetailsValidator = null;
+
+  /*
+   * ───────────────────── BUSINESS PROFILE FIELD POLICY ─────────────────────
+   *
+   * Registered legal identity is established through
+   * the trusted CAC onboarding and verification workflow.
+   *
+   * Ordinary business profile editing must not permit
+   * applicants to change the registered legal name,
+   * CAC number or regulatory registration identity.
+   *
+   * These fields remain visible but read-only.
+   *
+   * Client-side restrictions improve the interface.
+   * Server-side authorisation remains mandatory.
+   */
+
+  var protectedBusinessDetailsFields = [
+    "type",
+    "businessName",
+    "cacRegistrationNumber",
+    "regulatoryBody",
+    "regulatoryRegistrationNumber",
+  ];
+
+  var editableBusinessDetailsFields = [
+    "businessEmail",
+    "businessPhoneCode",
+    "businessPhone",
+    "state",
+    "lga",
+    "address",
+    "latitude",
+    "longitude",
+    "googlePlaceId",
+    "contactFirstName",
+    "contactLastName",
+    "contactRole",
+    "contactPhoneCode",
+    "contactPhone",
+  ];
 
   /* ---------- Get employer country code ---------- */
 
@@ -125,42 +164,137 @@ var EmployerBusinessProfile = (function () {
     updateBusinessDetailsRegulatoryBodyDisplay();
   }
 
-  /* ---------- Update regulatory-body display ---------- */
+  /* ---------- Keep regulatory-body display authoritative ---------- */
 
   function updateBusinessDetailsRegulatoryBodyDisplay() {
-    var typeSelect = document.querySelector("#businessTypeSelect");
-    var stateSelect = document.querySelector("#businessDetailsStateSelect");
     var regulatoryBodyDisplay = document.querySelector("#businessDetailsRegulatoryBodyDisplay");
 
-    if (!typeSelect || !stateSelect || !regulatoryBodyDisplay) return;
+    if (!regulatoryBodyDisplay) return;
 
-    var cleanType = String(typeSelect.value || "").trim();
+    /*
+     * The regulatory body stored on EmployerProfile
+     * is the authoritative value for this employer.
+     *
+     * Do not recalculate and replace that value
+     * merely because an applicant changes the
+     * state selection in the browser.
+     *
+     * A location change that affects the applicable
+     * regulator requires a separate verification flow.
+     *
+     * The backend validates this independently.
+     */
 
-    var cleanState = String(stateSelect.value || "")
-      .trim()
-      .toLowerCase();
-
-    if (cleanType === "pharmacy") {
-      regulatoryBodyDisplay.value = "Pharmacists Council of Nigeria";
-      return;
+    if ("readOnly" in regulatoryBodyDisplay) {
+      regulatoryBodyDisplay.readOnly = true;
     }
 
-    if (cleanType === "laboratory") {
-      regulatoryBodyDisplay.value = "Medical Laboratory Science Council of Nigeria";
+    regulatoryBodyDisplay.setAttribute("aria-readonly", "true");
+  }
 
-      return;
+  /* ---------- Protect registered business identity fields ---------- */
+
+  function protectBusinessDetailsIdentityFields() {
+    if (!businessDetailsForm) return;
+
+    protectedBusinessDetailsFields.forEach(function (fieldName) {
+      var fields = businessDetailsForm.querySelectorAll('[name="' + fieldName + '"]');
+
+      fields.forEach(function (field) {
+        /*
+         * Text fields remain visible but read-only.
+         *
+         * Select fields cannot be made read-only
+         * through standard HTML, so disable them.
+         *
+         * Hidden protected fields are also disabled
+         * because the update request does not need
+         * to submit any registered identity values.
+         */
+
+        if (
+          field.tagName === "SELECT" ||
+          field.type === "hidden" ||
+          field.type === "checkbox" ||
+          field.type === "radio"
+        ) {
+          field.disabled = true;
+
+          if (field.tagName === "SELECT" && typeof $ !== "undefined" && $(field).data("select2")) {
+            $(field).prop("disabled", true);
+          }
+
+          return;
+        }
+
+        if ("readOnly" in field) {
+          field.readOnly = true;
+        }
+
+        field.setAttribute("aria-readonly", "true");
+      });
+    });
+
+    /*
+     * Protect the existing known controls even
+     * if the view gives them a different name
+     * or omits the name attribute.
+     *
+     * The template must still render these
+     * fields as informational, not editable.
+     */
+
+    var businessTypeSelect = document.querySelector("#businessTypeSelect");
+
+    if (businessTypeSelect && businessDetailsForm.contains(businessTypeSelect)) {
+      businessTypeSelect.disabled = true;
+
+      if (typeof $ !== "undefined" && $(businessTypeSelect).data("select2")) {
+        $(businessTypeSelect).prop("disabled", true);
+      }
     }
 
-    if (cleanType === "clinic" || cleanType === "hospital") {
-      regulatoryBodyDisplay.value =
-        cleanState === "lagos"
-          ? "Health Facilities Monitoring and Accreditation Agency"
-          : "State Ministry of Health";
+    updateBusinessDetailsRegulatoryBodyDisplay();
+  }
 
-      return;
+  /* ---------- Build permitted business-details submission ---------- */
+
+  function buildBusinessDetailsSubmissionData() {
+    var formData = new FormData(businessDetailsForm);
+    var data = {};
+
+    /*
+     * Submit only the fields allowed by
+     * EmployerService.updateBusinessDetails().
+     *
+     * Do not use Object.fromEntries(formData)
+     * for this form because it may include
+     * protected legal identity or verification
+     * fields rendered by an older template.
+     *
+     * Registered identity is retrieved from
+     * the persisted profile by the backend.
+     */
+
+    editableBusinessDetailsFields.forEach(function (fieldName) {
+      if (formData.has(fieldName)) {
+        data[fieldName] = formData.get(fieldName);
+      }
+    });
+
+    /*
+     * Preserve the existing Express CSRF token
+     * when the form includes it as a hidden field.
+     *
+     * Axios may also use the application's
+     * configured CSRF header.
+     */
+
+    if (formData.has("_csrf")) {
+      data._csrf = formData.get("_csrf");
     }
 
-    regulatoryBodyDisplay.value = "-";
+    return data;
   }
 
   /* ---------- Bind add-branch select validation ---------- */
@@ -232,7 +366,6 @@ var EmployerBusinessProfile = (function () {
     if (typeSelect) {
       typeSelect.addEventListener("change", function () {
         updateBusinessDetailsRegulatoryBodyDisplay();
-        revalidateBusinessDetailsField("type");
       });
     }
 
@@ -258,7 +391,6 @@ var EmployerBusinessProfile = (function () {
     if (typeof $ !== "undefined") {
       $("#businessTypeSelect").on("change.select2", function () {
         updateBusinessDetailsRegulatoryBodyDisplay();
-        revalidateBusinessDetailsField("type");
       });
 
       $("#businessDetailsStateSelect").on("change.select2", function () {
@@ -1085,191 +1217,160 @@ var EmployerBusinessProfile = (function () {
 
     if (!businessDetailsForm || !businessDetailsSubmitButton) return;
 
-    if (typeof FormValidation !== "undefined") {
-      businessDetailsValidator = FormValidation.formValidation(businessDetailsForm, {
-        fields: {
-          type: {
-            validators: {
-              notEmpty: {
-                message: "Please select a business type.",
-              },
-            },
+    /*
+     * Apply protection before initialising
+     * FormValidation.
+     *
+     * The protected CAC and regulatory fields
+     * are not user-editable and are not required
+     * in the ordinary profile-update payload.
+     */
+
+    protectBusinessDetailsIdentityFields();
+
+    var validationFields = {
+      businessEmail: {
+        validators: {
+          notEmpty: {
+            message: "Business email is required.",
           },
 
-          businessName: {
-            validators: {
-              notEmpty: {
-                message: "Business name is required.",
-              },
-            },
+          regexp: {
+            regexp: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+            message: "Enter a valid business email address.",
+          },
+        },
+      },
+
+      businessPhoneCode: {
+        validators: {
+          notEmpty: {
+            message: "Phone code is required.",
+          },
+        },
+      },
+
+      businessPhone: {
+        validators: {
+          notEmpty: {
+            message: "Business phone number is required.",
           },
 
-          businessEmail: {
-            validators: {
-              notEmpty: {
-                message: "Business email is required.",
-              },
+          callback: {
+            message: "Enter a valid business phone number.",
 
-              regexp: {
-                regexp: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
-                message: "Enter a valid business email address.",
-              },
-            },
-          },
+            callback: function (input) {
+              var value = String(input.value || "").trim();
 
-          businessPhoneCode: {
-            validators: {
-              notEmpty: {
-                message: "Phone code is required.",
-              },
-            },
-          },
-
-          businessPhone: {
-            validators: {
-              notEmpty: {
-                message: "Business phone number is required.",
-              },
-
-              callback: {
-                message: "Enter a valid business phone number.",
-
-                callback: function (input) {
-                  var value = String(input.value || "").trim();
-
-                  return /^[0-9]{7,15}$/.test(value.replace(/\s+/g, ""));
-                },
-              },
-            },
-          },
-
-          cacRegistrationNumber: {
-            validators: {
-              notEmpty: {
-                message: "CAC registration number is required.",
-              },
-
-              regexp: {
-                regexp: /^(RC|BN|IT|LP|LLP)\d{4,10}$/i,
-
-                message: "Enter a valid CAC number, e.g. RC1234567 or BN1234567.",
-              },
-            },
-          },
-
-          regulatoryRegistrationNumber: {
-            validators: {
-              notEmpty: {
-                message: "Regulatory registration number is required.",
-              },
-
-              regexp: {
-                regexp: /^[A-Z0-9/\\\- ]{4,30}$/i,
-
-                message: "Enter a valid regulatory registration number.",
-              },
-            },
-          },
-
-          state: {
-            validators: {
-              notEmpty: {
-                message: "Please select a state.",
-              },
-            },
-          },
-
-          lga: {
-            validators: {
-              notEmpty: {
-                message: "Please select an LGA.",
-              },
-            },
-          },
-
-          address: {
-            validators: {
-              notEmpty: {
-                message: "Business address is required.",
-              },
-
-              callback: {
-                message: "Please select a valid address from the Google suggestions.",
-
-                callback: function (input) {
-                  var addressValue = String(input.value || "").trim();
-
-                  if (!addressValue) return false;
-
-                  var latitudeInput = document.querySelector("#businessDetailsLatitude");
-
-                  var longitudeInput = document.querySelector("#businessDetailsLongitude");
-
-                  var googlePlaceIdInput = document.querySelector("#businessDetailsGooglePlaceId");
-
-                  return Boolean(
-                    latitudeInput &&
-                    longitudeInput &&
-                    googlePlaceIdInput &&
-                    latitudeInput.value &&
-                    longitudeInput.value &&
-                    googlePlaceIdInput.value
-                  );
-                },
-              },
-            },
-          },
-
-          contactFirstName: {
-            validators: {
-              notEmpty: {
-                message: "Contact first name is required.",
-              },
-            },
-          },
-
-          contactLastName: {
-            validators: {
-              notEmpty: {
-                message: "Contact last name is required.",
-              },
-            },
-          },
-
-          contactRole: {
-            validators: {
-              notEmpty: {
-                message: "Please select a contact role.",
-              },
-            },
-          },
-
-          contactPhoneCode: {
-            validators: {
-              notEmpty: {
-                message: "Contact phone code is required.",
-              },
-            },
-          },
-
-          contactPhone: {
-            validators: {
-              notEmpty: {
-                message: "Contact phone number is required.",
-              },
-
-              callback: {
-                message: "Enter a valid contact phone number.",
-
-                callback: function (input) {
-                  var value = String(input.value || "").trim();
-
-                  return /^[0-9]{7,15}$/.test(value.replace(/\s+/g, ""));
-                },
-              },
+              return /^[0-9]{7,15}$/.test(value.replace(/\s+/g, ""));
             },
           },
         },
+      },
+
+      state: {
+        validators: {
+          notEmpty: {
+            message: "Please select a state.",
+          },
+        },
+      },
+
+      lga: {
+        validators: {
+          notEmpty: {
+            message: "Please select an LGA.",
+          },
+        },
+      },
+
+      address: {
+        validators: {
+          notEmpty: {
+            message: "Business address is required.",
+          },
+
+          callback: {
+            message: "Please select a valid address from the Google suggestions.",
+
+            callback: function (input) {
+              var addressValue = String(input.value || "").trim();
+
+              if (!addressValue) return false;
+
+              var latitudeInput = document.querySelector("#businessDetailsLatitude");
+
+              var longitudeInput = document.querySelector("#businessDetailsLongitude");
+
+              var googlePlaceIdInput = document.querySelector("#businessDetailsGooglePlaceId");
+
+              return Boolean(
+                latitudeInput &&
+                longitudeInput &&
+                googlePlaceIdInput &&
+                latitudeInput.value &&
+                longitudeInput.value &&
+                googlePlaceIdInput.value
+              );
+            },
+          },
+        },
+      },
+
+      contactFirstName: {
+        validators: {
+          notEmpty: {
+            message: "Contact first name is required.",
+          },
+        },
+      },
+
+      contactLastName: {
+        validators: {
+          notEmpty: {
+            message: "Contact last name is required.",
+          },
+        },
+      },
+
+      contactRole: {
+        validators: {
+          notEmpty: {
+            message: "Please select a contact role.",
+          },
+        },
+      },
+
+      contactPhoneCode: {
+        validators: {
+          notEmpty: {
+            message: "Contact phone code is required.",
+          },
+        },
+      },
+
+      contactPhone: {
+        validators: {
+          notEmpty: {
+            message: "Contact phone number is required.",
+          },
+
+          callback: {
+            message: "Enter a valid contact phone number.",
+
+            callback: function (input) {
+              var value = String(input.value || "").trim();
+
+              return /^[0-9]{7,15}$/.test(value.replace(/\s+/g, ""));
+            },
+          },
+        },
+      },
+    };
+
+    if (typeof FormValidation !== "undefined") {
+      businessDetailsValidator = FormValidation.formValidation(businessDetailsForm, {
+        fields: validationFields,
 
         plugins: {
           trigger: new FormValidation.plugins.Trigger(),
@@ -1296,13 +1397,29 @@ var EmployerBusinessProfile = (function () {
     businessDetailsForm.addEventListener("submit", function (event) {
       event.preventDefault();
 
+      if (businessDetailsSubmitButton.disabled) {
+        return;
+      }
+
       var submitForm = function () {
         businessDetailsSubmitButton.setAttribute("data-kt-indicator", "on");
 
         businessDetailsSubmitButton.disabled = true;
 
-        var formData = new FormData(businessDetailsForm);
-        var data = Object.fromEntries(formData);
+        /*
+         * Submit only fields permitted by the
+         * ordinary employer profile update service.
+         *
+         * Do not submit the CAC legal name,
+         * registration number, business type
+         * or regulatory registration identity.
+         *
+         * The backend independently retrieves
+         * these values from EmployerProfile
+         * and enforces actor authorisation.
+         */
+
+        var data = buildBusinessDetailsSubmissionData();
 
         axios
           .post(businessDetailsForm.action, data)
@@ -1329,8 +1446,25 @@ var EmployerBusinessProfile = (function () {
 
             businessDetailsSubmitButton.disabled = false;
 
+            /*
+             * The controller distinguishes:
+             *
+             * - Invalid input;
+             * - Unauthorised editing;
+             * - Protected identity changes;
+             * - Premises requiring renewed review;
+             * - Representative changes requiring review.
+             *
+             * Display the safe server message
+             * rather than assuming every failure
+             * is a client-side validation error.
+             */
+
+            var errorMessage =
+              error.response?.data?.message || "Unable to update business details.";
+
             Swal.fire({
-              text: error.response?.data?.message || "Unable to update business details.",
+              text: errorMessage,
 
               icon: "error",
               buttonsStyling: false,

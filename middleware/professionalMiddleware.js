@@ -2,6 +2,10 @@
 
 const ProfessionalProfile = require("../models/ProfessionalProfile");
 
+const { getProfessionalKycStatus } = require("../utils/statusHelper");
+
+// ───────────────────── ATTACH PROFESSIONAL PROFILE ─────────────────────
+
 exports.attachProfessionalProfile = async (req, res, next) => {
   try {
     if (!req.user) {
@@ -15,38 +19,84 @@ exports.attachProfessionalProfile = async (req, res, next) => {
       });
     }
 
-    const profile = await ProfessionalProfile.findOne({ user: req.user._id });
+    // Resolve the profile through the authenticated user.
+    const profile = await ProfessionalProfile.findOne({
+      user: req.user._id,
+    });
 
     if (!profile) {
       return res.redirect("/onboarding/professional");
     }
 
     req.professionalProfile = profile;
+
     return next();
   } catch (error) {
     return next(error);
   }
 };
 
-exports.canApplyForShifts = (req, res, next) => {
-  const profile = req.professionalProfile;
+// ───────────────────── SHIFT APPLICATION ELIGIBILITY ─────────────────────
 
-  if (!profile) {
-    return res.redirect("/onboarding/professional");
+/**
+ * A professional must satisfy all five existing
+ * marketplace eligibility requirements:
+ *
+ * - Verified identity
+ * - Verified professional licence
+ * - Approved professional account
+ * - Active account status
+ * - Visible marketplace status
+ *
+ * Payout readiness is separate from eligibility
+ * to apply for shifts.
+ *
+ * Recheck the current database state before allowing
+ * a new application.
+ */
+exports.canApplyForShifts = async (req, res, next) => {
+  try {
+    const profile = req.professionalProfile;
+
+    if (!profile) {
+      return res.redirect("/onboarding/professional");
+    }
+
+    // Check the current verification and marketplace state.
+    const currentProfile = await ProfessionalProfile.findOne({
+      _id: profile._id,
+      user: req.user?._id,
+    })
+      .select(
+        "identityVerificationStatus " +
+          "licenceVerificationStatus " +
+          "professionalApprovalStatus " +
+          "accountStatus " +
+          "marketplaceStatus"
+      )
+      .lean();
+
+    if (!currentProfile) {
+      return res.status(403).json({
+        success: false,
+        message: "Professional profile access is unavailable.",
+      });
+    }
+
+    const professionalKycStatus = getProfessionalKycStatus(currentProfile);
+
+    if (!professionalKycStatus.isEligible) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Your identity, licence, professional approval, account status, " +
+          "and marketplace visibility must meet Loqum's requirements " +
+          "before you can apply for shifts.",
+      });
+    }
+
+    return next();
+  } catch (error) {
+    return next(error);
   }
-
-  const isApprovedForShifts =
-    profile.identityVerificationStatus === "verified" &&
-    profile.licenceVerificationStatus === "verified" &&
-    profile.professionalApprovalStatus === "approved" &&
-    profile.accountStatus === "active";
-
-  if (!isApprovedForShifts) {
-    return res.status(403).json({
-      success: false,
-      message: "Your profile must be verified and approved before you can apply for shifts.",
-    });
-  }
-
-  return next();
 };

@@ -1,0 +1,553 @@
+
+<!-- views/professional/profile/partials/availability.ejs -->
+
+<!-- ───────────────────── AVAILABILITY ───────────────────── -->
+
+<div class="card mb-5 mb-xl-8">
+
+  <!-- ───────────────────── HEADER ───────────────────── -->
+
+  <div class="card-header">
+
+    <div class="card-title">
+
+      <div class="d-flex align-items-center gap-3">
+
+        <div class="symbol symbol-45px flex-shrink-0">
+
+          <span class="symbol-label bg-light-primary">
+
+            <i class="ki-duotone ki-calendar-tick fs-2x text-primary">
+              <span class="path1"></span>
+              <span class="path2"></span>
+              <span class="path3"></span>
+            </i>
+
+          </span>
+
+        </div>
+
+        <div class="min-w-0">
+
+          <h3 class="fw-bold text-gray-900 fs-5 mb-1">
+            My Availability
+          </h3>
+
+          <div class="fs-7 text-muted">
+            Manage when you're available for locum shifts
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+
+
+  <!-- ───────────────────── CONTENT ───────────────────── -->
+
+  <div class="card-body p-5 p-lg-8">
+
+    <!-- ───────────────────── FEEDBACK ───────────────────── -->
+
+    <% if (saved) { %>
+
+      <div
+        class="alert alert-success d-flex align-items-center gap-3 mb-6"
+        role="status"
+      >
+
+        <i class="ki-duotone ki-check-circle fs-2x text-success">
+          <span class="path1"></span>
+          <span class="path2"></span>
+        </i>
+
+        <span class="fw-semibold">
+          Your availability preferences have been saved successfully.
+        </span>
+
+      </div>
+
+    <% } %>
+
+
+    <% if (errorMessage) { %>
+
+      <div class="alert alert-danger mb-6" role="alert">
+        <%= errorMessage %>
+      </div>
+
+    <% } %>
+
+
+    <!-- Client-side validation messages -->
+
+    <div
+      id="professionalAvailabilityError"
+      class="alert alert-warning mb-6 d-none"
+      role="alert"
+      aria-live="polite"
+    ></div>
+
+
+    <!-- ───────────────────── AVAILABILITY FORM ───────────────────── -->
+
+    <form
+      id="professionalAvailabilityForm"
+      action="<%= availabilityView.formAction %>"
+      method="POST"
+    >
+
+      <input
+        type="hidden"
+        name="_csrf"
+        value="<%= csrfToken %>"
+      />
+
+
+      <!-- ───────────────────── AVAILABILITY STATUS ───────────────────── -->
+
+      <div class="mb-8">
+
+        <label
+          for="professionalAvailabilityStatus"
+          class="form-label fw-bold text-gray-900 fs-6 mb-3"
+        >
+          Availability Status
+        </label>
+
+        <select
+          id="professionalAvailabilityStatus"
+          name="availabilityStatus"
+          class="form-select form-select-solid"
+          required
+        >
+
+          <% availabilityView.statusOptions.forEach(function (option) { %>
+
+            <option
+              value="<%= option.value %>"
+              <%= option.selected ? "selected" : "" %>
+            >
+              <%= option.label %>
+            </option>
+
+          <% }) %>
+
+        </select>
+
+        <div class="text-muted fw-semibold fs-7 mt-3">
+          Set your general availability. This does not cancel
+          confirmed shifts or change existing assignments.
+        </div>
+
+      </div>
+
+
+      <div class="separator separator-dashed mb-8"></div>
+
+
+      <!-- ───────────────────── AVAILABILITY MODE ───────────────────── -->
+
+      <div class="mb-8">
+
+        <div class="fw-bold text-gray-900 fs-6 mb-2">
+          How would you like to set your availability?
+        </div>
+
+        <div class="text-muted fs-7 mb-5">
+          Choose whichever option best suits your work schedule.
+        </div>
+
+
+        <div class="row g-4">
+
+          <% availabilityView.modeOptions.forEach(function (option) { %>
+
+            <div class="col-12 col-sm-6">
+
+              <label
+                class="d-flex align-items-start gap-3
+                       border border-gray-300 border-dashed
+                       rounded p-4 p-lg-5 h-100 cursor-pointer"
+              >
+
+                <input
+                  type="radio"
+                  name="availabilityMode"
+                  value="<%= option.value %>"
+                  class="form-check-input flex-shrink-0 mt-1"
+                  <%= option.selected ? "checked" : "" %>
+                />
+
+                <span class="d-flex flex-column gap-1">
+
+                  <span class="fw-bold text-gray-800 fs-6">
+                    <%= option.label %>
+                  </span>
+
+                  <span class="fw-semibold text-muted fs-7">
+                    <%= option.description %>
+                  </span>
+
+                </span>
+
+              </label>
+
+            </div>
+
+          <% }) %>
+
+        </div>
+
+      </div>
+
+
+      <!-- ───────────────────── WEEKLY AVAILABILITY ───────────────────── -->
+
+      <div
+        id="professionalWeeklyAvailability"
+        class="mb-8 <%= availabilityView.mode === 'weekly' ? '' : 'd-none' %>"
+      >
+
+        <div class="d-flex align-items-start gap-3 mb-5">
+
+          <div class="symbol symbol-40px flex-shrink-0">
+
+            <span class="symbol-label bg-light-primary">
+
+              <i class="ki-duotone ki-calendar fs-2 text-primary">
+                <span class="path1"></span>
+                <span class="path2"></span>
+              </i>
+
+            </span>
+
+          </div>
+
+          <div class="min-w-0">
+
+            <div class="fw-bold text-gray-900 fs-6 mb-1">
+              My Regular Available Days
+            </div>
+
+            <div class="text-muted fs-7">
+              Select the days you're usually available each week.
+            </div>
+
+          </div>
+
+        </div>
+
+
+        <div class="row g-3">
+
+          <% availabilityView.weekdayOptions.forEach(function (day) { %>
+
+            <div class="col-6 col-sm-4 col-lg-3">
+
+              <input
+                type="checkbox"
+                class="btn-check"
+                id="professionalWeekday<%= day.value %>"
+                name="availableWeekdays"
+                value="<%= day.value %>"
+                autocomplete="off"
+                <%= day.selected ? "checked" : "" %>
+                <%= availabilityView.mode !== "weekly" ? "disabled" : "" %>
+              />
+
+              <label
+                for="professionalWeekday<%= day.value %>"
+                class="btn btn-outline btn-outline-dashed
+                       btn-active-light-primary btn-outline-primary
+                       w-100 py-4 fw-semibold"
+              >
+                <%= day.label %>
+              </label>
+
+            </div>
+
+          <% }) %>
+
+        </div>
+
+
+        <div class="notice d-flex bg-light-info rounded p-4 mt-5">
+
+          <i class="ki-duotone ki-information-5 fs-2 text-info me-3 flex-shrink-0">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+          </i>
+
+          <span class="fw-semibold text-gray-600 fs-7">
+            Select your usual days once. You can change them whenever
+            your work schedule changes.
+          </span>
+
+        </div>
+
+      </div>
+
+
+      <!-- ───────────────────── SPECIFIC DATES ───────────────────── -->
+
+      <div
+        id="professionalDateAvailability"
+        class="mb-8 <%= availabilityView.mode === 'dates' ? '' : 'd-none' %>"
+        data-max-dates="<%= availabilityView.maxDates %>"
+      >
+
+        <div class="d-flex align-items-start gap-3 mb-5">
+
+          <div class="symbol symbol-40px flex-shrink-0">
+
+            <span class="symbol-label bg-light-primary">
+
+              <i class="ki-duotone ki-calendar-tick fs-2 text-primary">
+                <span class="path1"></span>
+                <span class="path2"></span>
+                <span class="path3"></span>
+              </i>
+
+            </span>
+
+          </div>
+
+          <div class="min-w-0">
+
+            <div class="fw-bold text-gray-900 fs-6 mb-1">
+              My Available Dates
+            </div>
+
+            <div class="text-muted fs-7">
+              Add individual dates if your schedule changes
+              from week to week.
+            </div>
+
+          </div>
+
+        </div>
+
+
+        <!-- ───────────────────── ADD DATE ───────────────────── -->
+
+        <div class="row g-3 mb-6">
+
+          <div class="col-12 col-sm-8">
+
+            <label
+              for="professionalAvailabilityDatePicker"
+              class="form-label fw-semibold text-gray-700 fs-7"
+            >
+              Select a Date
+            </label>
+
+            <input
+              type="date"
+              id="professionalAvailabilityDatePicker"
+              class="form-control form-control-solid"
+              min="<%= availabilityView.minimumDate %>"
+              <%= availabilityView.mode !== "dates" ? "disabled" : "" %>
+            />
+
+          </div>
+
+
+          <div class="col-12 col-sm-4 d-flex align-items-end">
+
+            <button
+              type="button"
+              id="professionalAddAvailabilityDate"
+              class="btn btn-light-primary w-100"
+              <%= availabilityView.mode !== "dates" ? "disabled" : "" %>
+            >
+
+              <i class="ki-duotone ki-plus fs-3">
+                <span class="path1"></span>
+                <span class="path2"></span>
+              </i>
+
+              Add Date
+
+            </button>
+
+          </div>
+
+        </div>
+
+
+        <!-- ───────────────────── SELECTED DATES ───────────────────── -->
+
+        <div class="fw-bold text-gray-800 fs-7 mb-3">
+          Selected Dates
+        </div>
+
+        <div
+          id="professionalSelectedDates"
+          class="d-flex flex-wrap gap-2"
+          aria-live="polite"
+        >
+
+          <% availabilityView.selectedDates.forEach(function (date) { %>
+
+            <div
+              class="d-inline-flex align-items-center gap-2
+                     bg-light-primary border border-primary
+                     border-dashed rounded px-3 py-2"
+              data-availability-date="<%= date.value %>"
+            >
+
+              <span class="fw-semibold text-gray-800 fs-7">
+                <%= date.label %>
+              </span>
+
+              <input
+                type="hidden"
+                name="availableDates"
+                value="<%= date.value %>"
+                <%= availabilityView.mode !== "dates" ? "disabled" : "" %>
+              />
+
+              <button
+                type="button"
+                class="btn btn-icon btn-sm btn-light-primary"
+                data-remove-availability-date
+                aria-label="Remove <%= date.label %>"
+                title="Remove date"
+                <%= availabilityView.mode !== "dates" ? "disabled" : "" %>
+              >
+
+                <i class="ki-duotone ki-cross fs-5">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                </i>
+
+              </button>
+
+            </div>
+
+          <% }) %>
+
+        </div>
+
+
+        <!-- ───────────────────── EMPTY STATE ───────────────────── -->
+
+        <div
+          id="professionalDatesEmpty"
+          class="text-muted fw-semibold fs-7 py-4
+                 <%= availabilityView.selectedDates.length > 0 ? 'd-none' : '' %>"
+        >
+          No available dates selected.
+        </div>
+
+
+        <div class="text-muted fs-7 mt-4">
+          You can select up to <%= availabilityView.maxDates %> dates.
+        </div>
+
+      </div>
+
+
+      <div class="separator separator-dashed mb-8"></div>
+
+
+      <!-- ───────────────────── AVAILABILITY NOTE ───────────────────── -->
+
+      <div class="mb-8">
+
+        <label
+          for="professionalAvailabilityNote"
+          class="form-label fw-bold text-gray-900 fs-6 mb-2"
+        >
+          Availability Note
+          <span class="fw-normal text-muted">(Optional)</span>
+        </label>
+
+        <textarea
+          id="professionalAvailabilityNote"
+          name="availabilityNote"
+          class="form-control form-control-solid"
+          rows="3"
+          maxlength="<%= availabilityView.maxNoteLength %>"
+          placeholder="Add any helpful information about your availability."
+        ><%= availabilityView.note %></textarea>
+
+        <div class="text-muted fs-7 mt-3">
+          Maximum <%= availabilityView.maxNoteLength %> characters.
+        </div>
+
+      </div>
+
+
+      <!-- ───────────────────── INFORMATION ───────────────────── -->
+
+      <div
+        class="notice d-flex align-items-start
+               bg-light-warning rounded p-4 p-lg-5 mb-8"
+      >
+
+        <i class="ki-duotone ki-information-5 fs-2x text-warning me-4 flex-shrink-0">
+          <span class="path1"></span>
+          <span class="path2"></span>
+          <span class="path3"></span>
+        </i>
+
+        <div class="fw-semibold text-gray-700 fs-7">
+          <%= availabilityView.helpMessage %>
+        </div>
+
+      </div>
+
+
+      <!-- ───────────────────── SAVE ───────────────────── -->
+
+      <div class="separator separator-dashed mb-6"></div>
+
+      <div
+        class="d-flex flex-column flex-sm-row
+               align-items-stretch align-items-sm-center
+               justify-content-between gap-4"
+      >
+
+        <div class="text-muted fw-semibold fs-7">
+          Your preferences can be updated whenever your schedule changes.
+        </div>
+
+        <button
+          type="submit"
+          id="professionalAvailabilitySubmit"
+          class="btn btn-primary flex-shrink-0"
+        >
+
+          <span class="indicator-label">
+
+            <i class="ki-duotone ki-check fs-3 me-1">
+              <span class="path1"></span>
+              <span class="path2"></span>
+            </i>
+
+            Save Availability
+
+          </span>
+
+          <span class="indicator-progress">
+            Saving...
+            <span
+              class="spinner-border spinner-border-sm align-middle ms-2"
+            ></span>
+          </span>
+
+        </button>
+
+      </div>
+
+    </form>
+
+  </div>
+
+</div>

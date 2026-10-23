@@ -1,0 +1,259 @@
+<!-- views/professional/profile/partials/account-settings.ejs -->
+
+<!-- ───────────────────── ACCOUNT INFORMATION ───────────────────── -->
+
+<div class="card mb-5 mb-xl-8">
+  <div class="card-header">
+    <div class="card-title">
+      <div class="d-flex align-items-center gap-3">
+        <div class="symbol symbol-45px flex-shrink-0">
+          <span class="symbol-label bg-light-primary">
+            <i class="ki-duotone ki-profile-circle fs-2x text-primary">
+              <span class="path1"></span>
+              <span class="path2"></span>
+              <span class="path3"></span>
+            </i>
+          </span>
+        </div>
+
+        <div class="min-w-0">
+          <h3 class="fw-bold text-gray-900 fs-5 mb-1">Account Settings</h3>
+
+          <div class="text-muted fs-7">
+            Your registered account information and security settings
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card-body p-5 p-lg-8">
+    <!-- ───────────────────── ACCOUNT IDENTITY ───────────────────── -->
+
+    <div class="d-flex align-items-center gap-4 mb-7">
+      <div class="symbol symbol-60px symbol-circle flex-shrink-0">
+        <span class="symbol-label bg-light-primary text-primary fw-bold fs-2">
+          <%= professionalProfileSummary.initials %>
+        </span>
+      </div>
+
+      <div class="min-w-0">
+        <div class="fw-bold text-gray-900 fs-5 text-break mb-1">
+          <%= professionalProfileSummary.professionalName %>
+        </div>
+
+        <div class="text-muted fs-7 text-break mb-2"><%= professionalProfileSummary.email %></div>
+
+        <span class="badge <%= accountSettingsView.accountStatusBadgeClass %> fw-bold">
+          <%= accountSettingsView.accountStatusLabel %>
+        </span>
+      </div>
+    </div>
+
+    <div class="separator separator-dashed mb-7"></div>
+
+    <!-- ───────────────────── REGISTERED INFORMATION ───────────────────── -->
+
+    <div class="row g-4 g-xl-6">
+      <div class="col-12 col-md-6">
+        <div class="border border-gray-300 border-dashed rounded p-4 p-lg-5 h-100">
+          <div class="fw-semibold text-gray-500 fs-7 mb-3">Full Name</div>
+
+          <div class="fw-bold text-gray-800 fs-6 text-break">
+            <%= professionalProfileSummary.professionalName %>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12 col-md-6">
+        <div class="border border-gray-300 border-dashed rounded p-4 p-lg-5 h-100">
+          <div class="fw-semibold text-gray-500 fs-7 mb-3">Email Address</div>
+
+          <div class="fw-bold text-gray-800 fs-6 text-break">
+            <%= professionalProfileSummary.email %>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12 col-md-6">
+        <div class="border border-gray-300 border-dashed rounded p-4 p-lg-5 h-100">
+          <div class="fw-semibold text-gray-500 fs-7 mb-3">Phone Number</div>
+
+          <div class="fw-bold text-gray-800 fs-6 text-break">
+            <%= professionalProfileSummary.phone %>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12 col-md-6">
+        <div class="border border-gray-300 border-dashed rounded p-4 p-lg-5 h-100">
+          <div class="d-flex align-items-center justify-content-between gap-2 mb-3">
+            <span class="fw-semibold text-gray-500 fs-7"> Account Status </span>
+
+            <i class="ki-duotone ki-shield-tick fs-4 text-primary">
+              <span class="path1"></span>
+              <span class="path2"></span>
+            </i>
+          </div>
+
+          <span class="badge <%= accountSettingsView.accountStatusBadgeClass %> fw-bold">
+            <%= accountSettingsView.accountStatusLabel %>
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ───────────────────── ACCOUNT SECURITY ───────────────────── -->
+
+<div class="card mb-5 mb-xl-8">
+  <div class="card-header">
+    <div class="card-title">
+      <div class="d-flex align-items-center gap-3">
+        <div class="symbol symbol-45px flex-shrink-0">
+          <span class="symbol-label bg-light-success">
+            <i class="ki-duotone ki-shield-tick fs-2x text-success">
+              <span class="path1"></span>
+              <span class="path2"></span>
+            </i>
+          </span>
+        </div>
+
+        <div class="min-w-0">
+          <h3 class="fw-bold text-gray-900 fs-5 mb-1">Account Security</h3>
+
+          <div class="text-muted fs-7">
+            Information about your registered identity and account access
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card-body p-5 p-lg-8">
+    <!-- Registered email -->
+
+    <div class="d-flex align-items-start gap-4 mb-6">
+      <div class="symbol symbol-45px flex-shrink-0">
+        <span class="symbol-label bg-light-primary">
+          <i class="ki-duotone ki-sms fs-2x text-primary">
+            <span class="path1"></span>
+            <span class="path2"></span>
+          </i>
+        </span>
+      </div>
+
+      <div class="flex-grow-1 min-w-0">
+        <div class="fw-bold text-gray-800 fs-6 mb-2">Registered Email</div>
+
+        <div class="text-gray-600 fw-semibold fs-7 text-break mb-2">
+          <%= professionalProfileSummary.email %>
+        </div>
+
+        <div class="text-muted fs-7">
+          Your email address is associated with your Loqum account. Changes to account access
+          details must follow the authorised account verification process.
+        </div>
+      </div>
+    </div>
+
+    <div class="separator separator-dashed mb-6"></div>
+
+    <!-- Protected identity -->
+
+    <div class="d-flex align-items-start gap-4">
+      <div class="symbol symbol-45px flex-shrink-0">
+        <span class="symbol-label bg-light-info">
+          <i class="ki-duotone ki-lock fs-2x text-info">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+          </i>
+        </span>
+      </div>
+
+      <div class="flex-grow-1 min-w-0">
+        <div class="fw-bold text-gray-800 fs-6 mb-2">Protected Identity Information</div>
+
+        <div class="text-gray-600 fw-semibold fs-7"><%= verificationView.supportMessage %></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ───────────────────── ACCOUNT MANAGEMENT ───────────────────── -->
+
+<div class="card mb-5 mb-xl-8">
+  <div class="card-header">
+    <div class="card-title">
+      <div class="d-flex align-items-center gap-3">
+        <div class="symbol symbol-45px flex-shrink-0">
+          <span class="symbol-label bg-light-warning">
+            <i class="ki-duotone ki-setting-2 fs-2x text-warning">
+              <span class="path1"></span>
+              <span class="path2"></span>
+            </i>
+          </span>
+        </div>
+
+        <div class="min-w-0">
+          <h3 class="fw-bold text-gray-900 fs-5 mb-1">Account Management</h3>
+
+          <div class="text-muted fs-7">Account closure and professional record management</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card-body p-5 p-lg-8">
+    <!-- ───────────────────── ACCOUNT CLOSURE ───────────────────── -->
+
+    <div
+      class="d-flex flex-column flex-sm-row align-items-start justify-content-between gap-4 border border-gray-300 border-dashed rounded p-4 p-lg-6"
+    >
+      <div class="d-flex align-items-start gap-4 min-w-0">
+        <div class="symbol symbol-45px flex-shrink-0">
+          <span class="symbol-label bg-light">
+            <i class="ki-duotone ki-information-5 fs-2x text-gray-600">
+              <span class="path1"></span>
+              <span class="path2"></span>
+              <span class="path3"></span>
+            </i>
+          </span>
+        </div>
+
+        <div class="flex-grow-1 min-w-0">
+          <div class="fw-bold text-gray-800 fs-6 mb-2">Account Closure</div>
+
+          <div class="text-gray-600 fw-semibold fs-7 mb-3">
+            <%= accountSettingsView.closureMessage %>
+          </div>
+
+          <% if (!accountSettingsView.closureEnabled) { %>
+
+          <span class="badge badge-light-secondary fw-bold"> Not Available Yet </span>
+
+          <% } %>
+        </div>
+      </div>
+    </div>
+
+    <!-- ───────────────────── FINANCIAL AND ACCOUNT RECORDS ───────────────────── -->
+
+    <div
+      class="notice d-flex align-items-start bg-light-info border border-info border-dashed rounded p-4 p-lg-5 mt-6"
+    >
+      <i class="ki-duotone ki-shield-tick fs-2x text-info me-4 flex-shrink-0">
+        <span class="path1"></span>
+        <span class="path2"></span>
+      </i>
+
+      <div class="flex-grow-1 min-w-0">
+        <div class="fw-bold text-gray-900 fs-6 mb-2">Your Professional and Financial Records</div>
+
+        <div class="fw-semibold text-gray-600 fs-7"><%= accountSettingsView.financialNotice %></div>
+      </div>
+    </div>
+  </div>
+</div>

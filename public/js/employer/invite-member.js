@@ -354,6 +354,18 @@ var InviteMember = (function () {
 
         if (!editForm || !inviteId) return;
 
+        /*
+         * Clear validation feedback before populating
+         * the selected invitation.
+         *
+         * resetForm(false) preserves field values.
+         * resetForm(true) would erase the populated fields.
+         */
+
+        if (editValidator) {
+          editValidator.resetForm(false);
+        }
+
         editForm.action =
           "/employer/business-profile/invites/" + encodeURIComponent(inviteId) + "/update";
 
@@ -369,10 +381,6 @@ var InviteMember = (function () {
         setSelectValue(editBranchSelect, branchId);
 
         toggleBranchField(editRoleSelect, editBranchField, editBranchSelect);
-
-        if (editValidator) {
-          editValidator.resetForm(true);
-        }
       });
     });
   }

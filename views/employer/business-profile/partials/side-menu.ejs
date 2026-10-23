@@ -21,26 +21,28 @@
       </div>
 
       <div>
-        <span class="badge badge-light-primary fw-bold">
-          <%= businessProfileSummary.accountStatus %>
+        <span class="badge <%= businessProfileSummary.accountStatusBadgeClass %> fw-bold">
+          <%= businessProfileSummary.accountStatusLabel %>
         </span>
       </div>
     </div>
 
     <div class="d-flex flex-wrap flex-center mb-8">
+      <% if (employerPermissions.canViewBranches) { %>
       <div class="border border-gray-300 border-dashed rounded py-3 px-4 mx-2 mb-3">
         <div class="fs-4 fw-bold text-gray-800 text-center">
           <%= businessProfileSummary.totalBranches %>
         </div>
         <div class="fw-semibold text-muted">Branches</div>
       </div>
-
+      <% } %> <% if (employerPermissions.canViewTeamMembers) { %>
       <div class="border border-gray-300 border-dashed rounded py-3 px-4 mx-2 mb-3">
         <div class="fs-4 fw-bold text-gray-800 text-center">
           <%= businessProfileSummary.totalMembers %>
         </div>
         <div class="fw-semibold text-muted">Members</div>
       </div>
+      <% } %>
     </div>
 
     <div class="separator separator-dashed my-5"></div>
@@ -89,6 +91,7 @@
         </a>
       </div>
 
+      <% if (employerPermissions.canViewBranches) { %>
       <div class="menu-item">
         <a
           class="menu-link px-4 py-3 <%= activeTab === 'branches' ? 'active bg-light-primary' : '' %>"
@@ -102,7 +105,7 @@
           <span class="menu-title">Branches</span>
         </a>
       </div>
-
+      <% } %> <% if (employerPermissions.canViewTeamMembers) { %>
       <div class="menu-item">
         <a
           class="menu-link px-4 py-3 <%= activeTab === 'team' ? 'active bg-light-primary' : '' %>"
@@ -117,7 +120,7 @@
           <span class="menu-title">Team Members</span>
         </a>
       </div>
-
+      <% } %> <% if (employerPermissions.canInviteMembers) { %>
       <div class="menu-item">
         <a
           class="menu-link px-4 py-3 <%= activeTab === 'invites' ? 'active bg-light-primary' : '' %>"
@@ -140,6 +143,7 @@
           <% } %>
         </a>
       </div>
+      <% } %>
     </div>
   </div>
 </div>

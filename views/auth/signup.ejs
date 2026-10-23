@@ -30,250 +30,348 @@
 
       <% if (view.isInviteSignup) { %>
       <input type="hidden" name="inviteToken" value="<%= view.inviteToken %>" />
-      <% } %> <% if (view.isInviteSignup) { %> <% if (view.hasInviteError) { %>
-      <div class="alert bg-light-danger border border-danger d-flex align-items-center p-4 mb-8">
-        <i class="ki-duotone ki-information-5 fs-2x text-danger me-4">
-          <span class="path1"></span>
-          <span class="path2"></span>
-          <span class="path3"></span>
-        </i>
+      <% } %>
 
-        <div class="d-flex flex-column">
-          <span class="fw-bold text-gray-900 fs-6">Invite cannot be used</span>
-          <span class="text-gray-600 fs-7"><%= view.inviteError %></span>
-        </div>
-      </div>
-      <% } else if (view.existingInviteUser) { %>
-      <div class="alert bg-light-warning border border-warning d-flex align-items-center p-4 mb-8">
-        <i class="ki-duotone ki-information-5 fs-2x text-warning me-4">
-          <span class="path1"></span>
-          <span class="path2"></span>
-          <span class="path3"></span>
-        </i>
+      <!-- ───────────────────────── EMPLOYER TEAM INVITATION ───────────────────────── -->
 
-        <div class="d-flex flex-column">
-          <span class="fw-bold text-gray-900 fs-6">Account already exists</span>
+      <%
+        /*
+         * Invitations are exclusively for employer
+         * team members.
+         *
+         * Professionals cannot be invited through
+         * the employer team invitation workflow.
+         *
+         * Invited employer team members provide
+         * their account-holder first and last names.
+         *
+         * The invite token establishes the intended
+         * employer membership and permitted team role.
+         *
+         * InviteService must independently enforce
+         * those restrictions on the server.
+         */
+      %>
 
-          <span class="text-gray-600 fs-7">
-            An account already exists for <strong><%= view.inviteEmail %></strong>. Please log in to
-            accept this invite.
-          </span>
+      <% if (view.isInviteSignup) { %>
+        <% if (view.hasInviteError) { %>
+        <div class="alert bg-light-danger border border-danger d-flex align-items-center p-4 mb-8">
+          <i class="ki-duotone ki-information-5 fs-2x text-danger me-4">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+          </i>
 
-          <a href="<%= view.loginUrl %>" class="btn btn-sm btn-light-warning mt-3 align-self-start">
-            Log In
-          </a>
-        </div>
-      </div>
-      <% } else { %>
-      <div class="alert bg-light-primary border border-primary p-4 mb-8">
-        <div class="fw-bold text-gray-900 fs-6 mb-1">Team Invite</div>
-
-        <div class="text-gray-600 fs-7">
-          You were invited to join <strong><%= view.inviteBusinessName %></strong> <% if
-          (view.inviteBranchName) { %> at <strong><%= view.inviteBranchName %></strong> <% } %> as
-          <strong><%= view.inviteRoleLabel %></strong>.
-        </div>
-      </div>
-      <% } %> <% } %> <% if (!view.shouldDisableSubmit) { %> <% if (!view.isInviteSignup) { %>
-      <!-- Account Type -->
-      <div class="fv-row mb-10">
-        <div class="text-center mb-5">
-          <div class="text-gray-900 fw-bold fs-5">Choose your account type</div>
-          <div class="text-gray-500 fw-semibold fs-7">
-            This helps us set up the right experience for you.
+          <div class="d-flex flex-column">
+            <span class="fw-bold text-gray-900 fs-6">Invite cannot be used</span>
+            <span class="text-gray-600 fs-7"><%= view.inviteError %></span>
           </div>
         </div>
+        <% } else if (view.existingInviteUser) { %>
+        <div class="alert bg-light-warning border border-warning d-flex align-items-center p-4 mb-8">
+          <i class="ki-duotone ki-information-5 fs-2x text-warning me-4">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+          </i>
 
-        <div class="row g-9" data-kt-buttons="true">
-          <div class="col-6">
-            <label
-              class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex justify-content-center align-items-center p-6 active"
+          <div class="d-flex flex-column">
+            <span class="fw-bold text-gray-900 fs-6">Account already exists</span>
+
+            <span class="text-gray-600 fs-7">
+              An account already exists for <strong><%= view.inviteEmail %></strong>. Please log in to
+              accept this invite.
+            </span>
+
+            <a href="<%= view.loginUrl %>" class="btn btn-sm btn-light-warning mt-3 align-self-start">
+              Log In
+            </a>
+          </div>
+        </div>
+        <% } else { %>
+        <div class="alert bg-light-primary border border-primary p-4 mb-8">
+          <div class="fw-bold text-gray-900 fs-6 mb-1">Team Invite</div>
+
+          <div class="text-gray-600 fs-7">
+            You were invited to join <strong><%= view.inviteBusinessName %></strong> <% if
+            (view.inviteBranchName) { %> at <strong><%= view.inviteBranchName %></strong> <% } %> as
+            <strong><%= view.inviteRoleLabel %></strong>.
+          </div>
+        </div>
+        <% } %>
+      <% } %>
+
+      <% if (!view.shouldDisableSubmit) { %>
+        <% if (!view.isInviteSignup) { %>
+
+        <!-- ───────────────────────── ACCOUNT TYPE ───────────────────────── -->
+
+        <div class="fv-row mb-10">
+          <div class="text-center mb-5">
+            <div class="text-gray-900 fw-bold fs-5">Choose your account type</div>
+            <div class="text-gray-500 fw-semibold fs-7">
+              This helps us set up the right experience for you.
+            </div>
+          </div>
+
+          <div class="row g-9" data-kt-buttons="true">
+            <div class="col-6">
+              <label
+                class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex justify-content-center align-items-center p-6"
+              >
+                <input
+                  class="btn-check"
+                  type="radio"
+                  name="role"
+                  value="professional"
+                  checked="checked"
+                />
+
+                <i class="ki-duotone ki-address-book fs-2x me-5">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                  <span class="path3"></span>
+                </i>
+
+                <span class="d-flex flex-column text-start">
+                  <span class="fw-bold fs-3">Pharmacist</span>
+                  <span class="fs-7 text-muted">Find locum work</span>
+                </span>
+              </label>
+            </div>
+
+            <div class="col-6">
+              <label
+                class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex justify-content-center align-items-center p-6"
+              >
+                <input class="btn-check" type="radio" name="role" value="employer" />
+
+                <i class="ki-duotone ki-bank fs-2x me-5">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                </i>
+
+                <span class="d-flex flex-column text-start">
+                  <span class="fw-bold fs-3">Pharmacy</span>
+                  <span class="fs-7 text-muted">Hire locums</span>
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <div class="text-gray-500 fw-semibold fs-7 mt-5 text-center">
+            Pharmacists provide their legal names through NIN verification during onboarding.
+            Pharmacy employers provide the account holder's name during signup.
+          </div>
+        </div>
+        <% } %>
+
+        <% if (view.showGoogleSignup) { %>
+
+        <!-- ───────────────────────── GOOGLE SIGNUP ───────────────────────── -->
+
+        <div class="row g-3 mb-9">
+          <div class="col-md-12">
+            <button
+              type="button"
+              id="googleSignupBtn"
+              data-google-signup-url="<%= view.googleSignupUrl %>"
+              class="btn btn-flex btn-outline btn-text-gray-700 btn-active-color-primary bg-state-light flex-center text-nowrap w-100"
             >
-              <input
-                class="btn-check"
-                type="radio"
-                name="role"
-                value="professional"
-                checked="checked"
+              <img
+                alt="Google Logo"
+                src="/assets/media/svg/brand-logos/google-icon.svg"
+                class="h-15px me-3"
               />
 
-              <i class="ki-duotone ki-address-book fs-2x me-5">
-                <span class="path1"></span>
-                <span class="path2"></span>
-                <span class="path3"></span>
-              </i>
-
-              <span class="d-flex flex-column text-start">
-                <span class="fw-bold fs-3">Pharmacist</span>
-                <span class="fs-7 text-muted">Find locum work</span>
-              </span>
-            </label>
-          </div>
-
-          <div class="col-6">
-            <label
-              class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex justify-content-center align-items-center p-6"
-            >
-              <input class="btn-check" type="radio" name="role" value="employer" />
-
-              <i class="ki-duotone ki-bank fs-2x me-5">
-                <span class="path1"></span>
-                <span class="path2"></span>
-              </i>
-
-              <span class="d-flex flex-column text-start">
-                <span class="fw-bold fs-3">Pharmacy</span>
-                <span class="fs-7 text-muted">Hire locums</span>
-              </span>
-            </label>
+              <% if (view.isInviteSignup) { %> Accept Invite with Google <% } else { %> Sign up with
+              Google <% } %>
+            </button>
           </div>
         </div>
-      </div>
-      <% } %> <% if (view.showGoogleSignup) { %>
-      <!-- Google Signup -->
-      <div class="row g-3 mb-9">
-        <div class="col-md-12">
-          <button
-            type="button"
-            id="googleSignupBtn"
-            data-google-signup-url="<%= view.googleSignupUrl %>"
-            class="btn btn-flex btn-outline btn-text-gray-700 btn-active-color-primary bg-state-light flex-center text-nowrap w-100"
-          >
-            <img
-              alt="Google Logo"
-              src="/assets/media/svg/brand-logos/google-icon.svg"
-              class="h-15px me-3"
-            />
 
-            <% if (view.isInviteSignup) { %> Accept Invite with Google <% } else { %> Sign up with
-            Google <% } %>
+        <div class="separator separator-content my-14">
+          <span class="w-125px text-gray-500 fw-semibold fs-7">Or with email</span>
+        </div>
+        <% } %>
+
+        <!-- ───────────────────────── ACCOUNT-HOLDER NAMES ───────────────────────── -->
+
+        <%
+          /*
+           * Employer team invitation:
+           * First and last names remain visible
+           * and required.
+           *
+           * Ordinary employer signup:
+           * First and last names are required
+           * for the employer account holder.
+           *
+           * Ordinary professional signup:
+           * Names must not be collected before
+           * the trusted NIN onboarding lookup.
+           *
+           * Pharmacist is the default role.
+           * Therefore, ordinary signup initially
+           * renders the two name fields hidden
+           * and disabled.
+           *
+           * public/js/auth/signup.js restores
+           * both fields when Employer is selected.
+           *
+           * The data-professional-signup-* markers
+           * allow the existing JavaScript to restore
+           * fields that were hidden initially by
+           * this template.
+           *
+           * This client-side behaviour complements
+           * the backend prohibition on manually
+           * supplied professional legal names.
+           */
+        %>
+
+        <!-- First Name -->
+        <div
+          class="fv-row mb-8<% if (!view.isInviteSignup) { %> d-none<% } %>"
+          <% if (!view.isInviteSignup) { %>data-professional-signup-hidden="true"<% } %>
+        >
+          <input
+            type="text"
+            placeholder="First Name"
+            name="firstName"
+            class="form-control bg-transparent"
+            autocomplete="given-name"
+            <% if (!view.isInviteSignup) { %>
+            disabled
+            data-professional-signup-disabled="true"
+            <% } %>
+            required
+          />
+        </div>
+
+        <!-- Last Name -->
+        <div
+          class="fv-row mb-8<% if (!view.isInviteSignup) { %> d-none<% } %>"
+          <% if (!view.isInviteSignup) { %>data-professional-signup-hidden="true"<% } %>
+        >
+          <input
+            type="text"
+            placeholder="Last Name"
+            name="lastName"
+            class="form-control bg-transparent"
+            autocomplete="family-name"
+            <% if (!view.isInviteSignup) { %>
+            disabled
+            data-professional-signup-disabled="true"
+            <% } %>
+            required
+          />
+        </div>
+
+        <!-- ───────────────────────── EMAIL ───────────────────────── -->
+
+        <div class="fv-row mb-8">
+          <% if (view.isInviteSignup) { %>
+          <input
+            type="email"
+            placeholder="Email"
+            name="email"
+            value="<%= view.inviteEmail %>"
+            class="form-control bg-transparent"
+            autocomplete="email"
+            readonly
+            required
+          />
+          <% } else { %>
+          <input
+            type="email"
+            placeholder="Email"
+            name="email"
+            class="form-control bg-transparent"
+            autocomplete="email"
+            required
+          />
+          <% } %>
+        </div>
+
+        <!-- ───────────────────────── PASSWORD ───────────────────────── -->
+
+        <div class="fv-row mb-8" data-kt-password-meter="true">
+          <div class="mb-1">
+            <div class="position-relative mb-3">
+              <input
+                class="form-control bg-transparent"
+                type="password"
+                placeholder="Password"
+                name="password"
+                autocomplete="new-password"
+                required
+              />
+
+              <span
+                class="btn btn-sm btn-icon position-absolute translate-middle top-50 end-0 me-n2"
+                data-kt-password-meter-control="visibility"
+              >
+                <i class="ki-duotone ki-eye-slash fs-2"></i>
+                <i class="ki-duotone ki-eye fs-2 d-none"></i>
+              </span>
+            </div>
+
+            <div class="d-flex align-items-center mb-3" data-kt-password-meter-control="highlight">
+              <div class="flex-grow-1 bg-secondary bg-active-success rounded h-5px me-2"></div>
+              <div class="flex-grow-1 bg-secondary bg-active-success rounded h-5px me-2"></div>
+              <div class="flex-grow-1 bg-secondary bg-active-success rounded h-5px me-2"></div>
+              <div class="flex-grow-1 bg-secondary bg-active-success rounded h-5px"></div>
+            </div>
+          </div>
+
+          <div class="text-muted">Use 8+ characters with a mix of letters, numbers &amp; symbols.</div>
+        </div>
+
+        <!-- ───────────────────────── CONFIRM PASSWORD ───────────────────────── -->
+
+        <div class="fv-row mb-8">
+          <input
+            class="form-control bg-transparent"
+            type="password"
+            placeholder="Repeat Password"
+            name="confirmPassword"
+            autocomplete="new-password"
+            required
+          />
+        </div>
+
+        <!-- ───────────────────────── TERMS ───────────────────────── -->
+
+        <div class="fv-row mb-8">
+          <label class="form-check form-check-inline">
+            <input class="form-check-input" type="checkbox" name="toc" value="1" />
+
+            <span class="form-check-label fw-semibold text-gray-700 fs-base ms-1">
+              I Accept the
+              <a href="#" class="ms-1 link-primary">Terms</a>
+              and
+              <a href="#" class="ms-1 link-primary">Conditions</a>
+            </span>
+          </label>
+        </div>
+
+        <!-- ───────────────────────── SUBMIT ───────────────────────── -->
+
+        <div class="d-grid mb-10">
+          <button type="submit" id="kt_sign_up_submit" class="btn btn-primary">
+            <span class="indicator-label"><%= view.submitLabel %></span>
+
+            <span class="indicator-progress">
+              Please wait...
+              <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+            </span>
           </button>
         </div>
-      </div>
-
-      <div class="separator separator-content my-14">
-        <span class="w-125px text-gray-500 fw-semibold fs-7">Or with email</span>
-      </div>
       <% } %>
 
-      <!-- First Name -->
-      <div class="fv-row mb-8">
-        <input
-          type="text"
-          placeholder="First Name"
-          name="firstName"
-          class="form-control bg-transparent"
-          required
-        />
-      </div>
+      <!-- ───────────────────────── LOGIN LINK ───────────────────────── -->
 
-      <!-- Last Name -->
-      <div class="fv-row mb-8">
-        <input
-          type="text"
-          placeholder="Last Name"
-          name="lastName"
-          class="form-control bg-transparent"
-          required
-        />
-      </div>
-
-      <!-- Email -->
-      <div class="fv-row mb-8">
-        <% if (view.isInviteSignup) { %>
-        <input
-          type="email"
-          placeholder="Email"
-          name="email"
-          value="<%= view.inviteEmail %>"
-          class="form-control bg-transparent"
-          readonly
-          required
-        />
-        <% } else { %>
-        <input
-          type="email"
-          placeholder="Email"
-          name="email"
-          class="form-control bg-transparent"
-          required
-        />
-        <% } %>
-      </div>
-
-      <!-- Password -->
-      <div class="fv-row mb-8" data-kt-password-meter="true">
-        <div class="mb-1">
-          <div class="position-relative mb-3">
-            <input
-              class="form-control bg-transparent"
-              type="password"
-              placeholder="Password"
-              name="password"
-              autocomplete="off"
-              required
-            />
-
-            <span
-              class="btn btn-sm btn-icon position-absolute translate-middle top-50 end-0 me-n2"
-              data-kt-password-meter-control="visibility"
-            >
-              <i class="ki-duotone ki-eye-slash fs-2"></i>
-              <i class="ki-duotone ki-eye fs-2 d-none"></i>
-            </span>
-          </div>
-
-          <div class="d-flex align-items-center mb-3" data-kt-password-meter-control="highlight">
-            <div class="flex-grow-1 bg-secondary bg-active-success rounded h-5px me-2"></div>
-            <div class="flex-grow-1 bg-secondary bg-active-success rounded h-5px me-2"></div>
-            <div class="flex-grow-1 bg-secondary bg-active-success rounded h-5px me-2"></div>
-            <div class="flex-grow-1 bg-secondary bg-active-success rounded h-5px"></div>
-          </div>
-        </div>
-
-        <div class="text-muted">Use 8+ characters with a mix of letters, numbers & symbols.</div>
-      </div>
-
-      <!-- Confirm Password -->
-      <div class="fv-row mb-8">
-        <input
-          class="form-control bg-transparent"
-          type="password"
-          placeholder="Repeat Password"
-          name="confirmPassword"
-          autocomplete="off"
-          required
-        />
-      </div>
-
-      <!-- Terms -->
-      <div class="fv-row mb-8">
-        <label class="form-check form-check-inline">
-          <input class="form-check-input" type="checkbox" name="toc" value="1" />
-
-          <span class="form-check-label fw-semibold text-gray-700 fs-base ms-1">
-            I Accept the
-            <a href="#" class="ms-1 link-primary">Terms</a>
-            and
-            <a href="#" class="ms-1 link-primary">Conditions</a>
-          </span>
-        </label>
-      </div>
-
-      <!-- Submit -->
-      <div class="d-grid mb-10">
-        <button type="submit" id="kt_sign_up_submit" class="btn btn-primary">
-          <span class="indicator-label"><%= view.submitLabel %></span>
-
-          <span class="indicator-progress">
-            Please wait...
-            <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
-          </span>
-        </button>
-      </div>
-      <% } %>
-
-      <!-- Log in -->
       <div class="text-gray-500 text-center fw-semibold fs-6">
         Already a User?
         <a href="<%= view.loginUrl %>" class="link-primary">Log In</a>

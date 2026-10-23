@@ -1,0 +1,83 @@
+<!-- views/professional/profile/partials/personal-details.ejs -->
+
+<!-- ───────────────────── PERSONAL DETAILS ───────────────────── -->
+
+<div class="card mb-5 mb-xl-8">
+  <div class="card-header">
+    <div class="card-title">
+      <div class="d-flex align-items-center gap-3">
+        <div class="symbol symbol-45px flex-shrink-0">
+          <span class="symbol-label bg-light-primary">
+            <i class="ki-duotone ki-profile-circle fs-2x text-primary">
+              <span class="path1"></span>
+              <span class="path2"></span>
+              <span class="path3"></span>
+            </i>
+          </span>
+        </div>
+
+        <div class="min-w-0">
+          <h3 class="fw-bold text-gray-900 fs-5 mb-1">Personal Details</h3>
+
+          <div class="text-muted fs-7">Your registered personal and contact information</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───────────────────── REGISTERED INFORMATION ───────────────────── -->
+
+  <div class="card-body p-5 p-lg-8">
+    <div class="row g-4 g-xl-6">
+      <% personalDetailsView.fields.forEach(function (field) { %>
+
+      <div class="col-12 col-md-6">
+        <div class="border border-gray-300 border-dashed rounded p-4 p-lg-5 h-100">
+          <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+            <span class="fw-semibold text-gray-500 fs-7"> <%= field.label %> </span>
+
+            <% if (field.locked) { %>
+
+            <span
+              class="d-inline-flex align-items-center gap-1 text-gray-500"
+              title="Protected account information"
+            >
+              <i class="ki-duotone ki-lock fs-5">
+                <span class="path1"></span>
+                <span class="path2"></span>
+                <span class="path3"></span>
+              </i>
+
+              <span class="fw-semibold fs-8"> Protected </span>
+            </span>
+
+            <% } %>
+          </div>
+
+          <div class="fw-bold text-gray-800 fs-6 text-break"><%= field.value %></div>
+        </div>
+      </div>
+
+      <% }) %>
+    </div>
+
+    <!-- ───────────────────── IDENTITY PROTECTION ───────────────────── -->
+
+    <div class="separator separator-dashed my-7"></div>
+
+    <div
+      class="notice d-flex align-items-start bg-light-info border border-info border-dashed rounded p-4 p-lg-5"
+    >
+      <i class="ki-duotone ki-shield-tick fs-2x text-info me-4 flex-shrink-0">
+        <span class="path1"></span>
+        <span class="path2"></span>
+      </i>
+
+      <div class="flex-grow-1 min-w-0">
+        <div class="fw-bold text-gray-900 fs-6 mb-2">Identity Protection</div>
+
+        <div class="fw-semibold text-gray-600 fs-7"><%= personalDetailsView.identityNotice %></div>
+      </div>
+    </div>
+  </div>
+</div>

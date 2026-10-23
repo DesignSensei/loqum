@@ -1,0 +1,211 @@
+<!-- views/professional/profile/partials/verification.ejs -->
+
+<!-- ───────────────────── VERIFICATION HEADER ───────────────────── -->
+
+<div class="card mb-5 mb-xl-8">
+  <div class="card-header">
+    <div class="card-title">
+      <div class="d-flex align-items-center gap-3">
+        <div class="symbol symbol-45px flex-shrink-0">
+          <span class="symbol-label bg-light-primary">
+            <i class="ki-duotone ki-shield-tick fs-2x text-primary">
+              <span class="path1"></span>
+              <span class="path2"></span>
+            </i>
+          </span>
+        </div>
+
+        <div class="min-w-0">
+          <h3 class="fw-bold text-gray-900 fs-5 mb-1">Professional Verification</h3>
+
+          <div class="fs-7 text-muted">
+            Your identity, credentials, approval and marketplace status
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card-body p-5 p-lg-8">
+    <!-- ───────────────────── MARKETPLACE READINESS ───────────────────── -->
+
+    <div
+      class="d-flex flex-column flex-sm-row align-items-start align-items-sm-center justify-content-between gap-4 border border-dashed rounded p-4 p-lg-5 <%= verificationView.readinessNoticeClass %>"
+    >
+      <div class="d-flex align-items-start gap-4 min-w-0">
+        <div class="symbol symbol-45px flex-shrink-0">
+          <span class="symbol-label bg-light">
+            <i
+              class="ki-duotone <%= verificationView.readinessIcon %> fs-2x <%= verificationView.readinessIconClass %>"
+            >
+              <span class="path1"></span>
+              <span class="path2"></span>
+              <span class="path3"></span>
+            </i>
+          </span>
+        </div>
+
+        <div class="min-w-0">
+          <div class="fw-bold text-gray-900 fs-5 mb-2"><%= verificationView.readinessLabel %></div>
+
+          <div class="fw-semibold text-gray-600 fs-7"><%= verificationView.readinessMessage %></div>
+        </div>
+      </div>
+
+      <span
+        class="badge <%= verificationView.readinessBadgeClass %> fw-bold flex-shrink-0 px-4 py-3"
+      >
+        <%= verificationView.readinessLabel %>
+      </span>
+    </div>
+  </div>
+</div>
+
+<!-- ───────────────────── VERIFICATION STATUS CARDS ───────────────────── -->
+
+<div class="row g-5 g-xl-8 mb-5 mb-xl-8">
+  <% verificationView.items.forEach(function (item) { %>
+
+  <div class="col-12 col-lg-6">
+    <div class="card card-flush h-100">
+      <div class="card-body p-5 p-lg-7">
+        <!-- ───────────────────── STATUS HEADER ───────────────────── -->
+
+        <div
+          class="d-flex flex-column flex-sm-row align-items-start justify-content-between gap-3 mb-5"
+        >
+          <div class="d-flex align-items-start gap-3 min-w-0">
+            <div class="symbol symbol-45px flex-shrink-0">
+              <span class="symbol-label bg-light-primary">
+                <i class="ki-duotone ki-shield-tick fs-2x text-primary">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                </i>
+              </span>
+            </div>
+
+            <div class="min-w-0">
+              <h3 class="fw-bold text-gray-900 fs-6 mb-2"><%= item.title %></h3>
+
+              <div class="text-gray-500 fs-7"><%= item.description %></div>
+            </div>
+          </div>
+
+          <span class="badge <%= item.badgeClass %> fw-bold flex-shrink-0">
+            <%= item.statusLabel %>
+          </span>
+        </div>
+
+        <!-- ───────────────────── VERIFICATION DETAILS ───────────────────── -->
+
+        <% if (item.details.length > 0) { %>
+
+        <div class="separator separator-dashed my-5"></div>
+
+        <div class="d-flex flex-column gap-4">
+          <% item.details.forEach(function (detail) { %>
+
+          <div
+            class="d-flex flex-column flex-sm-row align-items-start justify-content-between gap-2"
+          >
+            <span class="fw-semibold text-gray-500 fs-7"> <%= detail.label %> </span>
+
+            <div class="d-flex align-items-start align-items-sm-center gap-2 min-w-0">
+              <span class="fw-bold text-gray-800 fs-7 text-break text-sm-end">
+                <%= detail.value %>
+              </span>
+
+              <% if (detail.locked) { %>
+
+              <i
+                class="ki-duotone ki-lock fs-5 text-gray-500 flex-shrink-0"
+                title="Protected information"
+                aria-label="Protected information"
+              >
+                <span class="path1"></span>
+                <span class="path2"></span>
+                <span class="path3"></span>
+              </i>
+
+              <% } %>
+            </div>
+          </div>
+
+          <% }) %>
+        </div>
+
+        <% } %>
+
+        <!-- ───────────────────── RECORDED DATE ───────────────────── -->
+
+        <% if (item.dateLabel) { %>
+
+        <div class="separator separator-dashed my-5"></div>
+
+        <div class="d-flex flex-wrap align-items-center gap-2">
+          <i class="ki-duotone ki-calendar-tick fs-5 text-gray-500">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+          </i>
+
+          <span class="fw-semibold text-gray-500 fs-7"> Recorded on: </span>
+
+          <span class="fw-bold text-gray-700 fs-7"> <%= item.dateLabel %> </span>
+        </div>
+
+        <% } %>
+      </div>
+    </div>
+  </div>
+
+  <% }) %>
+</div>
+
+<!-- ───────────────────── IDENTITY AND LICENCE PROTECTION ───────────────────── -->
+
+<div class="card mb-5 mb-xl-8">
+  <div class="card-body p-5 p-lg-7">
+    <div
+      class="notice d-flex align-items-start bg-light-info border border-info border-dashed rounded p-4 p-lg-5"
+    >
+      <i class="ki-duotone ki-lock fs-2x text-info me-4 flex-shrink-0">
+        <span class="path1"></span>
+        <span class="path2"></span>
+        <span class="path3"></span>
+      </i>
+
+      <div class="flex-grow-1 min-w-0">
+        <div class="fw-bold text-gray-900 fs-6 mb-2">Protected Identity and Licence Details</div>
+
+        <div class="fw-semibold text-gray-600 fs-7"><%= verificationView.supportMessage %></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ───────────────────── LICENCE VERIFICATION POLICY ───────────────────── -->
+
+<div class="card mb-5 mb-xl-8">
+  <div class="card-body p-5 p-lg-7">
+    <div class="d-flex align-items-start gap-4">
+      <div class="symbol symbol-45px flex-shrink-0">
+        <span class="symbol-label bg-light-primary">
+          <i class="ki-duotone ki-information-5 fs-2x text-primary">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+          </i>
+        </span>
+      </div>
+
+      <div class="flex-grow-1 min-w-0">
+        <div class="fw-bold text-gray-900 fs-6 mb-2">Professional Licence Verification Policy</div>
+
+        <div class="fw-semibold text-gray-600 fs-7">
+          <%= verificationView.licenceExpiryMessage %>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

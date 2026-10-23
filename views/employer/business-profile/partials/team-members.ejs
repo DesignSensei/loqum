@@ -44,11 +44,11 @@
         </div>
         <% }) %>
       </div>
-      <% } %>
-
+      <% } %> <% if (employerPermissions.canInviteMembers) { %>
       <a href="/employer/business-profile?tab=invites" class="btn btn-sm btn-light-primary">
         Invite Member
       </a>
+      <% } %>
     </div>
   </div>
 

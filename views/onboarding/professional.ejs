@@ -142,6 +142,7 @@
           ></i>
         </span>
       </label>
+
       <input
         type="text"
         name="licenceNumber"
@@ -153,6 +154,7 @@
         pattern="[0-9]{6}"
         oninput="this.value = this.value.replace(/\D/g, '').slice(0, 6)"
       />
+
       <div
         class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
       ></div>
@@ -249,9 +251,100 @@
     -->
   </div>
 
+  <!-- NIN REGISTRY VERIFICATION
+       NIN only. BVN is not supported in onboarding.
+
+       The NIN input has no name attribute.
+       It must not be included in the regular profile
+       submission payload.
+
+       The dedicated verification JavaScript sends
+       NIN and explicit consent to the verification
+       endpoint using the form's CSRF token.
+
+       Registry matching is not identity-holder
+       authentication or professional approval.
+  -->
+  <div class="fv-row mb-8" id="ninVerificationSection">
+    <label for="ninInput" class="form-label">
+      National Identification Number (NIN)
+      <span class="text-muted fs-7">
+        <i
+          class="ki-outline ki-information-2 fs-6"
+          data-bs-toggle="tooltip"
+          data-bs-original-title="Your NIN details will be checked against the identity registry using Loqum's configured verification provider."
+        ></i>
+      </span>
+    </label>
+
+    <div class="row g-3 align-items-start">
+      <div class="col-12 col-md-8">
+        <input
+          type="text"
+          id="ninInput"
+          class="form-control bg-transparent"
+          placeholder="Enter your 11-digit NIN"
+          autocomplete="off"
+          inputmode="numeric"
+          maxlength="11"
+          minlength="11"
+          pattern="[0-9]{11}"
+          spellcheck="false"
+          aria-describedby="ninPrivacyNote"
+        />
+      </div>
+
+      <div class="col-12 col-md-4">
+        <button
+          type="button"
+          id="kt_onboarding_nin_verify"
+          class="btn btn-light-primary w-100"
+          data-verify-url="/onboarding/professional/verify-nin"
+        >
+          <span class="indicator-label"> Verify NIN </span>
+
+          <span class="indicator-progress">
+            Verifying...
+            <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+          </span>
+        </button>
+      </div>
+    </div>
+
+    <div class="form-text mt-2" id="ninPrivacyNote">
+      Your NIN will be used only for the identity registry lookup. Loqum records limited
+      verification evidence rather than storing your full NIN.
+    </div>
+
+    <div class="form-check form-check-custom form-check-solid mt-4">
+      <input class="form-check-input" type="checkbox" id="ninConsent" value="true" />
+
+      <label class="form-check-label text-gray-700 fs-7" for="ninConsent">
+        I consent to Loqum checking my NIN against the identity registry through its configured
+        verification provider for professional onboarding.
+      </label>
+    </div>
+
+    <div
+      id="ninVerificationResult"
+      class="alert d-none mt-4 mb-0"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      <span id="ninVerificationMessage"></span>
+    </div>
+
+    <div class="text-muted fs-7 mt-3">
+      Matching NIN details does not complete identity verification. Additional identity checks or
+      review may still be required.
+    </div>
+  </div>
+
   <!-- Phone Number -->
   <div class="fv-row mb-8">
     <label class="form-label required">Phone Number</label>
+
     <div class="row g-3">
       <div class="col-4">
         <select
@@ -265,6 +358,7 @@
           <option value="+234" selected>🇳🇬 +234</option>
         </select>
       </div>
+
       <div class="col-8">
         <input
           type="tel"
@@ -273,6 +367,7 @@
           placeholder="08012345678"
           autocomplete="off"
         />
+
         <div
           class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
         ></div>
@@ -283,6 +378,7 @@
   <!-- Primary Practice Area (Specialty) — populated dynamically by SpecialtyPicker -->
   <div class="fv-row mb-8">
     <label class="form-label required">Primary Practice Area</label>
+
     <select
       id="specialtySelect"
       name="specialty"
@@ -293,6 +389,7 @@
     >
       <option value="">Select Specialty</option>
     </select>
+
     <div
       class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
     ></div>
@@ -301,6 +398,7 @@
   <!-- Years of Experience -->
   <div class="fv-row mb-8">
     <label class="form-label">Years of Experience</label>
+
     <input
       type="number"
       name="yearsOfExperience"
@@ -309,6 +407,7 @@
       min="0"
       autocomplete="off"
     />
+
     <div
       class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
     ></div>
@@ -318,6 +417,7 @@
   <div class="row gx-3 gy-8 mb-8">
     <div class="col-md-6">
       <label class="form-label required">State</label>
+
       <select
         id="stateSelect"
         name="state"
@@ -328,12 +428,15 @@
         <option></option>
         <option value="">Select State</option>
       </select>
+
       <div
         class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
       ></div>
     </div>
+
     <div class="col-md-6">
       <label class="form-label required">LGA</label>
+
       <select
         id="lgaSelect"
         name="lga"
@@ -344,6 +447,7 @@
       >
         <option value="">Select LGA</option>
       </select>
+
       <div class="fv-plugins-message-container invalid-feedback"></div>
     </div>
   </div>
@@ -362,7 +466,9 @@
     />
 
     <input type="hidden" id="latitudeInput" name="latitude" />
+
     <input type="hidden" id="longitudeInput" name="longitude" />
+
     <input type="hidden" id="googlePlaceIdInput" name="googlePlaceId" />
 
     <div
@@ -382,12 +488,14 @@
         ></i>
       </span>
     </label>
+
     <textarea
       name="bio"
       class="form-control bg-transparent"
       rows="4"
       placeholder="Briefly describe your clinical experience or specialties..."
     ></textarea>
+
     <div
       class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
     ></div>
@@ -396,7 +504,8 @@
   <!-- Submit -->
   <div class="d-grid mb-10 mt-10">
     <button type="submit" id="kt_onboarding_professional_submit" class="btn btn-primary">
-      <span class="indicator-label">Complete My Profile</span>
+      <span class="indicator-label"> Complete My Profile </span>
+
       <span class="indicator-progress">
         Processing...
         <span class="spinner-border spinner-border-sm align-middle ms-2"></span>

@@ -845,7 +845,7 @@ class DVAService {
 
       const account = customer.dedicated_account || customer.dedicatedAccount;
 
-      if (!account || account.active === false || account.assigned === false) {
+      if (!account || account.active !== true || account.assigned !== true) {
         throw DVAService.createAssignmentError(
           "Paystack has not yet returned an active assigned account for this customer.",
           "PAYSTACK_DVA_CUSTOMER_ACCOUNT_PENDING",
@@ -1029,8 +1029,12 @@ class DVAService {
 
     /*
      * Reconciliation is not an assignment retry.
+     *
      * An existing pending DVA may be checked against Paystack
      * without waiting for the 24-hour retry window.
+     *
+     * Never submit another assignment while the existing
+     * request remains pending.
      */
     if (existing?.status === "pending") {
       try {
@@ -1045,7 +1049,7 @@ class DVAService {
           `Paystack DVA reconciliation failed for ${employerProfileId}: ${error.message}`
         );
 
-        // Never submit a duplicate assignment because reconciliation failed.
+        // A failed reconciliation does not authorize another assignment.
         return (await DVA.findById(existing._id)) || existing;
       }
     }
@@ -1070,28 +1074,22 @@ class DVAService {
     const requestedAt = new Date();
 
     /*
-     * Store the customer email and Paystack mode
-     * before making the asynchronous provider request.
+     * Persist the identity of the intended assignment
+     * before calling Paystack.
+     *
+     * This allows asynchronous webhooks and subsequent
+     * reconciliation to resolve the correct employer wallet.
      */
-
     const metadata = {
       requestedWith: {
         userId: String(user._id),
-
         employerProfileId: String(employerProfile._id),
-
         walletId: String(wallet._id),
-
         email,
-
         businessName: employerProfile.businessName,
-
         employerType: employerProfile.type,
-
         preferredProviderSlug,
-
         countryCode: wallet.countryCode,
-
         currency: wallet.currency,
       },
 
@@ -1113,7 +1111,6 @@ class DVAService {
         {
           $set: {
             ownerUser: user._id,
-
             employer: employerProfile._id,
 
             status: "pending",
@@ -1124,7 +1121,6 @@ class DVAService {
             deactivatedAt: null,
 
             providerSlug: preferredProviderSlug,
-
             metadata,
           },
         },
@@ -1162,7 +1158,7 @@ class DVAService {
       }
     }
 
-    /* ---------- Submit assignment ---------- */
+    /* ---------- Submit assignment to Paystack ---------- */
 
     try {
       logger.info(`Creating Paystack DVA for employer profile: ${employerProfile._id}`);
@@ -1171,7 +1167,6 @@ class DVAService {
         email,
 
         firstName: employerProfile.contactFirstName,
-
         lastName: employerProfile.contactLastName,
 
         phone,
@@ -1181,26 +1176,27 @@ class DVAService {
 
         metadata: {
           userId: String(user._id),
-
           employerProfileId: String(employerProfile._id),
-
           walletId: String(wallet._id),
 
           businessName: employerProfile.businessName,
-
           employerType: employerProfile.type,
 
           countryCode: wallet.countryCode,
-
           currency: wallet.currency,
         },
       });
 
       /*
-       * Paystack has accepted the request, but the
-       * dedicated account may not exist yet.
+       * An asynchronous acknowledgement means Paystack
+       * accepted the assignment request.
+       *
+       * It does not mean a dedicated account is already
+       * assigned or active.
+       *
+       * Leave the DVA pending for webhook completion
+       * or subsequent reconciliation.
        */
-
       if (response?.pending === true) {
         await DVA.updateOne(
           {
@@ -1210,7 +1206,6 @@ class DVAService {
           {
             $set: {
               "metadata.assignmentAcknowledgedAt": new Date(),
-
               "metadata.assignmentMessage": response.message || null,
             },
           }
@@ -1219,41 +1214,92 @@ class DVAService {
         return (await DVA.findById(pendingDVA._id)) || pendingDVA;
       }
 
-      /* ---------- Immediate account response ---------- */
+      /* ---------- Verify immediate account response ---------- */
 
-      const fields = DVAService.extractDVAData(response, preferredProviderSlug);
+      /*
+       * A provider response containing account details
+       * is not sufficient on its own to activate the DVA.
+       *
+       * Use the existing reconciliation service to:
+       *
+       * - verify the Paystack customer;
+       * - match the original employer and wallet;
+       * - confirm the assignment environment;
+       * - verify the dedicated account independently;
+       * - require active and assigned account flags;
+       * - reject conflicting provider identities.
+       *
+       * This avoids maintaining separate activation rules
+       * for immediate responses and delayed webhooks.
+       */
+      try {
+        const reconciled = await DVAService.reconcilePendingEmployerDVA({
+          userId,
+          employerProfileId,
+        });
 
-      DVAService.validateDVAData(fields);
+        if (reconciled?.status === "active") {
+          logger.info(
+            `Paystack DVA independently verified and activated for employer profile: ${employerProfile._id}`
+          );
 
-      const active = await DVA.findOneAndUpdate(
-        {
-          _id: pendingDVA._id,
-          status: "pending",
-        },
-        {
-          $set: {
-            ...fields,
-
-            status: "active",
-            activatedAt: new Date(),
-
-            failedAt: null,
-            failureReason: null,
-            deactivatedAt: null,
-
-            lastSyncedAt: new Date(),
-
-            "metadata.immediateResponseReceivedAt": new Date(),
-          },
-        },
-        {
-          new: true,
-          runValidators: true,
+          return reconciled;
         }
-      );
 
-      return active || (await DVA.findById(pendingDVA._id));
+        /*
+         * The assignment was accepted, but independent
+         * confirmation has not completed.
+         *
+         * Keep the account pending. Do not submit another
+         * assignment or infer that the request failed.
+         */
+        await DVA.updateOne(
+          {
+            _id: pendingDVA._id,
+            status: "pending",
+          },
+          {
+            $set: {
+              "metadata.initialReconciliationPending": true,
+              "metadata.initialReconciliationCheckedAt": new Date(),
+            },
+          }
+        );
+
+        return (await DVA.findById(pendingDVA._id)) || pendingDVA;
+      } catch (reconciliationError) {
+        /*
+         * A reconciliation error after Paystack has accepted
+         * the request does not prove the assignment failed.
+         *
+         * Preserve the pending state and allow subsequent
+         * reconciliation or the verified webhook to finish.
+         */
+        logger.warn(
+          `Paystack DVA immediate reconciliation pending for ${employerProfile._id}: ${reconciliationError.message}`
+        );
+
+        await DVA.updateOne(
+          {
+            _id: pendingDVA._id,
+            status: "pending",
+          },
+          {
+            $set: {
+              "metadata.initialReconciliationPending": true,
+              "metadata.initialReconciliationCheckedAt": new Date(),
+              "metadata.initialReconciliationReason": DVAService.shortenErrorMessage(
+                reconciliationError.message
+              ),
+            },
+          }
+        );
+
+        return (await DVA.findById(pendingDVA._id)) || pendingDVA;
+      }
     } catch (error) {
+      /* ---------- Paystack submission failure ---------- */
+
       const failedAt = new Date();
 
       const providerUnavailable = DVAService.isProviderUnavailableError(error);
@@ -1263,10 +1309,13 @@ class DVAService {
         : error.message;
 
       /*
-       * A timeout after submitting to Paystack does
-       * not prove assignment failed. Keep it pending.
+       * A timeout or server-side failure after submission
+       * does not establish whether Paystack accepted the
+       * assignment.
+       *
+       * Keep the existing DVA pending so that a delayed
+       * webhook or subsequent reconciliation can complete it.
        */
-
       const uncertain =
         error.code === "PAYSTACK_REQUEST_TIMEOUT" ||
         (error.code === "PAYSTACK_REQUEST_FAILED" &&
@@ -1286,17 +1335,17 @@ class DVAService {
 
             "metadata.lastFailure": {
               message: DVAService.shortenErrorMessage(error.message),
-
               providerUnavailable,
               failedAt,
             },
           };
 
       /*
-       * Only change a record still marked pending.
-       * Never overwrite a webhook-completed account.
+       * Only update a record that is still pending.
+       *
+       * Never overwrite a DVA that has already been
+       * activated or failed through an independent webhook.
        */
-
       const savedDVA = await DVA.findOneAndUpdate(
         {
           _id: pendingDVA._id,

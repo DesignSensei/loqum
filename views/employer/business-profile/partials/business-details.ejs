@@ -1,3 +1,4 @@
+
 <!-- views/employer/business-profile/partials/business-details.ejs -->
 
 <div class="card">
@@ -56,259 +57,343 @@
     />
 
     <div class="card-body">
-      <div class="mb-10">
-        <h4 class="fw-bold text-gray-900 mb-1">Business Information</h4>
-        <div class="text-muted fw-semibold">
-          Update your business identity and registration details.
-        </div>
-      </div>
+      <fieldset
+        class="border-0 p-0 m-0 w-100"
+        <%= employerContext.canManageBusinessProfile ? '' : 'disabled' %>
+      >
+        <!-- ───────────────────────── BUSINESS INFORMATION ───────────────────────── -->
 
-      <div class="row g-6 mb-8">
-        <div class="col-md-6 fv-row">
-          <label class="form-label fw-bold required">Business Type</label>
-          <select
-            class="form-select"
-            name="type"
-            id="businessTypeSelect"
-            data-control="select2"
-            data-placeholder="Select business type"
-            data-hide-search="true"
-          >
-            <option value="">Select business type</option>
-            <% businessDetailsView.typeOptions.forEach((option) => { %>
-            <option value="<%= option.value %>"><%= option.label %></option>
-            <% }) %>
-          </select>
-        </div>
-
-        <div class="col-md-6 fv-row">
-          <label class="form-label fw-bold required">Business Name</label>
-          <input
-            type="text"
-            class="form-control"
-            name="businessName"
-            value="<%= businessDetailsView.values.businessName %>"
-            placeholder="Enter business name"
-          />
-        </div>
-      </div>
-
-      <div class="row g-6 mb-8">
-        <div class="col-md-6 fv-row">
-          <label class="form-label fw-bold required">Business Email</label>
-          <input
-            type="email"
-            class="form-control"
-            name="businessEmail"
-            value="<%= businessDetailsView.values.businessEmail %>"
-            placeholder="business@example.com"
-          />
-        </div>
-
-        <div class="col-md-6 fv-row">
-          <label class="form-label fw-bold required">Business Phone</label>
-          <div class="input-group">
-            <input
-              type="text"
-              class="form-control w-90px flex-grow-0"
-              name="businessPhoneCode"
-              value="<%= businessDetailsView.values.businessPhoneCode %>"
-              placeholder="+234"
-            />
-
-            <input
-              type="text"
-              class="form-control"
-              name="businessPhone"
-              value="<%= businessDetailsView.values.businessPhone %>"
-              placeholder="Business phone number"
-            />
+        <div class="mb-10">
+          <h4 class="fw-bold text-gray-900 mb-1">Business Information</h4>
+          <div class="text-muted fw-semibold">
+            Your registered business identity is based on verified CAC records.
+            Business owners and authorised administrators can update permitted
+            contact information here.
           </div>
         </div>
-      </div>
 
-      <div class="separator separator-dashed my-10"></div>
+        <div class="row g-6 mb-8">
+          <div class="col-md-6 fv-row">
+            <label for="businessTypeSelect" class="form-label fw-bold">
+              Business Type
+            </label>
 
-      <div class="mb-10">
-        <h4 class="fw-bold text-gray-900 mb-1">Registration Details</h4>
-        <div class="text-muted fw-semibold">
-          Changing registration details may return verification status to pending.
+            <select
+              class="form-select bg-light"
+              id="businessTypeSelect"
+              data-control="select2"
+              data-placeholder="Business type"
+              data-hide-search="true"
+              disabled
+              aria-describedby="businessTypeHelp"
+            >
+              <option value="">Select business type</option>
+              <% businessDetailsView.typeOptions.forEach((option) => { %>
+                <option value="<%= option.value %>" <%= option.isSelected ? 'selected' : '' %>>
+                  <%= option.label %>
+                </option>
+              <% }) %>
+            </select>
+
+            <div class="form-text" id="businessTypeHelp">
+              Your registered business type cannot be changed through ordinary profile editing.
+            </div>
+          </div>
+
+          <div class="col-md-6 fv-row">
+            <label for="businessDetailsRegisteredBusinessName" class="form-label fw-bold">
+              CAC Registered Business Name
+            </label>
+
+            <input
+              type="text"
+              class="form-control bg-light"
+              id="businessDetailsRegisteredBusinessName"
+              value="<%= businessDetailsView.values.businessName %>"
+              readonly
+              aria-readonly="true"
+              aria-describedby="registeredBusinessNameHelp"
+            />
+
+            <div class="form-text" id="registeredBusinessNameHelp">
+              This is the legal business name obtained from CAC verification. Contact support if you
+              believe the registered name requires correction.
+            </div>
+          </div>
         </div>
-      </div>
 
-      <div class="row g-6 mb-8">
-        <div class="col-md-6 fv-row">
-          <label class="form-label fw-bold required">CAC Registration Number</label>
+        <div class="row g-6 mb-8">
+          <div class="col-md-6 fv-row">
+            <label class="form-label fw-bold required">Business Email</label>
+            <input
+              type="email"
+              class="form-control"
+              name="businessEmail"
+              value="<%= businessDetailsView.values.businessEmail %>"
+              placeholder="business@example.com"
+            />
+          </div>
+
+          <div class="col-md-6 fv-row">
+            <label class="form-label fw-bold required">Business Phone</label>
+            <div class="input-group">
+              <input
+                type="text"
+                class="form-control w-90px flex-grow-0"
+                name="businessPhoneCode"
+                value="<%= businessDetailsView.values.businessPhoneCode %>"
+                placeholder="+234"
+              />
+
+              <input
+                type="text"
+                class="form-control"
+                name="businessPhone"
+                value="<%= businessDetailsView.values.businessPhone %>"
+                placeholder="Business phone number"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div class="separator separator-dashed my-10"></div>
+
+        <!-- ───────────────────────── REGISTRATION DETAILS ───────────────────────── -->
+
+        <div class="mb-10">
+          <h4 class="fw-bold text-gray-900 mb-1">Registration Details</h4>
+
+          <div class="text-muted fw-semibold">
+            Your CAC and regulatory registration details are protected. They cannot be changed through
+            this form. If your registration details have changed or require correction, please contact
+            support for the appropriate verification process.
+          </div>
+        </div>
+
+        <div class="row g-6 mb-8">
+          <div class="col-md-6 fv-row">
+            <label for="businessDetailsCACRegistrationNumber" class="form-label fw-bold">
+              CAC Registration Number
+            </label>
+
+            <input
+              type="text"
+              class="form-control bg-light"
+              id="businessDetailsCACRegistrationNumber"
+              value="<%= businessDetailsView.values.cacRegistrationNumber %>"
+              readonly
+              aria-readonly="true"
+            />
+
+            <div class="form-text">
+              This number is associated with your CAC verification record.
+            </div>
+          </div>
+
+          <div class="col-md-6 fv-row">
+            <label for="businessDetailsRegulatoryRegistrationNumber" class="form-label fw-bold">
+              Regulatory Registration Number
+            </label>
+
+            <input
+              type="text"
+              class="form-control bg-light"
+              id="businessDetailsRegulatoryRegistrationNumber"
+              value="<%= businessDetailsView.values.regulatoryRegistrationNumber %>"
+              readonly
+              aria-readonly="true"
+            />
+
+            <div class="form-text">
+              Changes to your facility registration require a separate regulatory review.
+            </div>
+          </div>
+        </div>
+
+        <div class="row g-6 mb-8">
+          <div class="col-md-6">
+            <label for="businessDetailsRegulatoryBodyDisplay" class="form-label fw-bold">
+              Regulatory Body
+            </label>
+
+            <input
+              type="text"
+              class="form-control bg-light"
+              id="businessDetailsRegulatoryBodyDisplay"
+              value="<%= businessDetailsView.values.regulatoryBodyLabel %>"
+              readonly
+              aria-readonly="true"
+            />
+
+            <div class="form-text">
+              This is the regulatory body recorded for your business. It is not automatically changed
+              when you edit your location.
+            </div>
+          </div>
+        </div>
+
+        <div class="separator separator-dashed my-10"></div>
+
+        <!-- ───────────────────────── BUSINESS LOCATION ───────────────────────── -->
+
+        <div class="mb-10">
+          <h4 class="fw-bold text-gray-900 mb-1">Business Location</h4>
+
+          <div class="text-muted fw-semibold">
+            <% if (employerContext.canManageBusinessProfile) { %>
+              Select a valid address from Google suggestions so the correct coordinates can be saved.
+            <% } else { %>
+              The business location is displayed below for reference.
+            <% } %>
+            Changes to premises that have already undergone regulatory review must follow a separate
+            review process.
+          </div>
+        </div>
+
+        <div class="row g-6 mb-8">
+          <div class="col-md-6 fv-row">
+            <label class="form-label fw-bold required">State</label>
+
+            <select
+              class="form-select"
+              name="state"
+              id="businessDetailsStateSelect"
+              data-control="select2"
+              data-placeholder="Select state"
+            >
+              <option value="">Select state</option>
+            </select>
+          </div>
+
+          <div class="col-md-6 fv-row">
+            <label class="form-label fw-bold required">LGA</label>
+
+            <select
+              class="form-select"
+              name="lga"
+              id="businessDetailsLgaSelect"
+              data-control="select2"
+              data-placeholder="Select LGA"
+            >
+              <option value="">Select LGA</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="mb-8 fv-row">
+          <label class="form-label fw-bold required">Business Address</label>
+
           <input
             type="text"
             class="form-control"
-            name="cacRegistrationNumber"
-            value="<%= businessDetailsView.values.cacRegistrationNumber %>"
-            placeholder="Example: RC1234567"
-          />
-        </div>
-
-        <div class="col-md-6 fv-row">
-          <label class="form-label fw-bold required">Regulatory Registration Number</label>
-          <input
-            type="text"
-            class="form-control"
-            name="regulatoryRegistrationNumber"
-            value="<%= businessDetailsView.values.regulatoryRegistrationNumber %>"
-            placeholder="Enter facility/regulatory number"
-          />
-        </div>
-      </div>
-
-      <div class="row g-6 mb-8">
-        <div class="col-md-6">
-          <label class="form-label fw-bold">Derived Regulatory Body</label>
-          <input
-            type="text"
-            class="form-control bg-light"
-            id="businessDetailsRegulatoryBodyDisplay"
-            value="<%= businessDetailsView.values.regulatoryBodyLabel %>"
-            readonly
+            id="businessDetailsAddressInput"
+            name="address"
+            value="<%= businessDetailsView.values.address %>"
+            placeholder="Start typing business address"
+            autocomplete="off"
           />
 
           <div class="form-text">
-            This is derived automatically from the selected business type.
+            If your facility has already been reviewed, changing its registered premises may require
+            additional verification before the change can be accepted.
           </div>
         </div>
-      </div>
 
-      <div class="separator separator-dashed my-10"></div>
+        <div class="separator separator-dashed my-10"></div>
 
-      <div class="mb-10">
-        <h4 class="fw-bold text-gray-900 mb-1">Business Location</h4>
-        <div class="text-muted fw-semibold">
-          Select a valid address from Google suggestions so coordinates can be saved.
-        </div>
-      </div>
+        <!-- ───────────────────────── CONTACT PERSON ───────────────────────── -->
 
-      <div class="row g-6 mb-8">
-        <div class="col-md-6 fv-row">
-          <label class="form-label fw-bold required">State</label>
-          <select
-            class="form-select"
-            name="state"
-            id="businessDetailsStateSelect"
-            data-control="select2"
-            data-placeholder="Select state"
-          >
-            <option value="">Select state</option>
-          </select>
+        <div class="mb-10">
+          <h4 class="fw-bold text-gray-900 mb-1">Contact Person</h4>
+
+          <div class="text-muted fw-semibold">
+            This is the main contact person for employer communication. Changes to an already-reviewed
+            representative may require administrative review.
+          </div>
         </div>
 
-        <div class="col-md-6 fv-row">
-          <label class="form-label fw-bold required">LGA</label>
-          <select
-            class="form-select"
-            name="lga"
-            id="businessDetailsLgaSelect"
-            data-control="select2"
-            data-placeholder="Select LGA"
-          >
-            <option value="">Select LGA</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="mb-8 fv-row">
-        <label class="form-label fw-bold required">Business Address</label>
-        <input
-          type="text"
-          class="form-control"
-          id="businessDetailsAddressInput"
-          name="address"
-          value="<%= businessDetailsView.values.address %>"
-          placeholder="Start typing business address"
-          autocomplete="off"
-        />
-      </div>
-
-      <div class="separator separator-dashed my-10"></div>
-
-      <div class="mb-10">
-        <h4 class="fw-bold text-gray-900 mb-1">Contact Person</h4>
-        <div class="text-muted fw-semibold">
-          This is the main contact person for employer communication.
-        </div>
-      </div>
-
-      <div class="row g-6 mb-8">
-        <div class="col-md-6 fv-row">
-          <label class="form-label fw-bold required">First Name</label>
-          <input
-            type="text"
-            class="form-control"
-            name="contactFirstName"
-            value="<%= businessDetailsView.values.contactFirstName %>"
-            placeholder="Contact first name"
-          />
-        </div>
-
-        <div class="col-md-6 fv-row">
-          <label class="form-label fw-bold required">Last Name</label>
-          <input
-            type="text"
-            class="form-control"
-            name="contactLastName"
-            value="<%= businessDetailsView.values.contactLastName %>"
-            placeholder="Contact last name"
-          />
-        </div>
-      </div>
-
-      <div class="row g-6 mb-8">
-        <div class="col-md-6 fv-row">
-          <label class="form-label fw-bold required">Contact Role</label>
-          <select
-            class="form-select"
-            name="contactRole"
-            id="contactRoleSelect"
-            data-control="select2"
-            data-placeholder="Select contact role"
-            data-hide-search="true"
-          >
-            <option value="">Select contact role</option>
-            <% businessDetailsView.contactRoleOptions.forEach((option) => { %>
-            <option value="<%= option.value %>"><%= option.label %></option>
-            <% }) %>
-          </select>
-        </div>
-
-        <div class="col-md-6 fv-row">
-          <label class="form-label fw-bold required">Contact Phone</label>
-          <div class="input-group">
-            <input
-              type="text"
-              class="form-control w-90px flex-grow-0"
-              name="contactPhoneCode"
-              value="<%= businessDetailsView.values.contactPhoneCode %>"
-              placeholder="+234"
-            />
+        <div class="row g-6 mb-8">
+          <div class="col-md-6 fv-row">
+            <label class="form-label fw-bold required">First Name</label>
 
             <input
               type="text"
               class="form-control"
-              name="contactPhone"
-              value="<%= businessDetailsView.values.contactPhone %>"
-              placeholder="Contact phone number"
+              name="contactFirstName"
+              value="<%= businessDetailsView.values.contactFirstName %>"
+              placeholder="Contact first name"
+            />
+          </div>
+
+          <div class="col-md-6 fv-row">
+            <label class="form-label fw-bold required">Last Name</label>
+
+            <input
+              type="text"
+              class="form-control"
+              name="contactLastName"
+              value="<%= businessDetailsView.values.contactLastName %>"
+              placeholder="Contact last name"
             />
           </div>
         </div>
-      </div>
+
+        <div class="row g-6 mb-8">
+          <div class="col-md-6 fv-row">
+            <label class="form-label fw-bold required">Contact Role</label>
+
+            <select
+              class="form-select"
+              name="contactRole"
+              id="contactRoleSelect"
+              data-control="select2"
+              data-placeholder="Select contact role"
+              data-hide-search="true"
+            >
+              <option value="">Select contact role</option>
+              <% businessDetailsView.contactRoleOptions.forEach((option) => { %>
+                <option value="<%= option.value %>" <%= option.isSelected ? 'selected' : '' %>>
+                  <%= option.label %>
+                </option>
+              <% }) %>
+            </select>
+          </div>
+
+          <div class="col-md-6 fv-row">
+            <label class="form-label fw-bold required">Contact Phone</label>
+
+            <div class="input-group">
+              <input
+                type="text"
+                class="form-control w-90px flex-grow-0"
+                name="contactPhoneCode"
+                value="<%= businessDetailsView.values.contactPhoneCode %>"
+                placeholder="+234"
+              />
+
+              <input
+                type="text"
+                class="form-control"
+                name="contactPhone"
+                value="<%= businessDetailsView.values.contactPhone %>"
+                placeholder="Contact phone number"
+              />
+            </div>
+          </div>
+        </div>
+      </fieldset>
     </div>
 
-    <div class="card-footer d-flex justify-content-end">
-      <button type="submit" id="kt_business_details_submit" class="btn btn-primary">
-        <span class="indicator-label">Save Changes</span>
-        <span class="indicator-progress">
-          Please wait...
-          <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
-        </span>
-      </button>
-    </div>
+    <% if (employerContext.canManageBusinessProfile) { %>
+      <div class="card-footer d-flex justify-content-end">
+        <button type="submit" id="kt_business_details_submit" class="btn btn-primary">
+          <span class="indicator-label">Save Changes</span>
+          <span class="indicator-progress">
+            Please wait...
+            <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+          </span>
+        </button>
+      </div>
+    <% } %>
   </form>
 </div>

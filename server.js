@@ -3,7 +3,6 @@
 const path = require("path");
 require("dotenv").config();
 
-// Core Libraries
 const express = require("express");
 const session = require("express-session");
 const MongoStore = require("connect-mongo");
@@ -14,19 +13,14 @@ const cookieParser = require("cookie-parser");
 const passport = require("passport");
 const mongoose = require("mongoose");
 
-// Jobs
 const { startBackgroundJobs, stopBackgroundJobs } = require("./jobs");
 
-// Utilities
 const attachViewLocals = require("./middleware/viewLocalsMiddleware");
-
 const { attachNotificationLocals } = require("./middleware/notificationMiddleware");
 
-// Pre-defined modules
 const connectDB = require("./config/db");
 const logger = require("./utils/logger");
 
-// Routes
 const authRoutes = require("./routes/authRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 const onboardingRoutes = require("./routes/onboardingRoutes");
@@ -36,10 +30,9 @@ const accountRoutes = require("./routes/accountRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const jobRoutes = require("./routes/jobRoutes");
-// const reviewRoutes = require("./routes/reviewRoutes");
 const webhookRoutes = require("./routes/webhookRoutes");
 
-/* ---------- Initialize App ---------- */
+// ───────────────────── APPLICATION ─────────────────────
 
 const app = express();
 
@@ -49,12 +42,22 @@ let server = null;
 let isShuttingDown = false;
 let backgroundJobsStarted = false;
 
-/* ---------- Public webhook routes ---------- */
+app.disable("x-powered-by");
 
-// Must run before normal body parsers so Paystack raw bytes are preserved.
+function wantsJSON(req) {
+  const accept = req.get("Accept") || "";
+
+  return req.xhr || Boolean(req.is("application/json")) || accept.includes("application/json");
+}
+
+// ───────────────────── WEBHOOKS ─────────────────────
+
+// Webhooks run before JSON parsing and CSRF middleware.
+// Each webhook route must validate the provider signature.
+
 app.use("/webhooks", webhookRoutes);
 
-/* ---------- Parsers ---------- */
+// ───────────────────── REQUEST PARSERS ─────────────────────
 
 app.use(cookieParser());
 
@@ -68,67 +71,57 @@ app.use(express.json());
 
 app.use(methodOverride("_method"));
 
-/* ---------- Static files ---------- */
+// ───────────────────── STATIC FILES ─────────────────────
 
 app.use(express.static(path.join(__dirname, "public")));
 
-/* ---------- View engine ---------- */
+// ───────────────────── VIEW ENGINE ─────────────────────
 
 app.set("view engine", "ejs");
-
 app.set("views", path.join(__dirname, "views"));
-
-/* ---------- Use layout ---------- */
 
 app.use(expressLayouts);
 
-/* ---------- Session ---------- */
+// ───────────────────── SESSION ─────────────────────
 
 app.use(
   session({
     secret: process.env.SESSION_SECRET,
-
     name: "connect.sid",
 
     resave: false,
-
     saveUninitialized: false,
 
     store: MongoStore.create({
       mongoUrl: process.env.MONGO_URI,
-
       collectionName: "sessions",
     }),
 
     cookie: {
       httpOnly: true,
-
       sameSite: "lax",
-
       secure: process.env.NODE_ENV === "production",
-
       maxAge: 1000 * 60 * 60 * 24 * 7,
     },
   })
 );
 
-/* ---------- Passport ---------- */
+// ───────────────────── PASSPORT ─────────────────────
 
 require("./config/passport")(passport);
 
 app.use(passport.initialize());
-
 app.use(passport.session());
 
-/* ---------- Request logging ---------- */
+// ───────────────────── REQUEST LOGGING ─────────────────────
 
 app.use((req, res, next) => {
   res.on("finish", () => {
-    const message = `${req.method} ${req.originalUrl} ${res.statusCode}`;
+    // Log the path without query-string parameters.
+    const message = `${req.method} ${req.path} ${res.statusCode}`;
 
     const meta = {
       user: req.user?.email || "Guest",
-
       timestamp: new Date().toISOString(),
     };
 
@@ -138,7 +131,7 @@ app.use((req, res, next) => {
   next();
 });
 
-/* ---------- CSRF Middleware ---------- */
+// ───────────────────── CSRF PROTECTION ─────────────────────
 
 const csrfProtection = csrf({
   cookie: true,
@@ -146,87 +139,125 @@ const csrfProtection = csrf({
 
 app.use(csrfProtection);
 
-/* ---------- Header notifications ---------- */
+// ───────────────────── VIEW LOCALS ─────────────────────
 
 app.use(attachNotificationLocals);
-
-/* ---------- View locals ---------- */
-
 app.use(attachViewLocals);
 
-/* ---------- Routes ---------- */
+// ───────────────────── ROUTES ─────────────────────
 
 app.use(authRoutes);
-
 app.use(accountRoutes);
 
 app.use("/jobs", jobRoutes);
-
 app.use("/payments", paymentRoutes);
-
 app.use("/notifications", notificationRoutes);
 
 app.use("/onboarding", onboardingRoutes);
-
 app.use("/admin", adminRoutes);
-
 app.use("/professional", professionalRoutes);
-
 app.use("/employer", employerRoutes);
 
-// app.use("/reviews", reviewRoutes);
-
-/* ---------- Catch unmatched routes (404) ---------- */
+// ───────────────────── NOT FOUND ─────────────────────
 
 app.use((req, res) => {
+  if (wantsJSON(req)) {
+    return res.status(404).json({
+      success: false,
+      message: "The requested resource was not found.",
+    });
+  }
+
   return res.status(404).render("errors/not-found", {
     layout: "layouts/error-layout",
-
     title: "Not Found",
-
     wfPage: "66b93fd9c65755b8a91df18e",
   });
 });
 
-/* ---------- Global Error Handler ---------- */
+// ───────────────────── GLOBAL ERROR HANDLING ─────────────────────
 
 app.use((err, req, res, next) => {
-  if (err.code === "EBADCSRFTOKEN") {
-    res.status(403);
-
-    res.locals.error = "Session expired or form tampered with. Please retry.";
-
-    return res.redirect(req.get("Referer") || "/");
+  if (res.headersSent) {
+    return next(err);
   }
 
-  const statusCode = err.statusCode || 500;
+  const isCSRFError = err?.code === "EBADCSRFTOKEN";
+
+  const statusCode = isCSRFError
+    ? 403
+    : Number.isInteger(err?.statusCode) && err.statusCode >= 400 && err.statusCode <= 599
+      ? err.statusCode
+      : 500;
+
+  res.set({
+    "Cache-Control": "no-store, no-cache, must-revalidate, private",
+    Pragma: "no-cache",
+    Expires: "0",
+  });
+
+  if (isCSRFError) {
+    const message =
+      "Session expired or security token invalid. Please refresh the page and try again.";
+
+    if (wantsJSON(req)) {
+      return res.status(403).json({
+        success: false,
+        message,
+        code: "INVALID_CSRF_TOKEN",
+      });
+    }
+
+    return res.status(403).render("errors/error", {
+      layout: "layouts/error-layout",
+      title: "Session Expired",
+      message,
+      wfPage: "66b93fd9c65755b8a91df18e",
+    });
+  }
 
   if (statusCode === 404) {
+    if (wantsJSON(req)) {
+      return res.status(404).json({
+        success: false,
+        message: "The requested resource was not found.",
+      });
+    }
+
     return res.status(404).render("errors/not-found", {
       layout: "layouts/error-layout",
-
       title: "Not Found",
-
       wfPage: "66b93fd9c65755b8a91df18e",
     });
   }
 
   logger.error(
-    `[${statusCode}] ${req.method} ${req.originalUrl} :: ` + `${err.message}\n${err.stack || ""}`
+    `[${statusCode}] ${req.method} ${req.path} :: ${
+      err?.message || "Unexpected error"
+    }\n${err?.stack || ""}`
   );
+
+  const message =
+    statusCode >= 500
+      ? "Something went wrong. Please try again."
+      : err?.message || "Unable to complete the request.";
+
+  if (wantsJSON(req)) {
+    return res.status(statusCode).json({
+      success: false,
+      message,
+    });
+  }
 
   return res.status(statusCode).render("errors/error", {
     layout: "layouts/error-layout",
-
     title: "Error",
-
-    message: err.message || "Something went wrong",
-
+    message,
     wfPage: "66b93fd9c65755b8a91df18e",
   });
 });
 
-/* ---------- Graceful shutdown ---------- */
+// ───────────────────── GRACEFUL SHUTDOWN ─────────────────────
 
 async function shutdown(signal) {
   if (isShuttingDown) {
@@ -237,7 +268,6 @@ async function shutdown(signal) {
 
   logger.info(`${signal} received. Shutting down gracefully.`);
 
-  // Stop scheduling new work before closing HTTP and MongoDB.
   if (backgroundJobsStarted) {
     stopBackgroundJobs();
   }
@@ -246,32 +276,26 @@ async function shutdown(signal) {
     try {
       if (mongoose.connection.readyState !== 0) {
         await mongoose.disconnect();
-
         logger.info("MongoDB connection closed.");
       }
 
       logger.info("Graceful shutdown completed.");
-
       process.exit(0);
     } catch (error) {
       logger.error("Graceful shutdown failed:", error);
-
       process.exit(1);
     }
   };
 
   if (!server || !server.listening) {
     server = null;
-
     await closeDatabase();
-
     return;
   }
 
   server.close(async (error) => {
     if (error && error.code !== "ERR_SERVER_NOT_RUNNING") {
       logger.error("HTTP server shutdown failed:", error);
-
       process.exit(1);
     }
 
@@ -283,7 +307,7 @@ async function shutdown(signal) {
   });
 }
 
-/* ---------- Shutdown signals ---------- */
+// ───────────────────── SHUTDOWN SIGNALS ─────────────────────
 
 process.on("SIGINT", () => {
   void shutdown("SIGINT");
@@ -293,23 +317,30 @@ process.on("SIGTERM", () => {
   void shutdown("SIGTERM");
 });
 
-/* ---------- Start server ---------- */
+// ───────────────────── SERVER STARTUP ─────────────────────
 
 (async () => {
   try {
     await connectDB();
 
-    server = app.listen(PORT, () => {
+    server = app.listen(PORT, async () => {
       logger.info(`Server running on http://localhost:${PORT}`);
 
-      if (process.env.NODE_ENV === "production") {
-        startBackgroundJobs();
+      if (process.env.NODE_ENV !== "production") {
+        logger.info("Background jobs disabled in development.");
+        return;
+      }
+
+      try {
+        await startBackgroundJobs();
 
         backgroundJobsStarted = true;
 
         logger.info("Background jobs enabled.");
-      } else {
-        logger.info("Background jobs disabled in development.");
+      } catch (error) {
+        logger.error("Background job startup failed:", error);
+
+        await shutdown("BACKGROUND_JOB_STARTUP_FAILED");
       }
     });
   } catch (error) {

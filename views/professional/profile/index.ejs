@@ -1,0 +1,20 @@
+<!-- views/professional/profile/index.ejs -->
+
+<div class="d-flex flex-column flex-xl-row align-items-stretch gap-5 gap-xl-8">
+  <!-- ───────────────────── PROFILE SIDEBAR ───────────────────── -->
+
+  <div class="flex-column flex-lg-row-auto w-100 w-xl-325px flex-shrink-0">
+    <%- include("./partials/side-menu") %>
+  </div>
+
+  <!-- ───────────────────── PROFILE CONTENT ───────────────────── -->
+
+  <div class="flex-grow-1 w-100 min-w-0">
+    <% if (activeTab === "overview") { %> <%- include("./partials/overview") %> <% } else if
+    (activeTab === "personal-details") { %> <%- include("./partials/personal-details") %> <% } else
+    if (activeTab === "professional-details") { %> <%- include("./partials/professional-details") %>
+    <% } else if (activeTab === "verification") { %> <%- include("./partials/verification") %> <% }
+    else if (activeTab === "availability") { %> <%- include("./partials/availability") %> <% } else
+    if (activeTab === "account-settings") { %> <%- include("./partials/account-settings") %> <% } %>
+  </div>
+</div>

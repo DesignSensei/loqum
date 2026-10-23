@@ -10,6 +10,8 @@ const regulatoryBodyLabels = {
   other: "Other Regulatory Body",
 };
 
+// ───────────────────── TEXT NORMALIZATION ─────────────────────
+
 function normalizeText(value) {
   return String(value || "").trim();
 }
@@ -36,11 +38,27 @@ function assertRequiredFields(values, message) {
   }
 }
 
+// ───────────────────── PROFESSIONAL LICENCE VALIDATION ─────────────────────
+
+/*
+ * The professional supplies their licence number
+ * as part of their professional profile.
+ *
+ * Format validation does not establish that
+ * the applicant owns the licence.
+ *
+ * ProfessionalVerificationService remains
+ * responsible for independent PCN verification
+ * and subsequent professional approval.
+ */
+
 function validateProfessionalLicenceNumber(type, licenceNumber) {
   if (type === "pharmacist" && !/^\d{6}$/.test(licenceNumber)) {
     throw new Error("PCN licence number must be exactly 6 digits.");
   }
 }
+
+// ───────────────────── REGULATORY BODY SUPPORT ─────────────────────
 
 function getRegulatoryBody(type, state) {
   const cleanType = normalizeLowercase(type);
@@ -61,16 +79,76 @@ function getRegulatoryBody(type, state) {
   return null;
 }
 
-function normalizeCACRegistrationNumber(value) {
-  return normalizeText(value).toUpperCase().replace(/\s+/g, "");
-}
+// ───────────────────── CAC REGISTRATION VALIDATION ─────────────────────
 
-function normalizeRegulatoryRegistrationNumber(value) {
-  return normalizeText(value).replace(/\s+/g, " ");
+/*
+ * The current automated CAC onboarding workflow
+ * supports RC and BN registrations.
+ *
+ * Ninja currently supports RC registrations.
+ * Dojah is configured to support RC and BN.
+ *
+ * Provider-specific registration support
+ * is checked by CACVerificationService before
+ * an external lookup is attempted.
+ *
+ * IT, LP and LLP registrations must not be
+ * accepted as automatically verifiable through
+ * the current pre-onboarding CAC workflow.
+ */
+
+function normalizeCACRegistrationNumber(value) {
+  return normalizeText(value).toUpperCase().replace(/[\s-]/g, "");
 }
 
 function isValidCACRegistrationNumber(value) {
-  return /^(RC|BN|IT|LP|LLP)\d{4,10}$/.test(value);
+  return /^(RC|BN)\d{4,10}$/.test(value);
+}
+
+// ───────────────────── REGISTERED BUSINESS NAME ─────────────────────
+
+/*
+ * EmployerProfile.businessName is the legal name
+ * returned by trusted CAC registry evidence.
+ *
+ * The onboarding service must validate and consume
+ * successful production CAC evidence before calling
+ * buildEmployerProfileData().
+ *
+ * The businessName argument received by this builder
+ * must already have been replaced with that trusted
+ * registry-derived value.
+ *
+ * This builder validates the name's shape, but it
+ * cannot independently prove registry provenance.
+ *
+ * Controllers must not use this builder to persist
+ * a user-submitted legal business name directly.
+ *
+ * An optional public trading or display name is
+ * separate from the registered legal business name.
+ *
+ * Do not silently truncate or fabricate CAC names.
+ */
+
+function normalizeRegisteredBusinessName(value) {
+  if (typeof value !== "string") {
+    throw new Error("Verified CAC registered business name is required.");
+  }
+
+  const businessName = value.trim();
+
+  if (!businessName || businessName.length > 150 || /[\u0000-\u001F\u007F]/.test(businessName)) {
+    throw new Error("Verified CAC registered business name is invalid.");
+  }
+
+  return businessName;
+}
+
+// ───────────────────── REGULATORY REGISTRATION VALIDATION ─────────────────────
+
+function normalizeRegulatoryRegistrationNumber(value) {
+  return normalizeText(value).replace(/\s+/g, " ");
 }
 
 function isValidRegulatoryRegistrationNumber(value) {
@@ -78,6 +156,30 @@ function isValidRegulatoryRegistrationNumber(value) {
 }
 
 class ProfileInputService {
+  // ───────────────────── PROFESSIONAL PROFILE DATA ─────────────────────
+
+  /*
+   * Build ordinary professional profile information.
+   *
+   * Professional legal names do not originate
+   * from this request.
+   *
+   * The applicant's:
+   *
+   * - firstName;
+   * - middleName;
+   * - lastName;
+   *
+   * must come from acknowledged, trusted NIN
+   * registry evidence during onboarding.
+   *
+   * This method does not accept or return
+   * legal-name fields.
+   *
+   * Professional licence ownership and final
+   * marketplace eligibility are separate checks.
+   */
+
   static buildProfessionalProfileData(data = {}) {
     const {
       type,
@@ -152,6 +254,34 @@ class ProfileInputService {
     };
   }
 
+  // ───────────────────── EMPLOYER PROFILE DATA ─────────────────────
+
+  /*
+   * Build employer profile information using
+   * the CAC-authoritative registered business name.
+   *
+   * The applicant provides:
+   *
+   * - CAC registration number;
+   * - Business contact information;
+   * - Business location;
+   * - Regulatory premises information;
+   * - Representative contact details.
+   *
+   * The registered legal business name must
+   * already have been obtained from CAC evidence.
+   *
+   * OnboardingService supplies that trusted value
+   * after successful transactional consumption.
+   *
+   * Representative names are contact declarations.
+   * They do not establish representative authority
+   * or replace separate identity checks.
+   *
+   * The builder does not grant CAC, regulatory,
+   * representative or administrative approval.
+   */
+
   static buildEmployerProfileData(data = {}) {
     const {
       type,
@@ -175,7 +305,6 @@ class ProfileInputService {
     } = data;
 
     const cleanType = normalizeLowercase(type);
-    const cleanBusinessName = normalizeText(businessName);
     const cleanBusinessEmail = normalizeEmail(businessEmail);
 
     const cleanState = normalizeText(state);
@@ -192,10 +321,20 @@ class ProfileInputService {
     const cleanContactPhoneCode = normalizeText(contactPhoneCode);
     const cleanContactPhone = normalizeText(contactPhone);
 
+    /*
+     * Validate the ordinary applicant-provided
+     * fields separately from the authoritative
+     * CAC registered business name.
+     *
+     * The business name is still required for
+     * EmployerProfile persistence, but it is
+     * supplied by the trusted onboarding workflow,
+     * not manually entered by the applicant.
+     */
+
     assertRequiredFields(
       [
         cleanType,
-        cleanBusinessName,
         cleanBusinessEmail,
         cacRegistrationNumber,
         regulatoryRegistrationNumber,
@@ -213,11 +352,19 @@ class ProfileInputService {
       "Missing required employer profile fields."
     );
 
+    // ───────── AUTHORITATIVE BUSINESS NAME ─────────
+
+    const cleanBusinessName = normalizeRegisteredBusinessName(businessName);
+
+    // ───────── REGULATORY BODY ─────────
+
     const regulatoryBody = getRegulatoryBody(cleanType, cleanState);
 
     if (!regulatoryBody) {
       throw new Error("Invalid employer type selected.");
     }
+
+    // ───────── BUSINESS LOCATION ─────────
 
     if (!cleanGooglePlaceId) {
       throw new Error("Please select a valid business address from the suggestions.");
@@ -229,15 +376,21 @@ class ProfileInputService {
       "Please select a valid business address from the suggestions."
     );
 
+    // ───────── BUSINESS EMAIL ─────────
+
     if (!isValidEmail(cleanBusinessEmail)) {
       throw new Error("Enter a valid business email address.");
     }
+
+    // ───────── CAC REGISTRATION NUMBER ─────────
 
     const normalizedCACRegistrationNumber = normalizeCACRegistrationNumber(cacRegistrationNumber);
 
     if (!isValidCACRegistrationNumber(normalizedCACRegistrationNumber)) {
       throw new Error("Enter a valid CAC number, e.g. RC1234567 or BN1234567.");
     }
+
+    // ───────── REGULATORY REGISTRATION NUMBER ─────────
 
     const normalizedRegulatoryRegistrationNumber = normalizeRegulatoryRegistrationNumber(
       regulatoryRegistrationNumber
@@ -251,6 +404,12 @@ class ProfileInputService {
 
     return {
       type: cleanType,
+
+      /*
+       * The registered business name is the
+       * CAC-derived value injected by the
+       * trusted onboarding workflow.
+       */
 
       businessName: cleanBusinessName,
       businessEmail: cleanBusinessEmail,
@@ -269,6 +428,11 @@ class ProfileInputService {
       state: cleanState,
       lga: cleanLga,
 
+      /*
+       * Contact names remain user-provided
+       * declarations until separately reviewed.
+       */
+
       contactFirstName: cleanContactFirstName,
       contactLastName: cleanContactLastName,
       contactRole: cleanContactRole,
@@ -276,6 +440,8 @@ class ProfileInputService {
       contactPhone: cleanContactPhone,
     };
   }
+
+  // ───────────────────── REGULATORY BODY HELPERS ─────────────────────
 
   static getRegulatoryBody(type, state) {
     return getRegulatoryBody(type, state);

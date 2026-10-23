@@ -278,43 +278,74 @@ var TeamMembers = (function () {
     });
   }
 
+  /*
+   * Render branch assignments using DOM nodes.
+   *
+   * Branch names, locations and role labels originate
+   * from persisted data and must be treated as text.
+   *
+   * Never concatenate these values into innerHTML.
+   */
+
   function renderViewBranches(branches) {
     var container = document.querySelector(".js-view-team-member-branches");
 
     if (!container) return;
 
-    if (!branches || branches.length === 0) {
-      container.innerHTML = '<div class="text-muted">No branch assignment.</div>';
+    container.replaceChildren();
+
+    if (!Array.isArray(branches) || branches.length === 0) {
+      var emptyMessage = document.createElement("div");
+
+      emptyMessage.className = "text-muted";
+      emptyMessage.textContent = "No branch assignment.";
+
+      container.appendChild(emptyMessage);
       return;
     }
 
-    container.innerHTML = branches
-      .map(function (assignment) {
-        var branchName = assignment.branchName || "Unknown branch";
-        var branchLocation = [assignment.branchState, assignment.branchLga]
-          .filter(Boolean)
-          .join(" • ");
-        var roleLabel = assignment.roleLabel || "Branch Staff";
+    var fragment = document.createDocumentFragment();
 
-        return (
-          '<div class="border rounded p-4 mb-3">' +
-          '<div class="d-flex justify-content-between align-items-start gap-3">' +
-          "<div>" +
-          '<div class="fw-bold text-gray-900">' +
-          branchName +
-          "</div>" +
-          '<div class="text-muted fs-7">' +
-          (branchLocation || "No location added") +
-          "</div>" +
-          "</div>" +
-          '<span class="badge badge-light-primary">' +
-          roleLabel +
-          "</span>" +
-          "</div>" +
-          "</div>"
-        );
-      })
-      .join("");
+    branches.forEach(function (assignment) {
+      var branchName = assignment.branchName || "Unknown branch";
+
+      var branchLocation = [assignment.branchState, assignment.branchLga]
+        .filter(Boolean)
+        .join(" • ");
+
+      var roleLabel = assignment.roleLabel || "Branch Staff";
+
+      var card = document.createElement("div");
+      card.className = "border rounded p-4 mb-3";
+
+      var row = document.createElement("div");
+      row.className = "d-flex justify-content-between align-items-start gap-3";
+
+      var details = document.createElement("div");
+
+      var nameElement = document.createElement("div");
+      nameElement.className = "fw-bold text-gray-900";
+      nameElement.textContent = branchName;
+
+      var locationElement = document.createElement("div");
+      locationElement.className = "text-muted fs-7";
+      locationElement.textContent = branchLocation || "No location added";
+
+      var roleElement = document.createElement("span");
+      roleElement.className = "badge badge-light-primary";
+      roleElement.textContent = roleLabel;
+
+      details.appendChild(nameElement);
+      details.appendChild(locationElement);
+
+      row.appendChild(details);
+      row.appendChild(roleElement);
+
+      card.appendChild(row);
+      fragment.appendChild(card);
+    });
+
+    container.appendChild(fragment);
   }
 
   function fetchMember(url) {
@@ -348,6 +379,18 @@ var TeamMembers = (function () {
   function populateEditModal(member, updateUrl) {
     if (!editForm) return;
 
+    /*
+     * Clear previous validation messages before
+     * loading the selected member.
+     *
+     * resetForm(false) preserves field values.
+     * resetForm(true) would clear populated values.
+     */
+
+    if (editValidator) {
+      editValidator.resetForm(false);
+    }
+
     editForm.action = updateUrl || "";
 
     setText(".js-edit-team-member-name", member.name);
@@ -360,9 +403,7 @@ var TeamMembers = (function () {
     toggleBranchField(editRoleSelect, editBranchField, editBranchSelect);
     setSelectedBranches(member.branches || []);
 
-    if (editValidator) {
-      editValidator.resetForm(true);
-    }
+    setButtonLoading(editSubmitButton, false);
   }
 
   function populateRemoveModal(button) {
@@ -428,6 +469,7 @@ var TeamMembers = (function () {
     data._csrf = getCsrfToken();
     data.role = role;
     data.accountStatus = editStatusSelect ? editStatusSelect.value : "";
+
     data.branchIds = roleRequiresBranch(role) ? getSelectedBranchIds() : [];
 
     return data;
@@ -490,10 +532,20 @@ var TeamMembers = (function () {
     });
   }
 
+  /*
+   * The EJS links include Bootstrap modal attributes.
+   *
+   * Prevent delegated Bootstrap click handling so a
+   * modal cannot open before member data is loaded.
+   *
+   * Show the modal only after a successful API response.
+   */
+
   function handleViewButtons() {
     document.querySelectorAll(".js-view-team-member").forEach(function (button) {
       button.addEventListener("click", function (e) {
         e.preventDefault();
+        e.stopPropagation();
 
         if (isActionLoading(button)) return;
 
@@ -506,11 +558,13 @@ var TeamMembers = (function () {
         fetchMember(url)
           .then(function (member) {
             setActionLoading(button, false);
+
             populateViewModal(member);
             showModal(viewModalElement);
           })
           .catch(function (error) {
             setActionLoading(button, false);
+
             showError(error.response?.data?.message || "Unable to load team member.");
           });
       });
@@ -521,6 +575,7 @@ var TeamMembers = (function () {
     document.querySelectorAll(".js-edit-team-member").forEach(function (button) {
       button.addEventListener("click", function (e) {
         e.preventDefault();
+        e.stopPropagation();
 
         if (isActionLoading(button)) return;
 
@@ -534,11 +589,13 @@ var TeamMembers = (function () {
         fetchMember(memberUrl)
           .then(function (member) {
             setActionLoading(button, false);
+
             populateEditModal(member, updateUrl);
             showModal(editModalElement);
           })
           .catch(function (error) {
             setActionLoading(button, false);
+
             showError(error.response?.data?.message || "Unable to load team member.");
           });
       });
@@ -549,6 +606,7 @@ var TeamMembers = (function () {
     document.querySelectorAll(".js-remove-team-member").forEach(function (button) {
       button.addEventListener("click", function (e) {
         e.preventDefault();
+        e.stopPropagation();
 
         populateRemoveModal(button);
         showModal(removeModalElement);
@@ -607,7 +665,7 @@ var TeamMembers = (function () {
     toggleBranchField(editRoleSelect, editBranchField, editBranchSelect);
 
     if (editValidator) {
-      editValidator.resetForm(true);
+      editValidator.resetForm(false);
     }
 
     setButtonLoading(editSubmitButton, false);

@@ -18,19 +18,23 @@
     <% if (activeTab === "overview") { %> <%- include("./partials/overview") %> <% } %> <% if
     (activeTab === "business-details") { %> <%- include("./partials/business-details") %> <% } %> <%
     if (activeTab === "verification") { %> <%- include("./partials/verification") %> <% } %> <% if
-    (activeTab === "branches") { %> <%- include("./partials/branches") %> <% } %> <% if (activeTab
-    === "team") { %> <%- include("./partials/team-members") %> <% } %> <% if (activeTab ===
-    "invites") { %> <%- include("./partials/invites") %> <% } %>
+    (activeTab === "branches" && employerPermissions.canViewBranches) { %> <%-
+    include("./partials/branches") %> <% } %> <% if (activeTab === "team" &&
+    employerPermissions.canViewTeamMembers) { %> <%- include("./partials/team-members") %> <% } %>
+    <% if (activeTab === "invites" && employerPermissions.canInviteMembers) { %> <%-
+    include("./partials/invites") %> <% } %>
   </div>
   <!--end::Main content-->
 </div>
 
 <!--begin::Modals-->
-<% if (activeTab === "branches") { %> <%- include("./partials/add-branch-modal") %> <%-
-include("./partials/view-branch-modal") %> <%- include("./partials/edit-branch-modal") %> <% } %> <%
-if (activeTab === "team") { %> <%- include("./partials/team-member-modals") %> <% } %> <% if
-(activeTab === "invites") { %> <%- include("./partials/invite-member-modal") %> <%-
-include("./partials/edit-invite-modal") %> <% } %>
+<% if (activeTab === "branches" && employerPermissions.canViewBranches) { %> <% if
+(employerContext.canManageBranches) { %> <%- include("./partials/add-branch-modal") %> <% } %> <%-
+include("./partials/view-branch-modal") %> <% if (employerContext.canManageBranches) { %> <%-
+include("./partials/edit-branch-modal") %> <% } %> <% } %> <% if (activeTab === "team" &&
+employerPermissions.canViewTeamMembers) { %> <%- include("./partials/team-member-modals") %> <% } %>
+<% if (activeTab === "invites" && employerPermissions.canInviteMembers) { %> <%-
+include("./partials/invite-member-modal") %> <%- include("./partials/edit-invite-modal") %> <% } %>
 <!--end::Modals-->
 
 <script>

@@ -1,0 +1,589 @@
+<%# views/admin/users/index.ejs %>
+
+<div class="container-fluid py-5" id="adminUsers">
+
+  <!--begin::Page Header-->
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-4 mb-8">
+
+    <div>
+      <h1 class="fs-2x fw-bold text-gray-900 mb-2">
+        <%= usersView.heading %>
+      </h1>
+
+      <p class="text-gray-600 fs-6 mb-0">
+        <%= usersView.description %>
+      </p>
+    </div>
+
+    <a
+      href="<%= usersView.refreshUrl %>"
+      class="btn btn-light-primary"
+    >
+      <i class="ki-duotone ki-arrows-circle fs-2 me-1">
+        <span class="path1"></span>
+        <span class="path2"></span>
+      </i>
+      Refresh
+    </a>
+
+  </div>
+  <!--end::Page Header-->
+
+  <!--begin::Role Navigation-->
+  <div class="d-flex flex-wrap gap-3 mb-8">
+
+    <% usersView.navigation.forEach(function (tab) { %>
+
+      <a
+        href="<%= tab.url %>"
+        class="btn <%= tab.active ? 'btn-primary' : 'btn-light' %>"
+        <% if (tab.active) { %>aria-current="page"<% } %>
+      >
+        <%= tab.label %>
+      </a>
+
+    <% }); %>
+
+  </div>
+  <!--end::Role Navigation-->
+
+  <!--begin::Summary Cards-->
+  <div class="row g-5 mb-8">
+
+    <% usersView.summaryCards.forEach(function (card) { %>
+
+      <div class="col-12 col-sm-6 col-xl-3">
+
+        <a
+          href="<%= card.url %>"
+          class="card card-flush h-100 hover-elevate-up text-decoration-none <%= card.active ? 'border border-primary' : '' %>"
+          <% if (card.active) { %>aria-current="page"<% } %>
+        >
+
+          <div class="card-body">
+
+            <div class="d-flex align-items-center justify-content-between gap-3">
+
+              <div>
+
+                <span class="text-gray-600 fw-semibold fs-6 d-block mb-3">
+                  <%= card.label %>
+                </span>
+
+                <div class="fs-2hx fw-bold text-<%= card.color %> mb-2">
+                  <%= card.valueText %>
+                </div>
+
+                <span class="text-gray-500 fs-8">
+                  <%= card.description %>
+                </span>
+
+              </div>
+
+              <span class="symbol symbol-50px flex-shrink-0">
+
+                <span class="symbol-label bg-light-<%= card.color %>">
+
+                  <i class="ki-duotone ki-chart-simple fs-2x text-<%= card.color %>">
+                    <span class="path1"></span>
+                    <span class="path2"></span>
+                    <span class="path3"></span>
+                    <span class="path4"></span>
+                  </i>
+
+                </span>
+
+              </span>
+
+            </div>
+
+          </div>
+
+        </a>
+
+      </div>
+
+    <% }); %>
+
+  </div>
+  <!--end::Summary Cards-->
+
+  <!--begin::Directory Card-->
+  <div class="card card-flush">
+
+    <!--begin::Card Header-->
+    <div class="card-header align-items-center py-5">
+
+      <div class="card-title flex-column align-items-start gap-1">
+
+        <h3 class="fw-bold text-gray-900 mb-0">
+          <%= usersView.heading %> Directory
+        </h3>
+
+        <span class="text-gray-500 fs-7">
+          <%= usersView.resultCountText %>
+        </span>
+
+      </div>
+
+    </div>
+    <!--end::Card Header-->
+
+    <!--begin::Card Body-->
+    <div class="card-body pt-0">
+
+      <!--begin::Filters-->
+      <form
+        action="<%= usersView.filters.action %>"
+        method="<%= usersView.filters.method %>"
+        role="search"
+        class="mb-7"
+      >
+
+        <input
+          type="hidden"
+          name="role"
+          value="<%= usersView.filters.role %>"
+        />
+
+        <div class="row g-4 align-items-end">
+
+          <!--begin::Search-->
+          <div class="col-12 col-lg-5">
+
+            <label
+              for="adminUsersSearch"
+              class="form-label fw-semibold"
+            >
+              Search Users
+            </label>
+
+            <div class="position-relative">
+
+              <i class="ki-duotone ki-magnifier fs-2 position-absolute top-50 translate-middle-y ms-4 text-gray-500">
+                <span class="path1"></span>
+                <span class="path2"></span>
+              </i>
+
+              <input
+                type="search"
+                id="adminUsersSearch"
+                name="<%= usersView.filters.search.name %>"
+                class="form-control form-control-solid ps-12"
+                value="<%= usersView.filters.search.value %>"
+                placeholder="<%= usersView.filters.search.placeholder %>"
+                maxlength="100"
+                autocomplete="off"
+              />
+
+            </div>
+
+          </div>
+          <!--end::Search-->
+
+          <!--begin::Verification Filter-->
+          <div class="col-12 col-sm-6 col-lg-3">
+
+            <label
+              for="adminUsersVerificationFilter"
+              class="form-label fw-semibold"
+            >
+              Verification Status
+            </label>
+
+            <select
+              id="adminUsersVerificationFilter"
+              name="<%= usersView.filters.verification.name %>"
+              class="form-select form-select-solid"
+            >
+
+              <% usersView.filters.verification.options.forEach(function (option) { %>
+
+                <option
+                  value="<%= option.value %>"
+                  <% if (option.selected) { %>selected<% } %>
+                >
+                  <%= option.label %>
+                </option>
+
+              <% }); %>
+
+            </select>
+
+          </div>
+          <!--end::Verification Filter-->
+
+          <!--begin::Account Filter-->
+          <div class="col-12 col-sm-6 col-lg-2">
+
+            <label
+              for="adminUsersAccountFilter"
+              class="form-label fw-semibold"
+            >
+              Account Status
+            </label>
+
+            <select
+              id="adminUsersAccountFilter"
+              name="<%= usersView.filters.account.name %>"
+              class="form-select form-select-solid"
+            >
+
+              <% usersView.filters.account.options.forEach(function (option) { %>
+
+                <option
+                  value="<%= option.value %>"
+                  <% if (option.selected) { %>selected<% } %>
+                >
+                  <%= option.label %>
+                </option>
+
+              <% }); %>
+
+            </select>
+
+          </div>
+          <!--end::Account Filter-->
+
+          <!--begin::Filter Actions-->
+          <div class="col-12 col-lg-2">
+
+            <div class="d-flex gap-2">
+
+              <button
+                type="submit"
+                class="btn btn-primary flex-grow-1"
+              >
+                Apply
+              </button>
+
+              <a
+                href="<%= usersView.filters.clearUrl %>"
+                class="btn btn-light"
+                title="Clear filters"
+                aria-label="Clear filters"
+              >
+                <i class="ki-duotone ki-cross fs-2">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                </i>
+              </a>
+
+            </div>
+
+          </div>
+          <!--end::Filter Actions-->
+
+        </div>
+
+      </form>
+      <!--end::Filters-->
+
+      <!--begin::Verification Guidance-->
+      <div class="notice d-flex bg-light-primary rounded border-primary border border-dashed p-5 mb-7">
+
+        <i class="ki-duotone ki-information-5 fs-2x text-primary me-4">
+          <span class="path1"></span>
+          <span class="path2"></span>
+          <span class="path3"></span>
+        </i>
+
+        <div class="fs-7 text-gray-700">
+          <%= usersView.verificationGuidance %>
+        </div>
+
+      </div>
+      <!--end::Verification Guidance-->
+
+      <!--begin::Directory Table-->
+      <div class="table-responsive">
+
+        <table class="table align-middle table-row-dashed fs-6 gy-5">
+
+          <thead>
+
+            <tr class="text-start text-gray-500 fw-bold fs-7 text-uppercase gs-0">
+
+              <th scope="col" class="min-w-200px">
+                <%= usersView.table.columns[0] %>
+              </th>
+
+              <th scope="col" class="min-w-120px">
+                <%= usersView.table.columns[1] %>
+              </th>
+
+              <th scope="col" class="min-w-140px">
+                <%= usersView.table.columns[2] %>
+              </th>
+
+              <th scope="col" class="min-w-110px">
+                <%= usersView.table.columns[3] %>
+              </th>
+
+              <th scope="col" class="min-w-110px">
+                <%= usersView.table.columns[4] %>
+              </th>
+
+              <th scope="col" class="min-w-110px">
+                <%= usersView.table.columns[5] %>
+              </th>
+
+              <th scope="col" class="min-w-110px">
+                <%= usersView.table.columns[6] %>
+              </th>
+
+              <th scope="col" class="text-end min-w-120px">
+                <%= usersView.table.columns[7] %>
+              </th>
+
+            </tr>
+
+          </thead>
+
+          <tbody class="fw-semibold text-gray-700">
+
+            <% if (usersView.table.empty) { %>
+
+              <tr>
+
+                <td colspan="8" class="text-center py-12">
+
+                  <div class="mb-4">
+
+                    <i class="ki-duotone ki-magnifier fs-4x text-gray-400">
+                      <span class="path1"></span>
+                      <span class="path2"></span>
+                    </i>
+
+                  </div>
+
+                  <h4 class="fw-bold text-gray-700 mb-2">
+                    <%= usersView.table.emptyTitle %>
+                  </h4>
+
+                  <p class="text-gray-500 fs-6 mb-0">
+                    <%= usersView.table.emptyMessage %>
+                  </p>
+
+                </td>
+
+              </tr>
+
+            <% } else { %>
+
+              <% usersView.table.rows.forEach(function (row) { %>
+
+                <tr>
+
+                  <!--begin::User-->
+                  <td>
+
+                    <a
+                      href="<%= row.action.url %>"
+                      class="text-gray-900 text-hover-primary fw-bold fs-6 d-block mb-1"
+                    >
+                      <%= row.name %>
+                    </a>
+
+                    <% if (row.secondaryName) { %>
+
+                      <div class="text-gray-600 fs-7 mb-1">
+                        <%= row.secondaryName %>
+                      </div>
+
+                    <% } %>
+
+                    <div class="text-gray-500 fs-7 text-break">
+                      <%= row.email %>
+                    </div>
+
+                  </td>
+                  <!--end::User-->
+
+                  <!--begin::Profile Type-->
+                  <td>
+
+                    <div class="text-gray-800 fw-semibold">
+                      <%= row.profileType %>
+                    </div>
+
+                    <div class="text-gray-500 fs-8 mt-1">
+                      <%= row.profileDescription %>
+                    </div>
+
+                  </td>
+                  <!--end::Profile Type-->
+
+                  <!--begin::Verification-->
+                  <td>
+
+                    <span class="<%= row.verification.badge.className %>">
+                      <%= row.verification.badge.label %>
+                    </span>
+
+                    <% row.verification.components.forEach(function (component) { %>
+
+                      <div class="text-gray-500 fs-8 mt-2">
+
+                        <span class="me-1">
+                          <%= component.label %>:
+                        </span>
+
+                        <span class="<%= component.badge.className %>">
+                          <%= component.badge.label %>
+                        </span>
+
+                      </div>
+
+                    <% }); %>
+
+                  </td>
+                  <!--end::Verification-->
+
+                  <!--begin::Approval-->
+                  <td>
+
+                    <span class="<%= row.approval.className %>">
+                      <%= row.approval.label %>
+                    </span>
+
+                  </td>
+                  <!--end::Approval-->
+
+                  <!--begin::Account-->
+                  <td>
+
+                    <span class="<%= row.account.badge.className %>">
+                      <%= row.account.badge.label %>
+                    </span>
+
+                    <% if (row.account.profileStatusBadge) { %>
+
+                      <div class="mt-2">
+
+                        <span class="text-gray-500 fs-8 d-block mb-1">
+                          Profile
+                        </span>
+
+                        <span class="<%= row.account.profileStatusBadge.className %>">
+                          <%= row.account.profileStatusBadge.label %>
+                        </span>
+
+                      </div>
+
+                    <% } %>
+
+                  </td>
+                  <!--end::Account-->
+
+                  <!--begin::Onboarding-->
+                  <td>
+
+                    <span class="<%= row.onboarding.className %>">
+                      <%= row.onboarding.label %>
+                    </span>
+
+                  </td>
+                  <!--end::Onboarding-->
+
+                  <!--begin::Joined-->
+                  <td>
+
+                    <span class="text-gray-600 fs-7">
+                      <%= row.joinedAt %>
+                    </span>
+
+                  </td>
+                  <!--end::Joined-->
+
+                  <!--begin::Actions-->
+                  <td class="text-end">
+
+                    <a
+                      href="<%= row.action.url %>"
+                      class="btn btn-sm btn-light-primary"
+                      aria-label="<%= row.action.label %> for <%= row.name %>"
+                    >
+                      <%= row.action.label %>
+                    </a>
+
+                  </td>
+                  <!--end::Actions-->
+
+                </tr>
+
+              <% }); %>
+
+            <% } %>
+
+          </tbody>
+
+        </table>
+
+      </div>
+      <!--end::Directory Table-->
+
+      <!--begin::Pagination-->
+      <div class="d-flex flex-wrap align-items-center justify-content-between gap-4 pt-6 border-top">
+
+        <span class="text-gray-600 fs-7">
+          <%= usersView.pagination.info %>
+        </span>
+
+        <nav
+          class="d-flex align-items-center gap-3"
+          aria-label="User directory pagination"
+        >
+
+          <% if (usersView.pagination.hasPreviousPage) { %>
+
+            <a
+              href="<%= usersView.pagination.previousUrl %>"
+              class="btn btn-sm btn-light-primary"
+              rel="prev"
+            >
+              Previous
+            </a>
+
+          <% } else { %>
+
+            <span class="btn btn-sm btn-light disabled" aria-disabled="true">
+              Previous
+            </span>
+
+          <% } %>
+
+          <span class="text-gray-700 fs-7 fw-semibold">
+            <%= usersView.pagination.label %>
+          </span>
+
+          <% if (usersView.pagination.hasNextPage) { %>
+
+            <a
+              href="<%= usersView.pagination.nextUrl %>"
+              class="btn btn-sm btn-light-primary"
+              rel="next"
+            >
+              Next
+            </a>
+
+          <% } else { %>
+
+            <span class="btn btn-sm btn-light disabled" aria-disabled="true">
+              Next
+            </span>
+
+          <% } %>
+
+        </nav>
+
+      </div>
+      <!--end::Pagination-->
+
+    </div>
+    <!--end::Card Body-->
+
+  </div>
+  <!--end::Directory Card-->
+
+</div>

@@ -8,6 +8,7 @@ const EmailService = require("./emailService");
 
 class AuthService {
   /* ---------- Login an existing user ---------- */
+
   static async loginUser({ email, password }) {
     const normalizedEmail = String(email || "")
       .toLowerCase()
@@ -35,6 +36,23 @@ class AuthService {
 
     if (!passwordMatches) {
       throw new Error("Invalid email or password");
+    }
+
+    /*
+     * Account restrictions are separate from
+     * NIN identity verification, professional
+     * licensing and marketplace approval.
+     *
+     * Suspended, deactivated and banned accounts
+     * must not complete ordinary password login.
+     *
+     * Restricted accounts may still authenticate
+     * where the application's access middleware
+     * permits limited account functionality.
+     */
+
+    if (["suspended", "deactivated", "banned"].includes(user.accountStatus)) {
+      throw new Error("This account is not currently permitted to sign in.");
     }
 
     if (!user.isVerified) {
@@ -65,9 +83,62 @@ class AuthService {
   }
 
   /* ---------- Register a new user ---------- */
-  static async registerUser({ firstName, lastName, email, password, confirmPassword, role }) {
+
+  /*
+   * REGISTRATION AND LEGAL NAME POLICY
+   *
+   * Professional registration requires only
+   * account credentials and the professional role.
+   *
+   * Professionals do not enter their legal
+   * firstName, middleName or lastName during
+   * initial account registration.
+   *
+   * Their legal names must later come from
+   * structured production NIN registry evidence
+   * through the trusted onboarding workflow.
+   *
+   * NIN lookup and acknowledgement are separate
+   * from email verification and account creation.
+   *
+   * A successful NIN lookup establishes that
+   * the submitted NIN exists in the registry.
+   * It does not independently authenticate
+   * the person operating the Loqum account.
+   *
+   * Employer registration still collects the
+   * account holder's first and last names.
+   *
+   * Those names are distinct from the employer's
+   * CAC-registered legal business name, which
+   * is established during employer onboarding.
+   *
+   * Public registration must never be allowed
+   * to create an administrator account.
+   */
+
+  static async registerUser({ firstName, lastName, email, password, confirmPassword, role } = {}) {
     try {
-      if (!firstName || !lastName || !email || !password || !confirmPassword || !role) {
+      const cleanRole = String(role || "")
+        .trim()
+        .toLowerCase();
+
+      // ───────── REGISTRATION ROLE ─────────
+
+      if (!["professional", "employer"].includes(cleanRole)) {
+        throw new Error("Please select a valid account type.");
+      }
+
+      // ───────── ACCOUNT CREDENTIALS ─────────
+
+      if (
+        typeof email !== "string" ||
+        !email.trim() ||
+        typeof password !== "string" ||
+        !password ||
+        typeof confirmPassword !== "string" ||
+        !confirmPassword
+      ) {
         throw new Error("All fields are required");
       }
 
@@ -75,7 +146,68 @@ class AuthService {
         throw new Error("Passwords do not match");
       }
 
-      const normalizedEmail = String(email).toLowerCase().trim();
+      const normalizedEmail = email.toLowerCase().trim();
+
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+        throw new Error("Enter a valid email address.");
+      }
+
+      // ───────── PROFESSIONAL LEGAL NAME PROTECTION ─────────
+
+      /*
+       * Reject submitted professional legal names
+       * rather than storing them temporarily.
+       *
+       * This applies even when a client attempts
+       * to submit the old registration fields.
+       *
+       * The professional registration controller
+       * and frontend must stop collecting names.
+       *
+       * The User model also prevents unverified
+       * professional accounts from retaining
+       * manually entered legal-name fields.
+       */
+
+      if (cleanRole === "professional") {
+        if (String(firstName ?? "").trim() || String(lastName ?? "").trim()) {
+          throw new Error(
+            "Professional registration does not accept manually entered legal names. Your legal name will be obtained through NIN verification during onboarding."
+          );
+        }
+      }
+
+      // ───────── EMPLOYER ACCOUNT-HOLDER NAMES ─────────
+
+      /*
+       * Employer account-holder names remain
+       * required for ordinary registration.
+       *
+       * These fields do not establish the legal
+       * name of the employer's registered business.
+       */
+
+      let cleanFirstName = "";
+      let cleanLastName = "";
+      let cleanDisplayName = "";
+
+      if (cleanRole === "employer") {
+        if (
+          typeof firstName !== "string" ||
+          typeof lastName !== "string" ||
+          !firstName.trim() ||
+          !lastName.trim()
+        ) {
+          throw new Error("All fields are required");
+        }
+
+        cleanFirstName = firstName.trim();
+        cleanLastName = lastName.trim();
+
+        cleanDisplayName = `${cleanFirstName} ${cleanLastName}`;
+      }
+
+      // ───────── EXISTING EMAIL CHECK ─────────
 
       const existingUser = await User.findOne({ email: normalizedEmail });
 
@@ -83,17 +215,42 @@ class AuthService {
         throw new Error("An account with this email already exists. Please log in instead.");
       }
 
-      const cleanFirstName = String(firstName).trim();
-      const cleanLastName = String(lastName).trim();
+      // ───────── CREATE ACCOUNT ─────────
+
+      /*
+       * Professional legal names remain empty.
+       *
+       * legalNameSource stays unverified until
+       * OnboardingService consumes eligible,
+       * acknowledged NIN registry evidence.
+       *
+       * The permanent NIN KYC evidence reference
+       * is assigned within that onboarding
+       * transaction, not during registration.
+       *
+       * Employer account-holder names are stored
+       * as unverified account information.
+       *
+       * No profile approval, licence verification
+       * or marketplace eligibility is granted here.
+       */
 
       const newUser = new User({
         firstName: cleanFirstName,
+        middleName: "",
         lastName: cleanLastName,
-        displayName: `${cleanFirstName} ${cleanLastName}`,
+
+        displayName: cleanDisplayName,
+
+        legalNameSource: "unverified",
+        legalNameEvidence: null,
+
         email: normalizedEmail,
         password,
-        role,
+        role: cleanRole,
+
         authProvider: "local",
+
         isVerified: false,
         isOnboarded: false,
         twoFactorEnabled: true,
@@ -114,6 +271,17 @@ class AuthService {
   }
 
   /* ---------- Send 6-digit OTP to Email ---------- */
+
+  /*
+   * Email OTP verification is separate from
+   * NIN identity and professional licensing.
+   *
+   * OTP values must not be written to logs.
+   *
+   * Retain the existing 60-second resend
+   * restriction and 10-minute OTP validity.
+   */
+
   static async sendOTP(userId) {
     const user = await User.findById(userId).select("+otp +otpExpiry");
 
@@ -129,10 +297,8 @@ class AuthService {
       }
     }
 
-    const otp = crypto.randomInt(100000, 999999).toString();
+    const otp = crypto.randomInt(100000, 1000000).toString();
     const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
-
-    logger.info(`OTP for ${user.email}: ${otp}`);
 
     user.otp = otp;
     user.otpExpiry = otpExpiry;
@@ -141,12 +307,21 @@ class AuthService {
 
     await user.save();
 
+    /*
+     * Deliver the OTP through the configured
+     * email provider.
+     *
+     * Never log the OTP or expose it through
+     * the registration response.
+     */
+
     await EmailService.sendOTP(user.email, otp);
 
     return true;
   }
 
   /* ---------- Verify user's OTP ---------- */
+
   static async verifyOTP(userId, otp) {
     const user = await User.findById(userId).select("+otp +otpExpiry");
 
@@ -173,6 +348,16 @@ class AuthService {
     user.otp = undefined;
     user.otpExpiry = undefined;
     user.otpAttempts = 0;
+
+    /*
+     * isVerified establishes successful
+     * email/account verification only.
+     *
+     * It must never be interpreted as
+     * NIN-holder authentication, PCN licence
+     * verification or marketplace approval.
+     */
+
     user.isVerified = true;
 
     await user.save();
@@ -181,6 +366,7 @@ class AuthService {
   }
 
   /* ---------- Send password reset link ---------- */
+
   static async sendResetLink(email) {
     const normalizedEmail = String(email || "")
       .toLowerCase()
@@ -208,6 +394,7 @@ class AuthService {
   }
 
   /* ---------- Reset password ---------- */
+
   static async resetPassword(token, newPassword, confirmPassword) {
     if (!token) {
       throw new Error("Reset token is missing");

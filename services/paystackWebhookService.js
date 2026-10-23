@@ -588,6 +588,10 @@ class PaystackWebhookService {
       throw new Error("Provider event recording did not return a persisted event ID.");
     }
 
+    if (providerEvent.isVerified !== true) {
+      throw new Error("Persisted Paystack provider event is not verified.");
+    }
+
     if (!processImmediately) {
       return {
         ...recordResult,

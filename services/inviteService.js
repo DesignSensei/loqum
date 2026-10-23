@@ -1,6 +1,7 @@
 // services/inviteService.js
 
 const crypto = require("crypto");
+const mongoose = require("mongoose");
 
 const Invite = require("../models/Invite");
 const EmployerMember = require("../models/EmployerMember");
@@ -90,6 +91,12 @@ class InviteService {
   }
 
   static buildMemberPayload({ userId, businessId, branchId, role }) {
+    /*
+     * The admin role here belongs to EmployerMember.
+     * It is business-wide employer administration,
+     * never the platform-level User.role "admin".
+     */
+
     if (InviteService.isAdminRole(role)) {
       return {
         user: userId,
@@ -112,23 +119,148 @@ class InviteService {
     };
   }
 
-  static async validateExistingUserForInvite({ user, businessId }) {
+  /* ---------- EMPLOYER-ONLY INVITATION ELIGIBILITY ---------- */
+
+  /*
+   * Employer team invitations are exclusively
+   * for accounts with User.role "employer".
+   *
+   * Professionals and platform administrators
+   * cannot accept employer team invitations.
+   *
+   * Existing users must also belong to the
+   * same employer business, if already linked.
+   *
+   * An invitation must not reactivate a
+   * restricted, suspended, deactivated or
+   * banned account.
+   *
+   * Historical memberships are not current
+   * memberships and must remain available
+   * for audit without blocking legitimate
+   * subsequent employer team membership.
+   */
+
+  static async validateExistingUserForInvite({ user, businessId, session = null }) {
     if (!user) return null;
 
     if (user.role !== "employer") {
       throw new Error("This user account cannot accept employer team invites.");
     }
 
-    if (user.employerProfile && String(user.employerProfile) !== String(businessId)) {
-      throw new Error("This user is already linked to another employer business.");
+    if (user.accountStatus !== "active") {
+      throw new Error("This account cannot accept team invites while restricted or inactive.");
     }
 
-    const existingMember = await EmployerMember.findOne({
+    /*
+     * Only a current EmployerMember record
+     * represents an existing team membership.
+     *
+     * Removed historical memberships have
+     * isCurrent: false and must not be returned.
+     *
+     * The current membership is checked before
+     * considering the User.employerProfile link
+     * because that link may still point to a
+     * previously removed employer membership.
+     */
+
+    const memberQuery = EmployerMember.findOne({
       user: user._id,
+      isCurrent: true,
     });
 
-    if (existingMember && String(existingMember.business) !== String(businessId)) {
+    if (session) {
+      memberQuery.session(session);
+    }
+
+    const existingMember = await memberQuery;
+
+    if (existingMember && !InviteService.idsMatch(existingMember.business, businessId)) {
       throw new Error("This user already belongs to another business.");
+    }
+
+    /*
+     * A primary business owner is different
+     * from an invited employer team member.
+     *
+     * Removing an EmployerMember record does
+     * not remove EmployerProfile.user ownership.
+     *
+     * A user who owns another employer business
+     * cannot use a team invitation to silently
+     * transfer or replace that ownership.
+     */
+
+    const ownedBusinessQuery = EmployerProfile.findOne({
+      user: user._id,
+    }).select("_id");
+
+    if (session) {
+      ownedBusinessQuery.session(session);
+    }
+
+    const ownedBusiness = await ownedBusinessQuery;
+
+    if (ownedBusiness && !InviteService.idsMatch(ownedBusiness._id, businessId)) {
+      throw new Error(
+        "This user owns another employer business and cannot join a different business through a team invite."
+      );
+    }
+
+    /*
+     * User.employerProfile may retain the ID
+     * of a former employer after a team member
+     * has been removed.
+     *
+     * A stale link must not permanently prevent
+     * the user from joining a different business.
+     *
+     * However, a mismatched employerProfile
+     * reference must not be ignored without
+     * evidence that the previous membership
+     * was genuinely removed.
+     *
+     * Allow the new invitation only when:
+     *
+     * - The user has no current membership
+     *   in another business;
+     *
+     * - The previous business membership
+     *   exists as a removed historical record;
+     *
+     * - The user is not the primary owner
+     *   of another business.
+     *
+     * Successful invitation acceptance updates
+     * User.employerProfile to the new business
+     * within the existing transaction.
+     *
+     * The previous EmployerMember document
+     * remains untouched for audit purposes.
+     */
+
+    if (user.employerProfile && !InviteService.idsMatch(user.employerProfile, businessId)) {
+      const previousBusinessId = InviteService.getObjectId(user.employerProfile);
+
+      const previousMembershipQuery = EmployerMember.findOne({
+        user: user._id,
+        business: previousBusinessId,
+        accountStatus: "removed",
+        isCurrent: false,
+      }).select("_id");
+
+      if (session) {
+        previousMembershipQuery.session(session);
+      }
+
+      const previousMembership = await previousMembershipQuery;
+
+      if (!previousMembership) {
+        throw new Error(
+          "This user is linked to another employer business without a confirmed removed membership."
+        );
+      }
     }
 
     return existingMember;
@@ -158,10 +290,15 @@ class InviteService {
     return member;
   }
 
-  static async demoteExistingBranchManagers({ businessId, branchId, newManagerUserId }) {
+  static async demoteExistingBranchManagers({
+    businessId,
+    branchId,
+    newManagerUserId,
+    session = null,
+  }) {
     if (!branchId || !newManagerUserId) return;
 
-    const existingManagers = await EmployerMember.find({
+    const query = EmployerMember.find({
       business: businessId,
       user: { $ne: newManagerUserId },
       branches: {
@@ -172,25 +309,36 @@ class InviteService {
       },
     });
 
-    await Promise.all(
-      existingManagers.map(async (member) => {
-        const updatedBranches = InviteService.getMemberBranches(member).map((assignment) => {
-          if (
-            InviteService.idsMatch(assignment.branch, branchId) &&
-            assignment.role === "branch_manager"
-          ) {
-            assignment.role = "branch_staff";
-          }
+    if (session) {
+      query.session(session);
+    }
 
-          return assignment;
-        });
+    const existingManagers = await query;
 
-        member.branches = updatedBranches;
-        member.role = InviteService.deriveMemberRoleFromBranches(updatedBranches);
+    /*
+     * Save sequentially so that all writes can
+     * safely share the same MongoDB transaction
+     * session when invitation acceptance
+     * promotes a new branch manager.
+     */
 
-        await member.save();
-      })
-    );
+    for (const member of existingManagers) {
+      const updatedBranches = InviteService.getMemberBranches(member).map((assignment) => {
+        if (
+          InviteService.idsMatch(assignment.branch, branchId) &&
+          assignment.role === "branch_manager"
+        ) {
+          assignment.role = "branch_staff";
+        }
+
+        return assignment;
+      });
+
+      member.branches = updatedBranches;
+      member.role = InviteService.deriveMemberRoleFromBranches(updatedBranches);
+
+      await member.save(session ? { session } : {});
+    }
   }
 
   //─────────────────────────────── SEND / RESEND INVITE ───────────────────────────────//
@@ -226,6 +374,14 @@ class InviteService {
         throw new Error("Branch not found.");
       }
     }
+
+    /*
+     * Check the recipient's existing account.
+     *
+     * A pharmacist or platform administrator
+     * must never receive an employer team invite
+     * through an existing Loqum account.
+     */
 
     const existingUser = await User.findOne({ email: normalizedEmail });
 
@@ -265,6 +421,15 @@ class InviteService {
       existingPendingBusinessInvite.expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
       existingPendingBusinessInvite.invitedBy = invitedBy;
       existingPendingBusinessInvite.role = role;
+
+      /*
+       * Rotate the token when resending.
+       *
+       * Previously issued links must not
+       * remain usable after a resend.
+       */
+
+      existingPendingBusinessInvite.token = crypto.randomBytes(32).toString("hex");
 
       if (InviteService.isAdminRole(role)) {
         existingPendingBusinessInvite.branch = undefined;
@@ -353,8 +518,32 @@ class InviteService {
 
     InviteService.validateRole(invite.role);
 
-    if (InviteService.requiresBranch(invite.role) && !invite.branch) {
-      throw new Error("This invite is missing a branch assignment.");
+    /*
+     * Every invitation must belong to an
+     * existing employer business.
+     *
+     * Branch-scoped invitations must reference
+     * a branch belonging to that same business.
+     */
+
+    if (!invite.business) {
+      throw new Error("The business associated with this invite no longer exists.");
+    }
+
+    if (InviteService.isAdminRole(invite.role) && invite.branch) {
+      throw new Error("Business-wide administrator invites cannot have a branch assignment.");
+    }
+
+    if (InviteService.requiresBranch(invite.role)) {
+      if (!invite.branch) {
+        throw new Error("This invite is missing a branch assignment.");
+      }
+
+      if (
+        !InviteService.idsMatch(invite.branch.business, InviteService.getObjectId(invite.business))
+      ) {
+        throw new Error("This invite has an invalid business branch assignment.");
+      }
     }
 
     return invite;
@@ -418,9 +607,23 @@ class InviteService {
 
       const existingUser = await User.findOne({
         email: invite.email,
-      })
-        .select("_id")
-        .lean();
+      });
+
+      /*
+       * Reject invitations addressed to an
+       * existing professional or platform admin.
+       *
+       * Do not direct an ineligible account to
+       * log in merely to discover the restriction
+       * at the final acceptance step.
+       */
+
+      if (existingUser) {
+        await InviteService.validateExistingUserForInvite({
+          user: existingUser,
+          businessId: InviteService.getObjectId(invite.business),
+        });
+      }
 
       const existingInviteUser = Boolean(existingUser);
       const inviteBusinessName = InviteService.getBusinessName(invite.business);
@@ -495,6 +698,17 @@ class InviteService {
       const invite = await InviteService.validateInviteToken(token);
       const inviteBusinessName = InviteService.getBusinessName(invite.business);
 
+      const existingUser = await User.findOne({
+        email: invite.email,
+      });
+
+      if (existingUser) {
+        await InviteService.validateExistingUserForInvite({
+          user: existingUser,
+          businessId: InviteService.getObjectId(invite.business),
+        });
+      }
+
       return {
         ...defaultContext,
 
@@ -536,7 +750,14 @@ class InviteService {
       );
     }
 
-    if (!firstName || !lastName || !password || !confirmPassword) {
+    if (
+      typeof firstName !== "string" ||
+      typeof lastName !== "string" ||
+      !firstName.trim() ||
+      !lastName.trim() ||
+      !password ||
+      !confirmPassword
+    ) {
       throw new Error("All fields are required.");
     }
 
@@ -544,13 +765,24 @@ class InviteService {
       throw new Error("Passwords do not match.");
     }
 
-    const cleanFirstName = String(firstName).trim();
-    const cleanLastName = String(lastName).trim();
+    const cleanFirstName = firstName.trim();
+    const cleanLastName = lastName.trim();
+
+    /*
+     * Employer team invitations create only
+     * employer User accounts.
+     *
+     * These names identify the team member.
+     * They are not NIN-derived professional
+     * names or CAC-registered business names.
+     */
 
     const user = new User({
       firstName: cleanFirstName,
       lastName: cleanLastName,
       displayName: `${cleanFirstName} ${cleanLastName}`,
+      legalNameSource: "unverified",
+      legalNameEvidence: null,
       email: InviteService.normalizeEmail(invite.email),
       password,
       role: "employer",
@@ -594,99 +826,208 @@ class InviteService {
     const businessId = InviteService.getObjectId(invite.business);
     const branchId = invite.branch ? InviteService.getObjectId(invite.branch) : null;
 
-    const user = await User.findById(userId);
+    /*
+     * Accepting an invitation updates:
+     *
+     * - The employer team membership;
+     * - Any existing branch manager assignments;
+     * - The invited user's employer profile;
+     * - The invitation acceptance status.
+     *
+     * These updates must succeed or fail together.
+     *
+     * A conditional update claims the pending
+     * invitation within the same transaction,
+     * preventing successful reuse of a token.
+     *
+     * This requires MongoDB transaction support.
+     */
 
-    if (!user) {
-      throw new Error("User not found.");
-    }
+    const session = await mongoose.startSession();
 
-    const inviteEmail = InviteService.normalizeEmail(invite.email);
-    const userEmail = InviteService.normalizeEmail(user.email);
+    let acceptedResult;
 
-    if (inviteEmail !== userEmail) {
-      throw new Error("This invite was sent to a different email address.");
-    }
-
-    if (user.role !== "employer") {
-      throw new Error("This user account cannot accept employer team invites.");
-    }
-
-    if (!user.isVerified) {
-      throw new Error("Please verify your email before accepting this invite.");
-    }
-
-    const existingMember = await InviteService.validateExistingUserForInvite({
-      user,
-      businessId,
-    });
-
-    let member;
-
-    if (existingMember) {
-      if (InviteService.isAdminRole(invite.role)) {
-        existingMember.role = "admin";
-        existingMember.branches = [];
-      } else {
-        if (existingMember.role === "admin") {
-          throw new Error("This user already has business-wide access.");
-        }
-
-        const alreadyAssignedToBranch = InviteService.userIsAssignedToBranch(
-          existingMember,
-          branchId
+    try {
+      await session.withTransaction(async () => {
+        const acceptedInvite = await Invite.findOneAndUpdate(
+          {
+            _id: invite._id,
+            token: InviteService.normalizeToken(token),
+            status: "pending",
+            expiresAt: { $gt: new Date() },
+          },
+          {
+            $set: {
+              status: "accepted",
+              acceptedAt: new Date(),
+            },
+          },
+          {
+            new: true,
+            session,
+          }
         );
 
-        if (alreadyAssignedToBranch) {
-          throw new Error("This user is already assigned to this branch.");
+        if (!acceptedInvite) {
+          throw new Error("This invite is no longer active or has expired.");
         }
 
-        InviteService.addOrReplaceBranchAssignment({
-          member: existingMember,
-          branchId,
-          role: invite.role,
+        const user = await User.findById(userId).session(session);
+
+        if (!user) {
+          throw new Error("User not found.");
+        }
+
+        const inviteEmail = InviteService.normalizeEmail(invite.email);
+        const userEmail = InviteService.normalizeEmail(user.email);
+
+        if (inviteEmail !== userEmail) {
+          throw new Error("This invite was sent to a different email address.");
+        }
+
+        if (user.role !== "employer") {
+          throw new Error("This user account cannot accept employer team invites.");
+        }
+
+        if (user.accountStatus !== "active") {
+          throw new Error("This account cannot accept team invites while restricted or inactive.");
+        }
+
+        if (!user.isVerified) {
+          throw new Error("Please verify your email before accepting this invite.");
+        }
+
+        /*
+         * Recheck the branch assignment inside
+         * the transaction before changing team
+         * membership records.
+         */
+
+        if (InviteService.requiresBranch(invite.role)) {
+          const validBranch = await Branch.findOne({
+            _id: branchId,
+            business: businessId,
+          }).session(session);
+
+          if (!validBranch) {
+            throw new Error("This invite has an invalid business branch assignment.");
+          }
+        }
+
+        /*
+         * Membership validation now ignores
+         * removed historical EmployerMember
+         * records and permits documented
+         * previous-business removal.
+         *
+         * The current membership and any stale
+         * User.employerProfile reference are
+         * checked within this transaction.
+         */
+
+        const existingMember = await InviteService.validateExistingUserForInvite({
+          user,
+          businessId,
+          session,
         });
-      }
 
-      await existingMember.save();
+        let member;
 
-      member = existingMember;
-    } else {
-      const memberPayload = InviteService.buildMemberPayload({
-        userId: user._id,
-        businessId,
-        branchId,
-        role: invite.role,
+        if (existingMember) {
+          if (InviteService.isAdminRole(invite.role)) {
+            existingMember.role = "admin";
+            existingMember.branches = [];
+          } else {
+            if (existingMember.role === "admin") {
+              throw new Error("This user already has business-wide access.");
+            }
+
+            const alreadyAssignedToBranch = InviteService.userIsAssignedToBranch(
+              existingMember,
+              branchId
+            );
+
+            if (alreadyAssignedToBranch) {
+              throw new Error("This user is already assigned to this branch.");
+            }
+
+            InviteService.addOrReplaceBranchAssignment({
+              member: existingMember,
+              branchId,
+              role: invite.role,
+            });
+          }
+
+          await existingMember.save({ session });
+
+          member = existingMember;
+        } else {
+          const memberPayload = InviteService.buildMemberPayload({
+            userId: user._id,
+            businessId,
+            branchId,
+            role: invite.role,
+          });
+
+          member = new EmployerMember(memberPayload);
+
+          await member.save({ session });
+        }
+
+        if (invite.role === "branch_manager") {
+          await InviteService.demoteExistingBranchManagers({
+            businessId,
+            branchId,
+            newManagerUserId: user._id,
+            session,
+          });
+        }
+
+        /*
+         * The platform-level User.role remains
+         * "employer" regardless of the invited
+         * business team role.
+         *
+         * An EmployerMember admin invitation
+         * never creates a platform administrator.
+         *
+         * Updating employerProfile here replaces
+         * a stale link to a previous business
+         * only after the membership checks pass.
+         *
+         * The historical membership itself
+         * remains unchanged.
+         */
+
+        user.role = "employer";
+        user.employerProfile = businessId;
+        user.isOnboarded = true;
+
+        await user.save({ session });
+
+        /*
+         * Keep the populated invitation returned
+         * by validateInviteToken() for callers
+         * that use the linked business or branch.
+         */
+
+        invite.status = acceptedInvite.status;
+        invite.acceptedAt = acceptedInvite.acceptedAt;
+
+        acceptedResult = {
+          user,
+          member,
+          invite,
+          redirectTo: "/employer/dashboard",
+        };
       });
-
-      member = new EmployerMember(memberPayload);
-
-      await member.save();
+    } finally {
+      await session.endSession();
     }
-
-    if (invite.role === "branch_manager") {
-      await InviteService.demoteExistingBranchManagers({
-        businessId,
-        branchId,
-        newManagerUserId: user._id,
-      });
-    }
-
-    user.role = "employer";
-    user.employerProfile = businessId;
-    user.isOnboarded = true;
-
-    await user.save();
-
-    await InviteService.markInviteAccepted(invite);
 
     logger.info(`User ${invite.email} accepted invite after authentication`);
 
-    return {
-      user,
-      member,
-      invite,
-      redirectTo: "/employer/dashboard",
-    };
+    return acceptedResult;
   }
 
   //─────────────────────────────── MANAGE EXISTING INVITES ───────────────────────────────//
@@ -737,10 +1078,35 @@ class InviteService {
       }
     }
 
+    /*
+     * The recipient may have created or changed
+     * a Loqum account since the invitation was
+     * originally issued.
+     *
+     * Recheck employer-only eligibility before
+     * sending a replacement invitation link.
+     */
+
+    const existingUser = await User.findOne({
+      email: InviteService.normalizeEmail(invite.email),
+    });
+
+    await InviteService.validateExistingUserForInvite({
+      user: existingUser,
+      businessId,
+    });
+
     invite.status = "pending";
     invite.expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
     invite.revokedAt = undefined;
     invite.acceptedAt = undefined;
+
+    /*
+     * Issue a new token when resending so the
+     * previous invitation link is invalidated.
+     */
+
+    invite.token = crypto.randomBytes(32).toString("hex");
 
     await invite.save();
 

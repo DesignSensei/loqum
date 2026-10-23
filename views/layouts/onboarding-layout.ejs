@@ -36,6 +36,35 @@
       <div class="d-flex flex-column flex-lg-row flex-column-fluid onboarding-shell">
         <!-- Form pane -->
         <div class="d-flex flex-column flex-lg-row-fluid w-lg-50 order-1 onboarding-form-pane">
+          <!-- ───────────────────── ONBOARDING TOP ACTIONS ───────────────────── -->
+
+          <div
+            class="d-flex align-items-center justify-content-end flex-shrink-0 gap-3 px-5 px-md-10 pt-5"
+            style="z-index: 10"
+          >
+            <!-- Logout -->
+            <form action="/auth/logout" method="POST" class="m-0">
+              <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+              <button
+                type="submit"
+                class="btn btn-sm btn-light-danger d-inline-flex align-items-center gap-2"
+                aria-label="Log out of Loqum"
+              >
+                <i class="ki-duotone ki-exit-right fs-3">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                </i>
+
+                <span>Logout</span>
+              </button>
+            </form>
+
+            <!-- Theme switcher -->
+            <%- include("../partials/theme-mode-switcher") %>
+          </div>
+
+          <!-- Onboarding form -->
           <div class="onboarding-form-wrap mx-auto w-100"><%- body %></div>
         </div>
 

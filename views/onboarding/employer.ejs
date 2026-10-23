@@ -33,9 +33,10 @@
 
   <!-- TYPE CARDS
        Only Pharmacy is active now.
-       When scaling: uncomment the other cards, change pharmacy col-12 back to col-12 col-md-6,
-       and add h-100 back to all labels.
+       When scaling: uncomment the other cards, change pharmacy col-12
+       back to col-12 col-md-6, and add h-100 to all labels.
   -->
+
   <div class="fv-row mb-8">
     <div class="row g-4" data-kt-buttons="true">
       <div class="col-12">
@@ -54,6 +55,7 @@
           />
 
           <i class="ki-duotone ki-address-book fs-2x me-4"></i>
+
           <span class="d-flex flex-column text-start">
             <span class="fw-bold fs-6">Pharmacy</span>
             <span class="fs-7 text-muted">Retail or community pharmacy</span>
@@ -75,7 +77,9 @@
             data-registration-field="field-clinic"
             data-validator-message="HEFAMAA / State Ministry of Health registration number is required."
           />
+
           <i class="ki-duotone ki-clinic fs-2x me-4"></i>
+
           <span class="d-flex flex-column text-start">
             <span class="fw-bold fs-6">Clinic</span>
             <span class="fs-7 text-muted">Outpatient clinic</span>
@@ -96,7 +100,9 @@
             data-registration-field="field-hospital"
             data-validator-message="HEFAMAA / State Ministry of Health registration number is required."
           />
+
           <i class="ki-duotone ki-hospital fs-2x me-4"></i>
+
           <span class="d-flex flex-column text-start">
             <span class="fw-bold fs-6">Hospital</span>
             <span class="fs-7 text-muted">Inpatient or specialist hospital</span>
@@ -117,7 +123,9 @@
             data-registration-field="field-laboratory"
             data-validator-message="MLSCN registration number is required."
           />
+
           <i class="ki-duotone ki-flask fs-2x me-4"></i>
+
           <span class="d-flex flex-column text-start">
             <span class="fw-bold fs-6">Laboratory</span>
             <span class="fs-7 text-muted">Diagnostic or research lab</span>
@@ -129,56 +137,153 @@
   </div>
 
   <!-- Business Name -->
+
   <div class="fv-row mb-8">
-    <label class="form-label required">Business Name</label>
+    <label for="businessNameInput" class="form-label required"> Business Name </label>
+
     <input
       type="text"
+      id="businessNameInput"
       name="businessName"
       class="form-control bg-transparent"
       placeholder="e.g. Your Pharmacy Name"
-      autocomplete="off"
+      autocomplete="organization"
     />
+
     <div
       class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
     ></div>
   </div>
 
-  <!-- CAC Registration Number -->
-  <div class="fv-row mb-8">
-    <label class="form-label required">
+  <!-- CAC REGISTRATION VERIFICATION
+       CAC confirms the registered business entity.
+
+       Verification requires explicit button activation.
+       No paid lookup occurs while typing.
+
+       Business name and registration number are
+       sent to the dedicated CAC verification endpoint.
+
+       A successful CAC result does not automatically
+       approve the employer or verify PCN premises.
+  -->
+
+  <div class="fv-row mb-8" id="cacVerificationSection">
+    <label for="cacRegistrationNumberInput" class="form-label required">
       CAC Registration Number
+
       <span class="text-muted fs-7">
         <i
           class="ki-outline ki-information-2 fs-6"
           data-bs-toggle="tooltip"
-          data-bs-original-title="Your Corporate Affairs Commission business registration number."
+          data-bs-original-title="Your Corporate Affairs Commission registration number."
         ></i>
       </span>
     </label>
 
-    <input
-      type="text"
-      name="cacRegistrationNumber"
-      class="form-control bg-transparent"
-      placeholder="e.g. RC1234567 or BN1234567"
-      autocomplete="off"
-    />
+    <div class="row g-3 align-items-start">
+      <div class="col-12 col-md-8">
+        <input
+          type="text"
+          id="cacRegistrationNumberInput"
+          name="cacRegistrationNumber"
+          class="form-control bg-transparent"
+          placeholder="e.g. RC1234567 or BN1234567"
+          autocomplete="off"
+          spellcheck="false"
+          maxlength="14"
+          aria-describedby="cacVerificationHelp"
+        />
+      </div>
+
+      <div class="col-12 col-md-4">
+        <button
+          type="button"
+          id="kt_onboarding_cac_verify"
+          class="btn btn-light-primary w-100"
+          data-verify-url="/onboarding/employer/verify-cac"
+        >
+          <span class="indicator-label"> Verify CAC </span>
+
+          <span class="indicator-progress">
+            Verifying...
+
+            <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+          </span>
+        </button>
+      </div>
+    </div>
 
     <div
       class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
     ></div>
+
+    <div class="form-text mt-2" id="cacVerificationHelp">
+      Enter your registered business name above and your CAC number here, then select Verify CAC.
+      Instant lookup availability depends on the registration type and configured provider.
+    </div>
+
+    <!--
+      Verification result.
+
+      JavaScript will update:
+      - Alert styling;
+      - Verification message;
+      - Registered business name;
+      - Whether a result is provisional.
+
+      Provider values must be written using textContent,
+      never inserted as raw HTML.
+    -->
+
+    <div
+      id="cacVerificationResult"
+      class="alert d-none mt-4 mb-0"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      <div class="d-flex align-items-start">
+        <i
+          id="cacVerificationIcon"
+          class="ki-outline ki-information-2 fs-3 me-3"
+          aria-hidden="true"
+        ></i>
+
+        <div class="flex-grow-1">
+          <div id="cacVerificationMessage" class="fw-semibold"></div>
+
+          <div id="cacRegisteredBusinessNameRow" class="mt-2 d-none">
+            <div class="text-muted fs-7 mb-1">Registered Business Name</div>
+
+            <div id="cacRegisteredBusinessName" class="fw-bold"></div>
+          </div>
+
+          <div id="cacVerificationAdditionalNote" class="fs-7 mt-2 d-none"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="text-muted fs-7 mt-3">
+      CAC verification confirms business registration details. Your PCN premises registration and
+      final employer approval are assessed separately.
+    </div>
   </div>
 
   <!-- FACILITY / REGULATORY REGISTRATION NUMBER
        Only Pharmacy is active now.
+
        CAC confirms the business entity.
        PCN confirms the pharmacy premises/facility registration.
   -->
+
   <div class="fv-row mb-8">
     <!-- Pharmacy: PCN -->
+
     <div id="field-pharmacy" class="registration-field">
       <label class="form-label required">
         PCN Premises Registration Number
+
         <span class="text-muted fs-7">
           <i
             class="ki-outline ki-information-2 fs-6"
@@ -288,9 +393,11 @@
   </div>
 
   <!-- State & LGA -->
+
   <div class="row gx-3 gy-8 mb-8">
     <div class="col-md-6">
-      <label class="form-label required">State</label>
+      <label class="form-label required"> State </label>
+
       <select
         id="stateSelect"
         name="state"
@@ -301,12 +408,15 @@
         <option></option>
         <option value="">Select State</option>
       </select>
+
       <div
         class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
       ></div>
     </div>
+
     <div class="col-md-6">
-      <label class="form-label required">LGA</label>
+      <label class="form-label required"> LGA </label>
+
       <select
         id="lgaSelect"
         name="lga"
@@ -317,13 +427,15 @@
       >
         <option value="">Select LGA</option>
       </select>
+
       <div class="fv-plugins-message-container invalid-feedback"></div>
     </div>
   </div>
 
   <!-- Location Address -->
+
   <div class="fv-row mb-8">
-    <label class="form-label required">Location Address</label>
+    <label class="form-label required"> Location Address </label>
 
     <input
       type="text"
@@ -335,7 +447,9 @@
     />
 
     <input type="hidden" id="latitudeInput" name="latitude" />
+
     <input type="hidden" id="longitudeInput" name="longitude" />
+
     <input type="hidden" id="googlePlaceIdInput" name="googlePlaceId" />
 
     <div
@@ -344,8 +458,10 @@
   </div>
 
   <!-- Business Email -->
+
   <div class="fv-row mb-8">
-    <label class="form-label required">Business Email</label>
+    <label class="form-label required"> Business Email </label>
+
     <input
       type="email"
       name="businessEmail"
@@ -353,14 +469,17 @@
       placeholder="e.g. pharmacy@example.com"
       autocomplete="off"
     />
+
     <div
       class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
     ></div>
   </div>
 
   <!-- Business Phone -->
+
   <div class="fv-row mb-8">
-    <label class="form-label required">Business Phone Number</label>
+    <label class="form-label required"> Business Phone Number </label>
+
     <div class="row g-3">
       <div class="col-4">
         <select
@@ -374,6 +493,7 @@
           <option value="+234" selected>🇳🇬 +234</option>
         </select>
       </div>
+
       <div class="col-8">
         <input
           type="tel"
@@ -382,6 +502,7 @@
           placeholder="08012345678"
           autocomplete="off"
         />
+
         <div
           class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
         ></div>
@@ -390,9 +511,11 @@
   </div>
 
   <!-- Contact Person -->
+
   <div class="row g-9 mb-8">
     <div class="col-md-6">
-      <label class="form-label required">Contact First Name</label>
+      <label class="form-label required"> Contact First Name </label>
+
       <input
         type="text"
         name="contactFirstName"
@@ -400,12 +523,15 @@
         placeholder="John"
         autocomplete="off"
       />
+
       <div
         class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
       ></div>
     </div>
+
     <div class="col-md-6">
-      <label class="form-label required">Contact Last Name</label>
+      <label class="form-label required"> Contact Last Name </label>
+
       <input
         type="text"
         name="contactLastName"
@@ -413,6 +539,7 @@
         placeholder="Doe"
         autocomplete="off"
       />
+
       <div
         class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
       ></div>
@@ -420,8 +547,9 @@
   </div>
 
   <!-- Contact Role -->
+
   <div class="fv-row mb-8">
-    <label class="form-label required">Contact Role</label>
+    <label class="form-label required"> Contact Role </label>
 
     <select
       name="contactRole"
@@ -447,8 +575,10 @@
   </div>
 
   <!-- Contact Phone -->
+
   <div class="fv-row mb-8">
-    <label class="form-label required">Contact Phone Number</label>
+    <label class="form-label required"> Contact Phone Number </label>
+
     <div class="row g-3">
       <div class="col-4">
         <select
@@ -462,6 +592,7 @@
           <option value="+234" selected>🇳🇬 +234</option>
         </select>
       </div>
+
       <div class="col-8">
         <input
           type="tel"
@@ -470,6 +601,7 @@
           placeholder="08012345678"
           autocomplete="off"
         />
+
         <div
           class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
         ></div>
@@ -478,11 +610,14 @@
   </div>
 
   <!-- Submit -->
+
   <div class="d-grid mb-10">
     <button type="submit" id="kt_onboarding_submit" class="btn btn-primary">
-      <span class="indicator-label">Complete Setup</span>
+      <span class="indicator-label"> Complete Setup </span>
+
       <span class="indicator-progress">
         Please wait...
+
         <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
       </span>
     </button>

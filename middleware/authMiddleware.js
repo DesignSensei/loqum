@@ -7,32 +7,76 @@ const {
   userHasRole,
 } = require("../utils/routeHelper");
 
-/* ---------- Check if user is authenticated ---------- */
+function hasAuthenticatedUser(req) {
+  return typeof req.isAuthenticated === "function" && req.isAuthenticated() && Boolean(req.user);
+}
+
+function expectsJSON(req) {
+  const accept = req.get("Accept") || "";
+
+  return (
+    Boolean(req.xhr) ||
+    accept.includes("application/json") ||
+    req.is("application/json") === "application/json"
+  );
+}
+
+function redirectOrError(req, res, { redirectUrl, statusCode, message }) {
+  if (expectsJSON(req)) {
+    return res.status(statusCode).json({
+      success: false,
+      message,
+      redirectUrl,
+    });
+  }
+
+  return res.redirect(redirectUrl);
+}
+
+function requireLogin(req, res) {
+  return redirectOrError(req, res, {
+    redirectUrl: "/login",
+    statusCode: 401,
+    message: "Session expired. Please log in again.",
+  });
+}
+
+// ───────────────────── AUTHENTICATION ─────────────────────
+
 exports.isAuthenticated = (req, res, next) => {
-  if (req.isAuthenticated && req.isAuthenticated() && req.user) {
+  if (hasAuthenticatedUser(req)) {
     return next();
   }
 
-  return res.redirect("/login");
+  return requireLogin(req, res);
 };
 
-/* ---------- Check if user is already logged in (for guest-only pages) ---------- */
+// ───────────────────── GUEST ACCESS ─────────────────────
+
 exports.isGuest = (req, res, next) => {
-  if (!req.isAuthenticated || !req.isAuthenticated() || !req.user) {
+  if (!hasAuthenticatedUser(req)) {
     return next();
   }
 
   return res.redirect(getPostAuthRedirect(req.user));
 };
 
-/* ---------- Check if user has a specific role ---------- */
+// ───────────────────── ROLE AUTHORIZATION ─────────────────────
+
 exports.hasRole = (...roles) => {
   return (req, res, next) => {
-    if (!req.isAuthenticated || !req.isAuthenticated() || !req.user) {
-      return res.redirect("/login");
+    if (!hasAuthenticatedUser(req)) {
+      return requireLogin(req, res);
     }
 
     if (!userHasRole(req.user.role, roles)) {
+      if (expectsJSON(req)) {
+        return res.status(403).json({
+          success: false,
+          message: "You do not have permission to access this resource.",
+        });
+      }
+
       return res.status(403).render("auth/not-found", {
         layout: "layouts/auth-layout-no-index",
         title: "Forbidden",
@@ -43,75 +87,97 @@ exports.hasRole = (...roles) => {
   };
 };
 
-/* ---------- Check if user has completed required two-factor setup ---------- */
+// ───────────────────── TWO-FACTOR SETUP ─────────────────────
+
 exports.hasTwoFactor = (req, res, next) => {
-  if (!req.isAuthenticated || !req.isAuthenticated() || !req.user) {
-    return res.redirect("/login");
+  if (!hasAuthenticatedUser(req)) {
+    return requireLogin(req, res);
   }
 
   if (req.user.twoFactorEnabled) {
     return next();
   }
 
-  return res.redirect("/two-factor");
+  return redirectOrError(req, res, {
+    redirectUrl: "/two-factor",
+    statusCode: 403,
+    message: "Two-factor authentication setup is required.",
+  });
 };
 
-/* ---------- Check if user is verified ---------- */
+// ───────────────────── ACCOUNT VERIFICATION ─────────────────────
+
 exports.isVerified = (req, res, next) => {
-  if (!req.isAuthenticated || !req.isAuthenticated() || !req.user) {
-    return res.redirect("/login");
+  if (!hasAuthenticatedUser(req)) {
+    return requireLogin(req, res);
   }
 
   if (!req.user.isVerified) {
-    return res.redirect("/two-factor");
+    return redirectOrError(req, res, {
+      redirectUrl: "/two-factor",
+      statusCode: 403,
+      message: "Account verification is required.",
+    });
   }
 
   return next();
 };
 
-/* ---------- Check if user has a pending OTP session ---------- */
+// ───────────────────── PENDING OTP AUTHENTICATION ─────────────────────
+
 exports.hasPendingAuth = (req, res, next) => {
-  if (req.session.otpContext?.userId && req.session.otpContext?.email) {
+  if (req.session?.otpContext?.userId && req.session.otpContext.email) {
     return next();
   }
 
-  if (req.isAuthenticated && req.isAuthenticated() && req.user) {
+  if (hasAuthenticatedUser(req)) {
     return res.redirect(getPostAuthRedirect(req.user));
   }
 
-  return res.redirect("/login");
+  return requireLogin(req, res);
 };
 
-/* ---------- Check if user has NOT completed onboarding ---------- */
+// ───────────────────── INCOMPLETE ONBOARDING ─────────────────────
+
 exports.isNotOnboarded = (req, res, next) => {
-  if (!req.isAuthenticated || !req.isAuthenticated() || !req.user) {
-    return res.redirect("/login");
+  if (!hasAuthenticatedUser(req)) {
+    return requireLogin(req, res);
   }
 
   if (!req.user.isOnboarded) {
     return next();
   }
 
-  return res.redirect(getHomeRoute(req.user.role));
+  return redirectOrError(req, res, {
+    redirectUrl: getHomeRoute(req.user.role),
+    statusCode: 409,
+    message: "Onboarding has already been completed.",
+  });
 };
 
-/* ---------- Check if user HAS completed onboarding ---------- */
+// ───────────────────── COMPLETED ONBOARDING ─────────────────────
+
 exports.isOnboarded = (req, res, next) => {
-  if (!req.isAuthenticated || !req.isAuthenticated() || !req.user) {
-    return res.redirect("/login");
+  if (!hasAuthenticatedUser(req)) {
+    return requireLogin(req, res);
   }
 
   if (req.user.isOnboarded) {
     return next();
   }
 
-  return res.redirect(getOnboardingRoute(req.user.role));
+  return redirectOrError(req, res, {
+    redirectUrl: getOnboardingRoute(req.user.role),
+    statusCode: 403,
+    message: "Please complete onboarding before continuing.",
+  });
 };
 
-/* ---------- Check if user account is allowed to access the platform ---------- */
+// ───────────────────── ACCOUNT ACCESS ─────────────────────
+
 exports.isAccountAllowed = (req, res, next) => {
-  if (!req.isAuthenticated || !req.isAuthenticated() || !req.user) {
-    return res.redirect("/login");
+  if (!hasAuthenticatedUser(req)) {
+    return requireLogin(req, res);
   }
 
   const accountStatus = req.user.accountStatus || "active";
@@ -122,28 +188,41 @@ exports.isAccountAllowed = (req, res, next) => {
       message:
         "Your account has been suspended. Please contact support if you believe this is a mistake.",
     },
+
     restricted: {
       title: "Account Restricted",
       message: "Your account is currently restricted. Some platform features are unavailable.",
     },
+
     deactivated: {
       title: "Account Deactivated",
       message: "This account has been deactivated. Please contact support for assistance.",
     },
+
     banned: {
       title: "Account Unavailable",
       message: "This account can no longer access the platform.",
     },
   };
 
-  if (blockedStatuses[accountStatus]) {
-    return res.status(403).render("auth/account-restricted", {
-      layout: "layouts/auth-layout-no-index",
-      title: blockedStatuses[accountStatus].title,
-      message: blockedStatuses[accountStatus].message,
+  const restriction = blockedStatuses[accountStatus];
+
+  if (!restriction) {
+    return next();
+  }
+
+  if (expectsJSON(req)) {
+    return res.status(403).json({
+      success: false,
+      message: restriction.message,
       accountStatus,
     });
   }
 
-  return next();
+  return res.status(403).render("auth/account-restricted", {
+    layout: "layouts/auth-layout-no-index",
+    title: restriction.title,
+    message: restriction.message,
+    accountStatus,
+  });
 };

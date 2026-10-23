@@ -48,6 +48,11 @@
           class="d-flex flex-column flex-lg-row-fluid w-lg-50 p-10 order-2 order-lg-1 justify-content-center"
           style="flex-grow: 1"
         >
+          <!-- Theme switcher: top-right of authentication pane -->
+          <div class="position-absolute top-0 end-0 m-4 m-md-7" style="z-index: 10">
+            <%- include("../partials/theme-mode-switcher") %>
+          </div>
+
           <!--begin::Form-->
 
           <%- body %>

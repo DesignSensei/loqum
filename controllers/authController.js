@@ -189,6 +189,30 @@ exports.postSignup = async (req, res) => {
   try {
     const inviteToken = getInviteTokenFromRequest(req);
 
+    if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+      throw new Error("Missing required fields");
+    }
+
+    // ───────────────────── INVITATION REGISTRATION ─────────────────────
+
+    /*
+     * Employer team-member invitations follow
+     * their existing separate registration flow.
+     *
+     * The invite service establishes the invitation
+     * role and permitted business membership.
+     *
+     * Do not replace invitation registration with
+     * ordinary professional or employer onboarding.
+     *
+     * The first and last names collected here
+     * belong to the invited account holder.
+     *
+     * Invitation account creation must not be used
+     * to establish a professional's NIN legal name
+     * or an employer's CAC registered business name.
+     */
+
     if (inviteToken) {
       const { firstName, lastName, password, confirmPassword } = req.body;
 
@@ -218,19 +242,103 @@ exports.postSignup = async (req, res) => {
       });
     }
 
+    // ───────────────────── ORDINARY ACCOUNT REGISTRATION ─────────────────────
+
+    /*
+     * Public registration supports only
+     * professional and employer accounts.
+     *
+     * Administrator registration is not available
+     * through the public signup form.
+     *
+     * AuthService.registerUser independently
+     * enforces the allowed account roles.
+     */
+
+    const { firstName, middleName, lastName, email, password, confirmPassword, role } = req.body;
+
+    const cleanRole = String(role || "")
+      .trim()
+      .toLowerCase();
+
+    if (!["professional", "employer"].includes(cleanRole)) {
+      throw new Error("Please select a valid account type.");
+    }
+
+    if (!email || !password || !confirmPassword) {
+      throw new Error("Missing required fields");
+    }
+
+    // ───────────────────── PROFESSIONAL REGISTRATION ─────────────────────
+
+    /*
+     * Professionals do not manually provide
+     * legal first, middle or last names during
+     * initial account registration.
+     *
+     * The professional account is created
+     * without legal names.
+     *
+     * The names are populated later using
+     * structured, acknowledged NIN registry
+     * evidence during professional onboarding.
+     *
+     * This controller must not infer names
+     * from displayName or accept names supplied
+     * by an older or modified signup form.
+     *
+     * NIN registry name population does not
+     * by itself establish NIN-holder authentication
+     * or final professional approval.
+     */
+
+    if (cleanRole === "professional") {
+      const submittedLegalName = [firstName, middleName, lastName].some(
+        (value) => String(value ?? "").trim() !== ""
+      );
+
+      if (submittedLegalName) {
+        throw new Error(
+          "Professional registration does not accept manually entered legal names. Your legal name will be obtained through NIN verification during onboarding."
+        );
+      }
+    }
+
+    // ───────────────────── EMPLOYER REGISTRATION ─────────────────────
+
+    /*
+     * Employers still provide their account
+     * holder's first and last names.
+     *
+     * These are account contact details,
+     * not the registered legal business name.
+     *
+     * The legal business name is obtained
+     * separately from trusted CAC evidence
+     * during employer onboarding.
+     */
+
     if (
-      !req.body ||
-      !req.body.firstName ||
-      !req.body.lastName ||
-      !req.body.email ||
-      !req.body.password ||
-      !req.body.confirmPassword ||
-      !req.body.role
+      cleanRole === "employer" &&
+      (typeof firstName !== "string" ||
+        !firstName.trim() ||
+        typeof lastName !== "string" ||
+        !lastName.trim())
     ) {
       throw new Error("Missing required fields");
     }
 
-    const { firstName, lastName, email, password, confirmPassword, role } = req.body;
+    // ───────────────────── CREATE USER ACCOUNT ─────────────────────
+
+    /*
+     * AuthService owns account creation,
+     * password processing, email uniqueness,
+     * role restrictions and legal-name policy.
+     *
+     * Do not pass NIN, CAC, verification status
+     * or administrative approval information
+     * through the registration payload.
+     */
 
     const newUser = await AuthService.registerUser({
       firstName,
@@ -238,8 +346,18 @@ exports.postSignup = async (req, res) => {
       email,
       password,
       confirmPassword,
-      role,
+      role: cleanRole,
     });
+
+    // ───────────────────── EMAIL VERIFICATION ─────────────────────
+
+    /*
+     * Email OTP verification is independent
+     * of NIN, CAC, PCN and marketplace approval.
+     *
+     * Professional NIN lookup occurs later
+     * in the authenticated onboarding flow.
+     */
 
     await AuthService.sendOTP(newUser._id);
 
@@ -288,6 +406,23 @@ exports.postVerifyOTP = async (req, res, next) => {
     }
 
     let user = await AuthService.verifyOTP(otpContext.userId, otp);
+
+    /*
+     * Account restrictions remain independent
+     * of successful OTP or email verification.
+     *
+     * Do not establish an authenticated session
+     * for an account that became suspended,
+     * deactivated or banned while its OTP
+     * verification was pending.
+     */
+
+    if (["suspended", "deactivated", "banned"].includes(user.accountStatus)) {
+      return res.status(403).json({
+        success: false,
+        message: "This account is not currently permitted to sign in.",
+      });
+    }
 
     let redirectUrl = getPostAuthRedirect(user);
     let message =

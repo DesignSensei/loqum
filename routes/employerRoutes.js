@@ -1,7 +1,6 @@
 // routes/employerRoutes.js
 
 const express = require("express");
-
 const router = express.Router();
 
 const {
@@ -22,6 +21,7 @@ const {
 } = require("../middleware/employerMiddleware");
 
 const employerController = require("../controllers/employerController");
+const employerVerificationController = require("../controllers/employerVerificationController");
 const branchController = require("../controllers/branchController");
 const inviteController = require("../controllers/inviteController");
 const teamMemberController = require("../controllers/teamMemberController");
@@ -38,29 +38,35 @@ const employerShiftAttendanceController = require("../controllers/employerShiftA
 const employerShiftClaimController = require("../controllers/employerShiftClaimController");
 const employerShiftOvertimeController = require("../controllers/employerShiftOvertimeController");
 
-/* ───────────────────── ROUTE PROTECTION ───────────────────── */
+// ───────────────────── AUTHENTICATION ─────────────────────
 
-router.use(
-  isAuthenticated,
-  isAccountAllowed,
-  isVerified,
-  hasRole("employer"),
-  isOnboarded,
-  attachEmployerProfile,
-  attachEmployerContext
+router.use(isAuthenticated, isAccountAllowed, isVerified, hasRole("employer"));
+
+// ───────────────────── EMPLOYER VERIFICATION ─────────────────────
+
+// Verification is accessible before onboarding is complete.
+// The controller independently checks employer profile ownership.
+
+router.get(
+  "/verification/:employerProfileId",
+  employerVerificationController.getVerificationStatus
 );
 
-/* ───────────────────── DASHBOARD ───────────────────── */
+router.post("/verification/:employerProfileId/cac", employerVerificationController.verifyCAC);
+
+// ───────────────────── EMPLOYER BUSINESS CONTEXT ─────────────────────
+
+router.use(isOnboarded, attachEmployerProfile, attachEmployerContext);
+
+// ───────────────────── DASHBOARD ─────────────────────
 
 router.get("/dashboard", employerController.getDashboard);
 
-/* ───────────────────── CASES ───────────────────── */
-
-// Read access is scoped by employer context; mutation authority remains service-owned.
+// ───────────────────── CASES ─────────────────────
 
 router.get("/cases", employerShiftClaimController.getCases);
 
-/* ───────────────────── BUSINESS PROFILE ───────────────────── */
+// ───────────────────── BUSINESS PROFILE ─────────────────────
 
 router.get("/business-profile", employerController.getBusinessProfile);
 
@@ -69,25 +75,20 @@ router.post(
   employerController.postUpdateBusinessDetails
 );
 
-/* ───────────────────── BRANCHES ───────────────────── */
+// ───────────────────── BRANCHES ─────────────────────
 
 router.get("/branches", branchController.getBranches);
-
 router.get("/branches/new", branchController.getNewBranch);
-
 router.get("/branches/:branchId/edit", branchController.getEditBranch);
-
 router.get("/branches/:branchId/members", branchController.getBranchMembers);
 
 router.post("/branches", branchController.postNewBranch);
-
 router.post("/branches/:branchId/edit", branchController.postEditBranch);
-
 router.post("/branches/:branchId/update", branchController.postEditBranch);
 
 router.post("/business-profile/branches/update", branchController.postEditBranch);
 
-/* ───────────────────── TEAM MEMBERS ───────────────────── */
+// ───────────────────── TEAM MEMBERS ─────────────────────
 
 router.get("/business-profile/team-members/:memberId", teamMemberController.getTeamMember);
 
@@ -101,10 +102,9 @@ router.post(
   teamMemberController.postRemoveTeamMember
 );
 
-/* ───────────────────── INVITES ───────────────────── */
+// ───────────────────── INVITES ─────────────────────
 
 router.get("/invites", inviteController.getInvites);
-
 router.post("/invites", inviteController.postSendInvite);
 
 router.post("/invites/:inviteId/revoke", inviteController.postRevokeInvite);
@@ -119,15 +119,10 @@ router.post("/business-profile/invites/:inviteId/revoke", inviteController.postR
 
 router.post("/business-profile/invites/revoke", inviteController.postRevokeInvite);
 
-/* ───────────────────── PERMANENT JOB PAGES ───────────────────── */
+// ───────────────────── PERMANENT JOB PAGES ─────────────────────
 
 router.get("/jobs", employerJobController.getJobs);
-
-// Keep the Create Job page before the parameterized Job details route.
-
 router.get("/jobs/new", employerJobController.getCreateJob);
-
-// Keep the focused-applications route before /jobs/:jobId.
 
 router.get("/jobs/:jobId/applications", employerJobApplicationController.getApplications);
 
@@ -139,7 +134,7 @@ router.post("/jobs/:jobId/publish/confirm", employerJobController.confirmPublica
 
 router.get("/jobs/:jobId", employerJobController.getJob);
 
-/* ───────────────────── PERMANENT JOB MASTER COMMANDS ───────────────────── */
+// ───────────────────── PERMANENT JOB COMMANDS ─────────────────────
 
 router.post("/jobs", employerJobController.createDraft);
 
@@ -149,14 +144,9 @@ router.post("/jobs/:jobId/archive", employerJobController.archiveJob);
 
 router.post("/jobs/:jobId/delete", employerJobController.deleteDraftJob);
 
-/* ───────────────────── JOB PUBLICATION COMMANDS ───────────────────── */
+// ───────────────────── JOB PUBLICATION ─────────────────────
 
-/**
- * Publish and renew resolve commercial publication authority inside
- * JobPublicationEntitlementService through the controller.
- *
- * The client must never supply or construct an entitlement grant.
- */
+// Publication eligibility and entitlement remain service-owned.
 
 router.post("/jobs/:jobId/publish", employerJobController.publishJob);
 
@@ -175,13 +165,13 @@ router.post("/job-publications/:publicationId/end", employerJobController.endPub
 
 router.post("/jobs/:jobId/close-recruitment", employerJobController.closeRecruitment);
 
-/* ───────────────────── JOB APPLICATION PAGES ───────────────────── */
+// ───────────────────── JOB APPLICATION PAGES ─────────────────────
 
 router.get("/job-applications", employerJobApplicationController.getApplications);
 
 router.get("/job-applications/:applicationId", employerJobApplicationController.getApplication);
 
-/* ───────────────────── JOB APPLICATION COMMANDS ───────────────────── */
+// ───────────────────── JOB APPLICATION COMMANDS ─────────────────────
 
 router.post(
   "/job-applications/:applicationId/under-review",
@@ -208,23 +198,20 @@ router.post(
   employerJobApplicationController.rejectApplication
 );
 
-/**
- * Hiring must use the publication finalization flow in the controller/service.
- * Never wire this route to a bare JobApplicationService.hireApplication() call.
- */
+// Hiring must use the publication finalization workflow.
 
 router.post(
   "/job-applications/:applicationId/hire",
   employerJobApplicationController.hireApplication
 );
 
-/* ───────────────────── JOB INTERVIEW PAGES ───────────────────── */
+// ───────────────────── JOB INTERVIEW PAGES ─────────────────────
 
 router.get("/job-appointments", employerJobAppointmentController.getAppointments);
 
 router.get("/job-appointments/:appointmentId", employerJobAppointmentController.getAppointment);
 
-/* ───────────────────── JOB INTERVIEW COMMANDS ───────────────────── */
+// ───────────────────── JOB INTERVIEW COMMANDS ─────────────────────
 
 router.post(
   "/job-applications/:applicationId/interviews",
@@ -251,11 +238,9 @@ router.post(
   employerJobAppointmentController.recordNoShow
 );
 
-/* ───────────────────── SHIFT PAGES ───────────────────── */
+// ───────────────────── SHIFT PAGES ─────────────────────
 
 router.get("/shifts", employerShiftController.getManageShifts);
-
-// Keep literal sub-pages before parameterized /shifts/:shiftId routes.
 
 router.get("/shifts/applications", employerShiftApplicationController.getApplications);
 
@@ -265,13 +250,9 @@ router.get("/shifts/attendance", employerShiftAttendanceController.getAttendance
 
 router.get("/shifts/:shiftId/occurrences", employerShiftController.getShiftOccurrences);
 
-// Existing-Shift resolution remains available during delinquency.
-
 router.get("/shifts/:shiftId/cancellation-preview", employerShiftController.getCancellationPreview);
 
-/* ───────────────────── SHIFT APPLICATIONS ───────────────────── */
-
-// Shortlisting and rejection only change application state.
+// ───────────────────── SHIFT APPLICATIONS ─────────────────────
 
 router.post(
   "/shifts/applications/:applicationId/shortlist",
@@ -283,26 +264,12 @@ router.post(
   employerShiftApplicationController.rejectApplication
 );
 
-/**
- * Acceptance creates an assignment.
- *
- * The application service owns the fresh delinquency check before
- * creating the new obligation.
- */
-
 router.post(
   "/shifts/applications/:applicationId/accept",
   employerShiftApplicationController.acceptApplication
 );
 
-/* ───────────────────── SHIFT ASSIGNMENTS ───────────────────── */
-
-/**
- * Assignment-case actions resolve existing assignment responsibility.
- *
- * ShiftAssignmentCaseService owns business/branch authorization
- * and lifecycle validity.
- */
+// ───────────────────── SHIFT ASSIGNMENTS ─────────────────────
 
 router.post(
   "/shifts/assignments/:assignmentId/issues",
@@ -319,7 +286,7 @@ router.post(
   employerShiftAssignmentController.escalateAssignmentCase
 );
 
-/* ───────────────────── ATTENDANCE PINS ───────────────────── */
+// ───────────────────── ATTENDANCE PINS ─────────────────────
 
 router.get(
   "/shifts/:shiftId/occurrences/:occurrenceId/check-in-pin",
@@ -331,17 +298,9 @@ router.get(
   employerShiftAttendanceController.getCheckOutPin
 );
 
-/* ───────────────────── SHIFT OVERTIME ───────────────────── */
+// ───────────────────── SHIFT OVERTIME ─────────────────────
 
-/**
- * Employer reviews the professional's submitted OT request.
- *
- * These decisions resolve an existing obligation, so employer
- * delinquency must not block them.
- *
- * ShiftOvertimeService owns authorization, deadline validity,
- * decision validity and financial consequences.
- */
+// Existing obligations must remain manageable during delinquency.
 
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/overtime/approve",
@@ -353,13 +312,6 @@ router.post(
   employerShiftOvertimeController.rejectOvertime
 );
 
-/**
- * Approved OT creates an occurrence-specific top-up obligation.
- *
- * Paying existing employer debt must remain available during
- * delinquency. Do not apply canPostShifts to these routes.
- */
-
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/overtime/top-up/wallet",
   employerShiftOvertimeController.fundOvertimeTopUpFromWallet
@@ -370,63 +322,31 @@ router.post(
   employerShiftOvertimeController.initializeOvertimeTopUpCheckout
 );
 
-/* ───────────────────── EMPLOYER DISPUTES ───────────────────── */
-
-/**
- * Employer's one substantive dispute submission.
- *
- * Disputes challenge an existing occurrence outcome and do not create
- * a new Shift obligation, so delinquency must not block submission.
- *
- * The dispute service owns authorization, scope, overlap,
- * challenge-window validity and financial consequences.
- */
+// ───────────────────── EMPLOYER DISPUTES ─────────────────────
 
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/disputes",
   employerShiftClaimController.submitDispute
 );
 
-// Withdrawal is allowed only while the dispute remains withdrawable.
-
 router.post("/shifts/disputes/:disputeId/withdraw", employerShiftClaimController.withdrawDispute);
 
-/* ───────────────────── PROFESSIONAL CLAIM REVIEW ───────────────────── */
-
-/**
- * Employer's one substantive response to a professional claim issue.
- *
- * The employer may approve or reject. Rejection may include a
- * counter-position and evidence, then proceeds to admin review.
- *
- * There is no second response, rebuttal or appeal.
- */
+// ───────────────────── PROFESSIONAL CLAIM REVIEW ─────────────────────
 
 router.post(
   "/shifts/claims/:claimId/issues/:issueId/review",
   employerShiftClaimController.reviewClaim
 );
 
-/* ───────────────────── SHIFT DETAILS ───────────────────── */
-
-// Keep after more-specific /shifts/... GET routes.
+// ───────────────────── SHIFT DETAILS ─────────────────────
 
 router.get("/shifts/:shiftId", employerShiftController.getShiftDetails);
 
-/* ───────────────────── SHIFT CREATION ───────────────────── */
-
-// Shift creation introduces a new employer obligation.
+// ───────────────────── SHIFT CREATION ─────────────────────
 
 router.post("/shifts", canPostShifts, employerShiftController.postShift);
 
-/* ───────────────────── INITIAL SHIFT FUNDING ───────────────────── */
-
-/**
- * Initial funding activates a new employer obligation.
- *
- * New-obligation restrictions apply. canFundShifts remains separate
- * from general wallet-management authority.
- */
+// ───────────────────── INITIAL SHIFT FUNDING ─────────────────────
 
 router.post(
   "/shifts/:shiftId/fund-from-wallet",
@@ -442,31 +362,16 @@ router.post(
   employerShiftController.initializeShiftCheckout
 );
 
-/* ───────────────────── SHIFT LIFECYCLE ───────────────────── */
-
-// Cancellation reduces or closes an existing obligation.
+// ───────────────────── SHIFT LIFECYCLE ─────────────────────
 
 router.post("/shifts/:shiftId/cancel", employerShiftController.postCancelShift);
-
-/**
- * Active-work cancellation resolves work already in progress.
- *
- * This is the authoritative route used by ShiftViewService.
- */
 
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/active-work-cancellation",
   employerShiftController.postActiveWorkCancellation
 );
 
-/* ───────────────────── BILLING / WALLET ───────────────────── */
-
-/**
- * Wallet visibility is broader than wallet-management authority.
- *
- * Branch managers may inspect wallet information but may not
- * withdraw funds or modify wallet/account configuration.
- */
+// ───────────────────── BILLING / WALLET ─────────────────────
 
 router.get("/billing", canViewWallet, employerBillingController.getBilling);
 
@@ -474,14 +379,7 @@ router.get("/billing/wallet", canViewWallet, (req, res) => {
   return res.redirect("/employer/billing");
 });
 
-/* ───────────────────── EMPLOYER MONETISATION ───────────────────── */
-
-/**
- * Commercial plan reads sit inside the employer billing area.
- *
- * Wallet visibility is sufficient for read-only commercial information.
- * Purchase/cancellation authority remains service-owned.
- */
+// ───────────────────── EMPLOYER MONETISATION ─────────────────────
 
 router.get(
   "/billing/job-publication-plans",
@@ -497,26 +395,13 @@ router.get(
 
 router.get("/billing/subscription", canViewWallet, employerBillingController.getActiveSubscription);
 
-/**
- * Wallet-funded PAYG publication purchase spends employer wallet balance.
- *
- * canManageWallet protects the wallet mutation. JobPublicationPaymentService
- * also independently requires the primary employer or a business admin.
- */
+// ───────────────────── JOB PUBLICATION PURCHASES ─────────────────────
 
 router.post(
   "/billing/job-publications/purchase/wallet",
   canManageWallet,
   employerBillingController.purchaseJobPublicationFromWallet
 );
-
-/**
- * Direct Paystack Checkout does not spend employer wallet balance.
- *
- * Do not gate this route with canManageWallet. The commercial service owns
- * business-level purchase authority and permits only the primary employer or a
- * business admin.
- */
 
 router.post(
   "/billing/job-publications/verify",
@@ -528,15 +413,7 @@ router.post(
   employerBillingController.initializeJobPublicationCheckout
 );
 
-/* ───────────────────── SUBSCRIPTION PURCHASES ───────────────────── */
-
-/**
- * Initial subscription purchase.
- *
- * Wallet purchase spends the employer wallet and therefore requires
- * canManageWallet in addition to the service-owned subscription-management
- * authorization check.
- */
+// ───────────────────── SUBSCRIPTION PURCHASES ─────────────────────
 
 router.post(
   "/billing/subscriptions/purchase/wallet",
@@ -544,32 +421,12 @@ router.post(
   employerBillingController.purchaseInitialSubscriptionFromWallet
 );
 
-/**
- * Initial subscription purchase through Paystack Checkout.
- *
- * This does not spend employer wallet balance, so canManageWallet must not be
- * used as the commercial authorization boundary. SubscriptionPaymentService
- * independently requires the primary employer or a business admin.
- */
-
 router.post(
   "/billing/subscriptions/initialize-checkout",
   employerBillingController.initializeInitialSubscriptionCheckout
 );
 
-/* ───────────────────── SUBSCRIPTION PLAN CHANGES ───────────────────── */
-
-/**
- * Plan changes are immediate purchases on the same continuing Subscription.
- *
- * There is never more than one effective subscription plan. The existing plan
- * remains current only while payment is unresolved. Once payment succeeds, the
- * purchased target plan replaces it immediately and starts a fresh billing
- * period. Unused time/value on the previous plan is forfeited.
- *
- * A downgrade may include retainedPublicationIds in the request body when the
- * target plan has fewer concurrent active Job slots than are currently occupied.
- */
+// ───────────────────── SUBSCRIPTION PLAN CHANGES ─────────────────────
 
 router.post(
   "/billing/subscriptions/:subscriptionId/plan-change/wallet",
@@ -582,14 +439,7 @@ router.post(
   employerBillingController.initializeSubscriptionPlanChangeCheckout
 );
 
-/* ───────────────────── SUBSCRIPTION RENEWALS ───────────────────── */
-
-/**
- * Renewal purchases the next period of the one currently effective plan.
- *
- * An early renewal may be paid before currentPeriodEnd, but it does not create
- * another current plan or alter current benefits before the billing boundary.
- */
+// ───────────────────── SUBSCRIPTION RENEWALS ─────────────────────
 
 router.post(
   "/billing/subscriptions/:subscriptionId/renew/wallet",
@@ -602,26 +452,14 @@ router.post(
   employerBillingController.initializeSubscriptionRenewalCheckout
 );
 
-/* ───────────────────── SUBSCRIPTION CANCELLATION ───────────────────── */
-
-/**
- * Subscription cancellation is a commercial lifecycle action, not a wallet
- * mutation. SubscriptionService owns the primary-employer/business-admin
- * authorization check.
- */
+// ───────────────────── SUBSCRIPTION CANCELLATION ─────────────────────
 
 router.post(
   "/billing/subscriptions/:subscriptionId/cancel",
   employerBillingController.requestSubscriptionCancellation
 );
 
-/* ───────────────────── WALLET MANAGEMENT ───────────────────── */
-
-/**
- * Delinquency does not freeze ordinary wallet/account management.
- *
- * These actions remain limited to users with wallet-management authority.
- */
+// ───────────────────── WALLET MANAGEMENT ─────────────────────
 
 router.post("/billing/setup-dva", canManageWallet, employerBillingController.postSetupDVA);
 

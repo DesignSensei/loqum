@@ -138,6 +138,7 @@
       <div class="modal-footer justify-content-center border-0 pt-0">
         <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
 
+        <% if (employerContext.canManageBranches) { %>
         <button
           type="button"
           class="btn btn-primary js-edit-branch-from-view"
@@ -146,6 +147,7 @@
         >
           Edit Branch
         </button>
+        <% } %>
       </div>
     </div>
   </div>

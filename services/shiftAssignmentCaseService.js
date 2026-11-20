@@ -9,8 +9,10 @@ const ProfessionalProfile = require("../models/ProfessionalProfile");
 
 const ShiftAssignmentService = require("./shiftAssignmentService");
 const PlatformSettingsService = require("./platformSettingsService");
+
 const { createServiceError } = require("./helpers/serviceErrorHelper");
 const { runWithOptionalTransaction } = require("./helpers/transactionHelper");
+
 const CASE = require("../constants/shiftAssignmentCase");
 
 const MINUTE_MS = 60 * 1000;
@@ -20,9 +22,14 @@ const MINUTE_MS = 60 * 1000;
  *
  * actor is trusted server authentication context, never a request-body object:
  * { role, userId, professionalProfileId?, businessId?, employerContext? }.
+ *
  * Controllers must authenticate admin/system access before constructing actor.
  * Professional ownership is also checked against ProfessionalProfile.user.
  * Employer access is restricted to the assignment business and allowed branches.
+ *
+ * Employer-triggered whole-shift case cancellation requires an already-active
+ * lifecycle transaction and a trusted, server-only verification callback.
+ * Never pass that callback from an HTTP request.
  *
  * All commands use a transaction and the same parent Shift lock as assignment
  * acceptance. The case and occurrence ownership are reloaded after that lock.
@@ -35,6 +42,7 @@ const MINUTE_MS = 60 * 1000;
  * It releases only an untouched future tail. Isolated occurrence replacement,
  * active-work cancellation and payout adjudication belong to their own flows.
  */
+
 class ShiftAssignmentCaseService {
   /* ------------------------- Validation ------------------------- */
 
@@ -62,6 +70,7 @@ class ShiftAssignmentCaseService {
   static text(value, fieldName, maximumLength, required = true) {
     if (value === null || value === undefined) {
       if (!required) return null;
+
       throw this.error(`${fieldName} is required.`, "CASE_TEXT_REQUIRED", 400);
     }
 
@@ -153,7 +162,9 @@ class ShiftAssignmentCaseService {
   /* ------------------------- Context and authorization ------------------------- */
 
   static async authorize(actor, assignment, session) {
-    if (["admin", "system"].includes(actor.role)) return;
+    if (["admin", "system"].includes(actor.role)) {
+      return;
+    }
 
     if (actor.role === "professional") {
       if (!this.sameId(actor.professionalProfileId, assignment.professional)) {
@@ -185,10 +196,13 @@ class ShiftAssignmentCaseService {
     }
 
     const context = actor.employerContext;
+
     const allBranches = context?.isPrimaryEmployer === true || context?.isBusinessAdmin === true;
+
     const assignedBranches = Array.isArray(context?.assignedBranchIds)
       ? context.assignedBranchIds
       : [];
+
     const branchAllowed =
       context?.isBranchManager === true &&
       assignedBranches.some((branchId) => this.sameId(branchId, assignment.branch));
@@ -199,15 +213,18 @@ class ShiftAssignmentCaseService {
   }
 
   static async loadContext({ assignmentId, caseId, actor, currentTime, session }) {
-    // This first read locates the parent; authoritative records are reloaded below.
+    // The first read locates the parent. Authoritative records are reloaded
+    // after the Shift lock is obtained.
+
     const locator = caseId
       ? await ShiftAssignmentCase.findById(this.objectId(caseId, "case ID")).session(session)
       : await ShiftAssignment.findById(this.objectId(assignmentId, "assignment ID")).session(
           session
         );
 
-    if (!locator)
+    if (!locator) {
       throw this.error("Assignment or case was not found.", "ASSIGNMENT_CASE_NOT_FOUND", 404);
+    }
 
     if (caseId && assignmentId && !this.sameId(locator.assignment, assignmentId)) {
       throw this.error(
@@ -278,7 +295,14 @@ class ShiftAssignmentCaseService {
       }
     }
 
-    return { shift, assignment, assignmentCase, actor, currentTime, session };
+    return {
+      shift,
+      assignment,
+      assignmentCase,
+      actor,
+      currentTime,
+      session,
+    };
   }
 
   static async runCaseCommand(payload, options, roles, command, opening = false) {
@@ -297,23 +321,42 @@ class ShiftAssignmentCaseService {
 
     const actor = this.actor(payload.actor);
     const currentTime = this.time(payload.currentTime);
+
     this.choice(actor.role, roles, "Actor role");
 
     return this.transaction(options, async (session) => {
-      const context = await this.loadContext({ ...payload, actor, currentTime, session });
+      const context = await this.loadContext({
+        ...payload,
+        actor,
+        currentTime,
+        session,
+      });
+
       await command(context);
+
       return this.saveContext(context);
     });
   }
 
   static async saveContext(context) {
     const { assignmentCase, assignment, shift, currentTime, session } = context;
+
     await assignmentCase.save({ session });
     await assignment.save({ session });
-    await ShiftAssignmentService.refreshAssignmentProgress({ shift, session, currentTime });
+
+    await ShiftAssignmentService.refreshAssignmentProgress({
+      shift,
+      session,
+      currentTime,
+    });
+
     await shift.save({ session });
 
-    return { assignmentCase, assignment, shift };
+    return {
+      assignmentCase,
+      assignment,
+      shift,
+    };
   }
 
   /* ------------------------- Opening cases ------------------------- */
@@ -323,6 +366,7 @@ class ShiftAssignmentCaseService {
 
     if (
       !["scheduled", "active"].includes(assignment.status) ||
+      assignment.occurrence ||
       assignment.openCase ||
       assignment.endCase ||
       ["pending_funding", "cancelled", "completed"].includes(shift.status) ||
@@ -339,15 +383,17 @@ class ShiftAssignmentCaseService {
       isOpen: true,
     }).session(session);
 
-    if (existing)
+    if (existing) {
       throw this.error(
         "This assignment already has an unresolved case.",
         "ASSIGNMENT_CASE_ALREADY_OPEN"
       );
+    }
   }
 
   static newCase(context, caseType, status) {
     const { assignment, shift, actor } = context;
+
     const id = new mongoose.Types.ObjectId();
 
     return new ShiftAssignmentCase({
@@ -361,7 +407,10 @@ class ShiftAssignmentCaseService {
       business: assignment.business,
       branch: assignment.branch,
       professional: assignment.professional,
-      initiatedBy: { role: actor.role, userId: actor.userId },
+      initiatedBy: {
+        role: actor.role,
+        userId: actor.userId,
+      },
     });
   }
 
@@ -372,7 +421,9 @@ class ShiftAssignmentCaseService {
       ["professional"],
       async (context) => {
         await this.assertCanOpen(context);
+
         const { range } = await this.loadExitTail(context, payload.replacementStartSequenceNumber);
+
         const assignmentCase = this.newCase(
           context,
           "professional_exit",
@@ -381,13 +432,16 @@ class ShiftAssignmentCaseService {
 
         assignmentCase.exitProposal = {
           source: "professional_notice",
+
           reason: this.choice(payload.reason, CASE.ASSIGNMENT_EXIT_REASONS, "Exit reason"),
+
           details: this.text(
             payload.details,
             "Exit details",
             CASE.MAX_EXIT_PROPOSAL_DETAILS_LENGTH,
             payload.reason === "other"
           ),
+
           range,
           proposedAt: context.currentTime,
           proposedBy: context.actor.userId,
@@ -407,6 +461,7 @@ class ShiftAssignmentCaseService {
       ["employer", "admin", "system"],
       async (context) => {
         await this.assertCanOpen(context);
+
         let occurrence = null;
 
         if (payload.occurrenceId) {
@@ -418,11 +473,12 @@ class ShiftAssignmentCaseService {
             assignedProfessional: context.assignment.professional,
           }).session(context.session);
 
-          if (!occurrence)
+          if (!occurrence) {
             throw this.error(
               "The reported occurrence is not owned by this assignment.",
               "CASE_OCCURRENCE_MISMATCH"
             );
+          }
         }
 
         const issueType = this.choice(
@@ -430,11 +486,13 @@ class ShiftAssignmentCaseService {
           CASE.EMPLOYER_ASSIGNMENT_ISSUE_TYPES,
           "Issue type"
         );
+
         if (issueType === "missed_occurrence" && !occurrence) {
           throw this.error("Select the missed occurrence.", "CASE_OCCURRENCE_REQUIRED", 400);
         }
 
         const occurredAt = payload.occurredAt == null ? null : this.time(payload.occurredAt);
+
         if (occurredAt && occurredAt > context.currentTime) {
           throw this.error(
             "An issue cannot be reported as occurring in the future.",
@@ -448,16 +506,19 @@ class ShiftAssignmentCaseService {
           "employer_issue",
           "awaiting_professional_response"
         );
+
         assignmentCase.employerIssue = {
           issueType,
           occurrence: occurrence?._id || null,
           occurrenceSequenceNumber: occurrence?.sequenceNumber || null,
           occurredAt,
+
           details: this.text(
             payload.details,
             "Issue details",
             CASE.MAX_EMPLOYER_ISSUE_DETAILS_LENGTH
           ),
+
           reportedAt: context.currentTime,
         };
 
@@ -473,7 +534,9 @@ class ShiftAssignmentCaseService {
   static async respondAsProfessional(payload, options = {}) {
     return this.runCaseCommand(payload, options, ["professional"], async (context) => {
       const { assignmentCase, actor, currentTime } = context;
+
       this.requireStatus(assignmentCase, ["awaiting_professional_response"]);
+
       const decision = this.choice(
         payload.decision,
         CASE.PROFESSIONAL_ASSIGNMENT_RESPONSE_DECISIONS,
@@ -482,15 +545,19 @@ class ShiftAssignmentCaseService {
 
       if (decision === "confirm_exit") {
         const { range } = await this.loadExitTail(context, payload.replacementStartSequenceNumber);
+
         assignmentCase.exitProposal = {
           source: "professional_response",
+
           reason: this.choice(payload.reason, CASE.ASSIGNMENT_EXIT_REASONS, "Exit reason"),
+
           details: this.text(
             payload.exitDetails,
             "Exit details",
             CASE.MAX_EXIT_PROPOSAL_DETAILS_LENGTH,
             payload.reason === "other"
           ),
+
           range,
           proposedAt: currentTime,
           proposedBy: actor.userId,
@@ -499,11 +566,13 @@ class ShiftAssignmentCaseService {
 
       assignmentCase.professionalResponse = {
         decision,
+
         details: this.text(
           payload.details,
           "Response details",
           CASE.MAX_PROFESSIONAL_RESPONSE_DETAILS_LENGTH
         ),
+
         respondedAt: currentTime,
         respondedBy: actor.userId,
       };
@@ -515,15 +584,18 @@ class ShiftAssignmentCaseService {
   static async respondAsEmployer(payload, options = {}) {
     return this.runCaseCommand(payload, options, ["employer"], async (context) => {
       const { assignmentCase, actor, currentTime } = context;
+
       this.requireStatus(assignmentCase, [
         "awaiting_employer_acknowledgment",
         "awaiting_employer_response",
       ]);
+
       const decision = this.choice(
         payload.decision,
         CASE.EMPLOYER_ASSIGNMENT_RESPONSE_DECISIONS,
         "Employer decision"
       );
+
       const details = this.text(
         payload.details,
         "Response details",
@@ -571,6 +643,7 @@ class ShiftAssignmentCaseService {
       if (decision === "acknowledge_and_request_replacement") {
         assignmentCase.replacementRequestedAt = currentTime;
         assignmentCase.replacementRequestedBy = actor.userId;
+
         await this.confirmExit(context, {
           startSequence: assignmentCase.exitProposal.range.replacementStartSequenceNumber,
           outcome: "exit_confirmed",
@@ -592,11 +665,13 @@ class ShiftAssignmentCaseService {
 
   static stageEscalation(context, reason) {
     const { assignmentCase, actor, currentTime } = context;
+
     this.requireStatus(assignmentCase, [
       "awaiting_employer_acknowledgment",
       "awaiting_professional_response",
       "awaiting_employer_response",
     ]);
+
     assignmentCase.status = "under_admin_review";
     assignmentCase.escalatedAt = currentTime;
     assignmentCase.escalatedBy = actor.userId;
@@ -624,11 +699,13 @@ class ShiftAssignmentCaseService {
   static async resolveByAdmin(payload, options = {}) {
     return this.runCaseCommand(payload, options, ["admin"], async (context) => {
       this.requireStatus(context.assignmentCase, ["under_admin_review"]);
+
       const outcome = this.choice(
         payload.outcome,
         CASE.ASSIGNMENT_CASE_RESOLUTION_OUTCOMES,
         "Resolution outcome"
       );
+
       const reason = this.text(
         payload.reason,
         "Resolution reason",
@@ -649,6 +726,7 @@ class ShiftAssignmentCaseService {
 
   static resolveContinuation(context, reason) {
     const { assignmentCase, assignment, actor, currentTime } = context;
+
     if (assignmentCase.caseType !== "employer_issue") {
       throw this.error(
         "A professional exit cannot resolve as continuation under the current case contract.",
@@ -658,6 +736,7 @@ class ShiftAssignmentCaseService {
 
     assignmentCase.status = "resolved_continue";
     assignmentCase.isOpen = false;
+
     assignmentCase.resolution = {
       outcome: "continue_assignment",
       reason,
@@ -665,6 +744,7 @@ class ShiftAssignmentCaseService {
       resolvedBy: actor.userId,
       resolvedByRole: actor.role,
     };
+
     assignment.openCase = null;
   }
 
@@ -672,6 +752,14 @@ class ShiftAssignmentCaseService {
 
   static async loadExitTail(context, startSequence) {
     const { assignment, shift, currentTime, session } = context;
+
+    if (assignment.occurrence) {
+      throw this.error(
+        "An occurrence-specific replacement cannot start an engagement exit case.",
+        "ISOLATED_ASSIGNMENT_EXIT_NOT_ALLOWED"
+      );
+    }
+
     if (
       !Number.isSafeInteger(startSequence) ||
       startSequence < assignment.startSequence ||
@@ -708,7 +796,10 @@ class ShiftAssignmentCaseService {
     const occurrences = await ShiftOccurrence.find({
       shift: shift._id,
       slotNumber: assignment.slotNumber,
-      sequenceNumber: { $gte: startSequence, $lte: assignment.plannedEndSequence },
+      sequenceNumber: {
+        $gte: startSequence,
+        $lte: assignment.plannedEndSequence,
+      },
     })
       .sort({ sequenceNumber: 1 })
       .session(session);
@@ -756,11 +847,15 @@ class ShiftAssignmentCaseService {
 
     return {
       occurrences,
+
       range: {
         lastWorkingSequenceNumber:
           startSequence === assignment.startSequence ? null : startSequence - 1,
+
         replacementStartSequenceNumber: startSequence,
+
         replacementEndSequenceNumber: assignment.plannedEndSequence,
+
         replacementOccurrenceCount: occurrences.length,
       },
     };
@@ -768,8 +863,11 @@ class ShiftAssignmentCaseService {
 
   static async confirmExit(context, { startSequence, outcome, reason }) {
     const { assignmentCase, assignment, shift, actor, currentTime, session } = context;
+
     const { occurrences, range } = await this.loadExitTail(context, startSequence);
+
     const settings = await PlatformSettingsService.getAttendanceSettings();
+
     const graceMinutes = settings?.unfilledFinalizationGraceMinutes;
 
     if (!Number.isSafeInteger(graceMinutes) || graceMinutes <= 0) {
@@ -780,9 +878,14 @@ class ShiftAssignmentCaseService {
       );
     }
 
-    // Confirm existing protected allocations before changing occurrence ownership.
+    // Confirm protected allocations before changing occurrence ownership.
     const allOccurrences = await ShiftAssignmentService.getOccurrences(shift, session);
-    await ShiftAssignmentService.assertAssignmentFunding({ shift, allOccurrences, session });
+
+    await ShiftAssignmentService.assertAssignmentFunding({
+      shift,
+      allOccurrences,
+      session,
+    });
 
     assignment.openCase = null;
 
@@ -798,24 +901,34 @@ class ShiftAssignmentCaseService {
           occurrence.slotNumber === assignment.slotNumber &&
           occurrence.sequenceNumber === startSequence - 1
       );
-      if (!endpoint)
+
+      if (!endpoint) {
         throw this.error(
           "The retained assignment endpoint was not found.",
           "CASE_ENDPOINT_NOT_FOUND"
         );
+      }
 
       assignment.effectiveEndSequence = startSequence - 1;
+
       assignment.effectiveOccurrenceCount = startSequence - assignment.startSequence;
+
       assignment.effectiveEndsAt = endpoint.endTime;
+
       assignment.endCase = assignmentCase._id;
+
       assignment.endingRequestedAt =
         assignmentCase.exitProposal?.proposedAt || assignmentCase.employerIssue.reportedAt;
+
       assignment.endingConfirmedAt = currentTime;
       assignment.endingConfirmedBy = actor.userId;
       assignment.endingConfirmedByRole = actor.role;
+
       assignment.endReason = actor.role === "admin" ? "admin_action" : "professional_request";
+
       assignment.endNotes = reason.slice(0, 500);
       assignment.status = "ending";
+
       await ShiftAssignmentService.finalizeEndingAssignmentIfDue({
         assignment,
         currentTime,
@@ -824,8 +937,10 @@ class ShiftAssignmentCaseService {
     }
 
     assignment.openCase = null;
+
     assignmentCase.status = "resolved_exit";
     assignmentCase.isOpen = false;
+
     assignmentCase.resolution = {
       outcome,
       reason,
@@ -839,6 +954,7 @@ class ShiftAssignmentCaseService {
       const finalizationAt = new Date(
         new Date(occurrence.fillCutoffAt).getTime() + graceMinutes * MINUTE_MS
       );
+
       if (!Number.isFinite(finalizationAt.getTime()) || finalizationAt <= occurrence.fillCutoffAt) {
         throw this.error(
           "Replacement finalization deadline is invalid.",
@@ -851,12 +967,16 @@ class ShiftAssignmentCaseService {
       occurrence.assignedProfessional = null;
       occurrence.assignment = null;
       occurrence.assignedAt = null;
+
       occurrence.replacementRequiredAt = currentTime;
       occurrence.replacementForAssignment = assignment._id;
       occurrence.replacementCase = assignmentCase._id;
       occurrence.replacementReasonCode = "release_request";
+
       occurrence.replacementReasonDetails = reason.slice(0, 500);
+
       occurrence.unfilledFinalizationAt = finalizationAt;
+
       await occurrence.save({ session });
     }
   }
@@ -865,27 +985,37 @@ class ShiftAssignmentCaseService {
 
   static closeCase(context, status, reason) {
     const { assignmentCase, assignment, actor, currentTime } = context;
+
     if (status === "withdrawn" && assignmentCase.caseType !== "professional_exit") {
       throw this.error(
         "Only a professional exit case may be withdrawn.",
         "CASE_WITHDRAWAL_NOT_ALLOWED"
       );
     }
+
     if (status === "dismissed" && assignmentCase.caseType !== "employer_issue") {
       throw this.error("Only an employer issue may be dismissed.", "CASE_DISMISSAL_NOT_ALLOWED");
     }
 
     const fields = {
       withdrawn: ["withdrawnAt", "withdrawnBy", "withdrawalReason"],
+
       dismissed: ["dismissedAt", "dismissedBy", "dismissalReason"],
+
       cancelled: ["cancelledAt", "cancelledBy", "cancellationReason"],
     }[status];
 
     assignmentCase.status = status;
     assignmentCase.isOpen = false;
+
     assignmentCase[fields[0]] = currentTime;
     assignmentCase[fields[1]] = actor.userId;
     assignmentCase[fields[2]] = reason;
+
+    if (status === "cancelled") {
+      assignmentCase.cancelledByRole = actor.role;
+    }
+
     assignment.openCase = null;
   }
 
@@ -895,6 +1025,7 @@ class ShiftAssignmentCaseService {
         "awaiting_employer_acknowledgment",
         "under_admin_review",
       ]);
+
       this.closeCase(
         context,
         "withdrawn",
@@ -910,6 +1041,7 @@ class ShiftAssignmentCaseService {
   static async dismissCase(payload, options = {}) {
     return this.runCaseCommand(payload, options, ["admin"], async (context) => {
       this.requireStatus(context.assignmentCase, ["under_admin_review"]);
+
       this.closeCase(
         context,
         "dismissed",
@@ -922,25 +1054,85 @@ class ShiftAssignmentCaseService {
     });
   }
 
-  /** Call before lifecycle cancellation clears assignment.openCase, in its transaction. */
+  /**
+   * Called before lifecycle cancellation clears assignment.openCase.
+   *
+   * An employer cannot directly cancel a case as a substitute for the case
+   * workflow. Employer cancellation is permitted only from a previously verified
+   * whole-shift lifecycle cancellation running in the SAME transaction.
+   *
+   * verifyWholeShiftCancellation is a trusted server callback supplied by the
+   * lifecycle service, never by request-body data.
+   *
+   * The callback must verify:
+   * - Parent Shift identity;
+   * - Employer business and user identity;
+   * - Assignment and case coverage;
+   * - The active cancellation transaction.
+   *
+   * Admin/system case cancellation retains its existing authorization contract.
+   */
+
   static async cancelCase(payload, options = {}) {
-    return this.runCaseCommand(payload, options, ["admin", "system"], async (context) => {
-      this.requireStatus(context.assignmentCase, [
-        "awaiting_employer_acknowledgment",
-        "awaiting_professional_response",
-        "awaiting_employer_response",
-        "under_admin_review",
-      ]);
-      this.closeCase(
-        context,
-        "cancelled",
-        this.text(
-          payload.reason,
-          "Cancellation reason",
-          CASE.MAX_ASSIGNMENT_CASE_TERMINAL_REASON_LENGTH
-        )
-      );
-    });
+    const employerCancellation = payload.actor?.role === "employer";
+
+    if (employerCancellation) {
+      if (
+        typeof options.verifyWholeShiftCancellation !== "function" ||
+        !options.session ||
+        typeof options.session.inTransaction !== "function" ||
+        !options.session.inTransaction()
+      ) {
+        throw this.error(
+          "Employer case closure requires a verified whole-shift cancellation transaction.",
+          "VERIFIED_PARENT_CANCELLATION_REQUIRED",
+          403
+        );
+      }
+    }
+
+    return this.runCaseCommand(
+      payload,
+      options,
+      ["admin", "system", "employer"],
+      async (context) => {
+        if (context.actor.role === "employer") {
+          const authorized = await options.verifyWholeShiftCancellation({
+            shiftId: context.shift._id,
+            businessId: context.assignment.business,
+            assignmentId: context.assignment._id,
+            caseId: context.assignmentCase._id,
+            actorUserId: context.actor.userId,
+            session: context.session,
+          });
+
+          if (authorized !== true) {
+            throw this.error(
+              "This case is not covered by the verified whole-shift cancellation.",
+              "VERIFIED_PARENT_CANCELLATION_MISMATCH",
+              403
+            );
+          }
+        }
+
+        this.requireStatus(context.assignmentCase, [
+          "awaiting_employer_acknowledgment",
+          "awaiting_professional_response",
+          "awaiting_employer_response",
+          "under_admin_review",
+        ]);
+
+        this.closeCase(
+          context,
+          "cancelled",
+          this.text(
+            payload.reason,
+            "Cancellation reason",
+            CASE.MAX_ASSIGNMENT_CASE_TERMINAL_REASON_LENGTH
+          )
+        );
+      }
+    );
   }
 }
 

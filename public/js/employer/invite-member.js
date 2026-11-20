@@ -233,7 +233,7 @@ var InviteMember = (function () {
     if (!editForm) return;
 
     editForm.reset();
-    editForm.action = "";
+    editForm.removeAttribute("action");
 
     if (editInviteIdInput) {
       editInviteIdInput.value = "";
@@ -321,7 +321,7 @@ var InviteMember = (function () {
 
       if (editSubmitButton.disabled) return;
 
-      if (!editForm.action) {
+      if (!editInviteIdInput?.value || !editForm.getAttribute("action")) {
         showError("Invite could not be edited. Please refresh and try again.");
         return;
       }

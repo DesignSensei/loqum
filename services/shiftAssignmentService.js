@@ -4,6 +4,10 @@ const mongoose = require("mongoose");
 
 const Shift = require("../models/Shift");
 const ProfessionalProfile = require("../models/ProfessionalProfile");
+const Branch = require("../models/Branch");
+const EmployerProfile = require("../models/EmployerProfile");
+const FacilityPermitVerificationService = require("./facilityPermitVerificationService");
+const EmployerDelinquencyService = require("./employerDelinquencyService");
 const ShiftOccurrence = require("../models/ShiftOccurrence");
 const ShiftAssignment = require("../models/ShiftAssignment");
 const ShiftAssignmentCase = require("../models/ShiftAssignmentCase");
@@ -12,6 +16,7 @@ const money = require("../utils/money");
 
 const WalletService = require("./walletService");
 const ShiftPlatformFeeService = require("./shiftPlatformFeeService");
+const ProfessionalVerificationService = require("./professionalVerificationService");
 
 const { MAX_SHIFT_OCCURRENCES } = require("../constants/shiftPosting");
 
@@ -20,15 +25,12 @@ const {
   ASSIGNMENT_END_REASONS,
   ASSIGNMENT_ACTOR_ROLES,
   CURRENT_ASSIGNMENT_STATUSES,
-  REPLACED_ASSIGNMENT_ALLOWED_STATUSES,
   MAX_ASSIGNMENT_END_NOTES_LENGTH,
 } = require("../constants/shiftAssignment");
 
 const {
-  INITIAL_APPLICATION_PAYMENT_STATUS,
   REPLACEMENT_APPLICATION_PARENT_STATUSES,
-  REPLACEMENT_APPLICATION_BLOCKED_PAYMENT_STATUSES,
-  REPLACEMENT_HIRING_STATUSES,
+  PROFESSIONAL_UNAVAILABLE_STATUSES,
 } = require("../constants/shiftApplication");
 
 const { createServiceError } = require("./helpers/serviceErrorHelper");
@@ -41,26 +43,19 @@ const {
 
 const { runWithOptionalTransaction } = require("./helpers/transactionHelper");
 
-const logger = require("../utils/logger");
-
 const SHIFT_ASSIGNMENT_SERVICE_ERROR_NAME = "ShiftAssignmentServiceError";
-const MAX_ASSIGNMENT_REFERENCE_NUMBER = 99;
 const ASSIGNABLE_OCCURRENCE_REFUND_STATUS = "not_eligible";
 
+const EXPECTED_PROFESSIONAL_EVIDENCE_ERRORS = new Set([
+  "PROFESSIONAL_VERIFICATION_NIN_EVIDENCE_REQUIRED",
+  "PROFESSIONAL_VERIFICATION_NIN_EVIDENCE_MISMATCH",
+  "PROFESSIONAL_VERIFICATION_REVIEW_EVIDENCE_REQUIRED",
+  "PROFESSIONAL_VERIFICATION_REVIEW_EVIDENCE_MISMATCH",
+  "PROFESSIONAL_VERIFICATION_CONFLICTING_REVIEWS",
+  "PROFESSIONAL_VERIFICATION_UNSUPPORTED_PROFESSIONAL_TYPE",
+]);
+
 const REPLACEMENT_CASE_AUTHORIZING_STATUSES = ["replacement_requested", "resolved_exit"];
-
-const PENDING_SETTLEMENT_STATUSES = [
-  "pending_review",
-  "awaiting_overtime_review",
-  "awaiting_topup",
-  "approved_for_release",
-  "release_pending",
-  "disputed",
-];
-
-const TERMINAL_PARENT_STATUSES = ["completed", "cancelled", "no_show"];
-
-const COMPLETED_ASSIGNMENT_PAYMENT_STATUSES = ["released", "partially_refunded"];
 
 const RESOLVED_OCCURRENCE_STATUSES = ["completed", "cancelled", "no_show", "expired_unfilled"];
 
@@ -931,6 +926,172 @@ class ShiftAssignmentService {
     return new Date(range.startsAt) <= assignedAt ? "active" : "scheduled";
   }
 
+  /**
+   * Enforce professional eligibility at the assignment-write boundary.
+   *
+   * This protects both initial and replacement assignments, including
+   * service callers that do not use the shift-application controller.
+   * Administrative verification evidence is read using the transaction
+   * already supplied by the assignment operation. No paid provider call
+   * or additional NIN/BVN lookup is performed.
+   */
+  static async assertProfessionalAssignable({ shift, professionalId, session }) {
+    if (!session || typeof session.inTransaction !== "function" || !session.inTransaction()) {
+      throw this.error(
+        "An active transaction is required for assignment eligibility.",
+        "ASSIGNMENT_TRANSACTION_REQUIRED",
+        500
+      );
+    }
+
+    const professional = await ProfessionalProfile.findById(
+      this.objectId(professionalId, "professional ID")
+    )
+      .select("+licenceDocumentUrl +upcomingLicence.documentUrl")
+      .session(session);
+
+    if (!professional) {
+      throw this.error("Professional was not found.", "PROFESSIONAL_PROFILE_NOT_FOUND", 404);
+    }
+
+    if (professional.type !== shift.professionalType) {
+      throw this.error(
+        "The professional type does not match this Shift.",
+        "SHIFT_PROFESSIONAL_TYPE_MISMATCH",
+        403
+      );
+    }
+
+    if (
+      professional.professionalApprovalStatus !== "approved" ||
+      professional.accountStatus !== "active" ||
+      professional.marketplaceStatus !== "visible" ||
+      professional.licenceVerificationStatus !== "verified"
+    ) {
+      throw this.error(
+        "The professional is not approved and eligible for assignment.",
+        "PROFESSIONAL_NOT_ELIGIBLE_FOR_ASSIGNMENT",
+        403
+      );
+    }
+
+    // An approved status must be backed by a valid administrative decision.
+    // Self-approval or a future-dated decision cannot authorize assignment.
+    const approvalTime = professional.approvedForShiftsAt
+      ? new Date(professional.approvedForShiftsAt).getTime()
+      : NaN;
+
+    if (
+      !Number.isFinite(approvalTime) ||
+      approvalTime > Date.now() ||
+      !mongoose.isValidObjectId(professional.approvedForShiftsBy) ||
+      String(professional.approvedForShiftsBy) === String(professional.user)
+    ) {
+      throw this.error(
+        "A valid independent administrative approval is required before assignment.",
+        "PROFESSIONAL_ASSIGNMENT_APPROVAL_EVIDENCE_INVALID",
+        403
+      );
+    }
+
+    if (PROFESSIONAL_UNAVAILABLE_STATUSES.includes(professional.availabilityStatus)) {
+      throw this.error(
+        "The professional is not currently available for assignment.",
+        "PROFESSIONAL_NOT_AVAILABLE",
+        403
+      );
+    }
+
+    // Verified readiness promotes approved due renewals in this session, checks
+    // trusted NIN evidence and validates the active licence-review evidence.
+    try {
+      const readiness = await ProfessionalVerificationService.getVerifiedReadiness({
+        profile: professional,
+        session,
+      });
+      if (
+        readiness?.verificationReady !== true ||
+        readiness.ninEvidenceConfirmed !== true ||
+        readiness.licenceVerified !== true ||
+        readiness.licenceCurrent !== true ||
+        readiness.namesConsistent !== true ||
+        readiness.adminApproved !== true ||
+        readiness.accountActive !== true
+      ) {
+        throw this.error(
+          "The professional's verification requirements are incomplete.",
+          "PROFESSIONAL_VERIFICATION_NOT_READY_FOR_ASSIGNMENT",
+          403
+        );
+      }
+    } catch (error) {
+      if (EXPECTED_PROFESSIONAL_EVIDENCE_ERRORS.has(error?.code)) {
+        throw this.error(
+          "The professional's verification evidence requires administrative review.",
+          "PROFESSIONAL_VERIFICATION_EVIDENCE_NOT_READY",
+          403
+        );
+      }
+
+      throw error;
+    }
+
+    return professional;
+  }
+
+  static async assertBranchAssignable({ shift, session }) {
+    if (!session || typeof session.inTransaction !== "function" || !session.inTransaction()) {
+      throw this.error(
+        "An active transaction is required for branch eligibility.",
+        "ASSIGNMENT_TRANSACTION_REQUIRED",
+        500
+      );
+    }
+    const businessId = this.objectId(shift.business, "business ID");
+    const branchId = this.objectId(shift.branch, "branch ID");
+    const branch = await Branch.findOne({
+      _id: branchId,
+      business: businessId,
+      isActive: true,
+    }).session(session);
+    const business = await EmployerProfile.findById(businessId).session(session);
+    if (
+      !branch ||
+      !business ||
+      business.accountStatus !== "active" ||
+      business.cacVerificationStatus !== "verified"
+    ) {
+      throw this.error(
+        "The employer branch is not eligible for a new assignment.",
+        "ASSIGNMENT_BRANCH_INELIGIBLE",
+        403
+      );
+    }
+    await FacilityPermitVerificationService.activateDuePermits({ businessId, branchId, session });
+    const readiness = await FacilityPermitVerificationService.getBranchReadiness({
+      businessId,
+      branchId,
+      session,
+    });
+    if (
+      readiness?.canPost !== true ||
+      readiness.identityReady !== true ||
+      readiness.branchActive !== true ||
+      !Array.isArray(readiness.missingRequirementKeys) ||
+      readiness.missingRequirementKeys.length !== 0
+    ) {
+      throw this.error(
+        "Current facility permits are required for this assignment.",
+        "ASSIGNMENT_BRANCH_PERMITS_REQUIRED",
+        403
+      );
+    }
+    await EmployerDelinquencyService.assertCanCreateNewObligation(
+      { businessId, currentTime: new Date() },
+      { session }
+    );
+  }
+
   static async createRecord({
     shift,
     input,
@@ -943,6 +1104,12 @@ class ShiftAssignmentService {
     replacementCase = null,
     session,
   }) {
+    await ShiftAssignmentService.assertProfessionalAssignable({
+      shift,
+      professionalId: input.professional,
+      session,
+    });
+
     const identity = await ShiftAssignmentService.nextIdentity(shift, session);
 
     const assignment = new ShiftAssignment({
@@ -987,6 +1154,7 @@ class ShiftAssignmentService {
       activatedBy: status === "active" ? input.assignedBy : null,
     });
 
+    await this.assertBranchAssignable({ shift, session });
     await assignment.save({
       session,
     });
@@ -1470,6 +1638,13 @@ class ShiftAssignmentService {
   /* ─────────────────────────────── INITIAL ASSIGNMENT ─────────────────────────────── */
 
   static async lockShiftAndProfessional({ shiftId, professionalId = null, session }) {
+    if (!session || typeof session.inTransaction !== "function" || !session.inTransaction()) {
+      throw this.error(
+        "Shift/professional locking requires an active transaction.",
+        "ASSIGNMENT_TRANSACTION_REQUIRED",
+        500
+      );
+    }
     const shift = await Shift.findOneAndUpdate(
       { _id: this.objectId(shiftId, "shift ID") },
       { $inc: { __v: 1 } },
@@ -1612,6 +1787,7 @@ class ShiftAssignmentService {
         professionalId: input.professional,
         session,
       });
+      await this.assertBranchAssignable({ shift, session });
       const assignedAt = this.normalizeDate(payload.assignedAt, "assigned-at time", new Date());
       if (shift.status !== "open" || shift.startTime <= assignedAt)
         throw this.error(
@@ -1699,6 +1875,7 @@ class ShiftAssignmentService {
         professionalId: input.professional,
         session,
       });
+      await this.assertBranchAssignable({ shift, session });
       const assignedAt = this.normalizeDate(payload.assignedAt, "assigned-at time", new Date());
       if (!REPLACEMENT_APPLICATION_PARENT_STATUSES.includes(shift.status))
         throw this.error(

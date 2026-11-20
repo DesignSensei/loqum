@@ -1,23 +1,17 @@
 // services/jobs/appointments/jobAppointmentQueryService.js
 
 const Appointment = require("../../../models/Appointment");
-
 const Job = require("../../../models/Job");
-
 const JobApplication = require("../../../models/JobApplication");
-
 const ProfessionalProfile = require("../../../models/ProfessionalProfile");
 
 const JobApplicationQueryService = require("../applications/jobApplicationQueryService");
 
 const { createServiceError } = require("../../helpers/serviceErrorHelper");
-
 const { normalizeObjectId } = require("../../helpers/serviceValidationHelpers");
 
 const JOB_APPOINTMENT_QUERY_SERVICE_ERROR_NAME = "JobAppointmentQueryServiceError";
-
 const APPOINTMENTS_PER_PAGE = 20;
-
 const AWAITING_EMPLOYER_UPDATE_STATUS = "awaiting_employer_update";
 
 const PROFESSIONAL_FIELDS = [
@@ -101,7 +95,7 @@ const PUBLICATION_FIELDS = [
   "updatedAt",
 ];
 
-/* ─────────────────────────────── ERROR CONTRACT ─────────────────────────────── */
+// ───────── Error Contract ─────────
 
 function createAppointmentQueryError(options) {
   return createServiceError({
@@ -110,7 +104,7 @@ function createAppointmentQueryError(options) {
   });
 }
 
-/* ─────────────────────────────── HELPERS ─────────────────────────────── */
+// ───────── Helpers ─────────
 
 function getExistingFields(model, fieldNames = []) {
   return fieldNames.filter((fieldName) => Boolean(model?.schema?.path(fieldName)));
@@ -126,17 +120,9 @@ function getApplicationPublicationPath() {
   return JobApplication.schema.path("publication") ? "publication" : null;
 }
 
-function normalizeApplicationPublicationAlias(application) {
-  return application;
-}
-
 function deriveAppointmentState(appointment, currentTime) {
   if (!appointment || typeof appointment !== "object") {
     return appointment;
-  }
-
-  if (appointment.jobApplication && typeof appointment.jobApplication === "object") {
-    normalizeApplicationPublicationAlias(appointment.jobApplication);
   }
 
   const endAt = appointment.endAt ? new Date(appointment.endAt) : null;
@@ -172,9 +158,7 @@ function buildGroupedCountMap(results = [], total = 0) {
 
 function buildPagination({ page, totalItems, perPage, itemCount }) {
   const totalPages = Math.max(Math.ceil(totalItems / perPage), 1);
-
   const currentPage = Math.min(page, totalPages);
-
   const skip = (currentPage - 1) * perPage;
 
   return {
@@ -182,23 +166,18 @@ function buildPagination({ page, totalItems, perPage, itemCount }) {
     totalPages,
     totalItems,
     perPage,
-
     startItem: totalItems > 0 ? skip + 1 : 0,
-
     endItem: totalItems > 0 ? skip + itemCount : 0,
-
     hasPreviousPage: currentPage > 1,
-
     hasNextPage: currentPage < totalPages,
-
     hasPagination: totalPages > 1,
   };
 }
 
-/* ─────────────────────────────── QUERY SERVICE ─────────────────────────────── */
+// ───────── Query Service ─────────
 
 class JobAppointmentQueryService {
-  /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
+  // ───────── Normalization ─────────
 
   static normalizeCurrentTime(value = new Date()) {
     const currentTime = new Date(value);
@@ -206,9 +185,7 @@ class JobAppointmentQueryService {
     if (Number.isNaN(currentTime.getTime())) {
       throw createAppointmentQueryError({
         message: "Current time is invalid.",
-
         code: "INVALID_CURRENT_TIME",
-
         statusCode: 500,
       });
     }
@@ -280,7 +257,7 @@ class JobAppointmentQueryService {
     });
   }
 
-  /* ─────────────────────────────── CAPABILITIES ─────────────────────────────── */
+  // ───────── Capabilities ─────────
 
   static canViewAppointments(employerContext = null) {
     return Boolean(
@@ -299,7 +276,7 @@ class JobAppointmentQueryService {
     );
   }
 
-  /* ─────────────────────────────── POPULATION ─────────────────────────────── */
+  // ───────── Population ─────────
 
   static buildProfessionalPopulate() {
     const professionalFields = getExistingFields(ProfessionalProfile, PROFESSIONAL_FIELDS);
@@ -319,7 +296,6 @@ class JobAppointmentQueryService {
     if (ProfessionalProfile.schema.path("user")) {
       populate.populate = {
         path: "user",
-
         select: USER_IDENTITY_FIELDS.join(" "),
       };
     }
@@ -329,7 +305,6 @@ class JobAppointmentQueryService {
 
   static buildApplicationPopulate() {
     const applicationFields = getExistingFields(JobApplication, APPLICATION_FIELDS);
-
     const publicationPath = getApplicationPublicationPath();
 
     const populate = {
@@ -343,7 +318,6 @@ class JobAppointmentQueryService {
     if (publicationPath) {
       populate.populate = {
         path: publicationPath,
-
         select: PUBLICATION_FIELDS.join(" "),
       };
     }
@@ -353,13 +327,11 @@ class JobAppointmentQueryService {
 
   static buildAdminJobPopulate() {
     const jobFields = getExistingFields(Job, JOB_FIELDS);
-
     const nestedPopulate = [];
 
     if (Job.schema.path("branch")) {
       nestedPopulate.push({
         path: "branch",
-
         select: "name address state lga isActive",
       });
     }
@@ -367,24 +339,19 @@ class JobAppointmentQueryService {
     if (Job.schema.path("business")) {
       nestedPopulate.push({
         path: "business",
-
-        select:
-          "businessName type countryCode currency logoUrl accountStatus employerApprovalStatus",
+        select: "businessName type countryCode currency logoUrl accountStatus",
       });
     }
 
     return {
       path: "job",
-
       select: jobFields.length ? jobFields.join(" ") : undefined,
-
       populate: nestedPopulate.length ? nestedPopulate : undefined,
     };
   }
 
   static buildEmployerAppointmentQuery(filter) {
     const jobFields = getExistingFields(Job, JOB_FIELDS);
-
     let query = Appointment.find(filter);
 
     if (Appointment.schema.path("employerPrivateNote")) {
@@ -399,13 +366,10 @@ class JobAppointmentQueryService {
     if (Appointment.schema.path("job")) {
       query = query.populate({
         path: "job",
-
         select: jobFields.length ? jobFields.join(" ") : undefined,
-
         populate: Job.schema.path("branch")
           ? {
               path: "branch",
-
               select: "name address state lga isActive",
             }
           : undefined,
@@ -424,8 +388,7 @@ class JobAppointmentQueryService {
     if (Appointment.schema.path("business")) {
       query = query.populate(
         "business",
-
-        "businessName type countryCode currency logoUrl accountStatus employerApprovalStatus"
+        "businessName type countryCode currency logoUrl accountStatus"
       );
     }
 
@@ -442,7 +405,7 @@ class JobAppointmentQueryService {
       .populate("branch", "name address state lga isActive");
   }
 
-  /* ─────────────────────────────── FILTERS ─────────────────────────────── */
+  // ───────── Filters ─────────
 
   static applyStatusFilter(filter, status, currentTime) {
     const result = {
@@ -453,9 +416,9 @@ class JobAppointmentQueryService {
       return result;
     }
 
+    // Virtual status: scheduled appointments whose end time has passed.
     if (status === AWAITING_EMPLOYER_UPDATE_STATUS) {
       result.status = "scheduled";
-
       result.endAt = {
         $lt: currentTime,
       };
@@ -483,15 +446,12 @@ class JobAppointmentQueryService {
   static async buildCounts({ scopeFilter, selectedStatus, selectedResponseStatus, currentTime }) {
     const statusCountMatch = JobAppointmentQueryService.applyResponseStatusFilter(
       scopeFilter,
-
       selectedResponseStatus
     );
 
     const responseCountMatch = JobAppointmentQueryService.applyStatusFilter(
       scopeFilter,
-
       selectedStatus,
-
       currentTime
     );
 
@@ -508,11 +468,9 @@ class JobAppointmentQueryService {
         {
           $match: statusCountMatch,
         },
-
         {
           $group: {
             _id: "$status",
-
             count: {
               $sum: 1,
             },
@@ -522,9 +480,7 @@ class JobAppointmentQueryService {
 
       Appointment.countDocuments({
         ...statusCountMatch,
-
         status: "scheduled",
-
         endAt: {
           $lt: currentTime,
         },
@@ -536,11 +492,9 @@ class JobAppointmentQueryService {
         {
           $match: responseCountMatch,
         },
-
         {
           $group: {
             _id: "$responseStatus",
-
             count: {
               $sum: 1,
             },
@@ -555,12 +509,11 @@ class JobAppointmentQueryService {
 
     return {
       statusCounts,
-
       responseStatusCounts: buildGroupedCountMap(responseCountResults, totalForResponseTabs),
     };
   }
 
-  /* ─────────────────────────────── EMPLOYER SCOPE ─────────────────────────────── */
+  // ───────── Employer Scope ─────────
 
   static async resolveEmployerScope({
     userId,
@@ -572,9 +525,7 @@ class JobAppointmentQueryService {
     if (!JobAppointmentQueryService.canViewAppointments(employerContext)) {
       throw createAppointmentQueryError({
         message: "You do not have permission to view permanent Job appointments.",
-
         code: "JOB_APPOINTMENT_VIEW_NOT_ALLOWED",
-
         statusCode: 403,
       });
     }
@@ -582,75 +533,55 @@ class JobAppointmentQueryService {
     if (applicationId) {
       const applicationData = await JobApplicationQueryService.getEmployerApplicationDetailData({
         userId,
-
         employerProfile,
-
         employerContext,
-
         applicationId,
-
         currentTime,
       });
 
       return {
         employer: applicationData.employer,
-
         focusedApplication: applicationData.application,
-
         focusedJob: applicationData.job,
-
         scopeFilter: {
           jobApplication: applicationData.application._id,
         },
-
         canViewAppointments: JobAppointmentQueryService.canViewAppointments(employerContext),
-
         canManageAppointments: JobAppointmentQueryService.canManageAppointments(employerContext),
       };
     }
 
     const profile = await JobApplicationQueryService.getEmployerProfileForRead({
       userId,
-
       employerProfile,
-
       employerContext,
     });
 
     const { jobIds } = await JobApplicationQueryService.resolveAccessibleJobScope({
       employerProfileId: profile._id,
-
       employerContext,
     });
 
     return {
       employer: {
         id: String(profile._id),
-
         businessName: profile.businessName || "Employer",
-
         countryCode: profile.countryCode || null,
-
         currency: profile.currency || null,
       },
-
       focusedApplication: null,
-
       focusedJob: null,
-
       scopeFilter: {
         job: {
           $in: jobIds,
         },
       },
-
       canViewAppointments: JobAppointmentQueryService.canViewAppointments(employerContext),
-
       canManageAppointments: JobAppointmentQueryService.canManageAppointments(employerContext),
     };
   }
 
-  /* ─────────────────────────────── PROFESSIONAL SCOPE ─────────────────────────────── */
+  // ───────── Professional Scope ─────────
 
   static async resolveProfessionalScope({
     userId,
@@ -662,20 +593,15 @@ class JobAppointmentQueryService {
       const applicationData = await JobApplicationQueryService.getProfessionalApplicationDetailData(
         {
           userId,
-
           professionalProfile,
-
           applicationId,
-
           currentTime,
         }
       );
 
       return {
         professional: applicationData.professional,
-
         focusedApplication: applicationData.application,
-
         scopeFilter: {
           jobApplication: applicationData.application._id,
         },
@@ -684,28 +610,23 @@ class JobAppointmentQueryService {
 
     const profile = await JobApplicationQueryService.getProfessionalProfileForRead({
       userId,
-
       professionalProfile,
     });
 
     return {
       professional: {
         id: String(profile._id),
-
         type: profile.type || null,
-
         specialty: profile.specialty || null,
       },
-
       focusedApplication: null,
-
       scopeFilter: {
         professional: profile._id,
       },
     };
   }
 
-  /* ─────────────────────────────── EMPLOYER APPOINTMENTS PAGE ─────────────────────────────── */
+  // ───────── Employer Appointments Page ─────────
 
   static async getEmployerAppointmentsPageData({
     userId,
@@ -731,48 +652,35 @@ class JobAppointmentQueryService {
 
     const scope = await JobAppointmentQueryService.resolveEmployerScope({
       userId,
-
       employerProfile,
-
       employerContext,
-
       applicationId: selectedApplicationId,
-
       currentTime: normalizedCurrentTime,
     });
 
     let filteredAppointmentFilter = JobAppointmentQueryService.applyStatusFilter(
       scope.scopeFilter,
-
       selectedStatus,
-
       normalizedCurrentTime
     );
 
     filteredAppointmentFilter = JobAppointmentQueryService.applyResponseStatusFilter(
       filteredAppointmentFilter,
-
       selectedResponseStatus
     );
 
     const [{ statusCounts, responseStatusCounts }, totalFilteredAppointments] = await Promise.all([
       JobAppointmentQueryService.buildCounts({
         scopeFilter: scope.scopeFilter,
-
         selectedStatus,
-
         selectedResponseStatus,
-
         currentTime: normalizedCurrentTime,
       }),
-
       Appointment.countDocuments(filteredAppointmentFilter),
     ]);
 
     const totalPages = Math.max(Math.ceil(totalFilteredAppointments / APPOINTMENTS_PER_PAGE), 1);
-
     const currentPage = Math.min(requestedPage, totalPages);
-
     const skip = (currentPage - 1) * APPOINTMENTS_PER_PAGE;
 
     const rawAppointments =
@@ -780,9 +688,7 @@ class JobAppointmentQueryService {
         ? await JobAppointmentQueryService.buildEmployerAppointmentQuery(filteredAppointmentFilter)
             .sort({
               startAt: 1,
-
               roundNumber: 1,
-
               _id: 1,
             })
             .skip(skip)
@@ -796,42 +702,27 @@ class JobAppointmentQueryService {
 
     return {
       employer: scope.employer,
-
       appointments,
-
       focusedApplication: scope.focusedApplication,
-
       focusedJob: scope.focusedJob,
-
       selectedStatus,
-
       selectedResponseStatus,
-
       selectedApplicationId: selectedApplicationId ? String(selectedApplicationId) : null,
-
       statusCounts,
-
       responseStatusCounts,
-
       canViewAppointments: scope.canViewAppointments,
-
       canManageAppointments: scope.canManageAppointments,
-
       currentTime: normalizedCurrentTime,
-
       pagination: buildPagination({
         page: currentPage,
-
         totalItems: totalFilteredAppointments,
-
         perPage: APPOINTMENTS_PER_PAGE,
-
         itemCount: appointments.length,
       }),
     };
   }
 
-  /* ─────────────────────────────── EMPLOYER APPOINTMENT DETAIL ─────────────────────────────── */
+  // ───────── Employer Appointment Detail ─────────
 
   static async getEmployerAppointmentDetailData({
     userId,
@@ -852,59 +743,44 @@ class JobAppointmentQueryService {
     if (!identity) {
       throw createAppointmentQueryError({
         message: "Appointment not found.",
-
         code: "APPOINTMENT_NOT_FOUND",
-
         statusCode: 404,
       });
     }
 
     const applicationData = await JobApplicationQueryService.getEmployerApplicationDetailData({
       userId,
-
       employerProfile,
-
       employerContext,
-
       applicationId: identity.jobApplication,
-
       currentTime: normalizedCurrentTime,
     });
 
     const rawAppointment = await JobAppointmentQueryService.buildEmployerAppointmentQuery({
       _id: normalizedAppointmentId,
-
       jobApplication: applicationData.application._id,
     }).lean();
 
     if (!rawAppointment) {
       throw createAppointmentQueryError({
         message: "Appointment not found.",
-
         code: "APPOINTMENT_NOT_FOUND",
-
         statusCode: 404,
       });
     }
 
     return {
       employer: applicationData.employer,
-
       appointment: deriveAppointmentState(rawAppointment, normalizedCurrentTime),
-
       application: applicationData.application,
-
       job: applicationData.job,
-
       canViewAppointments: JobAppointmentQueryService.canViewAppointments(employerContext),
-
       canManageAppointments: JobAppointmentQueryService.canManageAppointments(employerContext),
-
       currentTime: normalizedCurrentTime,
     };
   }
 
-  /* ─────────────────────────────── ADMIN APPOINTMENTS PAGE ─────────────────────────────── */
+  // ───────── Admin Appointments Page ─────────
 
   static async getAdminAppointmentsPageData({
     employerProfileId = null,
@@ -963,21 +839,15 @@ class JobAppointmentQueryService {
     const [{ statusCounts, responseStatusCounts }, totalFilteredAppointments] = await Promise.all([
       JobAppointmentQueryService.buildCounts({
         scopeFilter,
-
         selectedStatus,
-
         selectedResponseStatus,
-
         currentTime: normalizedCurrentTime,
       }),
-
       Appointment.countDocuments(filteredAppointmentFilter),
     ]);
 
     const totalPages = Math.max(Math.ceil(totalFilteredAppointments / APPOINTMENTS_PER_PAGE), 1);
-
     const currentPage = Math.min(requestedPage, totalPages);
-
     const skip = (currentPage - 1) * APPOINTMENTS_PER_PAGE;
 
     const rawAppointments =
@@ -985,9 +855,7 @@ class JobAppointmentQueryService {
         ? await JobAppointmentQueryService.buildAdminAppointmentQuery(filteredAppointmentFilter)
             .sort({
               startAt: 1,
-
               roundNumber: 1,
-
               _id: 1,
             })
             .skip(skip)
@@ -1001,44 +869,29 @@ class JobAppointmentQueryService {
 
     return {
       appointments,
-
       focusedApplication: applicationContext.application,
-
       focusedJob: applicationContext.job,
-
       selectedEmployerProfileId: selectedEmployerProfileId
         ? String(selectedEmployerProfileId)
         : null,
-
       selectedStatus,
-
       selectedResponseStatus,
-
       selectedApplicationId: selectedApplicationId ? String(selectedApplicationId) : null,
-
       statusCounts,
-
       responseStatusCounts,
-
       canViewAppointments: true,
-
       canManageAppointments: false,
-
       currentTime: normalizedCurrentTime,
-
       pagination: buildPagination({
         page: currentPage,
-
         totalItems: totalFilteredAppointments,
-
         perPage: APPOINTMENTS_PER_PAGE,
-
         itemCount: appointments.length,
       }),
     };
   }
 
-  /* ─────────────────────────────── ADMIN APPOINTMENT DETAIL ─────────────────────────────── */
+  // ───────── Admin Appointment Detail ─────────
 
   static async getAdminAppointmentDetailData({ appointmentId, currentTime = new Date() }) {
     const normalizedCurrentTime = JobAppointmentQueryService.normalizeCurrentTime(currentTime);
@@ -1053,9 +906,7 @@ class JobAppointmentQueryService {
     if (!rawAppointment) {
       throw createAppointmentQueryError({
         message: "Appointment not found.",
-
         code: "APPOINTMENT_NOT_FOUND",
-
         statusCode: 404,
       });
     }
@@ -1065,25 +916,19 @@ class JobAppointmentQueryService {
         rawAppointment.business && typeof rawAppointment.business === "object"
           ? rawAppointment.business
           : null,
-
       appointment: deriveAppointmentState(rawAppointment, normalizedCurrentTime),
-
       application:
         rawAppointment.jobApplication && typeof rawAppointment.jobApplication === "object"
           ? rawAppointment.jobApplication
           : null,
-
       job: rawAppointment.job && typeof rawAppointment.job === "object" ? rawAppointment.job : null,
-
       canViewAppointments: true,
-
       canManageAppointments: false,
-
       currentTime: normalizedCurrentTime,
     };
   }
 
-  /* ─────────────────────────────── PROFESSIONAL APPOINTMENTS PAGE ─────────────────────────────── */
+  // ───────── Professional Appointments Page ─────────
 
   static async getProfessionalAppointmentsPageData({
     userId,
@@ -1108,11 +953,8 @@ class JobAppointmentQueryService {
 
     const scope = await JobAppointmentQueryService.resolveProfessionalScope({
       userId,
-
       professionalProfile,
-
       applicationId: selectedApplicationId,
-
       currentTime: normalizedCurrentTime,
     });
 
@@ -1130,21 +972,15 @@ class JobAppointmentQueryService {
     const [{ statusCounts, responseStatusCounts }, totalFilteredAppointments] = await Promise.all([
       JobAppointmentQueryService.buildCounts({
         scopeFilter: scope.scopeFilter,
-
         selectedStatus,
-
         selectedResponseStatus,
-
         currentTime: normalizedCurrentTime,
       }),
-
       Appointment.countDocuments(filteredAppointmentFilter),
     ]);
 
     const totalPages = Math.max(Math.ceil(totalFilteredAppointments / APPOINTMENTS_PER_PAGE), 1);
-
     const currentPage = Math.min(requestedPage, totalPages);
-
     const skip = (currentPage - 1) * APPOINTMENTS_PER_PAGE;
 
     const rawAppointments =
@@ -1154,9 +990,7 @@ class JobAppointmentQueryService {
           )
             .sort({
               startAt: 1,
-
               roundNumber: 1,
-
               _id: 1,
             })
             .skip(skip)
@@ -1170,36 +1004,24 @@ class JobAppointmentQueryService {
 
     return {
       professional: scope.professional,
-
       appointments,
-
       focusedApplication: scope.focusedApplication,
-
       selectedStatus,
-
       selectedResponseStatus,
-
       selectedApplicationId: selectedApplicationId ? String(selectedApplicationId) : null,
-
       statusCounts,
-
       responseStatusCounts,
-
       currentTime: normalizedCurrentTime,
-
       pagination: buildPagination({
         page: currentPage,
-
         totalItems: totalFilteredAppointments,
-
         perPage: APPOINTMENTS_PER_PAGE,
-
         itemCount: appointments.length,
       }),
     };
   }
 
-  /* ─────────────────────────────── PROFESSIONAL APPOINTMENT DETAIL ─────────────────────────────── */
+  // ───────── Professional Appointment Detail ─────────
 
   static async getProfessionalAppointmentDetailData({
     userId,
@@ -1219,20 +1041,15 @@ class JobAppointmentQueryService {
     if (!identity) {
       throw createAppointmentQueryError({
         message: "Appointment not found.",
-
         code: "APPOINTMENT_NOT_FOUND",
-
         statusCode: 404,
       });
     }
 
     const applicationData = await JobApplicationQueryService.getProfessionalApplicationDetailData({
       userId,
-
       professionalProfile,
-
       applicationId: identity.jobApplication,
-
       currentTime: normalizedCurrentTime,
     });
 
@@ -1242,43 +1059,34 @@ class JobAppointmentQueryService {
     ) {
       throw createAppointmentQueryError({
         message: "Appointment not found.",
-
         code: "APPOINTMENT_NOT_FOUND",
-
         statusCode: 404,
       });
     }
 
     const rawAppointment = await JobAppointmentQueryService.buildProfessionalAppointmentQuery({
       _id: normalizedAppointmentId,
-
       jobApplication: applicationData.application._id,
-
       professional: applicationData.professional.id,
     }).lean();
 
     if (!rawAppointment) {
       throw createAppointmentQueryError({
         message: "Appointment not found.",
-
         code: "APPOINTMENT_NOT_FOUND",
-
         statusCode: 404,
       });
     }
 
     return {
       professional: applicationData.professional,
-
       appointment: deriveAppointmentState(rawAppointment, normalizedCurrentTime),
-
       application: applicationData.application,
-
       currentTime: normalizedCurrentTime,
     };
   }
 
-  /* ─────────────────────────────── APPLICATION-SCOPED READS ─────────────────────────────── */
+  // ───────── Application-Scoped Reads ─────────
 
   static async getEmployerApplicationAppointments({
     userId,
@@ -1291,13 +1099,9 @@ class JobAppointmentQueryService {
 
     const applicationData = await JobApplicationQueryService.getEmployerApplicationDetailData({
       userId,
-
       employerProfile,
-
       employerContext,
-
       applicationId,
-
       currentTime: normalizedCurrentTime,
     });
 
@@ -1306,28 +1110,20 @@ class JobAppointmentQueryService {
     })
       .sort({
         roundNumber: 1,
-
         startAt: 1,
-
         _id: 1,
       })
       .lean();
 
     return {
       employer: applicationData.employer,
-
       application: applicationData.application,
-
       job: applicationData.job,
-
       appointments: rawAppointments.map((appointment) =>
         deriveAppointmentState(appointment, normalizedCurrentTime)
       ),
-
       canViewAppointments: JobAppointmentQueryService.canViewAppointments(employerContext),
-
       canManageAppointments: JobAppointmentQueryService.canManageAppointments(employerContext),
-
       currentTime: normalizedCurrentTime,
     };
   }
@@ -1337,7 +1133,6 @@ class JobAppointmentQueryService {
 
     const applicationData = await JobApplicationQueryService.getAdminApplicationDetailData({
       applicationId,
-
       currentTime: normalizedCurrentTime,
     });
 
@@ -1346,28 +1141,20 @@ class JobAppointmentQueryService {
     })
       .sort({
         roundNumber: 1,
-
         startAt: 1,
-
         _id: 1,
       })
       .lean();
 
     return {
       employer: applicationData.employer,
-
       application: applicationData.application,
-
       job: applicationData.job,
-
       appointments: rawAppointments.map((appointment) =>
         deriveAppointmentState(appointment, normalizedCurrentTime)
       ),
-
       canViewAppointments: true,
-
       canManageAppointments: false,
-
       currentTime: normalizedCurrentTime,
     };
   }
@@ -1382,42 +1169,33 @@ class JobAppointmentQueryService {
 
     const applicationData = await JobApplicationQueryService.getProfessionalApplicationDetailData({
       userId,
-
       professionalProfile,
-
       applicationId,
-
       currentTime: normalizedCurrentTime,
     });
 
     const rawAppointments = await JobAppointmentQueryService.buildProfessionalAppointmentQuery({
       jobApplication: applicationData.application._id,
-
       professional: applicationData.professional.id,
     })
       .sort({
         roundNumber: 1,
-
         startAt: 1,
-
         _id: 1,
       })
       .lean();
 
     return {
       professional: applicationData.professional,
-
       application: applicationData.application,
-
       appointments: rawAppointments.map((appointment) =>
         deriveAppointmentState(appointment, normalizedCurrentTime)
       ),
-
       currentTime: normalizedCurrentTime,
     };
   }
 
-  /* ─────────────────────────────── SHARED ERROR CONTRACT ─────────────────────────────── */
+  // ───────── Shared Error Contract ─────────
 
   static createAppointmentQueryError(options) {
     return createAppointmentQueryError(options);

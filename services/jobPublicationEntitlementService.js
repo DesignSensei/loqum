@@ -7,6 +7,7 @@ const JobService = require("./jobService");
 
 const JobPublication = require("../models/JobPublication");
 const Subscription = require("../models/Subscription");
+const EmployerProfile = require("../models/EmployerProfile");
 
 const PlatformSettingsService = require("./platformSettingsService");
 const JobPublicationService = require("./jobPublicationService");
@@ -364,6 +365,32 @@ class JobPublicationEntitlementService {
       return null;
     }
 
+    const lock = await EmployerProfile.updateOne(
+      { _id: employerProfileId },
+      { $inc: { __v: 1 } },
+      { session, timestamps: false }
+    );
+
+    if (lock.matchedCount !== 1 || lock.modifiedCount !== 1) {
+      throw this.createError({
+        message: "The employer business is no longer available for publication.",
+        code: "JOB_PUBLICATION_EMPLOYER_NOT_AVAILABLE",
+        statusCode: 409,
+      });
+    }
+
+    const confirmedUsedCount = await this.countConsumedMonthlyFreeEntitlements({
+      employerProfileId,
+      periodStart,
+      periodEnd,
+      periodKey,
+      session,
+    });
+
+    if (confirmedUsedCount >= MONTHLY_FREE_JOB_PUBLICATION_LIMIT) {
+      return null;
+    }
+
     const slotNumber = 1;
 
     return {
@@ -380,7 +407,7 @@ class JobPublicationEntitlementService {
         periodStart,
         periodEnd,
         limit: MONTHLY_FREE_JOB_PUBLICATION_LIMIT,
-        used: usedCount,
+        used: confirmedUsedCount,
         remainingAfterGrant: 0,
         rolloverEnabled: false,
       },
@@ -424,12 +451,16 @@ class JobPublicationEntitlementService {
       return null;
     }
 
-    const remainder = reference.slice(prefix.length);
-    const [slotNumberText] = remainder.split(":");
+    const match = reference.slice(prefix.length).match(/^([1-9]\d*):([1-9]\d*)$/);
 
-    const slotNumber = Number(slotNumberText);
+    if (!match) {
+      return null;
+    }
 
-    return Number.isSafeInteger(slotNumber) && slotNumber > 0 ? slotNumber : null;
+    const slotNumber = Number(match[1]);
+    const generation = Number(match[2]);
+
+    return Number.isSafeInteger(slotNumber) && Number.isSafeInteger(generation) ? slotNumber : null;
   }
 
   static async getActiveSubscriptionFundedPublications({
@@ -691,7 +722,15 @@ class JobPublicationEntitlementService {
         });
 
         if (slotNumber === null) {
-          continue;
+          throw this.createError({
+            message: "An active Job publication has an invalid subscription slot reference.",
+            code: "SUBSCRIPTION_JOB_SLOT_REFERENCE_INVALID",
+            statusCode: 500,
+            details: {
+              subscriptionId: String(subscriptionId),
+              publicationId: String(publication._id),
+            },
+          });
         }
 
         if (occupiedCurrentSubscriptionSlots.has(slotNumber)) {
@@ -1215,14 +1254,15 @@ class JobPublicationEntitlementService {
     const publishedAt = this.normalizeCurrentTime(currentTime);
 
     return this.runWithOptionalTransaction(options, async (session) => {
+      this.assertCommercialConsumptionTransaction(session);
+      const job = await JobService.getEmployerJob({
+        jobId,
+        employerProfileId,
+        employerContext,
+        adminEmployerContext,
+        session,
+      });
       if (review) {
-        const job = await JobService.getEmployerJob({
-          jobId,
-          employerProfileId,
-          employerContext,
-          adminEmployerContext,
-          session,
-        });
         if (
           typeof review.jobUpdatedAt !== "string" ||
           new Date(job.updatedAt).toISOString() !== review.jobUpdatedAt
@@ -1234,6 +1274,17 @@ class JobPublicationEntitlementService {
           });
         }
       }
+      // This helper now activates due permits and checks current readiness in
+      // this same session BEFORE any commercial entitlement is consumed.
+      // Publication checks eligibility again before its write. Do not catch
+      // failures here: the transaction owner must abort the entire operation.
+      await JobPublicationService.assertBranchPublicationEligibility({
+        job,
+        actorUserId: publishedByUserId,
+        employerContext,
+        adminEmployerContext,
+        session,
+      });
       const entitlement = await this.obtainPublicationEntitlement(
         {
           employerProfileId,

@@ -1,9 +1,16 @@
 // services/professionalService.js
 
+const mongoose = require("mongoose");
+
+const ProfessionalProfile = require("../models/ProfessionalProfile");
 const ShiftOccurrence = require("../models/ShiftOccurrence");
 const ShiftApplication = require("../models/ShiftApplication");
 const Wallet = require("../models/Wallet");
 const BankAccount = require("../models/BankAccount");
+
+const ProfessionalVerificationService = require("./professionalVerificationService");
+
+const { PROFESSIONAL_UNAVAILABLE_STATUSES } = require("../constants/shiftApplication");
 
 const {
   getProfessionalKycStatus,
@@ -15,13 +22,146 @@ const {
 
 const money = require("../utils/money");
 
+const EXPECTED_VERIFICATION_EVIDENCE_ERRORS = new Set([
+  "PROFESSIONAL_VERIFICATION_NIN_EVIDENCE_REQUIRED",
+  "PROFESSIONAL_VERIFICATION_NIN_EVIDENCE_MISMATCH",
+  "PROFESSIONAL_VERIFICATION_REVIEW_EVIDENCE_REQUIRED",
+  "PROFESSIONAL_VERIFICATION_REVIEW_EVIDENCE_MISMATCH",
+  "PROFESSIONAL_VERIFICATION_CONFLICTING_REVIEWS",
+  "PROFESSIONAL_VERIFICATION_UNSUPPORTED_PROFESSIONAL_TYPE",
+]);
+
 class ProfessionalService {
+  // ───────────────────── VERIFICATION READINESS ─────────────────────
+
+  /**
+   * Read-only dashboard eligibility assessment.
+   *
+   * The five profile statuses remain presentation
+   * indicators, not authoritative verification evidence.
+   *
+   * Completed verification additionally requires:
+   *
+   * - Trusted production NIN evidence;
+   * - Administrative NIN documentary review;
+   * - Manual professional council licence verification;
+   * - Correct council verification source;
+   * - Matching NIN and council-confirmed legal names;
+   * - Valid active administrative review records.
+   *
+   * Shift application availability also reflects
+   * the professional's availability. Licence expiry alone
+   * does not revoke marketplace eligibility.
+   *
+   * No new paid NIN/BVN lookup is performed.
+   *
+   * This method does not approve a professional or
+   * change any verification state.
+   */
+
+  static async getDashboardEligibility(professionalProfile) {
+    const unavailable = {
+      verificationReady: false,
+      canApplyForShifts: false,
+    };
+
+    if (!professionalProfile?._id || !professionalProfile?.user) {
+      return unavailable;
+    }
+
+    const summary = getProfessionalKycStatus(professionalProfile);
+
+    if (!summary.isEligible) {
+      return unavailable;
+    }
+
+    const session = await mongoose.startSession();
+
+    try {
+      let result = unavailable;
+
+      await session.withTransaction(async () => {
+        result = unavailable;
+
+        // Re-read current state rather than trusting
+        // the previously attached profile document.
+        const currentProfile = await ProfessionalProfile.findOne({
+          _id: professionalProfile._id,
+          user: professionalProfile.user,
+        }).session(session);
+
+        if (!currentProfile) {
+          return;
+        }
+
+        const currentSummary = getProfessionalKycStatus(currentProfile);
+
+        if (!currentSummary.isEligible) {
+          return;
+        }
+
+        const readiness = ProfessionalVerificationService.getVerificationReadiness(currentProfile);
+
+        if (readiness.verificationReady !== true) {
+          return;
+        }
+
+        const approvalTime = currentProfile.approvedForShiftsAt
+          ? new Date(currentProfile.approvedForShiftsAt).getTime()
+          : NaN;
+
+        if (
+          !Number.isFinite(approvalTime) ||
+          approvalTime > Date.now() ||
+          !mongoose.isValidObjectId(currentProfile.approvedForShiftsBy) ||
+          String(currentProfile.approvedForShiftsBy) === String(currentProfile.user)
+        ) {
+          return;
+        }
+
+        const trusted = await ProfessionalVerificationService.getTrustedOnboardingNIN({
+          profile: currentProfile,
+          session,
+        });
+
+        await ProfessionalVerificationService.getVerifiedReviewEvidence({
+          profile: currentProfile,
+          trusted,
+          session,
+        });
+
+        const availabilityAllowed = !PROFESSIONAL_UNAVAILABLE_STATUSES.includes(
+          currentProfile.availabilityStatus
+        );
+
+        result = {
+          verificationReady: true,
+          canApplyForShifts: availabilityAllowed,
+        };
+      });
+
+      return result;
+    } catch (error) {
+      if (EXPECTED_VERIFICATION_EVIDENCE_ERRORS.has(error?.code)) {
+        return unavailable;
+      }
+
+      throw error;
+    } finally {
+      await session.endSession();
+    }
+  }
+
+  // ───────────────────── DASHBOARD DATA ─────────────────────
+
   /**
    * Get all data needed for the professional dashboard.
    *
    * This method only reads dashboard data.
-   * It does not create profiles, wallets, payout accounts, shifts, or applications.
+   * It does not create profiles, wallets, payout
+   * accounts, shifts, or applications.
    */
+
   static async getDashboardData(professionalProfile) {
     if (!professionalProfile) {
       throw new Error("Professional profile is required to load dashboard.");
@@ -41,6 +181,7 @@ class ProfessionalService {
      * - professional: ProfessionalProfile _id
      * - isActive: true
      */
+
     const [wallet, payoutAccount] = await Promise.all([
       Wallet.findOne({
         ownerType: "professional",
@@ -60,10 +201,15 @@ class ProfessionalService {
 
     const walletReadiness = getWalletStatus(wallet);
 
-    /**
-     * For now, professionals can apply for shifts only when profile checks pass.
-     */
-    const canApplyForShifts = professionalKycStatus.isEligible;
+    // Authoritative verification and general
+    // application eligibility are separate from
+    // the five-status presentation summary.
+
+    const eligibility = await this.getDashboardEligibility(professionalProfile);
+
+    const verificationReady = eligibility.verificationReady;
+
+    const canApplyForShifts = eligibility.canApplyForShifts;
 
     const walletStatus = wallet?.status || "not_started";
     const walletBalance = wallet?.availableBalance ?? 0;
@@ -127,6 +273,7 @@ class ProfessionalService {
 
     const recentApplications = safeRecentApplicationsRaw.map((application) => {
       const applicationStatus = application.status || "pending";
+
       const shift = application.shift || {};
       const shiftStatus = shift.status || "missing";
 
@@ -183,6 +330,7 @@ class ProfessionalService {
       payoutReadiness,
       walletReadiness,
       walletBalance,
+      verificationReady,
       canApplyForShifts,
     });
 
@@ -204,14 +352,17 @@ class ProfessionalService {
     };
   }
 
+  // ───────────────────── DASHBOARD PRESENTATION ─────────────────────
+
   static buildDashboardView({
     professionalKycStatus,
     payoutReadiness,
     walletReadiness,
     walletBalance,
+    verificationReady,
     canApplyForShifts,
   }) {
-    const profileAlertType = professionalKycStatus.isEligible ? "success" : "warning";
+    const profileAlertType = verificationReady ? "success" : "warning";
 
     const profileAlert = this.getAlertView(profileAlertType);
 
@@ -227,24 +378,27 @@ class ProfessionalService {
 
     const payoutAccountItem = payoutReadiness.items.find(
       (item) => item.label === "Payout account"
-    ) || {
-      status: "not_started",
-    };
+    ) || { status: "not_started" };
+
+    const profileMessage = !verificationReady
+      ? professionalKycStatus.pendingMessage
+      : canApplyForShifts
+        ? professionalKycStatus.successMessage
+        : "Your profile verification is complete. " +
+          "Shift applications also require an available professional status.";
 
     return {
       profileAlertClass: profileAlert.alertClass,
       profileIconClass: profileAlert.iconClass,
 
       profileTitle: professionalKycStatus.title,
-      profileMessage: professionalKycStatus.isEligible
-        ? professionalKycStatus.successMessage
-        : professionalKycStatus.pendingMessage,
+      profileMessage,
 
-      profileStatusLabel: professionalKycStatus.isEligible ? "Verified" : "Under Review",
-      profileBadgeClass: professionalKycStatus.isEligible
-        ? "badge-light-success"
-        : "badge-light-warning",
-      profileBadgeLabel: professionalKycStatus.isEligible ? "Ready" : "Pending",
+      profileStatusLabel: verificationReady ? "Verified" : "Under Review",
+
+      profileBadgeClass: verificationReady ? "badge-light-success" : "badge-light-warning",
+
+      profileBadgeLabel: verificationReady ? "Ready" : "Pending",
 
       marketplaceStatusLabel: formatStatus(marketplaceItem.status),
       marketplaceBadgeClass: badgeClass[marketplaceItem.status] || "badge-light-warning",
@@ -257,15 +411,18 @@ class ProfessionalService {
       payoutStatusLabel: payoutReadiness.isEligible
         ? "Ready"
         : formatStatus(payoutAccountItem.status),
+
       payoutBadgeClass: payoutReadiness.isEligible
         ? "badge-light-success"
         : badgeClass[payoutAccountItem.status] || "badge-light-warning",
+
       payoutBadgeLabel: payoutReadiness.isEligible
         ? "Ready"
         : formatStatus(payoutAccountItem.status),
 
       showPayoutNotice: !payoutReadiness.isEligible,
       payoutTitle: payoutReadiness.title,
+
       payoutMessage: payoutReadiness.isEligible
         ? payoutReadiness.successMessage
         : payoutReadiness.pendingMessage,
@@ -275,13 +432,20 @@ class ProfessionalService {
       walletBadgeLabel: formatStatus(walletItem.status),
 
       walletBalanceFormatted: this.formatMinorUnitMoney(walletBalance),
+
       walletCtaLabel: walletBalance > 0 ? "View Wallet" : "Wallet",
+
       walletCtaBadgeClass: walletBalance > 0 ? "badge-light-success" : "badge-light-warning",
 
       canApplyForShifts,
-      applyShiftLockedMessage: "Shift applications will be available after profile verification",
+
+      applyShiftLockedMessage: verificationReady
+        ? "Update your availability to apply for shifts."
+        : "Shift applications will be available after profile verification",
     };
   }
+
+  // ───────────────────── ALERT PRESENTATION ─────────────────────
 
   static getAlertView(type) {
     if (type === "success") {
@@ -306,10 +470,12 @@ class ProfessionalService {
     }
 
     return {
-      alertClass: "bg-light-warning border-warning",
-      iconClass: "ki-information-5 text-warning",
+      alertClass: "bg-light-warning",
+      iconClass: "ki-information-5 text-info",
     };
   }
+
+  // ───────────────────── FORMAT HELPERS ─────────────────────
 
   static formatDate(value) {
     if (!value) return "-";

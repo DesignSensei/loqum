@@ -11,6 +11,8 @@ const logger = require("../utils/logger");
 const EMPLOYER_ATTENDANCE_VIEW = "employer/shifts/attendance";
 const EMPLOYER_SHIFTS_URL = "/employer/shifts";
 
+const CONTROLLER_ERROR_NAME = "EmployerShiftAttendanceControllerError";
+
 /* ─────────────────────────────── HELPERS ─────────────────────────────── */
 
 function setSensitiveResponseHeaders(res) {
@@ -18,45 +20,62 @@ function setSensitiveResponseHeaders(res) {
     "Cache-Control": "no-store, no-cache, must-revalidate, private",
     Pragma: "no-cache",
     Expires: "0",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
   });
+}
+
+function createControllerError({ message, code, statusCode = 500, details = null }) {
+  const error = new Error(message);
+
+  error.name = CONTROLLER_ERROR_NAME;
+  error.code = code;
+  error.statusCode = statusCode;
+
+  if (details && typeof details === "object") {
+    error.details = details;
+  }
+
+  return error;
 }
 
 function isOperationalServiceError(error) {
   return [
     "ShiftAttendanceServiceError",
     "ShiftAttendanceQueryServiceError",
-    "EmployerShiftAttendanceControllerError",
+    CONTROLLER_ERROR_NAME,
   ].includes(error?.name);
+}
+
+function getErrorStatusCode(error) {
+  if (!isOperationalServiceError(error)) {
+    return 500;
+  }
+
+  const statusCode = Number(error?.statusCode);
+
+  return Number.isInteger(statusCode) && statusCode >= 400 && statusCode <= 599 ? statusCode : 400;
 }
 
 function handleJsonError({ res, error, logContext, fallbackMessage, fallbackCode }) {
   const operationalError = isOperationalServiceError(error);
-
-  const requestedStatusCode = Number(error?.statusCode);
-
-  const statusCode = operationalError
-    ? Number.isInteger(requestedStatusCode) &&
-      requestedStatusCode >= 400 &&
-      requestedStatusCode <= 599
-      ? requestedStatusCode
-      : 400
-    : 500;
+  const statusCode = getErrorStatusCode(error);
 
   if (statusCode >= 500) {
     logger.error(`${logContext}:`, error);
   } else {
-    logger.warn(`${logContext} rejected: ` + `${error.code || "UNKNOWN"} - ` + `${error.message}`);
+    logger.warn(`${logContext} rejected: ${error.code || "UNKNOWN"} - ${error.message}`);
   }
 
   const response = {
     success: false,
 
-    message: operationalError ? error.message : fallbackMessage,
+    message: operationalError && statusCode < 500 ? error.message : fallbackMessage,
 
-    code: operationalError ? error.code || fallbackCode : fallbackCode,
+    code: operationalError && statusCode < 500 ? error.code || fallbackCode : fallbackCode,
   };
 
-  if (operationalError && error.details && typeof error.details === "object") {
+  if (operationalError && statusCode < 500 && error.details && typeof error.details === "object") {
     response.details = error.details;
   }
 
@@ -71,36 +90,30 @@ function getEmployerUserId(req) {
   const employerUserId = req.user?._id;
 
   if (!employerUserId) {
-    const error = new Error("Employer user context is unavailable.");
-
-    error.name = "EmployerShiftAttendanceControllerError";
-
-    error.code = "EMPLOYER_USER_CONTEXT_REQUIRED";
-
-    error.statusCode = 500;
-
-    throw error;
+    throw createControllerError({
+      message: "Employer user context is unavailable.",
+      code: "EMPLOYER_USER_CONTEXT_REQUIRED",
+    });
   }
 
   return employerUserId;
 }
 
-function getEmployerProfileId(req) {
-  const employerProfileId = req.employerProfile?._id;
+function getEmployerProfile(req) {
+  const employerProfile = req.employerProfile;
 
-  if (!employerProfileId) {
-    const error = new Error("Employer profile context is unavailable.");
-
-    error.name = "EmployerShiftAttendanceControllerError";
-
-    error.code = "EMPLOYER_PROFILE_CONTEXT_REQUIRED";
-
-    error.statusCode = 500;
-
-    throw error;
+  if (!employerProfile?._id) {
+    throw createControllerError({
+      message: "Employer profile context is unavailable.",
+      code: "EMPLOYER_PROFILE_CONTEXT_REQUIRED",
+    });
   }
 
-  return employerProfileId;
+  return employerProfile;
+}
+
+function getEmployerProfileId(req) {
+  return getEmployerProfile(req)._id;
 }
 
 function getEmployerAttendanceContext(req) {
@@ -123,36 +136,43 @@ function getEmployerAttendanceContext(req) {
  * ShiftAttendanceQueryService owns:
  *
  * - employer/business authorization;
- * - branch scope;
- * - focused Shift scope;
+ * - branch-level access and filtering;
+ * - focused Shift filtering;
  * - attendance-status filtering;
- * - occurrence reads;
- * - raw attendance counts; and
- * - pagination facts.
+ * - occurrence retrieval;
+ * - attendance summary counts; and
+ * - pagination.
  *
  * ShiftAttendanceViewService owns:
  *
- * - occurrence identity presentation;
- * - professional presentation;
- * - attendance status presentation;
+ * - occurrence and professional presentation;
+ * - attendance status labels and styles;
  * - attendance audit presentation;
  * - PIN action availability;
- * - filters;
+ * - filter presentation;
  * - summary cards;
- * - empty state; and
+ * - empty states; and
  * - pagination presentation.
  *
- * Raw attendance PINs are never loaded by this page request.
- * PIN values remain behind the exact occurrence PIN endpoints below.
+ * The controller only orchestrates query, view-model
+ * construction and rendering.
+ *
+ * Raw attendance PINs are not retrieved for this page.
+ * They remain accessible only through the authorized
+ * occurrence-specific PIN endpoints.
+ *
+ * The application layout owns the global page header
+ * and toolbar. This controller supplies the title
+ * and breadcrumbs without duplicating them in EJS.
  */
 exports.getAttendance = async (req, res, next) => {
   try {
-    const currentTime = new Date();
+    const employerProfile = getEmployerProfile(req);
 
     const attendancePageData = await ShiftAttendanceQueryService.getEmployerAttendancePageData({
       userId: getEmployerUserId(req),
 
-      employerProfile: req.employerProfile,
+      employerProfile,
 
       employerContext: req.employerContext || null,
 
@@ -162,7 +182,7 @@ exports.getAttendance = async (req, res, next) => {
 
       page: req.query.page,
 
-      currentTime,
+      currentTime: new Date(),
     });
 
     const attendanceView =
@@ -178,17 +198,14 @@ exports.getAttendance = async (req, res, next) => {
       breadcrumbs: [
         {
           label: "Home",
-
           url: "/employer/dashboard",
         },
         {
           label: "Manage Shifts",
-
           url: EMPLOYER_SHIFTS_URL,
         },
         {
           label: "Attendance",
-
           url: null,
         },
       ],
@@ -198,8 +215,8 @@ exports.getAttendance = async (req, res, next) => {
       attendanceView,
 
       scripts: `
-          <script src="/js/employer/shift-attendance.js"></script>
-        `,
+        <script src="/js/employer/shift-attendance.js"></script>
+      `,
     });
   } catch (error) {
     logger.error("Employer shift attendance page error:", error);
@@ -212,7 +229,24 @@ exports.getAttendance = async (req, res, next) => {
 
 /**
  * Returns the check-in PIN for one ShiftOccurrence.
- * Employer/branch authorization and PIN availability are service-owned.
+ *
+ * ShiftAttendanceService owns:
+ *
+ * - employer/business authorization;
+ * - branch access;
+ * - occurrence assignment validation;
+ * - protected funding validation;
+ * - occurrence attendance-state validation; and
+ * - check-in PIN availability.
+ *
+ * An explicit occurrenceId selects the exact work occurrence.
+ *
+ * When occurrenceId is omitted, the service permits
+ * implicit selection only when exactly one occurrence
+ * belongs to the Shift.
+ *
+ * Check-in PIN availability is state-based rather
+ * than restricted to a pre-check-in reveal window.
  */
 exports.getCheckInPin = async (req, res) => {
   try {
@@ -224,13 +258,11 @@ exports.getCheckInPin = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-
       data: result,
     });
   } catch (error) {
     return handleJsonError({
       res,
-
       error,
 
       logContext: "Employer occurrence check-in PIN request",
@@ -246,7 +278,25 @@ exports.getCheckInPin = async (req, res) => {
 
 /**
  * Returns the check-out PIN for one ShiftOccurrence.
- * Employer/branch authorization and PIN availability are service-owned.
+ *
+ * ShiftAttendanceService owns:
+ *
+ * - employer/business authorization;
+ * - branch access;
+ * - occurrence assignment validation;
+ * - protected funding validation;
+ * - successful check-in verification;
+ * - occurrence attendance-state validation; and
+ * - check-out PIN availability.
+ *
+ * The check-out PIN is available only after
+ * successful professional check-in, while the
+ * occurrence remains eligible for checkout.
+ *
+ * An explicit occurrenceId selects the exact work occurrence.
+ *
+ * Implicit selection is permitted only when the
+ * Shift contains exactly one occurrence.
  */
 exports.getCheckOutPin = async (req, res) => {
   try {
@@ -258,13 +308,11 @@ exports.getCheckOutPin = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-
       data: result,
     });
   } catch (error) {
     return handleJsonError({
       res,
-
       error,
 
       logContext: "Employer occurrence check-out PIN request",

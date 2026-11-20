@@ -1,7 +1,6 @@
 // services/jobs/jobViewService.js
 
 const { badgeClass, formatStatus } = require("../../utils/statusHelper");
-
 const Job = require("../../models/Job");
 
 const {
@@ -50,35 +49,30 @@ const PAGE_COPY = Object.freeze({
 });
 
 class JobViewService {
-  /* ─────────────────────────────── HELPERS ─────────────────────────────── */
+  // ───────── Helpers ─────────
 
   static toId(value) {
     if (!value) {
       return null;
     }
-
     if (typeof value === "string") {
       return value;
     }
-
     return String(value._id || value);
   }
 
   static toNonNegativeSafeInteger(value, fallback = 0) {
     const normalized = Number(value);
-
     return Number.isSafeInteger(normalized) && normalized >= 0 ? normalized : fallback;
   }
 
   static toPositiveSafeInteger(value, fallback = null) {
     const normalized = Number(value);
-
     return Number.isSafeInteger(normalized) && normalized > 0 ? normalized : fallback;
   }
 
   static normalizeCurrentTime(value = new Date()) {
     const currentTime = new Date(value);
-
     return Number.isNaN(currentTime.getTime()) ? new Date() : currentTime;
   }
 
@@ -94,26 +88,20 @@ class JobViewService {
     if (!value) {
       return "-";
     }
-
     const date = new Date(value);
-
     if (Number.isNaN(date.getTime())) {
       return "-";
     }
-
     const options = {
       dateStyle: "medium",
     };
-
     if (timeZone) {
       options.timeZone = timeZone;
     }
-
     try {
       return new Intl.DateTimeFormat("en-NG", options).format(date);
     } catch (error) {
       delete options.timeZone;
-
       return new Intl.DateTimeFormat("en-NG", options).format(date);
     }
   }
@@ -122,34 +110,27 @@ class JobViewService {
     if (!value) {
       return "-";
     }
-
     const date = new Date(value);
-
     if (Number.isNaN(date.getTime())) {
       return "-";
     }
-
     const options = {
       dateStyle: "medium",
       timeStyle: "short",
     };
-
     if (timeZone) {
       options.timeZone = timeZone;
     }
-
     try {
       return new Intl.DateTimeFormat("en-NG", options).format(date);
     } catch (error) {
       delete options.timeZone;
-
       return new Intl.DateTimeFormat("en-NG", options).format(date);
     }
   }
 
   static buildLocationLabel({ address = null, lga = null, state = null } = {}) {
     const parts = [address, lga, state].map((value) => String(value || "").trim()).filter(Boolean);
-
     return parts.length ? parts.join(", ") : null;
   }
 
@@ -164,10 +145,8 @@ class JobViewService {
         urgency: null,
       };
     }
-
     const deadline = new Date(applicationDeadline);
     const now = this.normalizeCurrentTime(currentTime);
-
     if (Number.isNaN(deadline.getTime())) {
       return {
         value: applicationDeadline,
@@ -178,15 +157,10 @@ class JobViewService {
         urgency: null,
       };
     }
-
     const millisecondsRemaining = deadline.getTime() - now.getTime();
-
     const hasPassed = millisecondsRemaining < 0;
-
     const daysRemaining = hasPassed ? 0 : Math.ceil(millisecondsRemaining / (24 * 60 * 60 * 1000));
-
     let urgency = "normal";
-
     if (hasPassed) {
       urgency = "passed";
     } else if (daysRemaining <= 3) {
@@ -194,7 +168,6 @@ class JobViewService {
     } else if (daysRemaining <= 7) {
       urgency = "soon";
     }
-
     return {
       value: deadline,
       display: this.formatDate(deadline),
@@ -209,79 +182,55 @@ class JobViewService {
     if (!publication) {
       return null;
     }
-
     const now = this.normalizeCurrentTime(currentTime);
-
     const expiresAt = publication.expiresAt ? new Date(publication.expiresAt) : null;
-
     const hasValidExpiry = expiresAt && !Number.isNaN(expiresAt.getTime());
-
     const hasExpiredByTime = hasValidExpiry ? expiresAt <= now : false;
-
     return {
       publishedAt: publication.publishedAt || null,
       publishedAtDisplay: this.formatDateTime(publication.publishedAt),
-
       expiresAt: publication.expiresAt || null,
       expiresAtDisplay:
         publication.entitlementSnapshot?.source === "subscription_slot"
           ? "No fixed expiry (subscription slot)"
           : this.formatDateTime(publication.expiresAt),
-
       hasExpiredByTime,
-
       deadline: this.buildDeadlineView(publication.applicationDeadline, now),
     };
   }
 
   static buildPaginationView({ pagination, buildUrl, emptyText }) {
     const currentPage = this.toPositiveSafeInteger(pagination?.currentPage, 1);
-
     const totalPages = this.toPositiveSafeInteger(pagination?.totalPages, 1);
-
     const totalItems = this.toNonNegativeSafeInteger(pagination?.totalItems, 0);
-
     const startItem = this.toNonNegativeSafeInteger(pagination?.startItem, 0);
-
     const endItem = this.toNonNegativeSafeInteger(pagination?.endItem, 0);
-
     const previousPage = currentPage > 1 ? currentPage - 1 : null;
-
     const nextPage = currentPage < totalPages ? currentPage + 1 : null;
-
     return {
       currentPage,
       totalPages,
       totalItems,
-
       perPage: this.toNonNegativeSafeInteger(pagination?.perPage, 0),
-
       startItem,
       endItem,
-
       hasPagination: totalPages > 1,
-
       resultsText: totalItems > 0 ? `Showing ${startItem}-${endItem} of ${totalItems}` : emptyText,
-
       pageText: `Page ${currentPage} of ${totalPages}`,
-
       previous: {
         label: "Previous",
         enabled: previousPage !== null,
-
         url: previousPage === null ? null : buildUrl(previousPage),
       },
-
       next: {
         label: "Next",
         enabled: nextPage !== null,
-
         url: nextPage === null ? null : buildUrl(nextPage),
       },
     };
   }
 
-  /* ─────────────────────────────── URL BUILDERS ─────────────────────────────── */
+  // ───────── URL Builders ─────────
 
   static buildEmployerJobsUrl({
     recruitmentStatus = "all",
@@ -291,29 +240,22 @@ class JobViewService {
     page = null,
   } = {}) {
     const params = new URLSearchParams();
-
     if (recruitmentStatus && recruitmentStatus !== "all") {
       params.set("recruitmentStatus", recruitmentStatus);
     }
-
     if (publicationStatus && publicationStatus !== "all") {
       params.set("publicationStatus", publicationStatus);
     }
-
     if (branchId) {
       params.set("branch", String(branchId));
     }
-
     if (search) {
       params.set("search", String(search));
     }
-
     if (Number.isSafeInteger(Number(page)) && Number(page) > 1) {
       params.set("page", String(page));
     }
-
     const query = params.toString();
-
     return query ? `${EMPLOYER_JOBS_URL}?${query}` : EMPLOYER_JOBS_URL;
   }
 
@@ -326,33 +268,25 @@ class JobViewService {
     page = null,
   } = {}) {
     const params = new URLSearchParams();
-
     if (employerProfileId) {
       params.set("employer", String(employerProfileId));
     }
-
     if (recruitmentStatus && recruitmentStatus !== "all") {
       params.set("recruitmentStatus", recruitmentStatus);
     }
-
     if (publicationStatus && publicationStatus !== "all") {
       params.set("publicationStatus", publicationStatus);
     }
-
     if (branchId) {
       params.set("branch", String(branchId));
     }
-
     if (search) {
       params.set("search", String(search));
     }
-
     if (Number.isSafeInteger(Number(page)) && Number(page) > 1) {
       params.set("page", String(page));
     }
-
     const query = params.toString();
-
     return query ? `${ADMIN_JOBS_URL}?${query}` : ADMIN_JOBS_URL;
   }
 
@@ -366,72 +300,53 @@ class JobViewService {
     page = null,
   } = {}) {
     const params = new URLSearchParams();
-
     if (search) {
       params.set("search", String(search));
     }
-
     if (professionalType && professionalType !== "all") {
       params.set("professionalType", professionalType);
     }
-
     if (employmentType && employmentType !== "all") {
       params.set("employmentType", employmentType);
     }
-
     if (workplaceType && workplaceType !== "all") {
       params.set("workplaceType", workplaceType);
     }
-
     if (state) {
       params.set("state", String(state));
     }
-
     if (lga) {
       params.set("lga", String(lga));
     }
-
     if (Number.isSafeInteger(Number(page)) && Number(page) > 1) {
       params.set("page", String(page));
     }
-
     const query = params.toString();
-
     return query ? `${MARKETPLACE_JOBS_URL}?${query}` : MARKETPLACE_JOBS_URL;
   }
 
   static buildSavedJobsUrl({ page = null } = {}) {
     const params = new URLSearchParams();
-
     if (Number.isSafeInteger(Number(page)) && Number(page) > 1) {
       params.set("page", String(page));
     }
-
     const query = params.toString();
-
     return query ? `${PROFESSIONAL_SAVED_JOBS_URL}?${query}` : PROFESSIONAL_SAVED_JOBS_URL;
   }
 
-  /* ─────────────────────────────── GENERIC PRESENTATION ─────────────────────────────── */
+  // ───────── Generic Presentation ─────────
 
   static buildBranchView(branch) {
     if (!branch) {
       return null;
     }
-
     return {
       id: this.toId(branch),
-
       name: branch.name || null,
-
       address: branch.address || null,
-
       state: branch.state || null,
-
       lga: branch.lga || null,
-
       isActive: branch.isActive !== false,
-
       locationLabel: this.buildLocationLabel(branch),
     };
   }
@@ -439,9 +354,7 @@ class JobViewService {
   static buildStatusView(status) {
     return {
       value: status || null,
-
       label: this.formatStatusLabel(status),
-
       badgeClass: this.getStatusBadgeClass(status),
     };
   }
@@ -450,118 +363,69 @@ class JobViewService {
     if (!publication) {
       return null;
     }
-
     const id = this.toId(publication);
-
     const status = publication.status || null;
-
     const pauseHistory = (
       Array.isArray(publication.pauseHistory) ? publication.pauseHistory : []
     ).map((pause) => ({
       pausedAt: pause?.pausedAt || null,
-
       pausedAtDisplay: this.formatDateTime(pause?.pausedAt),
-
       pausedBy: this.toId(pause?.pausedBy),
-
       resumedAt: pause?.resumedAt || null,
-
       resumedAtDisplay: this.formatDateTime(pause?.resumedAt),
-
       resumedBy: this.toId(pause?.resumedBy),
-
       isActive: Boolean(pause?.pausedAt && !pause?.resumedAt),
     }));
-
     const latestPause = pauseHistory.length > 0 ? pauseHistory[pauseHistory.length - 1] : null;
-
     return {
       id,
-
       jobId: this.toId(publication.job),
-
       cycleNumber: this.toPositiveSafeInteger(publication.cycleNumber, null),
-
       status,
-
       statusLabel: this.formatStatusLabel(status),
-
       statusBadgeClass: this.getStatusBadgeClass(status),
-
       timing: this.buildPublicationTimingView(publication, currentTime),
-
       pauseHistory,
-
       hasPauseHistory: pauseHistory.length > 0,
-
       pausedAt: latestPause?.pausedAt || null,
-
       pausedAtDisplay: latestPause?.pausedAtDisplay || "-",
-
       resumedAt: latestPause?.resumedAt || null,
-
       resumedAtDisplay: latestPause?.resumedAtDisplay || "-",
-
       isCurrentlyPaused: status === "paused" && latestPause?.isActive === true,
-
       endedAt: publication.endedAt || null,
-
       endedAtDisplay: this.formatDateTime(publication.endedAt),
-
       createdAt: publication.createdAt || null,
-
       createdAtDisplay: this.formatDateTime(publication.createdAt),
-
       updatedAt: publication.updatedAt || null,
-
       updatedAtDisplay: this.formatDateTime(publication.updatedAt),
     };
   }
 
-  /* ─────────────────────────────── EMPLOYER JOB ─────────────────────────────── */
+  // ───────── Employer Job ─────────
 
   static buildEmployerJobView(job, currentTime = new Date()) {
     if (!job) {
       return null;
     }
-
     const id = this.toId(job);
-
     const branch = this.buildBranchView(job.branch);
-
     const recruitmentStatus = job.recruitmentStatus || null;
-
     const publicationStatus = job.publicationStatus || null;
-
     const currentPublication = this.buildPublicationView(job.currentPublication, currentTime);
-
     return {
       id,
-
       referenceCode: job.referenceCode || null,
-
       roleTitle: job.roleTitle || null,
-
       professionalType: job.professionalType || null,
-
       professionalTypeLabel: this.formatStatusLabel(job.professionalType),
-
       specialty: job.specialty || null,
-
       department: job.department || null,
-
       employmentType: job.employmentType || null,
-
       employmentTypeLabel: this.formatStatusLabel(job.employmentType),
-
       workplaceType: job.workplaceType || null,
-
       workplaceTypeLabel: this.formatStatusLabel(job.workplaceType),
-
       state: job.state || branch?.state || null,
-
       lga: job.lga || branch?.lga || null,
-
       locationLabel:
         this.buildLocationLabel({
           lga: job.lga,
@@ -569,68 +433,45 @@ class JobViewService {
         }) ||
         branch?.locationLabel ||
         null,
-
       branch,
-
       recruitmentStatus,
-
       recruitmentStatusLabel: this.formatStatusLabel(recruitmentStatus),
-
       recruitmentStatusBadgeClass: this.getStatusBadgeClass(recruitmentStatus),
-
       publicationStatus,
-
       publicationStatusLabel: this.formatStatusLabel(publicationStatus),
-
       publicationStatusBadgeClass: this.getStatusBadgeClass(publicationStatus),
-
       currentPublication,
-
       createdAt: job.createdAt || null,
-
       createdAtDisplay: this.formatDateTime(job.createdAt),
-
       updatedAt: job.updatedAt || null,
-
       updatedAtDisplay: this.formatDateTime(job.updatedAt),
-
       detailsUrl: id ? `${EMPLOYER_JOBS_URL}/${id}` : null,
-
       applicationsUrl: id ? `${EMPLOYER_JOBS_URL}/${id}/applications` : null,
     };
   }
 
   static buildStatusFilterItems({ counts = {}, selected = "all", key, buildUrl }) {
     const statuses = new Set(["all"]);
-
     Object.keys(counts || {}).forEach((status) => statuses.add(status));
-
     if (selected) {
       statuses.add(selected);
     }
-
     return [...statuses]
       .filter(Boolean)
       .sort((left, right) => {
         if (left === "all") {
           return -1;
         }
-
         if (right === "all") {
           return 1;
         }
-
         return String(left).localeCompare(String(right));
       })
       .map((status) => ({
         key: status,
-
         label: status === "all" ? "All" : this.formatStatusLabel(status) || status,
-
         count: this.toNonNegativeSafeInteger(counts?.[status], 0),
-
         isActive: status === selected,
-
         url: buildUrl({
           [key]: status,
           page: 1,
@@ -656,261 +497,175 @@ class JobViewService {
       currentTime = new Date(),
       pagination = {},
     } = pageData;
-
     const jobViews = (Array.isArray(jobs) ? jobs : [])
       .map((job) => this.buildEmployerJobView(job, currentTime))
       .filter(Boolean);
-
     const buildUrl = (overrides = {}) =>
       this.buildEmployerJobsUrl({
         recruitmentStatus: overrides.recruitmentStatus ?? selectedRecruitmentStatus,
-
         publicationStatus: overrides.publicationStatus ?? selectedPublicationStatus,
-
         branchId: Object.prototype.hasOwnProperty.call(overrides, "branchId")
           ? overrides.branchId
           : selectedBranchId,
-
         search: overrides.search ?? selectedSearch,
-
         page: overrides.page ?? null,
       });
-
     const recruitmentFilters = this.buildStatusFilterItems({
       counts: recruitmentStatusCounts,
-
       selected: selectedRecruitmentStatus,
-
       key: "recruitmentStatus",
-
       buildUrl,
     });
-
     const publicationFilters = this.buildStatusFilterItems({
       counts: publicationStatusCounts,
-
       selected: selectedPublicationStatus,
-
       key: "publicationStatus",
-
       buildUrl,
     });
-
     const branchFilters = [
       {
         key: "all",
-
         label: "All branches",
-
         value: null,
-
         isActive: !selectedBranchId,
-
         url: buildUrl({
           branchId: null,
           page: 1,
         }),
       },
-
       ...(Array.isArray(branches) ? branches : []).map((branch) => ({
         key: this.toId(branch),
-
         label: branch.name || "Branch",
-
         value: this.toId(branch),
-
         isActive: this.toId(branch) === selectedBranchId,
-
         url: buildUrl({
           branchId: this.toId(branch),
-
           page: 1,
         }),
       })),
     ];
-
     const paginationView = this.buildPaginationView({
       pagination,
-
       emptyText: "No Jobs match the current filters.",
-
       buildUrl: (page) => buildUrl({ page }),
     });
-
     const hasFilters = Boolean(
       selectedRecruitmentStatus !== "all" ||
       selectedPublicationStatus !== "all" ||
       selectedBranchId ||
       selectedSearch
     );
-
     const readOnly = canViewJobs === true && canManageJobs !== true;
-
     return {
       pageTitle: PAGE_COPY.employerJobsTitle,
-
       employer,
-
       jobs: jobViews,
-
       hasJobs: jobViews.length > 0,
-
       summary: {
         visibleJobCount: jobViews.length,
-
         totalFilteredJobs: this.toNonNegativeSafeInteger(pagination?.totalItems, 0),
       },
-
       filters: {
         recruitment: recruitmentFilters,
-
         publication: publicationFilters,
-
         branches: branchFilters,
-
         search: {
           value: selectedSearch || "",
-
           name: "search",
-
           placeholder: "Search Jobs",
         },
-
         clearAction: {
           visible: hasFilters,
-
           label: PAGE_COPY.clearFiltersLabel,
-
           url: EMPLOYER_JOBS_URL,
         },
       },
-
       permissions: {
         canViewJobs: canViewJobs === true,
-
         canManageJobs: canManageJobs === true,
-
         canViewAllBranches: canViewAllBranches === true,
-
         canManageAllBranches: canManageAllBranches === true,
-
         readOnly,
       },
-
       readOnlyNotice: readOnly
         ? {
             visible: true,
-
             title: PAGE_COPY.readOnlyTitle,
-
             message: PAGE_COPY.readOnlyMessage,
-
             noticeClass: "bg-light-info border-info",
-
             icon: "ki-information-5",
-
             iconClass: "text-info",
           }
         : {
             visible: false,
           },
-
       pagination: paginationView,
-
       resultsHeader: {
         title: "Jobs",
-
         subtitle: paginationView.resultsText,
       },
-
       emptyState: {
         visible: jobViews.length === 0,
-
         icon: "ki-briefcase",
-
         title: PAGE_COPY.noEmployerJobsTitle,
-
         message: hasFilters
           ? "No permanent Jobs match the current filters."
           : "No permanent Jobs have been created yet.",
-
         action: {
           visible: hasFilters,
-
           label: PAGE_COPY.clearFiltersLabel,
-
           buttonClass: "btn-light-primary",
-
           url: EMPLOYER_JOBS_URL,
         },
       },
-
       actions: {
         jobsUrl: EMPLOYER_JOBS_URL,
-
         createJobUrl: canManageJobs === true ? EMPLOYER_JOBS_URL : null,
       },
     };
   }
 
-  /* ─────────────────────────────── EMPLOYER JOB CREATION ─────────────────────────────── */
+  // ───────── Employer Job Creation ─────────
 
   // Presentation only: the controller must first obtain authorized creation data.
   static buildEmployerJobCreatePageView(pageData = {}) {
     const canManageJobs = pageData.canManageJobs === true;
-
     const branchRequired = pageData.branchRequired === true;
-
     const branches = (Array.isArray(pageData.branches) ? pageData.branches : [])
       .filter((branch) => branch && branch.isActive === true)
       .map((branch) => this.buildBranchView(branch))
       .filter((branch) => branch?.id);
-
     const currencyCode = pageData.employer?.currency || null;
-
     let currency = null;
-
     if (typeof currencyCode === "string" && /^[A-Z]{3}$/.test(currencyCode)) {
       const formatter = new Intl.NumberFormat("en-NG", {
         style: "currency",
         currency: currencyCode,
       });
-
       const decimalPlaces = formatter.resolvedOptions().maximumFractionDigits;
-
       currency = {
         code: currencyCode,
-
         decimalPlaces,
-
         minorUnitFactor: 10 ** decimalPlaces,
-
         inputStep: decimalPlaces === 0 ? "1" : `0.${"0".repeat(decimalPlaces - 1)}1`,
-
         label: `Salary (${currencyCode})`,
       };
     }
-
     const options = (values) =>
       values
         .filter((value) => typeof value === "string" && value.length > 0)
         .map((value) => ({
           value,
-
           label: this.formatStatusLabel(value) || value,
         }));
-
     const professionalTypes = options(Job.schema.path("professionalType").enumValues);
-
     const canCreateDraft = Boolean(
       canManageJobs &&
       pageData.canCreateDraft === true &&
       currency &&
       (!branchRequired || branches.length > 0)
     );
-
     let unavailableMessage = null;
-
     if (!canManageJobs) {
       unavailableMessage = "You do not have permission to create jobs.";
     } else if (!currency) {
@@ -921,55 +676,34 @@ class JobViewService {
     } else if (!canCreateDraft) {
       unavailableMessage = "Job creation is currently unavailable.";
     }
-
     return {
       pageTitle: "Create Job",
-
       employer: {
         id: this.toId(pageData.employer?.id),
-
         businessName: pageData.employer?.businessName || null,
-
         countryCode: pageData.employer?.countryCode || null,
       },
-
       currency,
-
       branches,
-
       branchRequired,
-
       branchPlaceholder: branchRequired ? "Select a branch" : "Choose a branch later",
-
       branchHelp:
         "A branch is required before publication. The job location comes from that branch.",
-
       permissions: {
         canManageJobs,
-
         canCreateDraft,
-
         canManageAllBranches: pageData.canManageAllBranches === true,
       },
-
       unavailableMessage,
-
       options: {
         professionalTypes,
-
         employmentTypes: options(JOB_EMPLOYMENT_TYPES),
-
         workplaceTypes: options(JOB_WORKPLACE_TYPES),
-
         compensationTypes: options(JOB_COMPENSATION_TYPES),
-
         salaryPeriods: options(JOB_SALARY_PERIODS),
-
         screeningQuestionTypes: options(JOB_SCREENING_QUESTION_TYPES),
-
         screeningRequirementLevels: options(JOB_SCREENING_REQUIREMENT_LEVELS),
       },
-
       limits: {
         roleTitle: MAX_JOB_TITLE_LENGTH,
         specialty: Job.schema.path("specialty").options.maxlength,
@@ -985,7 +719,6 @@ class JobViewService {
         screeningPrompt: MAX_SCREENING_QUESTION_LENGTH,
         screeningOption: MAX_SCREENING_OPTION_LENGTH,
       },
-
       defaults: {
         minimumYearsOfExperience: 0,
         vacancyCount: 1,
@@ -995,30 +728,23 @@ class JobViewService {
         screeningRequirementLevel: "informational",
         screeningResponseRequired: true,
       },
-
       draftMessage:
         "Save your progress as a draft. Review publication and payment options separately when the job is ready.",
-
       screeningHelp:
         "Required criteria can flag an application for review; they do not automatically reject a candidate.",
-
       actions: {
         jobsUrl: EMPLOYER_JOBS_URL,
-
         submitUrl: canCreateDraft ? EMPLOYER_JOBS_URL : null,
-
         submitMethod: "POST",
-
         submitLabel: "Save draft",
       },
     };
   }
 
-  /* ─────────────────────────────── EMPLOYER JOB EDIT FORM ─────────────────────────────── */
+  // ───────── Employer Job Edit Form ─────────
 
   static buildEmployerJobEditPageView(pageData = {}) {
     const job = pageData.job;
-
     // Reuse creation options and limits, without treating a retained inactive
     // branch as a new selection. The edit client omits an unchanged branch.
     const form = this.buildEmployerJobCreatePageView({
@@ -1026,7 +752,6 @@ class JobViewService {
       branchRequired: false,
       canCreateDraft: true,
     });
-
     const jobId = this.toId(job?._id);
     const currentBranchId = pageData.currentBranchId || null;
     const branchRequired = pageData.branchRequired === true;
@@ -1040,9 +765,7 @@ class JobViewService {
       !currencyChanged &&
       branchAvailable
     );
-
     let unavailableMessage = null;
-
     if (!jobId) {
       unavailableMessage = "The job is unavailable.";
     } else if (pageData.canManageJobs !== true) {
@@ -1058,7 +781,6 @@ class JobViewService {
     } else if (!canSaveChanges) {
       unavailableMessage = "This job is currently unavailable for editing.";
     }
-
     const text = (value) => (typeof value === "string" ? value : "");
     const list = (value) =>
       Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
@@ -1075,7 +797,6 @@ class JobViewService {
         .padStart(decimals + 1, "0");
       return decimals ? `${digits.slice(0, -decimals)}.${digits.slice(-decimals)}` : digits;
     };
-
     const values = {
       branch: currentBranchId || "",
       roleTitle: text(job?.roleTitle),
@@ -1116,7 +837,6 @@ class JobViewService {
           requireAllOptions: question.requireAllOptions === true,
         })),
     };
-
     for (const field of [
       "responsibilities",
       "requirements",
@@ -1127,7 +847,6 @@ class JobViewService {
       // Keep arrays intact: stored items may contain embedded line breaks.
       values[field] = list(job?.[field]);
     }
-
     return {
       ...form,
       pageTitle: "Edit Job",
@@ -1171,7 +890,6 @@ class JobViewService {
 
   static buildEmployerJobCompensationView(compensation, currency) {
     if (!compensation) return null;
-
     const minimum = compensation.minimumAmount;
     const maximum = compensation.maximumAmount;
     const valid =
@@ -1184,15 +902,12 @@ class JobViewService {
       JOB_COMPENSATION_TYPES.includes(compensation.type) &&
       JOB_SALARY_PERIODS.includes(compensation.period) &&
       (compensation.type !== "fixed" || minimum === maximum);
-
     let minimumDisplay = null;
     let maximumDisplay = null;
-
     if (valid) {
       const formatter = new Intl.NumberFormat("en-NG", { style: "currency", currency });
       const decimals = formatter.resolvedOptions().maximumFractionDigits;
       const factor = 10n ** BigInt(decimals);
-
       // Format integer and fractional parts independently to avoid rounding
       // a safe-integer minor amount through floating-point division.
       const formatAmount = (amount) => {
@@ -1203,11 +918,9 @@ class JobViewService {
           .map((part) => (part.type === "fraction" ? fraction : part.value))
           .join("");
       };
-
       minimumDisplay = formatAmount(minimum);
       maximumDisplay = formatAmount(maximum);
     }
-
     return {
       available: Boolean(valid),
       type: compensation.type || null,
@@ -1225,12 +938,10 @@ class JobViewService {
 
   static buildEmployerJobContentView(job) {
     if (!job) return null;
-
     const textList = (value) =>
       Array.isArray(value)
         ? value.filter((item) => typeof item === "string" && item.trim().length > 0)
         : [];
-
     return {
       summary: job.summary || null,
       description: job.description || null,
@@ -1292,31 +1003,26 @@ class JobViewService {
     const detail = this.buildEmployerJobDetailView(data.detail);
     const jobId = detail.job.id;
     const preview = data.preview;
-
     const labels = {
       free: "Free publication",
       free_monthly: "Monthly free posting",
       subscription_slot: "Available subscription job slot",
       paid_single_post: "Previously paid posting",
     };
-
     const price = (amount, currency) => {
       const formatter = new Intl.NumberFormat("en-NG", {
         style: "currency",
         currency,
       });
-
       const digits = formatter.resolvedOptions().maximumFractionDigits;
       const scale = 10n ** BigInt(digits);
       const value = BigInt(amount);
       const fraction = String(value % scale).padStart(digits, "0");
-
       return formatter
         .formatToParts(value / scale)
         .map((part) => (part.type === "fraction" ? fraction : part.value))
         .join("");
     };
-
     return {
       pageTitle: "Review and publish job",
       detail,
@@ -1374,193 +1080,124 @@ class JobViewService {
       canManageAllBranches = false,
       currentTime = new Date(),
     } = pageData;
-
     const jobView = this.buildEmployerJobView(job, currentTime);
-
     const publicationViews = (Array.isArray(publications) ? publications : [])
       .map((publication) => this.buildPublicationView(publication, currentTime))
       .filter(Boolean);
-
     const readOnly = canViewJobs === true && canManageJobs !== true;
-
     const editableState =
       (job?.recruitmentStatus === "draft" && job?.publicationStatus === "unpublished") ||
       (job?.recruitmentStatus === "active" &&
         ["expired", "ended"].includes(job?.publicationStatus));
-
     const canEditJob =
       canViewJobs === true && canManageJobs === true && Boolean(jobView?.id) && editableState;
-
     const publicationExpiredByTime =
       job?.recruitmentStatus === "active" &&
       ["live", "paused"].includes(job?.publicationStatus) &&
       job?.currentPublication?.expiresAt &&
       new Date(job.currentPublication.expiresAt) <= currentTime;
-
     const canReviewPublication =
       canViewJobs === true &&
       canManageJobs === true &&
       Boolean(jobView?.id) &&
       (editableState || publicationExpiredByTime);
-
     return {
       pageTitle: jobView?.roleTitle || "Job Details",
-
       employer,
-
       job: jobView ? { ...jobView, ...this.buildEmployerJobContentView(job) } : null,
-
       publications: publicationViews,
-
       hasPublicationHistory: publicationViews.length > 0,
-
       permissions: {
         canViewJobs: canViewJobs === true,
-
         canManageJobs: canManageJobs === true,
-
         canEditJob,
-
         canViewAllBranches: canViewAllBranches === true,
-
         canManageAllBranches: canManageAllBranches === true,
-
         readOnly,
       },
-
       readOnlyNotice: readOnly
         ? {
             visible: true,
-
             title: PAGE_COPY.readOnlyTitle,
-
             message: PAGE_COPY.readOnlyMessage,
-
             noticeClass: "bg-light-info border-info",
-
             icon: "ki-information-5",
-
             iconClass: "text-info",
           }
         : {
             visible: false,
           },
-
       actions: {
         publicationReviewUrl: canReviewPublication
           ? `${EMPLOYER_JOBS_URL}/${jobView.id}/publish`
           : null,
-
         jobsUrl: EMPLOYER_JOBS_URL,
-
         editUrl: canEditJob ? `${EMPLOYER_JOBS_URL}/${jobView.id}/edit` : null,
-
         applicationsUrl: jobView?.applicationsUrl || null,
       },
     };
   }
 
-  /* ─────────────────────────────── ADMIN JOB OVERSIGHT ─────────────────────────────── */
+  // ───────── Admin Job Oversight ─────────
 
   static buildAdminEmployerView(employer) {
     if (!employer || typeof employer !== "object") {
       return null;
     }
-
     const id = this.toId(employer._id || employer.id);
-
     return {
       id,
-
       businessName: employer.businessName || "Employer",
-
       type: employer.type || null,
-
       typeLabel: this.formatStatusLabel(employer.type),
-
       countryCode: employer.countryCode || null,
-
       currency: employer.currency || null,
-
       logoUrl: employer.logoUrl || null,
-
       accountStatus: employer.accountStatus || null,
-
       accountStatusLabel: this.formatStatusLabel(employer.accountStatus),
-
       accountStatusBadgeClass: this.getStatusBadgeClass(employer.accountStatus),
-
-      employerApprovalStatus: employer.employerApprovalStatus || null,
-
-      employerApprovalStatusLabel: this.formatStatusLabel(employer.employerApprovalStatus),
-
-      employerApprovalStatusBadgeClass: this.getStatusBadgeClass(employer.employerApprovalStatus),
     };
   }
 
   static buildAdminPublicationView(publication, currentTime = new Date()) {
     const base = this.buildPublicationView(publication, currentTime);
-
     if (!base) {
       return null;
     }
-
     const deadlineHistory = (
       Array.isArray(publication.deadlineHistory) ? publication.deadlineHistory : []
     ).map((entry) => ({
       fromDeadline: entry?.fromDeadline || null,
-
       fromDeadlineDisplay: this.formatDateTime(entry?.fromDeadline),
-
       toDeadline: entry?.toDeadline || null,
-
       toDeadlineDisplay: this.formatDateTime(entry?.toDeadline),
-
       changedAt: entry?.changedAt || null,
-
       changedAtDisplay: this.formatDateTime(entry?.changedAt),
-
       changedBy: this.toId(entry?.changedBy),
-
       reason: entry?.reason || null,
     }));
-
     return {
       ...base,
-
       referenceCode: publication.referenceCode || null,
-
       previousPublication: this.toId(publication.previousPublication),
-
       publicationPeriodDays: this.toPositiveSafeInteger(publication.publicationPeriodDays, null),
-
       initialApplicationDeadline: publication.initialApplicationDeadline || null,
-
       initialApplicationDeadlineDisplay: this.formatDateTime(
         publication.initialApplicationDeadline
       ),
-
       publishedBy: this.toId(publication.publishedBy),
-
       endedBy: this.toId(publication.endedBy),
-
       endReason: publication.endReason || null,
-
       entitlementSnapshot:
         publication.entitlementSnapshot && typeof publication.entitlementSnapshot === "object"
           ? {
               ...publication.entitlementSnapshot,
             }
           : null,
-
       deadlineHistory,
-
       hasDeadlineHistory: deadlineHistory.length > 0,
-
       applicationCount: this.toNonNegativeSafeInteger(publication.applicationCount, 0),
-
       applicationCountLastReconciledAt: publication.applicationCountLastReconciledAt || null,
-
       applicationCountLastReconciledAtDisplay: this.formatDateTime(
         publication.applicationCountLastReconciledAt
       ),
@@ -1571,63 +1208,38 @@ class JobViewService {
     if (!job) {
       return null;
     }
-
     const employerJobView = this.buildEmployerJobView(job, currentTime);
-
     if (!employerJobView) {
       return null;
     }
-
     const id = employerJobView.id;
-
     return {
       ...employerJobView,
-
       employer: this.buildAdminEmployerView(job.business),
-
       vacancyCount: this.toPositiveSafeInteger(job.vacancyCount, null),
-
       applicationSummary:
         job.applicationSummary && typeof job.applicationSummary === "object"
           ? {
               ...job.applicationSummary,
             }
           : null,
-
       publicationCount: this.toNonNegativeSafeInteger(job.publicationCount, 0),
-
       applicationDeadline: job.applicationDeadline || null,
-
       applicationDeadlineDisplay: this.formatDateTime(job.applicationDeadline),
-
       lastPublishedAt: job.lastPublishedAt || null,
-
       lastPublishedAtDisplay: this.formatDateTime(job.lastPublishedAt),
-
       publicationExpiresAt: job.publicationExpiresAt || null,
-
       publicationExpiresAtDisplay: this.formatDateTime(job.publicationExpiresAt),
-
       closeReason: job.closeReason || null,
-
       closeReasonLabel: this.formatStatusLabel(job.closeReason),
-
       closeReasonDetails: job.closeReasonDetails || null,
-
       closedAt: job.closedAt || null,
-
       closedAtDisplay: this.formatDateTime(job.closedAt),
-
       closedBy: this.toId(job.closedBy),
-
       archivedAt: job.archivedAt || null,
-
       archivedAtDisplay: this.formatDateTime(job.archivedAt),
-
       archivedBy: this.toId(job.archivedBy),
-
       detailsUrl: id ? `${ADMIN_JOBS_URL}/${id}` : null,
-
       applicationsUrl: null,
     };
   }
@@ -1647,93 +1259,62 @@ class JobViewService {
       currentTime = new Date(),
       pagination = {},
     } = pageData;
-
     const jobViews = (Array.isArray(jobs) ? jobs : [])
       .map((job) => this.buildAdminJobView(job, currentTime))
       .filter(Boolean);
-
     const employerView = this.buildAdminEmployerView(selectedEmployer);
-
     const buildUrl = (overrides = {}) =>
       this.buildAdminJobsUrl({
         employerProfileId: Object.prototype.hasOwnProperty.call(overrides, "employerProfileId")
           ? overrides.employerProfileId
           : selectedEmployerProfileId,
-
         recruitmentStatus: overrides.recruitmentStatus ?? selectedRecruitmentStatus,
-
         publicationStatus: overrides.publicationStatus ?? selectedPublicationStatus,
-
         branchId: Object.prototype.hasOwnProperty.call(overrides, "branchId")
           ? overrides.branchId
           : selectedBranchId,
-
         search: overrides.search ?? selectedSearch,
-
         page: overrides.page ?? null,
       });
-
     const recruitmentFilters = this.buildStatusFilterItems({
       counts: recruitmentStatusCounts,
-
       selected: selectedRecruitmentStatus,
-
       key: "recruitmentStatus",
-
       buildUrl,
     });
-
     const publicationFilters = this.buildStatusFilterItems({
       counts: publicationStatusCounts,
-
       selected: selectedPublicationStatus,
-
       key: "publicationStatus",
-
       buildUrl,
     });
-
     const branchFilters = [
       {
         key: "all",
-
         label: "All branches",
-
         value: null,
-
         isActive: !selectedBranchId,
-
         url: buildUrl({
           branchId: null,
           page: 1,
         }),
       },
-
       ...(Array.isArray(branches) ? branches : []).map((branch) => ({
         key: this.toId(branch),
-
         label: branch.name || "Branch",
-
         value: this.toId(branch),
-
         isActive: this.toId(branch) === selectedBranchId,
-
         url: buildUrl({
           branchId: this.toId(branch),
-
           page: 1,
         }),
       })),
     ];
-
     const paginationView = this.buildPaginationView({
       pagination,
-
       emptyText: "No Jobs match the current filters.",
-
       buildUrl: (page) => buildUrl({ page }),
     });
-
     const hasFilters = Boolean(
       selectedEmployerProfileId ||
       selectedRecruitmentStatus !== "all" ||
@@ -1741,28 +1322,19 @@ class JobViewService {
       selectedBranchId ||
       selectedSearch
     );
-
     return {
       pageTitle: PAGE_COPY.adminJobsTitle,
-
       jobs: jobViews,
-
       hasJobs: jobViews.length > 0,
-
       selectedEmployer: employerView,
-
       summary: {
         visibleJobCount: jobViews.length,
-
         totalFilteredJobs: this.toNonNegativeSafeInteger(pagination?.totalItems, 0),
       },
-
       filters: {
         employer: {
           value: selectedEmployerProfileId || null,
-
           selectedEmployer: employerView,
-
           clearUrl: selectedEmployerProfileId
             ? buildUrl({
                 employerProfileId: null,
@@ -1771,80 +1343,52 @@ class JobViewService {
               })
             : null,
         },
-
         recruitment: recruitmentFilters,
-
         publication: publicationFilters,
-
         branches: branchFilters,
-
         search: {
           value: selectedSearch || "",
-
           name: "search",
-
           placeholder: "Search Jobs",
         },
-
         clearAction: {
           visible: hasFilters,
-
           label: PAGE_COPY.clearFiltersLabel,
-
           url: ADMIN_JOBS_URL,
         },
       },
-
       permissions: {
         canViewJobs: true,
         canManageJobs: false,
         readOnly: true,
       },
-
       readOnlyNotice: {
         visible: true,
-
         title: PAGE_COPY.adminReadOnlyTitle,
-
         message: PAGE_COPY.adminReadOnlyMessage,
-
         noticeClass: "bg-light-info border-info",
-
         icon: "ki-information-5",
-
         iconClass: "text-info",
       },
-
       pagination: paginationView,
-
       resultsHeader: {
         title: "Jobs",
-
         subtitle: paginationView.resultsText,
       },
-
       emptyState: {
         visible: jobViews.length === 0,
-
         icon: "ki-briefcase",
-
         title: PAGE_COPY.noAdminJobsTitle,
-
         message: hasFilters
           ? "No permanent Jobs match the current filters."
           : "No permanent Jobs have been created yet.",
-
         action: {
           visible: hasFilters,
-
           label: PAGE_COPY.clearFiltersLabel,
-
           buttonClass: "btn-light-primary",
-
           url: ADMIN_JOBS_URL,
         },
       },
-
       actions: {
         jobsUrl: ADMIN_JOBS_URL,
       },
@@ -1853,98 +1397,65 @@ class JobViewService {
 
   static buildAdminJobDetailView(pageData = {}) {
     const { job = null, publications = [], currentTime = new Date() } = pageData;
-
     const jobView = this.buildAdminJobView(job, currentTime);
-
     const publicationViews = (Array.isArray(publications) ? publications : [])
       .map((publication) => this.buildAdminPublicationView(publication, currentTime))
       .filter(Boolean);
-
     return {
       pageTitle: jobView?.roleTitle || "Job Details",
-
       employer: jobView?.employer || null,
-
       job: jobView,
-
       publications: publicationViews,
-
       hasPublicationHistory: publicationViews.length > 0,
-
       permissions: {
         canViewJobs: true,
         canManageJobs: false,
         readOnly: true,
       },
-
       readOnlyNotice: {
         visible: true,
-
         title: PAGE_COPY.adminReadOnlyTitle,
-
         message: PAGE_COPY.adminReadOnlyMessage,
-
         noticeClass: "bg-light-info border-info",
-
         icon: "ki-information-5",
-
         iconClass: "text-info",
       },
-
       actions: {
         jobsUrl: ADMIN_JOBS_URL,
-
         applicationsUrl: null,
       },
     };
   }
 
-  /* ─────────────────────────────── MARKETPLACE ─────────────────────────────── */
+  // ───────── Marketplace ─────────
 
   static buildMarketplaceEmployerView(employerSnapshot) {
     if (!employerSnapshot || typeof employerSnapshot !== "object") {
       return null;
     }
-
     const branchLocationLabel = this.buildLocationLabel({
       address: employerSnapshot.branchAddress,
-
       lga: employerSnapshot.branchLga,
-
       state: employerSnapshot.branchState,
     });
-
     return {
       businessName: employerSnapshot.businessName || null,
-
       type: employerSnapshot.type || null,
-
       typeLabel: this.formatStatusLabel(employerSnapshot.type),
-
       logoUrl: employerSnapshot.logoUrl || null,
-
       publicDescription: employerSnapshot.publicDescription || null,
-
       websiteUrl: employerSnapshot.websiteUrl || null,
 
+      // Employer identity verification is CAC only.
       verification: {
         cacVerified: employerSnapshot.cacVerified === true,
-
-        regulatoryVerified: employerSnapshot.regulatoryVerified === true,
-
-        fullyVerified:
-          employerSnapshot.cacVerified === true && employerSnapshot.regulatoryVerified === true,
       },
 
       branch: {
         name: employerSnapshot.branchName || null,
-
         address: employerSnapshot.branchAddress || null,
-
         state: employerSnapshot.branchState || null,
-
         lga: employerSnapshot.branchLga || null,
-
         locationLabel: branchLocationLabel,
       },
     };
@@ -1954,18 +1465,12 @@ class JobViewService {
     if (!question || typeof question !== "object") {
       return null;
     }
-
     return {
       questionId: this.toId(question.questionId),
-
       prompt: question.prompt || null,
-
       type: question.type || null,
-
       typeLabel: this.formatStatusLabel(question.type),
-
       isResponseRequired: question.isResponseRequired === true,
-
       options: Array.isArray(question.options) ? [...question.options] : [],
     };
   }
@@ -1974,80 +1479,50 @@ class JobViewService {
     if (!snapshot || typeof snapshot !== "object") {
       return {};
     }
-
     return {
       snapshotVersion: snapshot.snapshotVersion || null,
-
       roleTitle: snapshot.roleTitle || null,
-
       professionalType: snapshot.professionalType || null,
-
       specialty: snapshot.specialty || null,
-
       department: snapshot.department || null,
-
       employmentType: snapshot.employmentType || null,
-
       workplaceType: snapshot.workplaceType || null,
-
       minimumYearsOfExperience: this.toNonNegativeSafeInteger(snapshot.minimumYearsOfExperience, 0),
-
       educationRequirement: snapshot.educationRequirement || null,
-
       countryCode: snapshot.countryCode || null,
-
       state: snapshot.state || null,
-
       lga: snapshot.lga || null,
-
       address: snapshot.address || null,
-
       currency: snapshot.currency || null,
-
       compensation:
         snapshot.compensation && typeof snapshot.compensation === "object"
           ? {
               type: snapshot.compensation.type || null,
-
               minimumAmount: snapshot.compensation.minimumAmount ?? null,
-
               maximumAmount: snapshot.compensation.maximumAmount ?? null,
-
               period: snapshot.compensation.period || null,
-
               negotiable: snapshot.compensation.negotiable === true,
             }
           : null,
-
       summary: snapshot.summary || null,
-
       description: snapshot.description || null,
-
       responsibilities: Array.isArray(snapshot.responsibilities)
         ? [...snapshot.responsibilities]
         : [],
-
       requirements: Array.isArray(snapshot.requirements) ? [...snapshot.requirements] : [],
-
       preferredQualifications: Array.isArray(snapshot.preferredQualifications)
         ? [...snapshot.preferredQualifications]
         : [],
-
       skills: Array.isArray(snapshot.skills) ? [...snapshot.skills] : [],
-
       benefits: Array.isArray(snapshot.benefits) ? [...snapshot.benefits] : [],
-
       vacancyCount: this.toPositiveSafeInteger(snapshot.vacancyCount, null),
-
       employmentStartDate: snapshot.employmentStartDate || null,
-
       screeningQuestions: (Array.isArray(snapshot.screeningQuestions)
         ? snapshot.screeningQuestions
         : []
       )
         .map((question) => this.buildMarketplaceScreeningQuestionView(question))
         .filter(Boolean),
-
       capturedAt: snapshot.capturedAt || null,
     };
   }
@@ -2059,105 +1534,58 @@ class JobViewService {
     if (!publication) {
       return null;
     }
-
     const id = this.toId(publication);
-
     const jobId = this.toId(publication.job);
-
     const snapshot = this.buildMarketplaceListingSnapshotView(publication.listingSnapshot);
-
     const employer = this.buildMarketplaceEmployerView(publication.employerSnapshot);
-
     const locationLabel = this.buildLocationLabel({
       address: snapshot.address,
-
       lga: snapshot.lga,
-
       state: snapshot.state,
     });
-
     const deadline = this.buildDeadlineView(publication.applicationDeadline, currentTime);
-
     const publicationTiming = this.buildPublicationTimingView(publication, currentTime);
-
     const inferredCurrentlyPublic = Boolean(
       publication.status === "live" && publicationTiming?.hasExpiredByTime !== true
     );
-
     const currentlyPublic =
       typeof isCurrentlyPublic === "boolean" ? isCurrentlyPublic : inferredCurrentlyPublic;
-
     const acceptingApplications = Boolean(currentlyPublic && deadline.hasPassed !== true);
-
     const normalizedHasApplied = hasApplied === true;
-
     const canApply = Boolean(acceptingApplications && !normalizedHasApplied);
-
     return {
       publicationId: id,
-
       jobId,
-
       status: publication.status || null,
-
       statusLabel: this.formatStatusLabel(publication.status),
-
       statusBadgeClass: this.getStatusBadgeClass(publication.status),
-
       employer,
-
       businessName: employer?.businessName || null,
-
       businessLogoUrl: employer?.logoUrl || null,
-
       branchName: employer?.branch?.name || null,
-
       roleTitle: snapshot.roleTitle || null,
-
       professionalType: snapshot.professionalType || null,
-
       professionalTypeLabel: this.formatStatusLabel(snapshot.professionalType),
-
       specialty: snapshot.specialty || null,
-
       department: snapshot.department || null,
-
       employmentType: snapshot.employmentType || null,
-
       employmentTypeLabel: this.formatStatusLabel(snapshot.employmentType),
-
       workplaceType: snapshot.workplaceType || null,
-
       workplaceTypeLabel: this.formatStatusLabel(snapshot.workplaceType),
-
       state: snapshot.state || null,
-
       lga: snapshot.lga || null,
-
       address: snapshot.address || null,
-
       locationLabel,
-
       listingSnapshot: snapshot,
-
       deadline,
-
       publicationTiming,
-
       acceptingApplications,
-
       hasApplied: normalizedHasApplied,
-
       canApply,
-
       isSaved: isSaved === true,
-
       detailsUrl: id ? `${MARKETPLACE_JOBS_URL}/${id}` : null,
-
       applyUrl: canApply && id ? `${PROFESSIONAL_JOB_PUBLICATIONS_URL}/${id}/apply` : null,
-
       saveUrl: jobId ? `/professional/jobs/${jobId}/save` : null,
-
       unsaveUrl: jobId ? `/professional/jobs/${jobId}/save` : null,
     };
   }
@@ -2175,44 +1603,30 @@ class JobViewService {
       currentTime = new Date(),
       pagination = {},
     } = pageData;
-
     const jobViews = (Array.isArray(items) ? items : [])
       .map((item) =>
         this.buildMarketplacePublicationView(item?.publication, {
           isSaved: item?.isSaved === true,
-
           hasApplied: item?.hasApplied === true,
-
           currentTime,
         })
       )
       .filter(Boolean);
-
     const buildUrl = (overrides = {}) =>
       this.buildMarketplaceJobsUrl({
         search: overrides.search ?? selectedSearch,
-
         professionalType: overrides.professionalType ?? selectedProfessionalType,
-
         employmentType: overrides.employmentType ?? selectedEmploymentType,
-
         workplaceType: overrides.workplaceType ?? selectedWorkplaceType,
-
         state: overrides.state ?? selectedState,
-
         lga: overrides.lga ?? selectedLga,
-
         page: overrides.page ?? null,
       });
-
     const paginationView = this.buildPaginationView({
       pagination,
-
       emptyText: "No Jobs match the current filters.",
-
       buildUrl: (page) => buildUrl({ page }),
     });
-
     const hasFilters = Boolean(
       selectedSearch ||
       selectedProfessionalType !== "all" ||
@@ -2221,105 +1635,69 @@ class JobViewService {
       selectedState ||
       selectedLga
     );
-
     return {
       pageTitle: PAGE_COPY.marketplaceTitle,
-
       professional,
-
       jobs: jobViews,
-
       hasJobs: jobViews.length > 0,
-
       summary: {
         visibleJobCount: jobViews.length,
-
         totalFilteredJobs: this.toNonNegativeSafeInteger(pagination?.totalItems, 0),
-
         visibleAppliedCount: jobViews.filter((job) => job.hasApplied).length,
       },
-
       filters: {
         search: {
           name: "search",
-
           value: selectedSearch || "",
-
           placeholder: "Search Jobs",
         },
-
         professionalType: {
           name: "professionalType",
-
           value: selectedProfessionalType,
         },
-
         employmentType: {
           name: "employmentType",
-
           value: selectedEmploymentType,
         },
-
         workplaceType: {
           name: "workplaceType",
-
           value: selectedWorkplaceType,
         },
-
         state: {
           name: "state",
-
           value: selectedState || "",
         },
-
         lga: {
           name: "lga",
-
           value: selectedLga || "",
         },
-
         clearAction: {
           visible: hasFilters,
-
           label: PAGE_COPY.clearFiltersLabel,
-
           url: MARKETPLACE_JOBS_URL,
         },
       },
-
       pagination: paginationView,
-
       resultsHeader: {
         title: "Available Jobs",
-
         subtitle: paginationView.resultsText,
       },
-
       emptyState: {
         visible: jobViews.length === 0,
-
         icon: "ki-briefcase",
-
         title: PAGE_COPY.noMarketplaceJobsTitle,
-
         message: hasFilters
           ? "No permanent Jobs match the current filters."
           : "There are no live permanent Job listings at the moment.",
-
         action: {
           visible: hasFilters,
-
           label: PAGE_COPY.clearFiltersLabel,
-
           buttonClass: "btn-light-primary",
-
           url: MARKETPLACE_JOBS_URL,
         },
       },
-
       actions: {
         marketplaceUrl: MARKETPLACE_JOBS_URL,
-
         savedJobsUrl: professional ? PROFESSIONAL_SAVED_JOBS_URL : null,
       },
     };
@@ -2333,47 +1711,33 @@ class JobViewService {
       professional = null,
       currentTime = new Date(),
     } = pageData;
-
     const job = this.buildMarketplacePublicationView(publication, {
       isSaved,
       hasApplied,
       currentTime,
     });
-
     return {
       pageTitle: job?.roleTitle || "Job Details",
-
       professional,
-
       job,
-
       actions: {
         marketplaceUrl: MARKETPLACE_JOBS_URL,
-
         savedJobsUrl: professional ? PROFESSIONAL_SAVED_JOBS_URL : null,
-
         applyUrl: job?.canApply === true ? job.applyUrl : null,
-
         saveUrl: professional && !job?.isSaved ? job?.saveUrl || null : null,
-
         unsaveUrl: professional && job?.isSaved ? job?.unsaveUrl || null : null,
       },
     };
   }
 
-  /* ─────────────────────────────── SAVED JOBS ─────────────────────────────── */
+  // ───────── Saved Jobs ─────────
 
   static buildSavedJobView(item, currentTime = new Date()) {
     const savedJob = item?.savedJob || null;
-
     const publication = item?.publication || null;
-
     const jobId = this.toId(savedJob?.job || publication?.job);
-
     const isCurrentlyPublic = item?.isCurrentlyPublic === true;
-
     const hasApplied = item?.hasApplied === true;
-
     const marketplaceView = publication
       ? this.buildMarketplacePublicationView(publication, {
           isSaved: true,
@@ -2382,107 +1746,68 @@ class JobViewService {
           currentTime,
         })
       : null;
-
     return {
       savedJobId: this.toId(savedJob),
-
       jobId,
-
       savedAt: savedJob?.savedAt || null,
-
       savedAtDisplay: this.formatDateTime(savedJob?.savedAt),
-
       isCurrentlyPublic,
-
       hasApplied,
-
       listing: marketplaceView,
-
       availability: isCurrentlyPublic ? "available" : "unavailable",
-
       availabilityLabel: isCurrentlyPublic ? "Available" : "Currently unavailable",
-
       availabilityBadgeClass: isCurrentlyPublic ? "badge-light-success" : "badge-light-secondary",
-
       detailsUrl: isCurrentlyPublic ? marketplaceView?.detailsUrl || null : null,
-
       applyUrl:
         isCurrentlyPublic && marketplaceView?.canApply === true ? marketplaceView.applyUrl : null,
-
       unsaveUrl: jobId ? `/professional/jobs/${jobId}/save` : null,
     };
   }
 
   static buildSavedJobsPageView(pageData = {}) {
     const { professional = null, items = [], currentTime = new Date(), pagination = {} } = pageData;
-
     const savedJobViews = (Array.isArray(items) ? items : [])
       .map((item) => this.buildSavedJobView(item, currentTime))
       .filter(Boolean);
-
     const paginationView = this.buildPaginationView({
       pagination,
-
       emptyText: "No saved Jobs.",
-
       buildUrl: (page) =>
         this.buildSavedJobsUrl({
           page,
         }),
     });
-
     const availableCount = savedJobViews.filter((item) => item.isCurrentlyPublic).length;
-
     return {
       pageTitle: PAGE_COPY.savedJobsTitle,
-
       professional,
-
       savedJobs: savedJobViews,
-
       hasSavedJobs: savedJobViews.length > 0,
-
       summary: {
         visibleSavedJobCount: savedJobViews.length,
-
         totalSavedJobs: this.toNonNegativeSafeInteger(pagination?.totalItems, 0),
-
         visibleAvailableCount: availableCount,
-
         visibleUnavailableCount: savedJobViews.length - availableCount,
       },
-
       pagination: paginationView,
-
       resultsHeader: {
         title: "Saved Jobs",
-
         subtitle: paginationView.resultsText,
       },
-
       emptyState: {
         visible: savedJobViews.length === 0,
-
         icon: "ki-heart",
-
         title: PAGE_COPY.noSavedJobsTitle,
-
         message: "Jobs you save from the marketplace will appear here.",
-
         action: {
           visible: true,
-
           label: "Browse Jobs",
-
           buttonClass: "btn-light-primary",
-
           url: MARKETPLACE_JOBS_URL,
         },
       },
-
       actions: {
         marketplaceUrl: MARKETPLACE_JOBS_URL,
-
         savedJobsUrl: PROFESSIONAL_SAVED_JOBS_URL,
       },
     };

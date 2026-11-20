@@ -271,6 +271,7 @@ const employerRefundSchema = new mongoose.Schema(
         {
           type: mongoose.Schema.Types.ObjectId,
           ref: "Transaction",
+          required: true,
         },
       ],
       default: [],
@@ -687,6 +688,24 @@ employerRefundSchema.pre("validate", function validateEmployerRefund() {
   }
 
   /* ─────────────────────────────── DATE ORDERING ─────────────────────────────── */
+
+  // Reservation is the prerequisite for batching, execution and terminalization.
+  for (const field of ["batchedAt", "executionStartedAt", "refundedAt", "voidedAt"]) {
+    if (this[field] && this.reservedAt && this[field] < this.reservedAt) {
+      this.invalidate(field, field + " cannot be earlier than reservedAt.");
+    }
+  }
+
+  if (
+    this.executionStartedAt &&
+    this.scheduledProcessingAt &&
+    this.executionStartedAt < this.scheduledProcessingAt
+  ) {
+    this.invalidate(
+      "executionStartedAt",
+      "executionStartedAt cannot be earlier than scheduledProcessingAt."
+    );
+  }
 
   if (this.heldAt && this.lastEvaluatedAt && this.heldAt > this.lastEvaluatedAt) {
     this.invalidate("heldAt", "heldAt cannot be later than lastEvaluatedAt.");

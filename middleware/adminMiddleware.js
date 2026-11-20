@@ -1,7 +1,6 @@
-// middleware/adminMiddleware.js
-
 const mongoose = require("mongoose");
 
+const User = require("../models/User");
 const EmployerProfile = require("../models/EmployerProfile");
 
 function createAdminMiddlewareError({ message, code, statusCode = 400, details = null }) {
@@ -35,6 +34,22 @@ function assertAdminRequest(req) {
     });
   }
 
+  if (req.user.accountStatus !== "active") {
+    throw createAdminMiddlewareError({
+      message: "An active administrator account is required.",
+      code: "ADMIN_ACCOUNT_NOT_ACTIVE",
+      statusCode: 403,
+    });
+  }
+
+  if (req.user.isVerified !== true) {
+    throw createAdminMiddlewareError({
+      message: "Administrator account verification is required.",
+      code: "ADMIN_ACCOUNT_NOT_VERIFIED",
+      statusCode: 403,
+    });
+  }
+
   return true;
 }
 
@@ -52,20 +67,31 @@ function getEmployerProfileId(req) {
   return new mongoose.Types.ObjectId(String(employerProfileId));
 }
 
-/**
- * Establishes the employer an authenticated admin is currently acting for.
- *
- * This does not:
- *
- * - replace req.user;
- * - impersonate an employer user;
- * - manufacture employerContext;
- * - grant branch-manager/business-admin permissions;
- * - authorize wallet spending or determine cancellation compensation.
- *
- * The admin remains the actual actor throughout the request. Individual admin
- * operations must enforce their own authorization and business rules.
- */
+exports.requireActiveAdmin = async (req, res, next) => {
+  try {
+    assertAdminRequest(req);
+
+    const currentAdmin = await User.exists({
+      _id: req.user._id,
+      role: "admin",
+      accountStatus: "active",
+      isVerified: true,
+    });
+
+    if (!currentAdmin) {
+      throw createAdminMiddlewareError({
+        message: "Your administrator access is no longer authorized.",
+        code: "ADMIN_ACCESS_REVOKED",
+        statusCode: 403,
+      });
+    }
+
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+};
+
 exports.attachAdminEmployerContext = async (req, res, next) => {
   try {
     assertAdminRequest(req);
@@ -73,7 +99,7 @@ exports.attachAdminEmployerContext = async (req, res, next) => {
     const employerProfileId = getEmployerProfileId(req);
 
     const employerProfile = await EmployerProfile.findById(employerProfileId).select(
-      "user businessName countryCode currency accountStatus employerApprovalStatus"
+      "user businessName countryCode currency accountStatus"
     );
 
     if (!employerProfile) {
@@ -96,11 +122,6 @@ exports.attachAdminEmployerContext = async (req, res, next) => {
   }
 };
 
-/**
- * Defensive middleware for employer-targeted admin routes, after
- * attachAdminEmployerContext. Both middleware functions expect the route
- * parameter employerProfileId to remain available at this point.
- */
 exports.requireAdminEmployerContext = (req, res, next) => {
   try {
     assertAdminRequest(req);

@@ -9,7 +9,10 @@ const EmailService = require("./emailService");
 class AuthService {
   /* ---------- Login an existing user ---------- */
 
-  static async loginUser({ email, password }) {
+  static async loginUser({ email, password } = {}) {
+    if (typeof email !== "string" || typeof password !== "string") {
+      throw new Error("Invalid email or password");
+    }
     const normalizedEmail = String(email || "")
       .toLowerCase()
       .trim();
@@ -117,7 +120,15 @@ class AuthService {
    * to create an administrator account.
    */
 
-  static async registerUser({ firstName, lastName, email, password, confirmPassword, role } = {}) {
+  static async registerUser({
+    firstName,
+    middleName,
+    lastName,
+    email,
+    password,
+    confirmPassword,
+    role,
+  } = {}) {
     try {
       const cleanRole = String(role || "")
         .trim()
@@ -170,7 +181,11 @@ class AuthService {
        */
 
       if (cleanRole === "professional") {
-        if (String(firstName ?? "").trim() || String(lastName ?? "").trim()) {
+        if (
+          [firstName, middleName, lastName].some(
+            (name) => name != null && (typeof name !== "string" || name.trim().length > 0)
+          )
+        ) {
           throw new Error(
             "Professional registration does not accept manually entered legal names. Your legal name will be obtained through NIN verification during onboarding."
           );
@@ -282,87 +297,195 @@ class AuthService {
    * restriction and 10-minute OTP validity.
    */
 
-  static async sendOTP(userId) {
-    const user = await User.findById(userId).select("+otp +otpExpiry");
+  static getOTPRequirements(purpose) {
+    switch (purpose) {
+      case "email_verification":
+      case "signup_invite_verification":
+        return { isVerified: false };
+      case "login_2fa":
+      case "disable_2fa":
+        return { isVerified: true, twoFactorEnabled: true };
+      case "enable_2fa":
+        return { isVerified: true, twoFactorEnabled: false };
+      default:
+        throw new Error("A valid OTP purpose is required.");
+    }
+  }
 
-    if (!user) {
-      throw new Error("User not found");
+  static getOTPContext(user, { purpose, email } = {}) {
+    const requirements = this.getOTPRequirements(purpose);
+    const expectedEmail = typeof email === "string" ? email.toLowerCase().trim() : "";
+    const accountEmail = String(user.email || "")
+      .toLowerCase()
+      .trim();
+
+    if (!expectedEmail || expectedEmail !== accountEmail) {
+      throw new Error("Your verification context changed. Please start this action again.");
     }
 
-    if (user.otpLastSentAt) {
-      const secondsSinceLastSent = (Date.now() - user.otpLastSentAt) / 1000;
-
-      if (secondsSinceLastSent < 60) {
-        throw new Error("Please wait 60 seconds before requesting another OTP");
-      }
+    if (Object.entries(requirements).some(([field, value]) => user[field] !== value)) {
+      throw new Error("This OTP action is no longer available. Please start again.");
     }
 
+    return { purpose, email: accountEmail, requirements };
+  }
+
+  static buildOTPChallenge({ userId, email, purpose, nonce, otp }) {
+    const digest = crypto
+      .createHash("sha256")
+      .update(JSON.stringify(["auth_otp:v1", String(userId), email, purpose, nonce, otp]))
+      .digest("hex");
+
+    return `auth_otp:v1:${purpose}:${nonce}:${digest}`;
+  }
+
+  static async sendOTP(userId, options = {}) {
+    this.getOTPRequirements(options.purpose);
+    const now = new Date();
+    const user = await User.findById(userId);
+    if (!user) throw new Error("User not found");
+    if (!["active", "restricted"].includes(user.accountStatus)) {
+      throw new Error("This account is not currently permitted to sign in.");
+    }
+
+    const context = this.getOTPContext(user, options);
     const otp = crypto.randomInt(100000, 1000000).toString();
-    const otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
+    const challenge = this.buildOTPChallenge({
+      userId: user._id,
+      email: context.email,
+      purpose: context.purpose,
+      nonce: crypto.randomBytes(16).toString("hex"),
+      otp,
+    });
+    const otpExpiry = new Date(now.getTime() + 10 * 60 * 1000);
 
-    user.otp = otp;
-    user.otpExpiry = otpExpiry;
-    user.otpAttempts = 0;
-    user.otpLastSentAt = new Date();
+    // Only one concurrent resend may claim the 60-second window.
+    // Increment the version so older document saves cannot overwrite it.
+    const claimed = await User.findOneAndUpdate(
+      {
+        _id: user._id,
+        email: user.email,
+        accountStatus: { $in: ["active", "restricted"] },
+        ...context.requirements,
+        $or: [
+          { otpLastSentAt: null },
+          { otpLastSentAt: { $lte: new Date(now.getTime() - 60 * 1000) } },
+        ],
+      },
+      {
+        $set: { otp: challenge, otpExpiry, otpAttempts: 0, otpLastSentAt: now },
+        $inc: { __v: 1 },
+      },
+      { new: true, runValidators: true }
+    );
 
-    await user.save();
+    if (!claimed) {
+      throw new Error(
+        "OTP request could not be claimed. Please wait 60 seconds before trying again."
+      );
+    }
 
-    /*
-     * Deliver the OTP through the configured
-     * email provider.
-     *
-     * Never log the OTP or expose it through
-     * the registration response.
-     */
-
-    await EmailService.sendOTP(user.email, otp);
-
+    // Send only after the claim succeeds. A delivery failure does not reset
+    // the resend window or trigger an automatic second email.
+    await EmailService.sendOTP(claimed.email, otp);
     return true;
   }
 
   /* ---------- Verify user's OTP ---------- */
 
-  static async verifyOTP(userId, otp) {
+  static async verifyOTP(userId, otp, options = {}) {
+    this.getOTPRequirements(options.purpose);
     const user = await User.findById(userId).select("+otp +otpExpiry");
-
-    if (!user) {
-      throw new Error("User not found");
+    if (!user) throw new Error("User not found");
+    if (!["active", "restricted"].includes(user.accountStatus)) {
+      throw new Error("This account is not currently permitted to sign in.");
     }
-
     if (user.otpAttempts >= 5) {
       throw new Error("Too many attempts. Please request a new OTP");
     }
 
-    if (!user.otpExpiry || user.otpExpiry < new Date()) {
+    const now = new Date();
+    if (!user.otp || !user.otpExpiry || user.otpExpiry <= now) {
       throw new Error("OTP has expired. Please request a new one");
     }
 
-    if (user.otp !== String(otp || "").trim()) {
-      user.otpAttempts += 1;
+    const context = this.getOTPContext(user, options);
+    const parts = String(user.otp).split(":");
 
-      await user.save();
-
-      throw new Error(`Invalid OTP. ${5 - user.otpAttempts} attempts remaining`);
+    // Reject legacy plain codes and challenges issued for another action.
+    // Existing codes must be resent after deploying this format.
+    if (
+      parts.length !== 5 ||
+      parts[0] !== "auth_otp" ||
+      parts[1] !== "v1" ||
+      parts[2] !== context.purpose ||
+      !/^[a-f0-9]{32}$/.test(parts[3]) ||
+      !/^[a-f0-9]{64}$/.test(parts[4])
+    ) {
+      throw new Error("This OTP is not valid for this action. Please request a new one.");
     }
 
-    user.otp = undefined;
-    user.otpExpiry = undefined;
-    user.otpAttempts = 0;
+    const candidate = typeof otp === "string" || typeof otp === "number" ? String(otp).trim() : "";
+    const expected = this.buildOTPChallenge({
+      userId: user._id,
+      email: context.email,
+      purpose: context.purpose,
+      nonce: parts[3],
+      otp: candidate,
+    });
+    const matches =
+      /^\d{6}$/.test(candidate) &&
+      crypto.timingSafeEqual(Buffer.from(user.otp), Buffer.from(expected));
 
-    /*
-     * isVerified establishes successful
-     * email/account verification only.
-     *
-     * It must never be interpreted as
-     * NIN-holder authentication, PCN licence
-     * verification or marketplace approval.
-     */
+    // Bind the update to the exact challenge read above. A resend, expiry,
+    // account restriction or earlier successful verification must win safely.
+    const filter = {
+      _id: user._id,
+      email: user.email,
+      accountStatus: { $in: ["active", "restricted"] },
+      ...context.requirements,
+      otp: user.otp,
+      otpLastSentAt: user.otpLastSentAt || null,
+      otpExpiry: { $eq: user.otpExpiry, $gt: new Date() },
+      otpAttempts: { $lt: 5 },
+    };
 
-    user.isVerified = true;
+    if (!matches) {
+      const failed = await User.findOneAndUpdate(
+        filter,
+        {
+          $inc: { otpAttempts: 1, __v: 1 },
+        },
+        { new: true, runValidators: true }
+      );
+      if (!failed) throw new Error("OTP is no longer available. Please request a new one.");
+      throw new Error(`Invalid OTP. ${5 - failed.otpAttempts} attempts remaining`);
+    }
 
-    await user.save();
+    const updates = { otpAttempts: 0 };
+    if (["email_verification", "signup_invite_verification"].includes(context.purpose)) {
+      updates.isVerified = true;
+    } else if (context.purpose === "enable_2fa") {
+      updates.twoFactorEnabled = true;
+    } else if (context.purpose === "disable_2fa") {
+      updates.twoFactorEnabled = false;
+    }
 
-    return user;
+    // Consume the challenge and apply only its intended action atomically.
+    const verified = await User.findOneAndUpdate(
+      filter,
+      {
+        $set: updates,
+        $unset: { otp: 1, otpExpiry: 1 },
+        $inc: { __v: 1 },
+      },
+      { new: true, runValidators: true }
+    );
+    if (!verified) throw new Error("OTP is no longer available. Please request a new one.");
+
+    // Email verification never grants NIN ownership, licence verification
+    // or marketplace approval.
+    return verified;
   }
 
   /* ---------- Send password reset link ---------- */
@@ -396,11 +519,16 @@ class AuthService {
   /* ---------- Reset password ---------- */
 
   static async resetPassword(token, newPassword, confirmPassword) {
-    if (!token) {
-      throw new Error("Reset token is missing");
+    if (typeof token !== "string" || !/^[a-f0-9]{64}$/.test(token)) {
+      throw new Error("Invalid or missing reset token");
     }
 
-    if (!newPassword || !confirmPassword) {
+    if (
+      typeof newPassword !== "string" ||
+      !newPassword ||
+      typeof confirmPassword !== "string" ||
+      !confirmPassword
+    ) {
       throw new Error("All fields are required");
     }
 
@@ -419,6 +547,8 @@ class AuthService {
       throw new Error("Invalid or expired reset link");
     }
 
+    // Reset fields are cleared on save; optimistic concurrency
+    // rejects another save that already consumed or replaced this token.
     user.password = newPassword;
     user.resetPasswordToken = undefined;
     user.resetPasswordExpiry = undefined;

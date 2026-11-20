@@ -809,6 +809,13 @@ shiftAssignmentSchema.pre("validate", function validateShiftAssignment() {
       this.invalidate("endReason", "endReason is required when an assignment is ending.");
     }
 
+    if (this.endReason === "engagement_completed") {
+      this.invalidate(
+        "endReason",
+        "An ending assignment cannot use engagement_completed; normal completion requires status ended."
+      );
+    }
+
     if (!this.endCase) {
       this.invalidate("endCase", "endCase is required when an assignment is ending.");
     }
@@ -861,6 +868,10 @@ shiftAssignmentSchema.pre("validate", function validateShiftAssignment() {
 
     if (this.endedAt && this.effectiveEndsAt && this.endedAt < this.effectiveEndsAt) {
       this.invalidate("endedAt", "endedAt cannot be earlier than effectiveEndsAt.");
+    }
+
+    if (this.endedAt && this.endingConfirmedAt && this.endedAt < this.endingConfirmedAt) {
+      this.invalidate("endedAt", "endedAt cannot be earlier than endingConfirmedAt.");
     }
 
     if (this.endReason === "engagement_completed") {

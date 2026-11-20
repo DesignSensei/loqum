@@ -334,11 +334,19 @@ class PaystackWebhookService {
         ? normalizedEvent.normalizedPayload
         : {};
 
-    return (
-      PaystackWebhookService.cleanString(normalizedPayload.paystackTransferReference) ||
-      PaystackWebhookService.cleanString(normalizedPayload.transferReference) ||
-      PaystackWebhookService.cleanString(normalizedEvent.providerReference)
-    );
+    const references = [
+      normalizedPayload.paystackTransferReference,
+      normalizedPayload.transferReference,
+      normalizedEvent.providerReference,
+    ]
+      .map(PaystackWebhookService.cleanString)
+      .filter(Boolean);
+
+    if (new Set(references).size > 1) {
+      throw new Error("Normalized Paystack Transfer references conflict.");
+    }
+
+    return references[0] || null;
   }
 
   static getAllowedWithdrawalTransferCategories(eventName) {
@@ -388,6 +396,26 @@ class PaystackWebhookService {
           `Paystack refund event ${eventName} was not normalized as employer_refund.`
         );
       }
+    }
+
+    if (
+      eventCategory === "employer_refund" &&
+      !PaystackWebhookService.isRefundLifecycleEvent(eventName)
+    ) {
+      throw new Error(`Unexpected Paystack refund category for event ${eventName}.`);
+    }
+
+    const withdrawalCategories = [
+      "employer_withdrawal_payout",
+      "professional_withdrawal_payout",
+      "employer_withdrawal_reversal",
+      "professional_withdrawal_reversal",
+    ];
+    if (
+      withdrawalCategories.includes(eventCategory) &&
+      !PaystackWebhookService.isTransferLifecycleEvent(eventName)
+    ) {
+      throw new Error(`Unexpected Paystack withdrawal category for event ${eventName}.`);
     }
 
     /*

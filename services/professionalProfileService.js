@@ -2,8 +2,7 @@
 
 const ProfessionalProfile = require("../models/ProfessionalProfile");
 const { getProfessionalKycStatus } = require("../utils/statusHelper");
-
-// ───────────────────────── CONSTANTS ─────────────────────────
+const ProfessionalVerificationService = require("./professionalVerificationService");
 
 const PROFILE_TABS = [
   {
@@ -91,24 +90,16 @@ const WEEKDAYS = [
 ];
 
 const VALID_AVAILABILITY_STATUSES = AVAILABILITY_STATUSES.map((item) => item.value);
-
 const VALID_AVAILABILITY_MODES = AVAILABILITY_MODES.map((item) => item.value);
-
 const MAX_AVAILABLE_DATES = 90;
 const MAX_AVAILABILITY_NOTE_LENGTH = 300;
 
-// ───────────────────────── ERRORS ─────────────────────────
-
 function createError(message, statusCode = 400) {
   const error = new Error(message);
-
   error.statusCode = statusCode;
   error.status = statusCode;
-
   return error;
 }
-
-// ───────────────────────── AUTHORISATION ─────────────────────────
 
 function assertProfessionalUser(actorUser) {
   if (!actorUser || !actorUser._id || actorUser.role !== "professional") {
@@ -131,8 +122,6 @@ function assertProfileOwnership(actorUser, professionalProfile) {
   }
 }
 
-// ───────────────────────── PRESENTATION HELPERS ─────────────────────────
-
 function humaniseStatus(value) {
   if (!value) return "Not available";
 
@@ -148,16 +137,15 @@ function statusBadgeClass(status) {
     active: "badge-light-success",
     visible: "badge-light-success",
     available: "badge-light-success",
-
     pending: "badge-light-warning",
-    needs_review: "badge-light-warning",
-    busy: "badge-light-warning",
+    needs_review: "badge-light-info",
+    busy: "badge-light-info",
     paused: "badge-light-warning",
-
     rejected: "badge-light-danger",
     restricted: "badge-light-danger",
     suspended: "badge-light-danger",
-
+    expired: "badge-light-danger",
+    recorded: "badge-light-info",
     hidden: "badge-light-secondary",
     unavailable: "badge-light-secondary",
     not_started: "badge-light-secondary",
@@ -206,12 +194,6 @@ function formatAvailabilityDate(value) {
   });
 }
 
-/**
- * Determine today's calendar date in Nigeria.
- *
- * Availability choices represent calendar dates,
- * not shift start times or timestamps.
- */
 function getTodayISODate() {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Africa/Lagos",
@@ -222,11 +204,11 @@ function getTodayISODate() {
 
   const values = {};
 
-  parts.forEach((part) => {
+  for (const part of parts) {
     if (part.type === "year" || part.type === "month" || part.type === "day") {
       values[part.type] = part.value;
     }
-  });
+  }
 
   return `${values.year}-${values.month}-${values.day}`;
 }
@@ -261,28 +243,25 @@ function getProfessionalName(actorUser, professionalProfile) {
 }
 
 function buildStatus(status) {
+  const value = status || "pending";
+
   return {
-    value: status || "pending",
-    label: humaniseStatus(status || "pending"),
-    badgeClass: statusBadgeClass(status || "pending"),
+    value,
+    label: humaniseStatus(value),
+    badgeClass: statusBadgeClass(value),
   };
 }
 
 function buildDetail(label, value, options = {}) {
   return {
     label,
-
     value: value === null || value === undefined || value === "" ? "Not available" : String(value),
-
     locked: options.locked === true,
   };
 }
 
-// ───────────────────────── PROFILE NAVIGATION ─────────────────────────
-
 function resolveActiveTab(requestedTab) {
   const matched = PROFILE_TABS.find((tab) => tab.key === requestedTab);
-
   return matched ? matched.key : "overview";
 }
 
@@ -293,8 +272,6 @@ function buildProfileNavigation(activeTab) {
     active: tab.key === activeTab,
   }));
 }
-
-// ───────────────────────── AVAILABILITY HELPERS ─────────────────────────
 
 function getStoredAvailableDates(profile) {
   if (!Array.isArray(profile.availableDates)) {
@@ -309,7 +286,6 @@ function resolveAvailabilityMode(profile) {
     return profile.availabilityMode;
   }
 
-  // Existing profiles may already have specific dates.
   if (getStoredAvailableDates(profile).length > 0) {
     return "dates";
   }
@@ -397,54 +373,32 @@ function normaliseAvailableDates(value) {
   return [...new Set(dates)].sort();
 }
 
-// ───────────────────────── SUMMARY VIEW ─────────────────────────
-
 function buildProfessionalProfileSummary(actorUser, profile) {
   const professionalName = getProfessionalName(actorUser, profile);
-
   const accountStatus = buildStatus(profile.accountStatus);
-
   const profession = PROFESSIONAL_TYPES[profile.type] || humaniseStatus(profile.type);
-
   const availabilityStatus = buildStatus(profile.availabilityStatus || "available");
 
   return {
     professionalName,
-
     initials: buildInitials(professionalName),
-
     email: actorUser.email || "",
-
     phone: [profile.phoneCode, profile.phone].filter(Boolean).join(" "),
-
     profession,
-
     specialty: profile.specialty || "Not specified",
-
     locationLabel:
       [profile.lga, profile.state].filter(Boolean).join(", ") || "Location not available",
-
     tier: profile.tier || "newcomer",
-
     tierLabel: humaniseStatus(profile.tier || "newcomer"),
-
     yearsOfExperience: profile.yearsOfExperience ?? 0,
-
     totalShiftsCompleted: profile.totalShiftsCompleted ?? 0,
-
     averageRating: Number(profile.averageRating || 0).toFixed(1),
-
     accountStatusLabel: accountStatus.label,
-
     accountStatusBadgeClass: accountStatus.badgeClass,
-
     availabilityStatusLabel: availabilityStatus.label,
-
     availabilityStatusBadgeClass: availabilityStatus.badgeClass,
   };
 }
-
-// ───────────────────────── VERIFICATION VIEW ─────────────────────────
 
 function buildVerificationItem({ key, title, description, status, verifiedAt, details = [] }) {
   const presentation = buildStatus(status);
@@ -453,141 +407,253 @@ function buildVerificationItem({ key, title, description, status, verifiedAt, de
     key,
     title,
     description,
-
     status: presentation.value,
     statusLabel: presentation.label,
     badgeClass: presentation.badgeClass,
-
     dateLabel: formatDate(verifiedAt),
-
     details,
   };
 }
 
-function buildVerificationView(profile) {
-  const kycStatus = getProfessionalKycStatus(profile);
+function describeLicenceValidity(type, licensingYear) {
+  if (type === "life") return "Confirmed lifetime licence";
 
-  // Eligibility, account status and marketplace visibility
-  // are separate considerations.
-  // This check is informational and does not modify approval.
-  const eligibilityChecksPassed = kycStatus?.isEligible === true;
+  if (type === "licensing_year") {
+    return Number.isInteger(licensingYear)
+      ? `Approved licensing year ${licensingYear}`
+      : "Licensing year awaiting confirmation";
+  }
 
-  const accountActive = profile.accountStatus === "active";
+  if (type === "expiry_date") return "Approved expiry date";
 
-  const marketplaceVisible = profile.marketplaceStatus === "visible";
+  return "Not yet established";
+}
 
-  const isMarketplaceReady = eligibilityChecksPassed && accountActive && marketplaceVisible;
+function daysBetweenISO(first, second) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(first || "") || !/^\d{4}-\d{2}-\d{2}$/.test(second || "")) {
+    return null;
+  }
 
-  let readinessLabel = "Marketplace Ready";
+  const a = Date.parse(`${first}T00:00:00.000Z`);
+  const b = Date.parse(`${second}T00:00:00.000Z`);
 
-  let readinessMessage =
-    "Your eligibility checks are satisfied, your account is active, " +
-    "and your professional profile is visible on the marketplace.";
+  return Number.isFinite(a) && Number.isFinite(b) ? Math.round((b - a) / 86400000) : null;
+}
 
-  if (!eligibilityChecksPassed) {
-    readinessLabel = "Requirements Outstanding";
+function buildLicencePresentation(profile) {
+  const validity = ProfessionalVerificationService.getLicenceValidityState(profile);
+  const approved = profile.licenceVerificationStatus === "verified";
+  const pendingAt = profile.licencePendingDocumentSubmittedAt || null;
+  const hasPendingSubmission = Boolean(pendingAt);
+  const future = profile.upcomingLicence || null;
+  const hasApprovedUpcoming = Boolean(future && !validity.usingUpcoming);
 
-    readinessMessage =
-      "Your account has not satisfied all current professional eligibility " +
-      "requirements. Review the statuses below for more information.";
-  } else if (!accountActive) {
-    readinessLabel = "Account Not Active";
+  const effectiveValidityType =
+    validity.usingUpcoming && future ? future.validityType : profile.licenceValidityType;
 
-    readinessMessage =
-      "Your eligibility checks are satisfied, but your professional account " +
-      "is not currently active.";
-  } else if (!marketplaceVisible) {
-    readinessLabel = "Marketplace Not Visible";
+  const effectiveLicensingYear =
+    validity.usingUpcoming && future ? future.licensingYear : profile.licenceLicensingYear;
 
-    readinessMessage =
-      "Your eligibility checks are satisfied, but your profile is not " +
-      "currently visible on the professional marketplace.";
+  const expiryISODate = validity.expiryISODate || null;
+  const today = getTodayISODate();
+  const daysUntilExpiry = expiryISODate ? daysBetweenISO(today, expiryISODate) : null;
+  const current = approved && validity.current;
+
+  let status = profile.licenceVerificationStatus || "pending";
+  let statusLabel = humaniseStatus(status);
+
+  if (approved && !validity.current) {
+    status = validity.expired ? "expired" : "needs_review";
+    statusLabel = validity.expired ? "Expired" : "Validity review required";
+  }
+
+  let expiryMessage =
+    "Licence validity is determined from reviewed evidence. " +
+    "An expired licence never authorises new work.";
+
+  if (approved && validity.expired) {
+    expiryMessage = validity.withinGrace
+      ? `Licence expired on ${expiryISODate}. Renewal grace ends ${validity.graceEndsOn}. ` +
+        "You may renew, but cannot take on new work."
+      : `Licence expired on ${expiryISODate}. Renew to regain work eligibility.`;
+  } else if (approved && current && effectiveValidityType === "life") {
+    expiryMessage = "Lifetime licence confirmed. Other eligibility checks still apply.";
+  } else if (approved && current && daysUntilExpiry !== null && daysUntilExpiry <= 30) {
+    expiryMessage =
+      `Licence expires on ${expiryISODate}. Renew early; the grace period ` +
+      "does not permit work after expiry.";
+  } else if (approved && current) {
+    expiryMessage = expiryISODate
+      ? `Licence current through ${expiryISODate}.`
+      : "Licence is current.";
+  }
+
+  const reviewFeedback = ["rejected", "needs_review"].includes(profile.licenceVerificationStatus)
+    ? String(profile.licenceVerificationNote || "").trim()
+    : "";
+
+  const canSubmitDocument = Boolean(profile._id && profile.licenceNumber) && !hasApprovedUpcoming;
+
+  return {
+    status,
+    statusLabel,
+    statusBadgeClass: statusBadgeClass(status),
+    approved,
+    current,
+    expired: validity.expired === true,
+    withinGrace: validity.withinGrace === true,
+    graceEndsOn: validity.graceEndsOn || null,
+    graceEndsLabel: validity.graceEndsOn || "",
+    expiryISODate,
+    expiryLabel:
+      expiryISODate ||
+      (approved && effectiveValidityType === "life" ? "Lifetime" : "Not available"),
+    daysUntilExpiry,
+    validityType: effectiveValidityType || null,
+    validityLabel: describeLicenceValidity(effectiveValidityType, effectiveLicensingYear),
+    verifiedDateLabel: formatDate(
+      validity.usingUpcoming ? future?.verifiedAt : profile.licenceVerifiedAt
+    ),
+    hasPendingSubmission,
+    pendingDateLabel: formatDate(pendingAt),
+    pendingStatusLabel: hasPendingSubmission ? "Awaiting review" : "No pending document",
+    reviewFeedback,
+    hasApprovedUpcoming,
+    upcoming: hasApprovedUpcoming
+      ? {
+          statusLabel: "Approved — not yet effective",
+          startsOnLabel: formatDate(future.validFrom),
+          validityLabel: describeLicenceValidity(future.validityType, future.licensingYear),
+          expiryLabel:
+            future.validityType === "life"
+              ? "Lifetime"
+              : formatDate(future.expiryDate) || "Not available",
+          reviewedDateLabel: formatDate(future.verifiedAt),
+        }
+      : null,
+    canSubmitDocument,
+    uploadAction: profile._id
+      ? `/professional/verification/${encodeURIComponent(String(profile._id))}/licence-document`
+      : null,
+    uploadFieldName: "licenceDocument",
+    uploadAccept: ".pdf,.jpg,.jpeg,.png,.webp",
+    uploadMaxBytes: 10 * 1024 * 1024,
+    uploadButtonLabel: hasPendingSubmission
+      ? "Replace submitted document"
+      : approved
+        ? "Submit renewal"
+        : "Submit practising licence",
+    uploadHelpMessage: hasApprovedUpcoming
+      ? "An approved upcoming renewal is already scheduled. Contact support " +
+        "if that approved document needs correction."
+      : !profile.licenceNumber
+        ? "A registered licence number is required before document submission."
+        : "Submit a PDF or image of your practising licence (maximum 10 MB). " +
+          "Submission is not verification or permission to work.",
+    expiryMessage,
+  };
+}
+
+function buildVerificationView(profile, verificationStatus) {
+  const kycStatus = getProfessionalKycStatus(profile, verificationStatus);
+  const licence = buildLicencePresentation(profile);
+
+  // Present the audit-backed status rather than a locally inferred approval.
+  const licenceItem = kycStatus.items.find((item) => item.label === "Practising licence");
+
+  if (licenceItem && licenceItem.status !== licence.status) {
+    licence.status = licenceItem.status;
+    licence.statusLabel = humaniseStatus(licence.status);
+    licence.statusBadgeClass = statusBadgeClass(licence.status);
+  }
+
+  const licenceDetails = [
+    buildDetail("Licence number", profile.licenceNumber, { locked: true }),
+    buildDetail("Issuing body", profile.licenceIssuingBody, { locked: true }),
+    buildDetail("Validity", licence.validityLabel),
+    buildDetail("Valid until", licence.expiryLabel),
+  ];
+
+  if (licence.reviewFeedback) {
+    licenceDetails.push(buildDetail("Review feedback", licence.reviewFeedback));
+  }
+
+  if (licence.hasPendingSubmission) {
+    licenceDetails.push(buildDetail("Document submitted", licence.pendingDateLabel));
+    licenceDetails.push(buildDetail("Submission", "Awaiting administrative review"));
   }
 
   const items = [
     buildVerificationItem({
-      key: "identity",
-      title: "Identity Verification",
-      description: "Your registered identity verification status.",
-      status: profile.identityVerificationStatus,
-      verifiedAt: profile.identityVerifiedAt,
-
-      details: [buildDetail("Identity number", "Protected for your security", { locked: true })],
-    }),
-
-    buildVerificationItem({
       key: "licence",
       title: "Professional Licence",
-      description: "Verification of your professional registration.",
-      status: profile.licenceVerificationStatus,
+      description: "Administrative review of your practising-licence evidence.",
+      status: licence.status,
       verifiedAt: profile.licenceVerifiedAt,
-
-      details: [
-        buildDetail("Licence number", profile.licenceNumber, { locked: true }),
-
-        buildDetail("Issuing body", profile.licenceIssuingBody, { locked: true }),
-      ],
+      details: licenceDetails,
     }),
-
     buildVerificationItem({
       key: "approval",
       title: "Professional Approval",
-      description: "Your approval status on Loqum.",
+      description: "Separate final approval to participate in Loqum's marketplace.",
       status: profile.professionalApprovalStatus,
       verifiedAt: profile.approvedForShiftsAt,
     }),
-
     buildVerificationItem({
       key: "account",
       title: "Account Status",
-      description: "Your professional account's current status.",
+      description: "Your professional account's current operational status.",
       status: profile.accountStatus,
     }),
-
     buildVerificationItem({
       key: "marketplace",
       title: "Marketplace Visibility",
-      description: "Your visibility in Loqum's professional marketplace.",
+      description: "Whether your profile is visible in Loqum's marketplace.",
       status: profile.marketplaceStatus,
     }),
   ];
 
+  if (licence.hasApprovedUpcoming) {
+    items.push(
+      buildVerificationItem({
+        key: "upcoming-licence",
+        title: "Upcoming Licence",
+        description: "Approved renewal scheduled to become effective later.",
+        status: "approved",
+        verifiedAt: profile.upcomingLicence.verifiedAt,
+        details: [
+          buildDetail("Effective from", licence.upcoming.startsOnLabel),
+          buildDetail("Validity", licence.upcoming.validityLabel),
+          buildDetail("Valid until", licence.upcoming.expiryLabel),
+        ],
+      })
+    );
+  }
+
   return {
-    // Retained for compatibility with the existing
-    // verification template until its presentation rework.
-    isEligible: isMarketplaceReady,
-
-    eligibilityChecksPassed,
-    isMarketplaceReady,
-
-    readinessLabel,
-    readinessMessage,
-
-    readinessBadgeClass: isMarketplaceReady ? "badge-light-success" : "badge-light-warning",
-
-    readinessNoticeClass: isMarketplaceReady
-      ? "bg-light-success border-success"
-      : "bg-light-warning border-warning",
-
-    readinessIcon: isMarketplaceReady ? "ki-shield-tick" : "ki-information-5",
-
-    readinessIconClass: isMarketplaceReady ? "text-success" : "text-warning",
-
+    isEligible: kycStatus.isMarketplaceReady,
+    eligibilityChecksPassed: kycStatus.verificationChecksPassed,
+    verificationChecksPassed: kycStatus.verificationChecksPassed,
+    accountActive: kycStatus.accountActive,
+    marketplaceVisible: kycStatus.marketplaceVisible,
+    isMarketplaceReady: kycStatus.isMarketplaceReady,
+    readinessLabel: kycStatus.readinessLabel,
+    readinessMessage: kycStatus.readinessMessage,
+    readinessBadgeClass: kycStatus.readinessBadgeClass,
+    readinessNoticeClass: kycStatus.readinessNoticeClass,
+    readinessIcon: kycStatus.readinessIcon,
+    readinessIconClass: kycStatus.readinessIconClass,
     items,
-
+    licence,
+    ninEvidenceMessage:
+      "Your onboarding NIN legal-name evidence is reused for licence review. " +
+      "No second NIN lookup is required.",
     supportMessage:
-      "Verified identity and professional licence details " +
-      "cannot be changed directly. Contact Loqum Support " +
-      "if a correction is required.",
-
-    licenceExpiryMessage:
-      "A recorded licence expiry date is informational. " +
-      "Loqum does not automatically revoke a completed " +
-      "one-time licence verification because of that date.",
+      "Your identity and licence details are protected. " +
+      "Submit licence renewals here or contact support for corrections.",
+    licenceExpiryMessage: licence.expiryMessage,
   };
 }
-
-// ───────────────────────── OVERVIEW VIEW ─────────────────────────
 
 function buildOverviewView(profile, verificationView) {
   return {
@@ -601,7 +667,6 @@ function buildOverviewView(profile, verificationView) {
         colorClass: "text-primary",
         backgroundClass: "bg-light-primary",
       },
-
       {
         key: "shifts",
         label: "Completed Shifts",
@@ -611,7 +676,6 @@ function buildOverviewView(profile, verificationView) {
         colorClass: "text-success",
         backgroundClass: "bg-light-success",
       },
-
       {
         key: "rating",
         label: "Average Rating",
@@ -622,49 +686,31 @@ function buildOverviewView(profile, verificationView) {
         backgroundClass: "bg-light-warning",
       },
     ],
-
     verificationItems: verificationView.items,
-
+    eligibilityChecksPassed: verificationView.verificationChecksPassed,
     isMarketplaceReady: verificationView.isMarketplaceReady,
-
     readinessMessage: verificationView.readinessMessage,
-
     readinessNoticeClass: verificationView.readinessNoticeClass,
-
     readinessIcon: verificationView.readinessIcon,
-
     readinessIconClass: verificationView.readinessIconClass,
-
     readinessLabel: verificationView.readinessLabel,
-
     readinessBadgeClass: verificationView.readinessBadgeClass,
-
     professionalDetailsUrl: "/professional/profile?tab=professional-details",
-
     verificationUrl: "/professional/profile?tab=verification",
-
     availabilityUrl: "/professional/profile?tab=availability",
   };
 }
-
-// ───────────────────────── PERSONAL DETAILS VIEW ─────────────────────────
 
 function buildPersonalDetailsView(actorUser, profile) {
   return {
     fields: [
       buildDetail("Full name", getProfessionalName(actorUser, profile), { locked: true }),
-
       buildDetail("Email address", actorUser.email),
-
       buildDetail("Phone number", [profile.phoneCode, profile.phone].filter(Boolean).join(" ")),
-
       buildDetail("State", profile.state),
-
       buildDetail("LGA", profile.lga),
-
       buildDetail("Address", profile.address),
     ],
-
     identityNotice:
       "Your registered legal identity is protected. " +
       "Contact Loqum Support if your verified identity " +
@@ -672,47 +718,31 @@ function buildPersonalDetailsView(actorUser, profile) {
   };
 }
 
-// ───────────────────────── PROFESSIONAL DETAILS VIEW ─────────────────────────
-
-function buildProfessionalDetailsView(profile) {
+function buildProfessionalDetailsView(profile, licence) {
   return {
     fields: [
       buildDetail("Profession", PROFESSIONAL_TYPES[profile.type] || humaniseStatus(profile.type), {
         locked: true,
       }),
-
       buildDetail("Specialty", profile.specialty),
-
       buildDetail("Years of experience", profile.yearsOfExperience ?? 0),
-
       buildDetail("Professional tier", humaniseStatus(profile.tier || "newcomer")),
-
       buildDetail("Licence number", profile.licenceNumber, { locked: true }),
-
       buildDetail("Licence issuing body", profile.licenceIssuingBody, { locked: true }),
-
-      buildDetail("Licence expiry date", formatDate(profile.licenceExpiryDate), { locked: true }),
+      buildDetail("Licence validity", licence.validityLabel, { locked: true }),
+      buildDetail("Licence expiry date", licence.expiryLabel, { locked: true }),
     ],
-
     bio: profile.bio || "",
-
     certifications: (profile.certifications || []).map((certification) => ({
       name: certification.name || "Certification",
-
       issuingBody: certification.issuingBody || "",
-
       dateObtainedLabel: formatDate(certification.dateObtained),
-
       expiryDateLabel: formatDate(certification.expiryDate),
-
       verified: certification.verified === true,
-
       verificationLabel: certification.verified === true ? "Verified" : "Not verified",
-
       verificationBadgeClass:
         certification.verified === true ? "badge-light-success" : "badge-light-secondary",
     })),
-
     protectedFieldsMessage:
       "Your profession and submitted licence identifiers " +
       "are protected. Corrections must be handled through " +
@@ -720,60 +750,49 @@ function buildProfessionalDetailsView(profile) {
   };
 }
 
-// ───────────────────────── AVAILABILITY VIEW ─────────────────────────
-
 function buildAvailabilityView(profile) {
   const today = getTodayISODate();
-
   const storedDates = getStoredAvailableDates(profile);
-
-  // Show upcoming selectable dates in the editing interface.
   const upcomingDates = storedDates.filter((date) => date >= today);
 
   const selectedWeekdays = Array.isArray(profile.availableWeekdays)
-    ? profile.availableWeekdays.map(Number)
+    ? [
+        ...new Set(
+          profile.availableWeekdays
+            .map(Number)
+            .filter((day) => WEEKDAYS.some((weekday) => weekday.value === day))
+        ),
+      ].sort((a, b) => a - b)
     : [];
 
   const mode = resolveAvailabilityMode(profile);
+  const status = profile.availabilityStatus || "available";
 
   return {
-    status: profile.availabilityStatus || "available",
-
+    status,
     mode,
-
     statusOptions: AVAILABILITY_STATUSES.map((option) => ({
       ...option,
-
-      selected: option.value === (profile.availabilityStatus || "available"),
+      selected: option.value === status,
     })),
-
     modeOptions: AVAILABILITY_MODES.map((option) => ({
       ...option,
       selected: option.value === mode,
     })),
-
     weekdayOptions: WEEKDAYS.map((day) => ({
       ...day,
       selected: selectedWeekdays.includes(day.value),
     })),
-
     selectedWeekdays,
-
     selectedDates: upcomingDates.map((date) => ({
       value: date,
       label: formatAvailabilityDate(date),
     })),
-
     minimumDate: today,
-
     note: profile.availabilityNote || "",
-
     maxDates: MAX_AVAILABLE_DATES,
-
     maxNoteLength: MAX_AVAILABILITY_NOTE_LENGTH,
-
     formAction: "/professional/profile/availability",
-
     helpMessage:
       "Your availability helps communicate when you " +
       "prefer to work. It does not cancel confirmed " +
@@ -781,22 +800,16 @@ function buildAvailabilityView(profile) {
   };
 }
 
-// ───────────────────────── ACCOUNT SETTINGS VIEW ─────────────────────────
-
 function buildAccountSettingsView(profile) {
   const status = buildStatus(profile.accountStatus);
 
   return {
     accountStatusLabel: status.label,
-
     accountStatusBadgeClass: status.badgeClass,
-
     closureEnabled: false,
-
     closureMessage:
       "Self-service account closure is not yet available. " +
       "Contact Loqum Support for account-related assistance.",
-
     financialNotice:
       "Account closure must account for outstanding shifts, " +
       "earnings, withdrawals, unresolved cases, and financial " +
@@ -805,58 +818,43 @@ function buildAccountSettingsView(profile) {
   };
 }
 
-// ───────────────────────── SERVICE ─────────────────────────
-
 class ProfessionalProfileService {
-  /**
-   * Prepare all Professional Profile data for rendering.
-   *
-   * The controller passes:
-   * - req.user
-   * - req.professionalProfile
-   * - the requested profile tab
-   *
-   * Ownership is checked defensively here.
-   */
   static async getProfileData({ actorUser, professionalProfile, activeTab = "overview" } = {}) {
     assertProfileOwnership(actorUser, professionalProfile);
 
+    const verificationStatus = await ProfessionalVerificationService.getVerificationStatus({
+      professionalProfileId: professionalProfile._id,
+      userId: actorUser._id,
+    });
+
+    // The status flow may activate an approved renewal that is now effective.
+    // Refresh after its transaction so the profile displays current licence data.
+    const profile = await ProfessionalProfile.findOne({
+      _id: professionalProfile._id,
+      user: actorUser._id,
+    });
+
+    if (!profile) {
+      throw createError("Your professional profile could not be found.", 404);
+    }
+
     const selectedTab = resolveActiveTab(activeTab);
-
-    const professionalProfileSummary = buildProfessionalProfileSummary(
-      actorUser,
-      professionalProfile
-    );
-
-    const verificationView = buildVerificationView(professionalProfile);
+    const professionalProfileSummary = buildProfessionalProfileSummary(actorUser, profile);
+    const verificationView = buildVerificationView(profile, verificationStatus);
 
     return {
       activeTab: selectedTab,
-
       professionalProfileSummary,
-
       profileNavigation: buildProfileNavigation(selectedTab),
-
-      overviewView: buildOverviewView(professionalProfile, verificationView),
-
-      personalDetailsView: buildPersonalDetailsView(actorUser, professionalProfile),
-
-      professionalDetailsView: buildProfessionalDetailsView(professionalProfile),
-
+      overviewView: buildOverviewView(profile, verificationView),
+      personalDetailsView: buildPersonalDetailsView(actorUser, profile),
+      professionalDetailsView: buildProfessionalDetailsView(profile, verificationView.licence),
       verificationView,
-
-      availabilityView: buildAvailabilityView(professionalProfile),
-
-      accountSettingsView: buildAccountSettingsView(professionalProfile),
+      availabilityView: buildAvailabilityView(profile),
+      accountSettingsView: buildAccountSettingsView(profile),
     };
   }
 
-  /**
-   * Update the authenticated professional's availability.
-   *
-   * Only the approved availability fields are written.
-   * Preferences for the inactive mode are preserved.
-   */
   static async updateAvailability({ actorUser, data } = {}) {
     assertProfessionalUser(actorUser);
 
@@ -865,9 +863,7 @@ class ProfessionalProfileService {
     }
 
     const status = readSingleString(data.availabilityStatus, "availability status");
-
     const mode = readSingleString(data.availabilityMode, "availability mode");
-
     const note = readSingleString(data.availabilityNote, "availability note");
 
     if (!VALID_AVAILABILITY_STATUSES.includes(status)) {
@@ -903,8 +899,6 @@ class ProfessionalProfileService {
       }
     }
 
-    // Resolve ownership from the authenticated user.
-    // Never accept a profile ID from the form.
     const profile = await ProfessionalProfile.findOne({
       user: actorUser._id,
     });
@@ -923,21 +917,15 @@ class ProfessionalProfileService {
       profile.availableDates = dates.map((date) => new Date(`${date}T00:00:00.000Z`));
     }
 
-    // Preserve existing Mongoose validation hooks.
     await profile.save();
 
     return {
       success: true,
-
       message: "Your availability has been updated.",
-
       availabilityStatus: profile.availabilityStatus,
-
       availabilityMode: profile.availabilityMode,
     };
   }
 }
-
-// ───────────────────────── EXPORT ─────────────────────────
 
 module.exports = ProfessionalProfileService;

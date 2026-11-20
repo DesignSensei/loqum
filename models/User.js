@@ -16,6 +16,23 @@ const bcrypt = require("bcryptjs");
  * registry evidence, not applicant-entered registration data.
  */
 
+const LEGAL_NAME_FIELDS = [
+  "firstName",
+  "middleName",
+  "lastName",
+  "legalNameSource",
+  "legalNameEvidence",
+];
+
+const IDENTITY_FIELDS = [...LEGAL_NAME_FIELDS, "role"];
+
+function isValidLegalName(value) {
+  return (
+    value == null ||
+    (typeof value === "string" && value.length <= 100 && !/[\u0000-\u001F\u007F]/.test(value))
+  );
+}
+
 // ───────────────────── USER SCHEMA ─────────────────────
 
 const userSchema = new mongoose.Schema(
@@ -38,12 +55,22 @@ const userSchema = new mongoose.Schema(
       },
 
       trim: true,
+      maxlength: 100,
+      validate: {
+        validator: isValidLegalName,
+        message: "Legal name component is invalid.",
+      },
       default: "",
     },
 
     middleName: {
       type: String,
       trim: true,
+      maxlength: 100,
+      validate: {
+        validator: isValidLegalName,
+        message: "Legal name component is invalid.",
+      },
       default: "",
     },
 
@@ -55,6 +82,11 @@ const userSchema = new mongoose.Schema(
       },
 
       trim: true,
+      maxlength: 100,
+      validate: {
+        validator: isValidLegalName,
+        message: "Legal name component is invalid.",
+      },
       default: "",
     },
 
@@ -257,6 +289,7 @@ const userSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    optimisticConcurrency: true,
   }
 );
 
@@ -315,11 +348,17 @@ userSchema.pre("validate", function validateProfessionalLegalName() {
   // ───────────────────── NIN REGISTRY NAME ─────────────────────
 
   if (this.legalNameSource === "nin_registry") {
-    if (!this.firstName) {
+    if (
+      (this.isNew || this.isSelected("firstName") || this.isModified("firstName")) &&
+      !this.firstName
+    ) {
       this.invalidate("firstName", "NIN registry-derived professional first name is required.");
     }
 
-    if (!this.lastName) {
+    if (
+      (this.isNew || this.isSelected("lastName") || this.isModified("lastName")) &&
+      !this.lastName
+    ) {
       this.invalidate("lastName", "NIN registry-derived professional last name is required.");
     }
 
@@ -330,7 +369,10 @@ userSchema.pre("validate", function validateProfessionalLegalName() {
      */
 
     const mustValidateEvidenceReference =
-      this.isNew || this.isModified("legalNameSource") || this.isModified("legalNameEvidence");
+      this.isNew ||
+      this.isSelected("legalNameEvidence") ||
+      this.isModified("legalNameSource") ||
+      this.isModified("legalNameEvidence");
 
     if (mustValidateEvidenceReference && !this.legalNameEvidence) {
       this.invalidate(
@@ -350,8 +392,8 @@ userSchema.pre("validate", function validateProfessionalLegalName() {
  * The initial transition from unverified to nin_registry remains
  * permitted through the trusted onboarding workflow.
  *
- * Query-based updates bypass save middleware. Controllers and
- * services must independently protect these fields.
+ * Query identity writes are guarded separately below. Controllers and
+ * services still need input allowlists and authentic evidence checks.
  */
 
 userSchema.pre("save", async function protectRegistryLegalName() {
@@ -359,13 +401,7 @@ userSchema.pre("save", async function protectRegistryLegalName() {
     return;
   }
 
-  const protectedFields = [
-    "firstName",
-    "middleName",
-    "lastName",
-    "legalNameSource",
-    "legalNameEvidence",
-  ];
+  const protectedFields = IDENTITY_FIELDS;
 
   const hasProtectedChange = protectedFields.some((field) => {
     return this.isModified(field);
@@ -375,10 +411,14 @@ userSchema.pre("save", async function protectRegistryLegalName() {
     return;
   }
 
+  if (!this.isSelected("role") || !this.isSelected("legalNameSource")) {
+    throw new Error("Load role and legal-name provenance before changing account identity.");
+  }
+
   // Compare against stored provenance, not the submitted document state.
   const previousUser = await this.constructor
     .findById(this._id)
-    .select("firstName middleName lastName legalNameSource +legalNameEvidence")
+    .select("role firstName middleName lastName legalNameSource +legalNameEvidence")
     .session(this.$session())
     .lean();
 
@@ -403,6 +443,117 @@ userSchema.pre("save", async function protectRegistryLegalName() {
       throw new Error(
         "NIN registry-derived legal names and their evidence cannot be changed through ordinary account updates."
       );
+    }
+  }
+});
+
+// ───────────────────── QUERY IDENTITY PROTECTION ─────────────────────
+
+/**
+ * Query updates do not run document validation or save middleware.
+ *
+ * Preserve the existing transactional onboarding assignment, with an
+ * explicit unverified professional filter and complete name evidence.
+ * Other identity changes must use a loaded document and save().
+ *
+ * This protects model operations, not raw collection writes. Services
+ * must verify the evidence and must never forward arbitrary request
+ * filters, update operators or transaction options into this model.
+ */
+
+function assertSafeIdentityUpdate(filter, update, options = {}, operation) {
+  if (
+    Array.isArray(update) ||
+    ["replaceOne", "findOneAndReplace"].includes(operation) ||
+    options.overwrite
+  ) {
+    throw new Error("User pipeline and replacement writes are not supported; use document save().");
+  }
+  if (!update) return false;
+
+  const touchesIdentity = (path) => IDENTITY_FIELDS.includes(String(path).split(".")[0]);
+  const changed = [];
+  for (const [operator, values] of Object.entries(update)) {
+    if (!operator.startsWith("$")) {
+      if (touchesIdentity(operator)) changed.push(["direct", operator]);
+      continue;
+    }
+    for (const [path, value] of Object.entries(values || {})) {
+      if (touchesIdentity(path) || (operator === "$rename" && touchesIdentity(value))) {
+        changed.push([operator, path]);
+      }
+    }
+  }
+  if (!changed.length) return false;
+
+  const fields = update.$set || {};
+  const onboardingAssignment =
+    ["updateOne", "findOneAndUpdate"].includes(operation) &&
+    !options.upsert &&
+    options.session?.inTransaction?.() === true &&
+    filter.role === "professional" &&
+    filter.legalNameSource === "unverified" &&
+    Object.prototype.hasOwnProperty.call(filter, "legalNameEvidence") &&
+    filter.legalNameEvidence === null &&
+    changed.every(([operator, path]) => operator === "$set" && LEGAL_NAME_FIELDS.includes(path)) &&
+    LEGAL_NAME_FIELDS.every((path) => Object.prototype.hasOwnProperty.call(fields, path)) &&
+    fields.legalNameSource === "nin_registry" &&
+    mongoose.isValidObjectId(fields.legalNameEvidence) &&
+    typeof fields.firstName === "string" &&
+    fields.firstName.trim().length > 0 &&
+    isValidLegalName(fields.firstName) &&
+    typeof fields.lastName === "string" &&
+    fields.lastName.trim().length > 0 &&
+    isValidLegalName(fields.lastName) &&
+    isValidLegalName(fields.middleName);
+
+  if (!onboardingAssignment) {
+    throw new Error(
+      "Identity query updates require a complete transactional onboarding assignment; use document save() for other changes."
+    );
+  }
+  // Invalidate stale documents loaded before the registry-name assignment.
+  // The service must not supply its own version mutation alongside this one.
+  if (
+    Object.entries(update).some(
+      ([operator, values]) =>
+        operator.startsWith("$") &&
+        Object.entries(values || {}).some(
+          ([path, value]) =>
+            path === "__v" || path.startsWith("__v.") || (operator === "$rename" && value === "__v")
+        )
+    )
+  ) {
+    throw new Error("Identity assignment versioning is managed by the User model.");
+  }
+  update.$inc = { ...(update.$inc || {}), __v: 1 };
+  return true;
+}
+
+userSchema.pre(
+  ["updateOne", "updateMany", "findOneAndUpdate", "replaceOne", "findOneAndReplace"],
+  function () {
+    if (assertSafeIdentityUpdate(this.getFilter(), this.getUpdate(), this.getOptions(), this.op)) {
+      this.setOptions({ runValidators: true });
+    }
+  }
+);
+
+// Bulk identity writes bypass document guards and are deliberately excluded.
+userSchema.pre("bulkWrite", function (operations) {
+  for (const operation of operations) {
+    if (operation.replaceOne || operation.insertOne) {
+      throw new Error("Bulk user creation/replacement is not supported; use create() or save().");
+    }
+    for (const name of ["updateOne", "updateMany"]) {
+      if (operation[name]) {
+        assertSafeIdentityUpdate(
+          operation[name].filter,
+          operation[name].update,
+          operation[name],
+          name
+        );
+      }
     }
   }
 });

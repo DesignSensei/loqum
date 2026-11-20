@@ -12,14 +12,11 @@ const SUCCESSFUL_STATUSES = new Set(["matched", "consumed"]);
  * Registered legal business names must originate
  * from trusted CAC registry evidence.
  *
- * A business name must not consist solely of
- * whitespace or contain control characters.
- *
  * This helper validates the stored value.
  *
- * It does not establish that the provider
- * supplied the value. That responsibility
- * belongs to the trusted verification service.
+ * It does not establish that a provider supplied
+ * the value. That responsibility belongs to the
+ * trusted CAC verification service.
  */
 
 function isValidRegisteredBusinessName(value) {
@@ -29,6 +26,29 @@ function isValidRegisteredBusinessName(value) {
 }
 
 // ───────────────────── PRE-ONBOARDING CAC EVIDENCE ─────────────────────
+
+/*
+ * This model stores temporary CAC verification
+ * evidence for employer onboarding.
+ *
+ * LOOKUP POLICY
+ *
+ * - Eight lookups per rolling 24-hour period;
+ * - Six distinct registration numbers;
+ * - No mandatory cooldown between completed lookups;
+ * - One active processing claim per employer;
+ * - No automatic provider retries;
+ * - Uncertain outcomes require support review.
+ *
+ * Rolling limits are enforced using CACLookupAttempt.
+ *
+ * This model does not store the employer's remaining
+ * lookup allowance or next eligible lookup time.
+ *
+ * CAC verification does not independently establish
+ * representative authority, PCN premises eligibility
+ * or final employer approval.
+ */
 
 const preOnboardingCACVerificationSchema = new mongoose.Schema(
   {
@@ -44,15 +64,13 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
     // ───────────────────── VERIFICATION PROVIDER ─────────────────────
 
     /*
-     * The configured provider performs the CAC lookup.
+     * The provider is selected by the verification
+     * configuration, not by the applicant.
      *
-     * Provider selection is controlled through
-     * the application's verification configuration.
+     * Staging evidence cannot authorize
+     * production employer onboarding.
      *
-     * No automatic provider fallback or double-charging.
-     *
-     * Staging lookups may be used for testing but
-     * cannot authorise production onboarding.
+     * No automatic provider fallback.
      */
 
     provider: {
@@ -70,25 +88,17 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
     // ───────────────────── CAC REGISTRATION IDENTITY ─────────────────────
 
     /*
-     * The registration number identifies the
-     * business being checked.
-     *
      * Only RC and BN registrations are supported
      * by the current automated onboarding workflow.
      *
-     * The verification service must normalise
-     * registration numbers before persistence.
+     * Registration identifiers must be normalized
+     * before persistence.
      *
-     * The applicant does not supply an authoritative
-     * registered business name.
+     * The applicant does not supply the authoritative
+     * registered legal business name.
      *
-     * That name comes directly from CAC evidence.
-     *
-     * Ninja and Dojah may support different
-     * registration categories.
-     *
-     * The selected provider must explicitly support
-     * the supplied category before a paid lookup.
+     * Provider capability must be checked before
+     * starting a chargeable lookup.
      */
 
     registrationNumber: {
@@ -103,41 +113,43 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
 
     /*
      * processing:
-     * A CAC lookup has been claimed and is in progress.
+     * A provider lookup has been claimed.
      *
      * matched:
-     * A registered business was found and its
-     * registration details passed the required checks.
+     * The registration passed required CAC checks.
      *
      * needs_review:
      * Registry evidence is incomplete or inconclusive.
      *
      * not_found:
-     * The registry did not confirm the registration.
+     * The registration could not be confirmed.
      *
      * failed:
-     * The lookup could not be completed.
+     * The lookup could not be completed safely.
+     *
+     * cancelled:
+     * An unconsumed lookup was invalidated
+     * before completion.
      *
      * consumed:
-     * Successfully matched production evidence has
-     * been consumed during employer onboarding.
+     * Successful production CAC evidence was
+     * transferred during employer onboarding.
      *
-     * A successful CAC lookup verifies the business
-     * registration only.
-     *
-     * It does not prove the applicant is authorised
-     * to represent the business.
-     *
-     * It does not establish PCN premises verification
-     * or final employer KYB approval.
-     *
-     * The service must enforce permitted status
+     * The verification service owns permitted
      * transitions through atomic database updates.
      */
 
     status: {
       type: String,
-      enum: ["processing", "matched", "needs_review", "not_found", "failed", "consumed"],
+      enum: [
+        "processing",
+        "matched",
+        "needs_review",
+        "not_found",
+        "failed",
+        "cancelled",
+        "consumed",
+      ],
       required: true,
       default: "processing",
     },
@@ -145,25 +157,16 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
     // ───────────────────── REGISTRY EVIDENCE ─────────────────────
 
     /*
-     * Authoritative registered legal business name
-     * returned by the configured CAC provider.
+     * Authoritative legal business name returned
+     * by the configured CAC verification provider.
      *
-     * This value must originate from trusted
-     * server-side verification evidence.
-     *
-     * Never populate this field from request-body
-     * businessName or user-entered display names.
+     * Never populate this field using a
+     * request-body businessName.
      *
      * Required for matched and consumed records.
      *
-     * OnboardingService uses this field to populate
-     * EmployerProfile.businessName.
-     *
-     * Partial names may be retained for controlled
-     * review when status is needs_review.
-     *
-     * Only successful evidence may authorise
-     * normal employer onboarding.
+     * Partial evidence may be retained when the
+     * result requires controlled administrative review.
      */
 
     nameOnRecord: {
@@ -178,18 +181,13 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
     },
 
     /*
-     * Registration number returned by the registry.
+     * Registration number returned by CAC.
      *
-     * The provider adapter must normalise this
-     * value into the same RC/BN format used
-     * by registrationNumber.
+     * The provider adapter must normalize it
+     * into the same RC/BN format.
      *
-     * A successful lookup requires both registration
-     * numbers to refer to the same registration.
-     *
-     * A provider response that does not provide
-     * sufficient registration-number evidence
-     * must not be treated as a successful match.
+     * Successful evidence requires matching
+     * requested and returned identifiers.
      */
 
     responseRegistrationNumber: {
@@ -203,17 +201,12 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
     /*
      * Registry entity category and status.
      *
-     * These are obtained from the provider response.
+     * EmployerVerificationService interprets
+     * whether these satisfy Loqum's business
+     * registration requirements.
      *
-     * EmployerVerificationService remains responsible
-     * for interpreting supported entity categories
-     * and acceptable registration statuses.
-     *
-     * Do not assume that a record is active merely
-     * because the provider returned company details.
-     *
-     * Missing or ambiguous registry status must
-     * not be interpreted as an active registration.
+     * A registration must not be assumed active
+     * merely because the provider returned details.
      */
 
     entityType: {
@@ -239,30 +232,23 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
     // ───────────────────── REGISTRATION VALIDATION ─────────────────────
 
     /*
-     * These checks must be calculated by trusted
-     * verification services using provider evidence.
+     * These checks are calculated by trusted
+     * verification services from provider evidence.
      *
      * registrationNumberMatches:
-     * The returned registration number matches
-     * the registration number requested.
+     * Returned registration matches the request.
      *
      * entityCategoryMatches:
-     * The returned business category satisfies
-     * Loqum's supported-registration policy.
+     * Entity category is supported by Loqum.
      *
      * registrationIsActive:
-     * The registry confirms an acceptable active
-     * business-registration status.
+     * CAC confirms an acceptable active status.
      *
-     * No businessNameMatches check is required.
+     * All three must be true for matched
+     * or consumed evidence.
      *
-     * The registered legal business name is
-     * provided directly by CAC and is not matched
-     * against a user-submitted legal name.
-     *
-     * All three checks must be true before
-     * evidence can be marked as matched
-     * or consumed.
+     * No applicant-entered business-name match
+     * is required.
      */
 
     checks: {
@@ -285,24 +271,23 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
     // ───────────────────── PROCESSING REFERENCES ─────────────────────
 
     /*
-     * Internal lookup ownership and correlation.
+     * Internal ownership and correlation fields.
      *
-     * These fields support:
+     * processingClaimId:
+     * Identifies the active lookup claim.
      *
-     * - Atomic lookup claims;
-     * - Duplicate-request prevention;
-     * - Provider response correlation;
-     * - Controlled retry handling;
-     * - Transactional evidence consumption.
+     * requestReference:
+     * Correlates evidence with the durable
+     * CACLookupAttempt audit record.
      *
-     * processingClaimId identifies the active
-     * lookup claim.
-     *
-     * A completed result must not retain
-     * an active processing claim.
+     * providerReference:
+     * Tracks the provider's returned reference.
      *
      * Never store provider credentials or
      * sensitive authentication tokens.
+     *
+     * These fields are excluded from ordinary
+     * queries unless explicitly selected.
      */
 
     processingClaimId: {
@@ -315,6 +300,8 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
 
     requestReference: {
       type: String,
+      required: true,
+      match: /^[A-Za-z0-9_.:-]{1,128}$/,
       trim: true,
       maxlength: 128,
       default: null,
@@ -331,17 +318,14 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
     // ───────────────────── REVIEW AND ERROR INFORMATION ─────────────────────
 
     /*
-     * Store concise, sanitised error and
-     * review information.
+     * Only concise, sanitized review information
+     * may be stored here.
      *
-     * Never persist raw provider errors containing
-     * credentials or sensitive request information.
+     * Do not persist raw provider errors that
+     * could expose credentials or sensitive data.
      *
-     * needs_review may retain partial registry
-     * evidence for authorised investigation.
-     *
-     * Review information must not independently
-     * authorise employer onboarding.
+     * Review status must never independently
+     * authorize employer onboarding.
      */
 
     reason: {
@@ -361,24 +345,24 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
     // ───────────────────── LOOKUP TIMESTAMPS ─────────────────────
 
     /*
-     * lookupStartedAt identifies when the
-     * chargeable lookup was claimed.
+     * lookupStartedAt:
+     * Time the potentially chargeable lookup
+     * was claimed.
      *
-     * processingLeaseExpiresAt controls
-     * the active processing lease.
+     * processingLeaseExpiresAt:
+     * Deadline for the active processing claim.
      *
-     * checkedAt identifies when the provider
-     * result was assessed and recorded.
+     * checkedAt:
+     * Time the provider result was assessed.
      *
-     * nextLookupAllowedAt remains available
-     * for the CAC verification service's
-     * controlled retry policy.
+     * There is no nextLookupAllowedAt field.
      *
-     * A timed-out provider request must not
-     * automatically trigger another paid lookup
-     * when its outcome is uncertain.
+     * The rolling 24-hour budget and next eligible
+     * lookup time are calculated from persistent
+     * CACLookupAttempt history.
      *
-     * No retry should silently switch providers.
+     * An expired processing lease does not
+     * authorize an automatic provider retry.
      */
 
     lookupStartedAt: {
@@ -396,7 +380,22 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
       default: null,
     },
 
-    nextLookupAllowedAt: {
+    // ───────────────────── CORRECTION CANCELLATION ─────────────────────
+
+    /*
+     * Cancellation invalidates an unfinished
+     * lookup before a replacement claim.
+     *
+     * A completed lookup can be superseded by
+     * a new explicit verification request,
+     * subject to the rolling-window policy.
+     *
+     * Services must reject late provider responses
+     * and clear cancellation state when claiming
+     * another lookup.
+     */
+
+    cancelledAt: {
       type: Date,
       default: null,
     },
@@ -407,14 +406,12 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
      * Only successfully matched production
      * CAC evidence may be consumed.
      *
-     * The trusted onboarding service must
-     * persist the authoritative registered
-     * business name and permanent CAC evidence
-     * in the same onboarding transaction.
+     * The onboarding service must save permanent
+     * CAC verification evidence and the registered
+     * legal business name in the same transaction.
      *
-     * Consumption does not establish
-     * representative authority, PCN premises
-     * approval or final employer KYB approval.
+     * Consumption does not establish representative
+     * authority or final employer KYB approval.
      */
 
     consumedAt: {
@@ -425,21 +422,22 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
     // ───────────────────── TEMPORARY EVIDENCE RETENTION ─────────────────────
 
     /*
-     * Temporary CAC lookup evidence only.
+     * This is temporary verification evidence.
      *
-     * Expiration here does not revoke permanent
-     * CAC verification or employer approval.
+     * Expiration does not revoke previously
+     * transferred permanent CAC verification.
      *
      * Permanent verification history is maintained
      * through KYCVerification.
      *
-     * The verification service must check expiresAt
-     * independently because MongoDB TTL cleanup
-     * is asynchronous.
+     * MongoDB TTL cleanup is asynchronous.
      *
-     * Expiration is an evidence validity control,
-     * not proof that provider verification was
-     * unsuccessful.
+     * The service must check expiresAt before
+     * reusing or consuming evidence.
+     *
+     * Removing temporary evidence does not reset
+     * the lookup budget because CACLookupAttempt
+     * retains the durable lookup history.
      */
 
     expiresAt: {
@@ -449,6 +447,7 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    optimisticConcurrency: true,
   }
 );
 
@@ -456,13 +455,14 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
 
 preOnboardingCACVerificationSchema.pre("validate", function () {
   /*
-   * Temporary evidence must include a valid
-   * lookup claim timestamp and retention period.
+   * Every temporary record must include
+   * a lookup start and valid retention period.
    *
-   * MongoDB TTL cleanup is asynchronous.
+   * Document validation does not run for
+   * findOneAndUpdate().
    *
-   * The service must independently enforce
-   * expiry before consuming evidence.
+   * Services must independently enforce
+   * equivalent atomic update conditions.
    */
 
   if (!this.lookupStartedAt) {
@@ -473,28 +473,30 @@ preOnboardingCACVerificationSchema.pre("validate", function () {
     throw new Error("CAC evidence expiration must be later than the lookup start.");
   }
 
-  /*
-   * A processing lookup must retain its
-   * active claim and processing lease.
-   *
-   * It must not contain completed verification
-   * evidence from a previous lookup.
-   *
-   * Replacing temporary evidence must clear
-   * previous registry details and checks.
-   */
+  // ───────── PROCESSING VALIDATION ─────────
 
   if (this.status === "processing") {
     if (!this.processingClaimId || !this.processingLeaseExpiresAt) {
       throw new Error("Processing CAC verification requires an active claim and lease.");
     }
 
-    if (this.processingLeaseExpiresAt <= this.lookupStartedAt) {
-      throw new Error("CAC processing lease must extend beyond the lookup start.");
+    if (
+      this.processingLeaseExpiresAt <= this.lookupStartedAt ||
+      this.processingLeaseExpiresAt > this.expiresAt
+    ) {
+      throw new Error(
+        "CAC processing lease must extend beyond lookup start and remain within retention."
+      );
     }
+
+    /*
+     * A new processing claim must not retain
+     * completed evidence from an earlier lookup.
+     */
 
     if (
       this.checkedAt ||
+      this.providerReference ||
       this.consumedAt ||
       this.nameOnRecord ||
       this.responseRegistrationNumber ||
@@ -507,13 +509,38 @@ preOnboardingCACVerificationSchema.pre("validate", function () {
     ) {
       throw new Error("Processing CAC verification cannot retain completed registry evidence.");
     }
+
+    // ───────── CANCELLATION VALIDATION ─────────
+  } else if (this.status === "cancelled") {
+    if (
+      !this.cancelledAt ||
+      this.cancelledAt < this.lookupStartedAt ||
+      this.processingClaimId ||
+      this.processingLeaseExpiresAt ||
+      this.checkedAt ||
+      this.consumedAt ||
+      this.providerReference ||
+      this.nameOnRecord ||
+      this.responseRegistrationNumber ||
+      this.entityType ||
+      this.entityStatus ||
+      this.registrationDate ||
+      this.checks?.registrationNumberMatches != null ||
+      this.checks?.entityCategoryMatches != null ||
+      this.checks?.registrationIsActive != null
+    ) {
+      throw new Error(
+        "Cancelled CAC evidence must record cancellation and clear claims and registry results."
+      );
+    }
+
+    // ───────── COMPLETED RESULT VALIDATION ─────────
   } else {
     /*
-     * Completed lookup results must include a
-     * completed lookup timestamp.
+     * Completed outcomes must contain a
+     * checkedAt timestamp.
      *
-     * The processing claim and lease must be
-     * cleared when the lookup is completed.
+     * Processing ownership must be cleared.
      */
 
     if (!this.checkedAt || this.checkedAt < this.lookupStartedAt) {
@@ -524,19 +551,25 @@ preOnboardingCACVerificationSchema.pre("validate", function () {
       throw new Error("Completed CAC verification cannot retain an active processing claim.");
     }
 
-    if (this.checkedAt > this.expiresAt) {
+    if (this.checkedAt >= this.expiresAt) {
       throw new Error("Completed CAC verification evidence has expired.");
     }
   }
+
+  // ───────── CANCELLATION CONSISTENCY ─────────
+
+  if (this.status !== "cancelled" && this.cancelledAt) {
+    throw new Error("Only cancelled CAC evidence may retain a cancellation timestamp.");
+  }
+
+  // ───────── SUCCESSFUL EVIDENCE ─────────
 
   /*
    * Matched and consumed records must contain
    * complete, internally consistent CAC evidence.
    *
-   * A provider returning a registered name alone
-   * is not sufficient to confirm eligibility.
-   *
-   * All required registry checks must pass.
+   * A registered business name alone is not
+   * sufficient for successful verification.
    */
 
   if (SUCCESSFUL_STATUSES.has(this.status)) {
@@ -577,42 +610,44 @@ preOnboardingCACVerificationSchema.pre("validate", function () {
     }
   }
 
+  // ───────── PRODUCTION CONSUMPTION ─────────
+
   /*
-   * Only successful production evidence may
-   * be consumed during normal onboarding.
+   * Staging records may be matched for testing.
    *
-   * Staging evidence may be matched for testing
-   * but cannot establish production CAC verification.
+   * Only successful production CAC evidence
+   * can be consumed during normal onboarding.
    */
 
   if (this.status === "consumed" && this.providerEnvironment !== "production") {
     throw new Error("Staging CAC evidence cannot be consumed for production onboarding.");
   }
 
-  /*
-   * Consumption must be explicitly recorded.
-   *
-   * Unconsumed records must not have consumedAt.
-   *
-   * The service must enforce the matched-to-consumed
-   * transition atomically.
-   */
+  // ───────── CONSUMPTION TIMESTAMPS ─────────
 
   if (this.status === "consumed" && !this.consumedAt) {
     throw new Error("Consumed CAC evidence must include a consumption timestamp.");
+  }
+
+  if (
+    this.status === "consumed" &&
+    (this.consumedAt < this.checkedAt || this.consumedAt >= this.expiresAt)
+  ) {
+    throw new Error("CAC evidence must be consumed after lookup completion and before expiry.");
   }
 
   if (this.status !== "consumed" && this.consumedAt) {
     throw new Error("Unconsumed CAC evidence cannot have a consumption timestamp.");
   }
 
+  // ───────── UNSUCCESSFUL EVIDENCE ─────────
+
   /*
-   * Failed and not-found results must not retain
-   * a registered business name that could be
-   * mistaken for successful verification evidence.
+   * Failed and not-found outcomes must not
+   * retain authoritative business names.
    *
-   * Partial evidence may be retained in needs_review
-   * for controlled administrative investigation.
+   * needs_review may retain partial registry
+   * evidence for authorized investigation.
    */
 
   if (["processing", "not_found", "failed"].includes(this.status) && this.nameOnRecord) {
@@ -627,39 +662,50 @@ preOnboardingCACVerificationSchema.pre("validate", function () {
 /*
  * One temporary CAC verification record per user.
  *
- * Replacement and processing claims must be
- * managed atomically by the verification service.
- *
- * Prevent duplicate concurrent provider lookups.
+ * Lookup claims and replacement updates must
+ * be coordinated atomically by the service.
  */
 
-preOnboardingCACVerificationSchema.index({ user: 1 }, { unique: true });
+preOnboardingCACVerificationSchema.index(
+  {
+    user: 1,
+  },
+  {
+    unique: true,
+  }
+);
 
 /*
- * Automatic cleanup of temporary CAC evidence.
+ * Automatic cleanup of temporary evidence.
  *
  * MongoDB TTL cleanup is asynchronous.
  *
- * Services must independently verify expiration
- * before consuming evidence.
+ * The service independently enforces expiry.
  *
- * This does not expire permanent CAC verification
- * or employer KYB approval.
+ * This index does not delete permanent CAC
+ * verification history or lookup attempt history.
  */
 
-preOnboardingCACVerificationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+preOnboardingCACVerificationSchema.index(
+  {
+    expiresAt: 1,
+  },
+  {
+    expireAfterSeconds: 0,
+  }
+);
 
 // ───────────────────── SAFE SERIALIZATION ─────────────────────
 
 /*
- * Internal processing references must not be
- * exposed through ordinary JSON serialisation.
+ * Internal processing references must not
+ * be exposed through ordinary JSON serialization.
  *
- * Controllers and verification services should
- * construct explicit public response objects.
+ * Controllers and services must construct
+ * explicitly approved public response objects.
  *
- * Provider evidence must not be exposed before
- * the caller's account ownership is established.
+ * Provider evidence must not be exposed until
+ * account ownership is established.
  */
 
 preOnboardingCACVerificationSchema.set("toJSON", {

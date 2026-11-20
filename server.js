@@ -18,6 +18,8 @@ const { startBackgroundJobs, stopBackgroundJobs } = require("./jobs");
 const attachViewLocals = require("./middleware/viewLocalsMiddleware");
 const { attachNotificationLocals } = require("./middleware/notificationMiddleware");
 
+const { notFoundHandler, errorHandler } = require("./middleware/errorHandler");
+
 const connectDB = require("./config/db");
 const logger = require("./utils/logger");
 
@@ -43,12 +45,6 @@ let isShuttingDown = false;
 let backgroundJobsStarted = false;
 
 app.disable("x-powered-by");
-
-function wantsJSON(req) {
-  const accept = req.get("Accept") || "";
-
-  return req.xhr || Boolean(req.is("application/json")) || accept.includes("application/json");
-}
 
 // ───────────────────── WEBHOOKS ─────────────────────
 
@@ -133,6 +129,9 @@ app.use((req, res, next) => {
 
 // ───────────────────── CSRF PROTECTION ─────────────────────
 
+// CSRF protection accepts tokens supplied through request headers.
+// Multipart checkout uploads remain subject to CSRF validation.
+
 const csrfProtection = csrf({
   cookie: true,
 });
@@ -160,102 +159,11 @@ app.use("/employer", employerRoutes);
 
 // ───────────────────── NOT FOUND ─────────────────────
 
-app.use((req, res) => {
-  if (wantsJSON(req)) {
-    return res.status(404).json({
-      success: false,
-      message: "The requested resource was not found.",
-    });
-  }
-
-  return res.status(404).render("errors/not-found", {
-    layout: "layouts/error-layout",
-    title: "Not Found",
-    wfPage: "66b93fd9c65755b8a91df18e",
-  });
-});
+app.use(notFoundHandler);
 
 // ───────────────────── GLOBAL ERROR HANDLING ─────────────────────
 
-app.use((err, req, res, next) => {
-  if (res.headersSent) {
-    return next(err);
-  }
-
-  const isCSRFError = err?.code === "EBADCSRFTOKEN";
-
-  const statusCode = isCSRFError
-    ? 403
-    : Number.isInteger(err?.statusCode) && err.statusCode >= 400 && err.statusCode <= 599
-      ? err.statusCode
-      : 500;
-
-  res.set({
-    "Cache-Control": "no-store, no-cache, must-revalidate, private",
-    Pragma: "no-cache",
-    Expires: "0",
-  });
-
-  if (isCSRFError) {
-    const message =
-      "Session expired or security token invalid. Please refresh the page and try again.";
-
-    if (wantsJSON(req)) {
-      return res.status(403).json({
-        success: false,
-        message,
-        code: "INVALID_CSRF_TOKEN",
-      });
-    }
-
-    return res.status(403).render("errors/error", {
-      layout: "layouts/error-layout",
-      title: "Session Expired",
-      message,
-      wfPage: "66b93fd9c65755b8a91df18e",
-    });
-  }
-
-  if (statusCode === 404) {
-    if (wantsJSON(req)) {
-      return res.status(404).json({
-        success: false,
-        message: "The requested resource was not found.",
-      });
-    }
-
-    return res.status(404).render("errors/not-found", {
-      layout: "layouts/error-layout",
-      title: "Not Found",
-      wfPage: "66b93fd9c65755b8a91df18e",
-    });
-  }
-
-  logger.error(
-    `[${statusCode}] ${req.method} ${req.path} :: ${
-      err?.message || "Unexpected error"
-    }\n${err?.stack || ""}`
-  );
-
-  const message =
-    statusCode >= 500
-      ? "Something went wrong. Please try again."
-      : err?.message || "Unable to complete the request.";
-
-  if (wantsJSON(req)) {
-    return res.status(statusCode).json({
-      success: false,
-      message,
-    });
-  }
-
-  return res.status(statusCode).render("errors/error", {
-    layout: "layouts/error-layout",
-    title: "Error",
-    message,
-    wfPage: "66b93fd9c65755b8a91df18e",
-  });
-});
+app.use(errorHandler);
 
 // ───────────────────── GRACEFUL SHUTDOWN ─────────────────────
 

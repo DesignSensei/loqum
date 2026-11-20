@@ -75,7 +75,6 @@ const actorSchema = new mongoose.Schema(
       enum: ASSIGNMENT_ACTOR_ROLES,
       required: true,
     },
-
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -92,15 +91,12 @@ const exitRangeSchema = new mongoose.Schema(
     lastWorkingSequenceNumber: nullableSequenceField(
       "lastWorkingSequenceNumber must be a whole number when supplied."
     ),
-
     replacementStartSequenceNumber: nullableSequenceField(
       "replacementStartSequenceNumber must be a whole number when supplied."
     ),
-
     replacementEndSequenceNumber: nullableSequenceField(
       "replacementEndSequenceNumber must be a whole number when supplied."
     ),
-
     replacementOccurrenceCount: nullableSequenceField(
       "replacementOccurrenceCount must be a whole number when supplied."
     ),
@@ -117,30 +113,25 @@ const exitProposalSchema = new mongoose.Schema(
       enum: [...ASSIGNMENT_EXIT_PROPOSAL_SOURCES, null],
       default: null,
     },
-
     reason: {
       type: String,
       enum: [...ASSIGNMENT_EXIT_REASONS, null],
       default: null,
     },
-
     details: {
       type: String,
       trim: true,
       maxlength: MAX_EXIT_PROPOSAL_DETAILS_LENGTH,
       default: null,
     },
-
     range: {
       type: exitRangeSchema,
       default: () => ({}),
     },
-
     proposedAt: {
       type: Date,
       default: null,
     },
-
     proposedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -159,29 +150,24 @@ const employerIssueSchema = new mongoose.Schema(
       enum: [...EMPLOYER_ASSIGNMENT_ISSUE_TYPES, null],
       default: null,
     },
-
     occurrence: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "ShiftOccurrence",
       default: null,
     },
-
     occurrenceSequenceNumber: nullableSequenceField(
       "occurrenceSequenceNumber must be a whole number when supplied."
     ),
-
     occurredAt: {
       type: Date,
       default: null,
     },
-
     details: {
       type: String,
       trim: true,
       maxlength: MAX_EMPLOYER_ISSUE_DETAILS_LENGTH,
       default: null,
     },
-
     reportedAt: {
       type: Date,
       default: null,
@@ -199,19 +185,16 @@ const professionalResponseSchema = new mongoose.Schema(
       enum: [...PROFESSIONAL_ASSIGNMENT_RESPONSE_DECISIONS, null],
       default: null,
     },
-
     details: {
       type: String,
       trim: true,
       maxlength: MAX_PROFESSIONAL_RESPONSE_DETAILS_LENGTH,
       default: null,
     },
-
     respondedAt: {
       type: Date,
       default: null,
     },
-
     respondedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -230,19 +213,16 @@ const employerResponseSchema = new mongoose.Schema(
       enum: [...EMPLOYER_ASSIGNMENT_RESPONSE_DECISIONS, null],
       default: null,
     },
-
     details: {
       type: String,
       trim: true,
       maxlength: MAX_EMPLOYER_RESPONSE_DETAILS_LENGTH,
       default: null,
     },
-
     respondedAt: {
       type: Date,
       default: null,
     },
-
     respondedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -261,30 +241,25 @@ const resolutionSchema = new mongoose.Schema(
       enum: [...ASSIGNMENT_CASE_RESOLUTION_OUTCOMES, null],
       default: null,
     },
-
     reason: {
       type: String,
       trim: true,
       maxlength: MAX_ASSIGNMENT_CASE_RESOLUTION_REASON_LENGTH,
       default: null,
     },
-
     effectiveExitRange: {
       type: exitRangeSchema,
       default: () => ({}),
     },
-
     resolvedAt: {
       type: Date,
       default: null,
     },
-
     resolvedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       default: null,
     },
-
     resolvedByRole: {
       type: String,
       enum: [...ASSIGNMENT_ACTOR_ROLES, null],
@@ -299,7 +274,6 @@ const resolutionSchema = new mongoose.Schema(
 const shiftAssignmentCaseSchema = new mongoose.Schema(
   {
     // --- IDENTITY ---
-
     referenceCode: {
       type: String,
       trim: true,
@@ -307,19 +281,16 @@ const shiftAssignmentCaseSchema = new mongoose.Schema(
       required: true,
       // Example: LQM-ASC-7F2A91.
     },
-
     caseType: {
       type: String,
       enum: ASSIGNMENT_CASE_TYPES,
       required: true,
     },
-
     status: {
       type: String,
       enum: ASSIGNMENT_CASE_STATUSES,
       required: true,
     },
-
     isOpen: {
       type: Boolean,
       default: true,
@@ -328,31 +299,26 @@ const shiftAssignmentCaseSchema = new mongoose.Schema(
     },
 
     // --- ASSIGNMENT CONTEXT ---
-
     shift: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Shift",
       required: true,
     },
-
     assignment: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "ShiftAssignment",
       required: true,
     },
-
     business: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "EmployerProfile",
       required: true,
     },
-
     branch: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Branch",
       required: true,
     },
-
     professional: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "ProfessionalProfile",
@@ -360,41 +326,34 @@ const shiftAssignmentCaseSchema = new mongoose.Schema(
     },
 
     // --- INITIATOR AND CASE CONTENT ---
-
     initiatedBy: {
       type: actorSchema,
       required: true,
     },
-
     exitProposal: {
       type: exitProposalSchema,
       default: () => ({}),
     },
-
     employerIssue: {
       type: employerIssueSchema,
       default: () => ({}),
     },
 
     // --- RESPONSES ---
-
     professionalResponse: {
       type: professionalResponseSchema,
       default: () => ({}),
     },
-
     employerResponse: {
       type: employerResponseSchema,
       default: () => ({}),
     },
 
     // --- REPLACEMENT REQUEST ---
-
     replacementRequestedAt: {
       type: Date,
       default: null,
     },
-
     replacementRequestedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -402,18 +361,15 @@ const shiftAssignmentCaseSchema = new mongoose.Schema(
     },
 
     // --- ESCALATION ---
-
     escalatedAt: {
       type: Date,
       default: null,
     },
-
     escalatedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       default: null,
     },
-
     escalationReason: {
       type: String,
       trim: true,
@@ -422,61 +378,57 @@ const shiftAssignmentCaseSchema = new mongoose.Schema(
     },
 
     // --- RESOLUTION ---
-
     resolution: {
       type: resolutionSchema,
       default: () => ({}),
     },
 
     // --- TERMINAL AUDIT ---
-
     withdrawnAt: {
       type: Date,
       default: null,
     },
-
     withdrawnBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       default: null,
     },
-
     withdrawalReason: {
       type: String,
       trim: true,
       maxlength: MAX_ASSIGNMENT_CASE_TERMINAL_REASON_LENGTH,
       default: null,
     },
-
     dismissedAt: {
       type: Date,
       default: null,
     },
-
     dismissedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       default: null,
     },
-
     dismissalReason: {
       type: String,
       trim: true,
       maxlength: MAX_ASSIGNMENT_CASE_TERMINAL_REASON_LENGTH,
       default: null,
     },
-
     cancelledAt: {
       type: Date,
       default: null,
     },
-
     cancelledBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       default: null,
     },
-
+    // Records whether a verified employer, admin, or system actor closed the case.
+    cancelledByRole: {
+      type: String,
+      enum: [...ASSIGNMENT_ACTOR_ROLES, null],
+      default: null,
+    },
     cancellationReason: {
       type: String,
       trim: true,
@@ -493,7 +445,6 @@ function sameId(left, right) {
   if (!left || !right) {
     return false;
   }
-
   return String(left) === String(right);
 }
 
@@ -501,7 +452,6 @@ function hasAnyExitRangeValue(range) {
   if (!range) {
     return false;
   }
-
   return [
     range.lastWorkingSequenceNumber,
     range.replacementStartSequenceNumber,
@@ -512,11 +462,8 @@ function hasAnyExitRangeValue(range) {
 
 function validateExitRange(document, range, pathPrefix, { required = false } = {}) {
   const lastWorkingSequenceNumber = range?.lastWorkingSequenceNumber;
-
   const replacementStartSequenceNumber = range?.replacementStartSequenceNumber;
-
   const replacementEndSequenceNumber = range?.replacementEndSequenceNumber;
-
   const replacementOccurrenceCount = range?.replacementOccurrenceCount;
 
   if (!hasAnyExitRangeValue(range)) {
@@ -526,7 +473,6 @@ function validateExitRange(document, range, pathPrefix, { required = false } = {
         "A replacement occurrence range is required."
       );
     }
-
     return;
   }
 
@@ -536,21 +482,18 @@ function validateExitRange(document, range, pathPrefix, { required = false } = {
       "replacementStartSequenceNumber is required and must be a whole number."
     );
   }
-
   if (!Number.isSafeInteger(replacementEndSequenceNumber)) {
     document.invalidate(
       `${pathPrefix}.replacementEndSequenceNumber`,
       "replacementEndSequenceNumber is required and must be a whole number."
     );
   }
-
   if (!Number.isSafeInteger(replacementOccurrenceCount)) {
     document.invalidate(
       `${pathPrefix}.replacementOccurrenceCount`,
       "replacementOccurrenceCount is required and must be a whole number."
     );
   }
-
   if (
     Number.isSafeInteger(lastWorkingSequenceNumber) &&
     Number.isSafeInteger(replacementStartSequenceNumber) &&
@@ -561,7 +504,6 @@ function validateExitRange(document, range, pathPrefix, { required = false } = {
       "replacementStartSequenceNumber must immediately follow lastWorkingSequenceNumber."
     );
   }
-
   if (
     Number.isSafeInteger(replacementStartSequenceNumber) &&
     Number.isSafeInteger(replacementEndSequenceNumber) &&
@@ -572,14 +514,12 @@ function validateExitRange(document, range, pathPrefix, { required = false } = {
       "replacementEndSequenceNumber cannot be earlier than replacementStartSequenceNumber."
     );
   }
-
   if (
     Number.isSafeInteger(replacementStartSequenceNumber) &&
     Number.isSafeInteger(replacementEndSequenceNumber) &&
     Number.isSafeInteger(replacementOccurrenceCount)
   ) {
     const expectedCount = replacementEndSequenceNumber - replacementStartSequenceNumber + 1;
-
     if (replacementOccurrenceCount !== expectedCount) {
       document.invalidate(
         `${pathPrefix}.replacementOccurrenceCount`,
@@ -591,23 +531,17 @@ function validateExitRange(document, range, pathPrefix, { required = false } = {
 
 shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase() {
   const statusIsOpen = OPEN_ASSIGNMENT_CASE_STATUSES.includes(this.status);
-
   const statusIsTerminal = TERMINAL_ASSIGNMENT_CASE_STATUSES.includes(this.status);
-
   const hasProfessionalResponse = Boolean(this.professionalResponse?.decision);
-
   const hasEmployerResponse = Boolean(this.employerResponse?.decision);
 
   // --- STATUS AND INITIATOR ---
-
   if (statusIsOpen && this.isOpen !== true) {
     this.invalidate("isOpen", `isOpen must be true while case status is ${this.status}.`);
   }
-
   if (statusIsTerminal && this.isOpen !== false) {
     this.invalidate("isOpen", `isOpen must be false when case status is ${this.status}.`);
   }
-
   if (this.initiatedBy?.role !== "system" && !this.initiatedBy?.userId) {
     this.invalidate(
       "initiatedBy.userId",
@@ -616,7 +550,6 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
   }
 
   // --- CASE TYPE ---
-
   if (this.caseType === "professional_exit") {
     if (this.initiatedBy?.role !== "professional") {
       this.invalidate(
@@ -624,28 +557,24 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
         "A professional exit case must be initiated by the professional."
       );
     }
-
     if (this.exitProposal?.source !== "professional_notice") {
       this.invalidate(
         "exitProposal.source",
         "A professional exit case must use professional_notice as its exit proposal source."
       );
     }
-
     if (!this.exitProposal?.reason) {
       this.invalidate(
         "exitProposal.reason",
         "exitProposal.reason is required for a professional exit case."
       );
     }
-
     if (!this.exitProposal?.proposedAt || !this.exitProposal?.proposedBy) {
       this.invalidate(
         "exitProposal.proposedAt",
         "exitProposal.proposedAt and proposedBy are required for a professional exit case."
       );
     }
-
     if (
       this.initiatedBy?.userId &&
       this.exitProposal?.proposedBy &&
@@ -656,18 +585,24 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
         "The professional who initiated the case must own the exit proposal."
       );
     }
-
     validateExitRange(this, this.exitProposal?.range, "exitProposal.range", {
       required: true,
     });
-
-    if (this.employerIssue?.issueType) {
+    if (
+      [
+        "issueType",
+        "occurrence",
+        "occurrenceSequenceNumber",
+        "occurredAt",
+        "details",
+        "reportedAt",
+      ].some((fieldName) => hasDocumentValue(this.employerIssue?.[fieldName]))
+    ) {
       this.invalidate(
-        "employerIssue.issueType",
+        "employerIssue",
         "A professional exit case cannot also contain an employer issue."
       );
     }
-
     if (hasProfessionalResponse) {
       this.invalidate(
         "professionalResponse.decision",
@@ -683,21 +618,18 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
         "An employer issue case must be initiated by an employer, admin or the system."
       );
     }
-
     if (!this.employerIssue?.issueType) {
       this.invalidate(
         "employerIssue.issueType",
         "employerIssue.issueType is required for an employer issue case."
       );
     }
-
     if (!this.employerIssue?.reportedAt) {
       this.invalidate(
         "employerIssue.reportedAt",
         "employerIssue.reportedAt is required for an employer issue case."
       );
     }
-
     if (
       this.exitProposal?.source &&
       !EMPLOYER_ISSUE_EXIT_PROPOSAL_SOURCES.includes(this.exitProposal.source)
@@ -709,21 +641,20 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
     }
   }
 
-  // --- WORKFLOW STATUS ---
+  // Validate a supplied proposal range even before a response or resolution.
+  validateExitRange(this, this.exitProposal?.range, "exitProposal.range");
 
+  // --- WORKFLOW STATUS ---
   if (this.status === "awaiting_employer_acknowledgment" && this.caseType !== "professional_exit") {
     this.invalidate("status", "Only a professional exit case may await employer acknowledgment.");
   }
-
   if (this.status === "awaiting_professional_response" && this.caseType !== "employer_issue") {
     this.invalidate("status", "Only an employer issue case may await a professional response.");
   }
-
   if (this.status === "awaiting_employer_response") {
     if (this.caseType !== "employer_issue") {
       this.invalidate("status", "Only an employer issue case may await an employer response.");
     }
-
     if (!hasProfessionalResponse) {
       this.invalidate(
         "professionalResponse.decision",
@@ -733,7 +664,6 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
   }
 
   // --- PROFESSIONAL RESPONSE ---
-
   if (hasProfessionalResponse) {
     if (!this.professionalResponse?.respondedAt || !this.professionalResponse?.respondedBy) {
       this.invalidate(
@@ -741,13 +671,16 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
         "professionalResponse.respondedAt and respondedBy are required."
       );
     }
-  } else if (this.professionalResponse?.respondedAt || this.professionalResponse?.respondedBy) {
+  } else if (
+    ["details", "respondedAt", "respondedBy"].some((fieldName) =>
+      hasDocumentValue(this.professionalResponse?.[fieldName])
+    )
+  ) {
     this.invalidate(
       "professionalResponse.decision",
       "professionalResponse.decision is required when response data is recorded."
     );
   }
-
   if (this.professionalResponse?.decision === "confirm_exit") {
     if (this.exitProposal?.source !== "professional_response") {
       this.invalidate(
@@ -755,14 +688,12 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
         "A confirmed employer-issue exit must use professional_response as its source."
       );
     }
-
     if (!this.exitProposal?.proposedAt || !this.exitProposal?.proposedBy) {
       this.invalidate(
         "exitProposal.proposedAt",
         "The confirmed exit proposal must record proposedAt and proposedBy."
       );
     }
-
     if (
       this.professionalResponse?.respondedBy &&
       this.exitProposal?.proposedBy &&
@@ -773,14 +704,12 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
         "The professional response author must own the confirmed exit proposal."
       );
     }
-
     validateExitRange(this, this.exitProposal?.range, "exitProposal.range", {
       required: true,
     });
   }
 
   // --- EMPLOYER RESPONSE ---
-
   if (
     this.caseType === "professional_exit" &&
     PROFESSIONAL_EXIT_DISALLOWED_EMPLOYER_DECISIONS.includes(this.employerResponse?.decision)
@@ -790,7 +719,6 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
       "A professional exit request cannot be treated as continuation or dismissed as an issue."
     );
   }
-
   if (
     this.employerResponse?.decision === "accept_continuation" &&
     this.professionalResponse?.decision !== "continue_assignment"
@@ -800,11 +728,9 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
       "The employer may accept continuation only after the professional confirms continuation."
     );
   }
-
   if (this.employerResponse?.decision === "dismiss_issue" && this.caseType !== "employer_issue") {
     this.invalidate("employerResponse.decision", "Only an employer issue case may be dismissed.");
   }
-
   if (hasEmployerResponse) {
     if (!this.employerResponse?.respondedAt || !this.employerResponse?.respondedBy) {
       this.invalidate(
@@ -812,13 +738,16 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
         "employerResponse.respondedAt and respondedBy are required."
       );
     }
-  } else if (this.employerResponse?.respondedAt || this.employerResponse?.respondedBy) {
+  } else if (
+    ["details", "respondedAt", "respondedBy"].some((fieldName) =>
+      hasDocumentValue(this.employerResponse?.[fieldName])
+    )
+  ) {
     this.invalidate(
       "employerResponse.decision",
       "employerResponse.decision is required when response data is recorded."
     );
   }
-
   if (
     this.employerResponse?.decision === "acknowledge_and_request_replacement" &&
     this.caseType !== "professional_exit" &&
@@ -831,15 +760,28 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
   }
 
   // --- REPLACEMENT AND ESCALATION ---
-
-  if (this.status === "replacement_requested") {
-    if (!this.replacementRequestedAt || !this.replacementRequestedBy) {
+  // Resolved exits may retain replacement requests, but must retain the complete
+  // audit and the same author/decision relationship as replacement_requested.
+  const hasReplacementRequest = Boolean(this.replacementRequestedAt || this.replacementRequestedBy);
+  if (hasReplacementRequest) {
+    if (!this.replacementRequestedAt) {
       this.invalidate(
         "replacementRequestedAt",
-        "replacementRequestedAt and replacementRequestedBy are required."
+        "replacementRequestedAt is required with replacementRequestedBy."
       );
     }
-
+    if (!this.replacementRequestedBy) {
+      this.invalidate(
+        "replacementRequestedBy",
+        "replacementRequestedBy is required with replacementRequestedAt."
+      );
+    }
+    if (this.employerResponse?.decision !== "acknowledge_and_request_replacement") {
+      this.invalidate(
+        "employerResponse.decision",
+        "A recorded replacement request requires the employer acknowledgment and replacement decision."
+      );
+    }
     if (
       this.employerResponse?.respondedBy &&
       this.replacementRequestedBy &&
@@ -850,19 +792,35 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
         "The employer response author must own the replacement request."
       );
     }
+  }
 
+  if (this.status === "replacement_requested") {
+    if (!this.replacementRequestedAt || !this.replacementRequestedBy) {
+      this.invalidate(
+        "replacementRequestedAt",
+        "replacementRequestedAt and replacementRequestedBy are required."
+      );
+    }
+    if (
+      this.employerResponse?.respondedBy &&
+      this.replacementRequestedBy &&
+      !sameId(this.employerResponse.respondedBy, this.replacementRequestedBy)
+    ) {
+      this.invalidate(
+        "replacementRequestedBy",
+        "The employer response author must own the replacement request."
+      );
+    }
     if (this.employerResponse?.decision !== "acknowledge_and_request_replacement") {
       this.invalidate(
         "employerResponse.decision",
         "The employer must acknowledge and request replacement before this status is used."
       );
     }
-
     validateExitRange(this, this.exitProposal?.range, "exitProposal.range", {
       required: true,
     });
   }
-
   if (
     !REPLACEMENT_REQUEST_RETAINING_CASE_STATUSES.includes(this.status) &&
     (this.replacementRequestedAt || this.replacementRequestedBy)
@@ -872,7 +830,6 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
       "Replacement request data may remain only on replacement_requested or resolved_exit cases."
     );
   }
-
   if (this.status === "under_admin_review") {
     if (!this.escalatedAt || !this.escalationReason) {
       this.invalidate(
@@ -883,13 +840,10 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
   }
 
   // --- RESOLUTION ---
-
   const statusIsResolved = RESOLVED_ASSIGNMENT_CASE_STATUSES.includes(this.status);
-
   // Proposed exits belong to exitProposal until a final resolution is recorded.
   if (!statusIsResolved) {
     const resolutionFields = ["outcome", "reason", "resolvedAt", "resolvedBy", "resolvedByRole"];
-
     for (const fieldName of resolutionFields) {
       if (hasDocumentValue(this.resolution?.[fieldName])) {
         this.invalidate(
@@ -898,7 +852,6 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
         );
       }
     }
-
     if (hasAnyExitRangeValue(this.resolution?.effectiveExitRange)) {
       this.invalidate(
         "resolution.effectiveExitRange",
@@ -906,19 +859,16 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
       );
     }
   }
-
   if (statusIsResolved) {
     if (!this.resolution?.outcome) {
       this.invalidate("resolution.outcome", "resolution.outcome is required for a resolved case.");
     }
-
     if (!this.resolution?.resolvedAt || !this.resolution?.resolvedByRole) {
       this.invalidate(
         "resolution.resolvedAt",
         "resolution.resolvedAt and resolvedByRole are required for a resolved case."
       );
     }
-
     if (this.resolution?.resolvedByRole !== "system" && !this.resolution?.resolvedBy) {
       this.invalidate(
         "resolution.resolvedBy",
@@ -926,7 +876,6 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
       );
     }
   }
-
   if (this.status === "resolved_continue") {
     if (this.caseType !== "employer_issue") {
       this.invalidate(
@@ -934,14 +883,12 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
         "Only an employer issue case may resolve with the assignment continuing."
       );
     }
-
     if (this.resolution?.outcome !== "continue_assignment") {
       this.invalidate(
         "resolution.outcome",
         "A resolved_continue case must have continue_assignment outcome."
       );
     }
-
     if (hasAnyExitRangeValue(this.resolution?.effectiveExitRange)) {
       this.invalidate(
         "resolution.effectiveExitRange",
@@ -949,7 +896,6 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
       );
     }
   }
-
   if (this.status === "resolved_exit") {
     if (!RESOLVED_EXIT_OUTCOMES.includes(this.resolution?.outcome)) {
       this.invalidate(
@@ -957,57 +903,120 @@ shiftAssignmentCaseSchema.pre("validate", function validateShiftAssignmentCase()
         "A resolved_exit case must confirm an exit or assignment termination."
       );
     }
-
     validateExitRange(this, this.resolution?.effectiveExitRange, "resolution.effectiveExitRange", {
       required: true,
     });
   }
 
-  // --- TERMINAL STATES ---
+  // --- AUDIT CHRONOLOGY ---
+  const caseStartedAt =
+    this.caseType === "professional_exit"
+      ? this.exitProposal?.proposedAt
+      : this.employerIssue?.reportedAt;
 
+  const recordedEvents = [
+    ["professionalResponse.respondedAt", this.professionalResponse?.respondedAt],
+    ["employerResponse.respondedAt", this.employerResponse?.respondedAt],
+    ["replacementRequestedAt", this.replacementRequestedAt],
+    ["escalatedAt", this.escalatedAt],
+    ["resolution.resolvedAt", this.resolution?.resolvedAt],
+    ["withdrawnAt", this.withdrawnAt],
+    ["dismissedAt", this.dismissedAt],
+    ["cancelledAt", this.cancelledAt],
+  ];
+  for (const [path, occurredAt] of recordedEvents) {
+    if (caseStartedAt && occurredAt && occurredAt < caseStartedAt) {
+      this.invalidate(path, path + " cannot be earlier than the case notice or issue report.");
+    }
+  }
+  if (
+    this.replacementRequestedAt &&
+    this.employerResponse?.respondedAt &&
+    this.replacementRequestedAt < this.employerResponse.respondedAt
+  ) {
+    this.invalidate(
+      "replacementRequestedAt",
+      "replacementRequestedAt cannot be earlier than the employer response."
+    );
+  }
+  if (statusIsResolved && this.resolution?.resolvedAt) {
+    const priorEvents = [
+      this.exitProposal?.proposedAt,
+      this.professionalResponse?.respondedAt,
+      this.employerResponse?.respondedAt,
+      this.replacementRequestedAt,
+      this.escalatedAt,
+    ];
+    if (priorEvents.some((occurredAt) => occurredAt && this.resolution.resolvedAt < occurredAt)) {
+      this.invalidate(
+        "resolution.resolvedAt",
+        "Resolution cannot be earlier than its recorded proposal, responses, replacement request or escalation."
+      );
+    }
+  }
+
+  // --- TERMINAL STATES ---
   if (this.status === "withdrawn") {
     if (this.caseType !== "professional_exit") {
       this.invalidate("status", "Only a professional exit case may be withdrawn.");
     }
-
     if (!this.withdrawnAt || !this.withdrawnBy) {
       this.invalidate(
         "withdrawnAt",
         "withdrawnAt and withdrawnBy are required when a case is withdrawn."
       );
     }
+    if (!this.withdrawalReason?.trim()) {
+      this.invalidate("withdrawalReason", "withdrawalReason is required when a case is withdrawn.");
+    }
   }
-
   if (this.status === "dismissed") {
     if (this.caseType !== "employer_issue") {
       this.invalidate("status", "Only an employer issue case may be dismissed.");
     }
-
     if (!this.dismissedAt || !this.dismissedBy) {
       this.invalidate(
         "dismissedAt",
         "dismissedAt and dismissedBy are required when a case is dismissed."
       );
     }
+    if (!this.dismissalReason?.trim()) {
+      this.invalidate("dismissalReason", "dismissalReason is required when a case is dismissed.");
+    }
   }
-
-  if (this.status === "cancelled" && !this.cancelledAt) {
-    this.invalidate("cancelledAt", "cancelledAt is required when a case is cancelled.");
+  if (this.status === "cancelled") {
+    if (!this.cancelledAt) {
+      this.invalidate("cancelledAt", "cancelledAt is required when a case is cancelled.");
+    }
+    if (!this.cancellationReason?.trim()) {
+      this.invalidate(
+        "cancellationReason",
+        "cancellationReason is required when a case is cancelled."
+      );
+    }
+    if (!this.cancelledByRole) {
+      this.invalidate("cancelledByRole", "cancelledByRole is required when a case is cancelled.");
+    } else if (this.cancelledByRole === "system") {
+      if (this.cancelledBy) {
+        this.invalidate("cancelledBy", "System cancellation cannot identify a user actor.");
+      }
+    } else if (!this.cancelledBy) {
+      this.invalidate("cancelledBy", "A user actor is required for non-system case cancellation.");
+    }
   }
 
   const terminalAuditFieldsByStatus = {
     withdrawn: ["withdrawnAt", "withdrawnBy", "withdrawalReason"],
     dismissed: ["dismissedAt", "dismissedBy", "dismissalReason"],
-    cancelled: ["cancelledAt", "cancelledBy", "cancellationReason"],
+    cancelled: ["cancelledAt", "cancelledBy", "cancelledByRole", "cancellationReason"],
   };
 
-  // Validate actors and reasons even when their timestamps are absent.
-  // System cancellation may omit cancelledBy; cancelledAt is required above.
+  // Terminal fields belong only to their matching status; system cancellation
+  // has an explicit actor role and no user ID.
   for (const [terminalStatus, fieldNames] of Object.entries(terminalAuditFieldsByStatus)) {
     if (this.status === terminalStatus) {
       continue;
     }
-
     for (const fieldName of fieldNames) {
       if (hasDocumentValue(this[fieldName])) {
         this.invalidate(
@@ -1035,7 +1044,6 @@ shiftAssignmentCaseSchema.index(
   },
   {
     unique: true,
-
     partialFilterExpression: {
       isOpen: true,
     },

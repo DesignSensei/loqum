@@ -4,7 +4,7 @@
 
 exports.ASSIGNMENT_TYPES = ["initial", "replacement"];
 
-exports.ASSIGNMENT_SOURCES = ["application", "employer_invite", "admin", "system_migration"];
+exports.ASSIGNMENT_SOURCES = ["application", "employer_invite", "admin"];
 
 /* ─────────────────────────────── ASSIGNMENT LIFECYCLE ─────────────────────────────── */
 

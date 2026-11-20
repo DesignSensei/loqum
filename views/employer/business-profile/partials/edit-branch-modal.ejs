@@ -42,7 +42,7 @@
 
           <div class="scroll-y me-n7 pe-7">
             <div class="fv-row mb-7">
-              <label class="required fs-6 fw-semibold mb-2">Branch Name</label>
+              <label class="required fs-6 fw-semibold mb-2"> Branch Name </label>
 
               <input
                 type="text"
@@ -55,7 +55,7 @@
             </div>
 
             <div class="fv-row mb-7">
-              <label class="fs-6 fw-semibold mb-2">Assigned Manager</label>
+              <label class="fs-6 fw-semibold mb-2"> Assigned Manager </label>
 
               <select
                 class="form-select form-select-solid"
@@ -83,7 +83,7 @@
 
             <div class="row g-7 mb-7">
               <div class="col-md-6 fv-row">
-                <label class="required fs-6 fw-semibold mb-2">State</label>
+                <label class="required fs-6 fw-semibold mb-2"> State </label>
 
                 <select
                   class="form-select form-select-solid"
@@ -98,7 +98,7 @@
               </div>
 
               <div class="col-md-6 fv-row">
-                <label class="required fs-6 fw-semibold mb-2">LGA</label>
+                <label class="required fs-6 fw-semibold mb-2"> LGA </label>
 
                 <select
                   class="form-select form-select-solid"
@@ -114,7 +114,7 @@
             </div>
 
             <div class="fv-row mb-7">
-              <label class="required fs-6 fw-semibold mb-2">Branch Address</label>
+              <label class="required fs-6 fw-semibold mb-2"> Branch Address </label>
 
               <input
                 type="text"
@@ -126,14 +126,15 @@
               />
 
               <div class="form-text">
-                Select an address from the Google suggestions so the branch coordinates can be
-                updated.
+                The existing verified address is retained when editing other branch details. If you
+                change the physical address, select the new location from the Google suggestions so
+                its coordinates and Google Place ID can be updated.
               </div>
             </div>
 
             <div class="row g-7 mb-7">
               <div class="col-md-5 fv-row">
-                <label class="fs-6 fw-semibold mb-2">Phone Code</label>
+                <label class="fs-6 fw-semibold mb-2"> Phone Code </label>
 
                 <input
                   type="text"
@@ -147,7 +148,7 @@
               </div>
 
               <div class="col-md-7 fv-row">
-                <label class="fs-6 fw-semibold mb-2">Branch Phone</label>
+                <label class="fs-6 fw-semibold mb-2"> Branch Phone </label>
 
                 <input
                   type="text"
@@ -161,7 +162,7 @@
             </div>
 
             <div class="fv-row mb-7">
-              <label class="required fs-6 fw-semibold mb-2">Geofence Radius</label>
+              <label class="fs-6 fw-semibold mb-2"> Geofence Radius </label>
 
               <div class="input-group input-group-solid">
                 <input
@@ -169,19 +170,53 @@
                   class="form-control form-control-solid"
                   id="editBranchGeofenceRadiusInput"
                   name="geofenceRadiusMeters"
-                  min="20"
-                  max="1000"
                   step="1"
-                  placeholder="100"
+                  inputmode="numeric"
+                  placeholder="Enter geofence radius"
                 />
 
                 <span class="input-group-text">meters</span>
               </div>
 
               <div class="form-text">
-                This radius is used for shift clock-in and geofence checks.
+                This radius is used for shift clock-in and geofence checks. The permitted minimum
+                and maximum are controlled by the platform's active settings. Leave the field blank
+                to apply the platform's configured default radius.
               </div>
             </div>
+
+            <!--begin::Physical premises and permit warning-->
+            <div
+              class="notice d-flex bg-light-warning rounded border-warning border border-dashed p-6 mb-7"
+              role="note"
+            >
+              <i class="ki-duotone ki-information-5 fs-2tx text-warning me-4">
+                <span class="path1"></span>
+                <span class="path2"></span>
+                <span class="path3"></span>
+              </i>
+
+              <div class="d-flex flex-column">
+                <div class="fw-bold fs-6 text-gray-800 mb-2">Changing Physical Premises</div>
+
+                <div class="text-gray-700 fs-7 fw-semibold mb-2">
+                  Changing this branch's physical premises will deactivate its current facility
+                  permits. Applicable permits must be submitted and approved for the new premises
+                  before the branch can regain regulatory readiness.
+                </div>
+
+                <div class="text-gray-600 fs-7">
+                  Changing the branch name, contact phone number, assigned manager, or geofence
+                  radius does not, by itself, deactivate existing permits.
+                </div>
+
+                <div class="text-gray-600 fs-7 mt-2">
+                  You will be asked to confirm a physical premises change before the update is
+                  submitted.
+                </div>
+              </div>
+            </div>
+            <!--end::Physical premises and permit warning-->
           </div>
         </div>
 

@@ -1,6 +1,10 @@
 // services/jobPublicationService.js
 
 const Job = require("../models/Job");
+const Branch = require("../models/Branch");
+const EmployerMember = require("../models/EmployerMember");
+const User = require("../models/User");
+const FacilityPermitVerificationService = require("./facilityPermitVerificationService");
 const JobPublication = require("../models/JobPublication");
 const EmployerProfile = require("../models/EmployerProfile");
 const Subscription = require("../models/Subscription");
@@ -488,7 +492,7 @@ class JobPublicationService {
     };
   }
 
-  static buildEmployerSnapshot(employerProfile, branch) {
+  static buildEmployerSnapshot(employerProfile, branch, readiness = null) {
     return {
       snapshotVersion: 1,
       businessName: employerProfile.businessName,
@@ -497,7 +501,7 @@ class JobPublicationService {
       publicDescription: String(employerProfile.publicDescription || "").trim() || null,
       websiteUrl: String(employerProfile.websiteUrl || "").trim() || null,
       cacVerified: employerProfile.cacVerificationStatus === "verified",
-      regulatoryVerified: employerProfile.regulatoryVerificationStatus === "verified",
+      branchReadyAtPublication: readiness?.canPost === true,
       branchName: branch.name,
       branchAddress: branch.address || null,
       branchState: branch.state || null,
@@ -507,19 +511,145 @@ class JobPublicationService {
 
   /* ─────────────────────────────── PUBLICATION INTEGRITY ─────────────────────────────── */
 
+  static async assertBranchPublicationEligibility({
+    job,
+    actorUserId,
+    employerContext = null,
+    adminEmployerContext = null,
+    session,
+  }) {
+    if (!session || typeof session.inTransaction !== "function" || !session.inTransaction()) {
+      throw this.createError({
+        message: "Publication eligibility requires an active transaction.",
+        code: "JOB_PUBLICATION_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+    // Preserve JobService's trusted admin-support and employer scope contracts.
+    const actor = JobService.assertAdminActorMatchesContext({
+      actorUserId,
+      adminEmployerContext,
+      fieldName: "publication actor user ID",
+    });
+    JobService.assertBranchManagerCanAccessBranch({
+      branchId: job.branch,
+      employerProfileId: job.business,
+      employerContext,
+      adminEmployerContext,
+    });
+    // Fence the authoritative Job/branch pair against concurrent reassignment.
+    const lockedJob = await Job.findOneAndUpdate(
+      { _id: job._id, business: job.business, branch: job.branch },
+      { $inc: { __v: 1 } },
+      { new: true, session, timestamps: false }
+    );
+    if (!lockedJob) {
+      throw this.createError({
+        message: "The Job branch changed; reload before publishing.",
+        code: "JOB_PUBLICATION_BRANCH_CHANGED",
+        statusCode: 409,
+      });
+    }
+    // Keep the loaded document's version aligned for its later save.
+    job.__v = lockedJob.__v;
+    const branch = await Branch.findOneAndUpdate(
+      { _id: job.branch, business: job.business, isActive: true },
+      { $inc: { __v: 1 } },
+      { new: true, session, timestamps: false }
+    );
+    if (!branch) {
+      throw this.createError({
+        message: "The Job requires an active business-owned branch.",
+        code: "ACTIVE_JOB_BRANCH_NOT_FOUND",
+        statusCode: 403,
+      });
+    }
+    const business = await EmployerProfile.findById(job.business).session(session);
+    if (!business) {
+      throw this.createError({
+        message: "Employer profile was not found.",
+        code: "EMPLOYER_PROFILE_NOT_FOUND",
+        statusCode: 404,
+      });
+    }
+    this.assertEmployerEligibleToPublish(business);
+    if (!JobService.hasAdminEmployerContext(adminEmployerContext)) {
+      const user = await User.findOne({
+        _id: actor,
+        role: "employer",
+        accountStatus: "active",
+        isVerified: true,
+      }).session(session);
+      let allowed = Boolean(user && String(business.user) === String(actor));
+      if (user && !allowed) {
+        const member = await EmployerMember.findOne({
+          user: actor,
+          business: business._id,
+          accountStatus: "active",
+          isCurrent: true,
+        }).session(session);
+        allowed = Boolean(
+          member &&
+          (member.role === "admin" ||
+            (member.role === "branch_manager" &&
+              Array.isArray(member.branches) &&
+              member.branches.some(
+                (a) => String(a.branch) === String(job.branch) && a.role === "branch_manager"
+              )))
+        );
+      }
+      if (!allowed) {
+        throw this.createError({
+          message: "Current branch publication permission is required.",
+          code: "JOB_BRANCH_PUBLICATION_NOT_ALLOWED",
+          statusCode: 403,
+        });
+      }
+    }
+    // Reuse the publication transaction after authorization. Renewal changes,
+    // entitlement consumption and publication writes share commit/rollback.
+    await FacilityPermitVerificationService.activateDuePermits({
+      businessId: job.business,
+      branchId: job.branch,
+      session,
+    });
+    const readiness = await FacilityPermitVerificationService.getBranchReadiness({
+      businessId: job.business,
+      branchId: job.branch,
+      session,
+    });
+    if (
+      readiness?.canPost !== true ||
+      readiness.identityReady !== true ||
+      readiness.branchActive !== true ||
+      !Array.isArray(readiness.missingRequirementKeys) ||
+      readiness.missingRequirementKeys.length !== 0
+    ) {
+      throw this.createError({
+        message: "The Job branch does not meet current permit requirements.",
+        code: "JOB_BRANCH_PERMITS_REQUIRED",
+        statusCode: 403,
+        details: {
+          reason: readiness?.reason || "branch_not_ready",
+          missingRequirementKeys: readiness?.missingRequirementKeys || [],
+        },
+      });
+    }
+    return readiness;
+  }
+
   static assertEmployerEligibleToPublish(employerProfile) {
+    if (employerProfile?.cacVerificationStatus !== "verified") {
+      throw this.createError({
+        message: "CAC verification is required before publishing Jobs.",
+        code: "EMPLOYER_CAC_REQUIRED_FOR_JOB_PUBLICATION",
+        statusCode: 403,
+      });
+    }
     if (employerProfile.accountStatus !== "active") {
       throw this.createError({
         message: "Employer account must be active before publishing Jobs.",
         code: "EMPLOYER_ACCOUNT_NOT_ACTIVE_FOR_JOB_PUBLICATION",
-        statusCode: 403,
-      });
-    }
-
-    if (employerProfile.employerApprovalStatus !== "approved") {
-      throw this.createError({
-        message: "Employer profile must be approved before publishing Jobs.",
-        code: "EMPLOYER_NOT_APPROVED_FOR_JOB_PUBLICATION",
         statusCode: 403,
       });
     }
@@ -694,8 +824,7 @@ class JobPublicationService {
         this.normalizeObjectId(employerProfileId, "employer profile ID")
       ).select(
         "businessName type logoUrl publicDescription websiteUrl " +
-          "cacVerificationStatus regulatoryVerificationStatus " +
-          "accountStatus employerApprovalStatus"
+          "cacVerificationStatus accountStatus"
       ),
       session
     );
@@ -1065,6 +1194,13 @@ class JobPublicationService {
         entitlementSource: normalizedEntitlement.source,
       });
 
+      const branchReadiness = await this.assertBranchPublicationEligibility({
+        job,
+        actorUserId: publishedBy,
+        employerContext,
+        adminEmployerContext,
+        session,
+      });
       const publicationPayload = {
         referenceCode: generateReference("LQ-JPUB"),
         job: job._id,
@@ -1072,7 +1208,7 @@ class JobPublicationService {
         branch: branch._id,
         cycleNumber,
         previousPublication: latestPublication ? latestPublication._id : null,
-        employerSnapshot: this.buildEmployerSnapshot(employerProfile, branch),
+        employerSnapshot: this.buildEmployerSnapshot(employerProfile, branch, branchReadiness),
         listingSnapshot: this.buildListingSnapshot(job, publishedAt),
         entitlementSnapshot: normalizedEntitlement,
         publicationPeriodDays,
@@ -1440,6 +1576,20 @@ class JobPublicationService {
         };
       }
 
+      // Extending or removing a deadline reopens/extends marketplace access.
+      // Shortening an existing window remains possible for an ineligible branch.
+      if (
+        publication.applicationDeadline &&
+        (!requestedDeadline || requestedDeadline > new Date(publication.applicationDeadline))
+      ) {
+        await this.assertBranchPublicationEligibility({
+          job,
+          actorUserId: changedBy,
+          employerContext,
+          adminEmployerContext,
+          session,
+        });
+      }
       publication.deadlineHistory.push({
         fromDeadline: publication.applicationDeadline || null,
         toDeadline: requestedDeadline,

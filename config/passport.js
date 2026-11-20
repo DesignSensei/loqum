@@ -7,6 +7,15 @@ const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 const InviteService = require("../services/inviteService");
 
+// Restricted users may authenticate to receive account-status guidance,
+// but isAccountAllowed denies access to protected application routes.
+// Missing or unexpected statuses must never be treated as active.
+const SIGN_IN_PERMITTED_STATUSES = new Set(["active", "restricted"]);
+
+function isPermittedSignInStatus(accountStatus) {
+  return SIGN_IN_PERMITTED_STATUSES.has(accountStatus);
+}
+
 module.exports = function (passport) {
   /* --------------------------- Local Strategy --------------------------- */
 
@@ -33,7 +42,7 @@ module.exports = function (passport) {
           });
         }
 
-        if (!user.password) {
+        if (user.authProvider !== "local" || !user.password) {
           return done(null, false, {
             message: "Password login is not available for this account.",
           });
@@ -45,7 +54,7 @@ module.exports = function (passport) {
           return done(null, false, { message: "Invalid credentials" });
         }
 
-        if (["suspended", "deactivated", "banned"].includes(user.accountStatus)) {
+        if (!isPermittedSignInStatus(user.accountStatus)) {
           return done(null, false, {
             message: "This account is not currently permitted to sign in.",
           });
@@ -70,35 +79,22 @@ module.exports = function (passport) {
       },
       async (req, accessToken, refreshToken, profile, done) => {
         try {
-          const googleId = profile.id;
-
-          const email = String(profile.emails?.[0]?.value || "")
+          const googleId = profile?.id;
+          const email = String(profile?.emails?.[0]?.value || "")
             .toLowerCase()
             .trim();
-
-          const displayName = String(profile.displayName || "").trim();
-          const photo = profile.photos?.[0]?.value || "";
+          const displayName = String(profile?.displayName || "").trim();
+          const photo = profile?.photos?.[0]?.value || "";
 
           /*
-           * Google provides account-profile names,
-           * not authoritative Nigerian NIN legal names.
-           *
-           * Never populate a professional's firstName,
-           * middleName or lastName from Google.
-           *
-           * Do not split displayName to invent
-           * missing structured name components.
-           *
-           * Employer accounts may use Google's
-           * structured givenName and familyName
-           * as unverified account-holder information.
-           *
-           * These names do not establish the
-           * employer's CAC-registered business name.
+           * Google profile names are not authoritative NIN legal names.
+           * Do not populate professional firstName, middleName or lastName
+           * using Google data, or split displayName into name components.
+           * Employer holder names may come from Google's structured fields,
+           * but they do not establish a CAC-registered business name.
            */
-
-          const googleFirstName = String(profile.name?.givenName || "").trim();
-          const googleLastName = String(profile.name?.familyName || "").trim();
+          const googleFirstName = String(profile?.name?.givenName || "").trim();
+          const googleLastName = String(profile?.name?.familyName || "").trim();
 
           if (!googleId) {
             return done(null, false, {
@@ -113,29 +109,34 @@ module.exports = function (passport) {
           }
 
           /*
-           * Require evidence that Google has
-           * verified the returned email address.
-           *
-           * Email verification establishes an
-           * authenticated account email only.
-           *
-           * It does not prove NIN identity-holder
-           * authentication, professional licensing,
-           * CAC authority or marketplace approval.
+           * Require Google-origin verification of this same email.
+           * Different Google APIs can use email_verified or verified_email.
+           * Email ownership is not NIN holder authentication, licensing,
+           * CAC representative authority or marketplace approval.
            */
+          const providerEmail = String(profile?._json?.email || "")
+            .toLowerCase()
+            .trim();
+
+          if (providerEmail && providerEmail !== email) {
+            return done(null, false, {
+              message: "Your Google email address could not be verified.",
+            });
+          }
 
           const matchingGoogleEmail = Array.isArray(profile.emails)
-            ? profile.emails.find((item) => {
-                return (
+            ? profile.emails.find(
+                (item) =>
                   String(item?.value || "")
                     .toLowerCase()
                     .trim() === email
-                );
-              })
+              )
             : null;
 
           const googleEmailVerified =
-            profile._json?.email_verified === true || matchingGoogleEmail?.verified === true;
+            profile?._json?.email_verified === true ||
+            profile?._json?.verified_email === true ||
+            matchingGoogleEmail?.verified === true;
 
           if (!googleEmailVerified) {
             return done(null, false, {
@@ -147,25 +148,10 @@ module.exports = function (passport) {
           const inviteToken = String(oauthContext.inviteToken || "").trim();
 
           /*
-           * Important:
-           * If this is a Google invite signup, validate the invite before creating
-           * a new user. This prevents creating an orphan Google user when the Google
-           * email does not match the invite email.
-           *
-           * Loqum invitations are exclusively for
-           * employer team members.
-           *
-           * Professionals cannot be invited.
-           *
-           * A validated employer invitation
-           * establishes the new account's User
-           * role as "employer", independently
-           * of any role supplied in OAuth state.
-           *
-           * InviteService must also enforce
-           * employer-only invitation eligibility.
+           * Invitations are exclusively for employer team members.
+           * Validate the invite's email before creating a Google user.
+           * Never derive an admin or professional role from an invitation.
            */
-
           if (inviteToken) {
             const invite = await InviteService.validateInviteToken(inviteToken);
             const inviteEmail = InviteService.normalizeEmail(invite.email);
@@ -180,12 +166,12 @@ module.exports = function (passport) {
           let user = await User.findOne({ googleId });
 
           if (user) {
-            /*
-             * A previously registered Google user
-             * must not gain employer membership
-             * through an invite if the account
-             * belongs to a professional or admin.
-             */
+            // A linked Google identity must actually belong to a Google user.
+            if (user.authProvider !== "google") {
+              return done(null, false, {
+                message: "Google login is not available for this account.",
+              });
+            }
 
             if (inviteToken && user.role !== "employer") {
               return done(null, false, {
@@ -193,20 +179,13 @@ module.exports = function (passport) {
               });
             }
 
-            if (["suspended", "deactivated", "banned"].includes(user.accountStatus)) {
+            if (!isPermittedSignInStatus(user.accountStatus)) {
               return done(null, false, {
                 message: "This account is not currently permitted to sign in.",
               });
             }
 
-            /*
-             * Existing professional legal names
-             * are never refreshed using Google.
-             *
-             * Google displayName and photo remain
-             * non-authoritative profile information.
-             */
-
+            // Do not overwrite existing NIN-derived legal names.
             if (!user.photo && photo) {
               user.photo = photo;
             }
@@ -215,12 +194,18 @@ module.exports = function (passport) {
               user.displayName = displayName;
             }
 
-            if (!user.isVerified) {
+            // Google verifies its own email, which may differ from the saved
+            // Loqum email after an account email change. Keep that address
+            // and its verification state unless Google verified the same one.
+            const accountEmail = String(user.email || "")
+              .toLowerCase()
+              .trim();
+
+            if (!user.isVerified && accountEmail === email) {
               user.isVerified = true;
             }
 
             await user.save();
-
             return done(null, user);
           }
 
@@ -240,19 +225,13 @@ module.exports = function (passport) {
               });
             }
 
-            if (["suspended", "deactivated", "banned"].includes(user.accountStatus)) {
+            if (!isPermittedSignInStatus(user.accountStatus)) {
               return done(null, false, {
                 message: "This account is not currently permitted to sign in.",
               });
             }
 
-            /*
-             * Do not replace an already linked
-             * Google account with a different
-             * Google identity solely because
-             * the emails match.
-             */
-
+            // A Google email match must not replace a different linked identity.
             if (user.googleId && user.googleId !== googleId) {
               return done(null, false, {
                 message: "This account is already linked to a different Google account.",
@@ -274,24 +253,17 @@ module.exports = function (passport) {
             }
 
             await user.save();
-
             return done(null, user);
           }
 
           /* --------------------------- New Google User --------------------------- */
 
           /*
-           * Ordinary signup requires an explicitly
-           * selected professional or employer role.
-           *
-           * A validated employer team invitation
-           * is the only exception: the invitation
-           * itself establishes the employer role.
-           *
-           * Never allow public Google signup
-           * to assign the admin role.
+           * Ordinary Google signup requires the selected professional or
+           * employer role in oauthContext. A validated employer invitation
+           * establishes employer role independently of the signup role.
+           * Public Google signup must never assign admin privileges.
            */
-
           let accountRole;
 
           if (inviteToken) {
@@ -314,19 +286,11 @@ module.exports = function (passport) {
           }
 
           /*
-           * Employer account-holder first and
-           * last names remain required.
-           *
-           * Use only Google's structured fields.
-           * Do not manufacture fallback names
-           * such as "Google User".
-           *
-           * If either component is unavailable,
-           * the employer may use ordinary email
-           * registration to provide their
-           * account-holder information.
+           * Employer account-holder names must use Google's structured
+           * given/family fields. Do not manufacture missing components.
+           * Professional names remain empty until production NIN evidence
+           * is acknowledged and consumed during onboarding.
            */
-
           if (accountRole === "employer" && (!googleFirstName || !googleLastName)) {
             return done(null, false, {
               message:
@@ -334,28 +298,11 @@ module.exports = function (passport) {
             });
           }
 
-          /*
-           * Professional legal names remain empty
-           * until the authenticated onboarding
-           * workflow consumes valid production NIN
-           * registry evidence acknowledged by
-           * the applicant.
-           *
-           * NIN-derived legal names and the
-           * permanent KYC evidence reference
-           * are not established during OAuth.
-           */
-
           const isProfessional = accountRole === "professional";
 
           user = await User.create({
             googleId,
             email,
-
-            /*
-             * Google display names are not
-             * NIN-derived legal names.
-             */
             displayName,
             photo,
 
@@ -368,37 +315,15 @@ module.exports = function (passport) {
 
             role: accountRole,
             authProvider: "google",
-
-            /**
-             * Google has authenticated ownership of this email.
-             *
-             * This does not establish NIN identity,
-             * PCN licence verification, employer CAC
-             * verification or marketplace approval.
-             */
             isVerified: true,
-
-            /**
-             * User still needs onboarding or invite finalization.
-             * Invite acceptance happens in authRoutes.js after Passport returns.
-             */
             isOnboarded: false,
-
-            /**
-             * Keeping your existing behavior.
-             * If you do not want Google signup users to go through Loqum OTP
-             * immediately after Google auth, set this to false.
-             */
             twoFactorEnabled: true,
           });
 
-          /**
-           * Do not delete req.session.oauthContext here.
-           * authRoutes.js still needs inviteToken after Passport finishes.
-           */
+          // authRoutes.js still needs oauthContext for invite finalization.
           return done(null, user);
         } catch (err) {
-          if (err.code === 11000) {
+          if (err?.code === 11000) {
             return done(null, false, {
               message: "An account with this email already exists. Please log in instead.",
             });
@@ -418,11 +343,12 @@ module.exports = function (passport) {
 
   passport.deserializeUser(async (id, done) => {
     try {
+      // Reload each request so accountStatus, role and isVerified stay current.
+      // Password remains excluded from the request user document.
       const user = await User.findById(id).select("-password");
-
-      done(null, user);
+      return done(null, user);
     } catch (err) {
-      done(err);
+      return done(err);
     }
   });
 };

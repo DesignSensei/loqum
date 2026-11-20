@@ -153,6 +153,14 @@ const preOnboardingNINVerificationSchema = new mongoose.Schema(
      * failed:
      * The lookup could not be confirmed safely.
      *
+     * cancelled:
+     * The applicant invalidated an unconsumed,
+     * nonprocessing lookup.
+     *
+     * An in-flight lookup keeps its processing
+     * claim until the provider outcome has been
+     * safely recorded.
+     *
      * consumed:
      * Acknowledged production evidence has been
      * consumed inside the onboarding transaction.
@@ -167,7 +175,15 @@ const preOnboardingNINVerificationSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["processing", "matched", "needs_review", "not_found", "failed", "consumed"],
+      enum: [
+        "processing",
+        "matched",
+        "needs_review",
+        "not_found",
+        "failed",
+        "cancelled",
+        "consumed",
+      ],
       required: true,
       default: "processing",
     },
@@ -225,7 +241,7 @@ const preOnboardingNINVerificationSchema = new mongoose.Schema(
      * - Duplicate-request prevention;
      * - Provider result correlation;
      * - Name acknowledgement of the current result;
-     * - Immediate correction of an incorrect NIN;
+     * - Entering a different NIN;
      * - Transactional onboarding consumption.
      *
      * Never store provider credentials, raw NIN
@@ -304,17 +320,23 @@ const preOnboardingNINVerificationSchema = new mongoose.Schema(
       default: null,
     },
 
-    // ───────────────────── IMMEDIATE NIN CORRECTION ─────────────────────
+    // ───────────────────── ENTER A DIFFERENT NIN ─────────────────────
 
     /*
-     * Selecting "Correct my NIN" clears the
+     * Selecting "Enter a different NIN" clears
      * acknowledgement and marks correction pending.
      *
-     * Previously matched evidence cannot be
-     * consumed while correctionRequestedAt is set.
+     * An in-flight lookup keeps its processing
+     * claim and lease. A second chargeable lookup
+     * cannot proceed until the first outcome has
+     * been safely recorded.
      *
-     * The same NIN may reuse cached evidence;
-     * a different NIN replaces the current record
+     * A completed nonmatched lookup can be
+     * cancelled. Matched evidence remains cached
+     * but cannot be consumed during correction.
+     *
+     * The same NIN may reuse valid cached evidence.
+     * A different NIN replaces the current record
      * through an atomic processing claim.
      *
      * No blanket correction cooldown applies.
@@ -328,16 +350,21 @@ const preOnboardingNINVerificationSchema = new mongoose.Schema(
     // ───────────────────── EVIDENCE VALIDITY ─────────────────────
 
     /*
-     * resultExpiresAt is the last moment when
-     * a completed registry result can be reused,
-     * acknowledged or consumed.
+     * resultExpiresAt controls the period during
+     * which a completed registry result can be
+     * reused, acknowledged or consumed.
      *
-     * This is separate from expiresAt, which
-     * controls document cleanup and retention
-     * of lookup-attempt counters.
+     * expiresAt controls MongoDB TTL cleanup.
      *
-     * Neither timestamp imposes a waiting period
-     * before correcting an incorrect NIN.
+     * The temporary record may outlive its
+     * usable result to preserve lookup-attempt
+     * counter snapshots.
+     *
+     * Durable lookup-attempt audit records are
+     * stored separately.
+     *
+     * Neither timestamp imposes a correction
+     * cooldown.
      */
 
     resultExpiresAt: {
@@ -348,17 +375,18 @@ const preOnboardingNINVerificationSchema = new mongoose.Schema(
     // ───────────────────── LOOKUP ATTEMPT CONTROLS ─────────────────────
 
     /*
-     * The service tracks chargeable lookup attempts
-     * across NIN corrections and process restarts.
+     * The verification service tracks chargeable
+     * lookup attempts across NIN changes and
+     * application restarts.
      *
      * attemptDistinctNINHashes contains only
      * server-generated HMACs, never raw NINs.
      *
-     * The model supports a bounded per-account
-     * lookup budget without a blanket cooldown.
+     * These counters are temporary snapshots.
+     * NINLookupAttempt supplies durable audit data.
      *
-     * Additional cross-account rate limiting
-     * and durable security audits remain separate.
+     * Additional account, IP and device rate
+     * limiting belongs to separate controls.
      */
 
     attemptWindowStartedAt: {
@@ -458,6 +486,7 @@ const preOnboardingNINVerificationSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    optimisticConcurrency: true,
   }
 );
 
@@ -469,9 +498,10 @@ preOnboardingNINVerificationSchema.pre("validate", function () {
    * are created or saved.
    *
    * Query-level findOneAndUpdate() does NOT run
-   * document validation middleware. The service
-   * must independently enforce atomic transitions,
-   * expiry checks and acknowledgement fencing.
+   * document validation middleware.
+   *
+   * The service independently enforces atomic
+   * transitions, expiry and acknowledgement fencing.
    */
 
   if (!this.lookupStartedAt || !this.consentAcceptedAt) {
@@ -504,9 +534,14 @@ preOnboardingNINVerificationSchema.pre("validate", function () {
     throw new Error("NIN lookup attempt evidence is incomplete or inconsistent.");
   }
 
+  // ───────── PROCESSING EVIDENCE ─────────
+
   /*
-   * A processing lookup owns a lease and must not
-   * contain completed registry or name evidence.
+   * A processing lookup retains its claim and lease,
+   * even if the applicant has selected a different NIN.
+   *
+   * A pending correction is allowed, but completed
+   * registry evidence and acknowledgement are not.
    */
 
   if (this.status === "processing") {
@@ -514,8 +549,13 @@ preOnboardingNINVerificationSchema.pre("validate", function () {
       throw new Error("Processing NIN evidence must include a claim and lease.");
     }
 
-    if (this.processingLeaseExpiresAt <= this.lookupStartedAt) {
-      throw new Error("NIN processing lease must extend beyond the lookup start.");
+    if (
+      this.processingLeaseExpiresAt <= this.lookupStartedAt ||
+      this.processingLeaseExpiresAt > this.expiresAt
+    ) {
+      throw new Error(
+        "NIN processing lease must extend beyond lookup start and remain within retention."
+      );
     }
 
     if (
@@ -525,12 +565,33 @@ preOnboardingNINVerificationSchema.pre("validate", function () {
       this.resultExpiresAt ||
       this.nameAcknowledgedAt ||
       this.nameAcknowledgedRequestReference ||
-      this.correctionRequestedAt ||
       this.consumedAt
     ) {
       throw new Error("Processing NIN evidence cannot contain completed lookup evidence.");
     }
+  } else if (this.status === "cancelled") {
+    // ───────── CANCELLED EVIDENCE ─────────
+
+    if (
+      !this.correctionRequestedAt ||
+      this.correctionRequestedAt < this.lookupStartedAt ||
+      this.processingClaimId ||
+      this.processingLeaseExpiresAt ||
+      this.registryFound !== null ||
+      this.registryLegalName ||
+      this.checkedAt ||
+      this.resultExpiresAt ||
+      this.nameAcknowledgedAt ||
+      this.nameAcknowledgedRequestReference ||
+      this.consumedAt
+    ) {
+      throw new Error(
+        "Cancelled NIN evidence must record correction and clear claims and results."
+      );
+    }
   } else {
+    // ───────── COMPLETED EVIDENCE ─────────
+
     /*
      * Completed results require a lookup timestamp
      * and a finite evidence validity window.
@@ -550,6 +611,8 @@ preOnboardingNINVerificationSchema.pre("validate", function () {
       throw new Error("Completed NIN evidence requires a valid result expiry.");
     }
   }
+
+  // ───────── STRUCTURED REGISTRY NAME ─────────
 
   /*
    * Only matched or consumed results may retain
@@ -575,31 +638,25 @@ preOnboardingNINVerificationSchema.pre("validate", function () {
     throw new Error("Unconfirmed NIN evidence cannot contain authoritative legal names.");
   }
 
-  /*
-   * A not-found result must explicitly state that
-   * the registry record could not be found.
-   */
+  // ───────── NOT FOUND ─────────
 
   if (this.status === "not_found" && this.registryFound !== false) {
     throw new Error("A not-found NIN result must confirm that the record was not found.");
   }
 
-  /*
-   * A failed provider lookup cannot claim a
-   * confirmed registry outcome.
-   */
+  // ───────── FAILED LOOKUP ─────────
 
   if (this.status === "failed" && this.registryFound !== null) {
     throw new Error("A failed NIN lookup cannot assert a registry outcome.");
   }
 
+  // ───────── NAME ACKNOWLEDGEMENT ─────────
+
   /*
    * Acknowledgement must apply to the currently
-   * displayed lookup, and must occur after the
-   * registry result was obtained.
+   * displayed lookup after the registry result.
    *
-   * An applicant cannot acknowledge evidence
-   * once correction has been requested.
+   * It cannot coexist with a pending correction.
    */
 
   if (this.nameAcknowledgedAt) {
@@ -617,24 +674,37 @@ preOnboardingNINVerificationSchema.pre("validate", function () {
     throw new Error("NIN acknowledgement reference requires an acknowledgement timestamp.");
   }
 
+  // ───────── PENDING NIN CHANGE ─────────
+
   /*
-   * Correction only applies to an unconsumed,
-   * matched lookup. It invalidates acknowledgement
-   * without imposing a time-based cooldown.
+   * A correction invalidates acknowledgement
+   * without imposing a blanket cooldown.
+   *
+   * A processing request keeps its claim.
+   * Its provider result may arrive after the
+   * correction timestamp.
+   *
+   * Completed matched, not-found, failed and
+   * review outcomes may also retain the correction
+   * flag until another NIN is submitted.
+   *
+   * No evidence can be consumed while this
+   * flag remains set.
    */
 
-  if (this.correctionRequestedAt) {
+  if (this.correctionRequestedAt && this.status !== "cancelled") {
     if (
-      this.status !== "matched" ||
+      !["processing", "matched", "needs_review", "not_found", "failed"].includes(this.status) ||
       this.consumedAt ||
       this.nameAcknowledgedAt ||
       this.nameAcknowledgedRequestReference ||
-      !this.checkedAt ||
-      this.correctionRequestedAt < this.checkedAt
+      this.correctionRequestedAt < this.lookupStartedAt
     ) {
       throw new Error("NIN correction must invalidate unconsumed name acknowledgement.");
     }
   }
+
+  // ───────── CONSUMED EVIDENCE ─────────
 
   /*
    * Only acknowledged production evidence may
@@ -647,9 +717,13 @@ preOnboardingNINVerificationSchema.pre("validate", function () {
       !this.consumedAt ||
       !this.nameAcknowledgedAt ||
       this.correctionRequestedAt ||
-      this.consumedAt < this.nameAcknowledgedAt
+      this.consumedAt < this.nameAcknowledgedAt ||
+      this.consumedAt >= this.resultExpiresAt ||
+      this.consumedAt >= this.expiresAt
     ) {
-      throw new Error("Consumed NIN evidence must be acknowledged production evidence.");
+      throw new Error(
+        "Consumed NIN evidence must be acknowledged production evidence consumed before expiry."
+      );
     }
   } else if (this.consumedAt) {
     throw new Error("Unconsumed NIN evidence cannot contain a consumption timestamp.");
@@ -661,17 +735,17 @@ preOnboardingNINVerificationSchema.pre("validate", function () {
 /*
  * One temporary NIN evidence record per user.
  *
- * The verification service must enforce atomic
- * lookup claims and prevent duplicate paid requests.
+ * The service must enforce atomic lookup claims
+ * and prevent duplicate paid requests.
  */
 
 preOnboardingNINVerificationSchema.index({ user: 1 }, { unique: true });
 
 /*
- * MongoDB TTL cleanup applies to document retention,
- * not to correction wait times or result validity.
+ * MongoDB TTL cleanup controls document retention,
+ * not correction cooldown or result validity.
  *
- * Services must independently enforce resultExpiresAt.
+ * The service independently enforces resultExpiresAt.
  */
 
 preOnboardingNINVerificationSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
@@ -679,11 +753,11 @@ preOnboardingNINVerificationSchema.index({ expiresAt: 1 }, { expireAfterSeconds:
 // ───────────────────── SAFE SERIALIZATION ─────────────────────
 
 /*
- * Do not expose sensitive internal evidence when
+ * Sensitive evidence must not appear when
  * a Mongoose document is serialised to JSON.
  *
- * The verification service constructs the
- * authorised registry-name preview explicitly.
+ * The verification service explicitly constructs
+ * the authorised registry-name preview.
  */
 
 preOnboardingNINVerificationSchema.set("toJSON", {
@@ -691,13 +765,17 @@ preOnboardingNINVerificationSchema.set("toJSON", {
     delete result.ninHash;
     delete result.ninLast4;
     delete result.registryLegalName;
+
     delete result.processingClaimId;
     delete result.requestReference;
     delete result.providerReference;
+
     delete result.nameAcknowledgedRequestReference;
+
     delete result.attemptWindowStartedAt;
     delete result.attemptCount;
     delete result.attemptDistinctNINHashes;
+
     delete result.errorCode;
 
     return result;

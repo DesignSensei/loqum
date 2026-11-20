@@ -451,6 +451,17 @@ walletSchema.pre("validate", function validateWallet() {
   } else {
     this.closedAt = null;
   }
+
+  // Lifecycle events cannot precede the wallet they belong to.
+  for (const field of ["frozenAt", "closedAt", "lastTransactionAt"]) {
+    if (this[field] && this.createdAt && this[field] < this.createdAt) {
+      this.invalidate(field, `${field} cannot precede wallet creation.`);
+    }
+  }
+
+  if (this.closedAt && this.lastTransactionAt && this.closedAt < this.lastTransactionAt) {
+    this.invalidate("closedAt", "closedAt cannot precede the last wallet transaction.");
+  }
 });
 
 module.exports = mongoose.model("Wallet", walletSchema);

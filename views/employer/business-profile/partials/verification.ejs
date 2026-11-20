@@ -1,7 +1,5 @@
 <!-- views/employer/business-profile/partials/verification.ejs -->
 
-<!-- ───────────────────── VERIFICATION OVERVIEW ───────────────────── -->
-
 <div class="card mb-8">
   <div class="card-header">
     <div class="card-title">
@@ -10,141 +8,159 @@
   </div>
 
   <div class="card-body">
-    <div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-6">
-      <div class="flex-grow-1">
-        <h4 class="fw-bold text-gray-900 mb-2">Business Verification Status</h4>
+    <h4 class="fw-bold text-gray-900 mb-2">Business and Facility Verification</h4>
 
-        <div class="text-muted fw-semibold">
-          View the registration information submitted during onboarding and track your CAC
-          verification, facility registration, employer approval, and account status.
-        </div>
+    <p class="text-muted fw-semibold mb-4">
+      CAC confirms your registered business identity. Facility permits are assessed independently
+      for each branch and its current premises.
+    </p>
+
+    <% if (verificationView.supportMessage) { %>
+    <div class="notice d-flex bg-light-primary border border-primary border-dashed rounded p-5">
+      <i class="ki-duotone ki-information-5 fs-2 text-primary me-4"></i>
+      <span class="fw-semibold text-gray-700"> <%= verificationView.supportMessage %> </span>
+    </div>
+    <% } %>
+  </div>
+</div>
+
+<h4 class="fw-bold text-gray-900 mb-4">CAC Registration</h4>
+
+<div class="card card-flush mb-8">
+  <div class="card-body">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-5">
+      <div>
+        <h5 class="fw-bold text-gray-900 mb-1"><%= verificationView.cac.title %></h5>
+        <div class="text-muted fw-semibold"><%= verificationView.cac.description %></div>
       </div>
 
-      <% if (verificationView.supportMessage) { %>
-      <div class="notice d-flex bg-light-primary rounded border-primary border border-dashed p-5">
-        <i class="ki-duotone ki-information-5 fs-2tx text-primary me-4">
-          <span class="path1"></span>
-          <span class="path2"></span>
-          <span class="path3"></span>
-        </i>
+      <span class="badge <%= verificationView.cac.badgeClass %>">
+        <%= verificationView.cac.statusLabel %>
+      </span>
+    </div>
 
-        <div class="fw-semibold text-gray-700"><%= verificationView.supportMessage %></div>
+    <div class="bg-light rounded p-5 mb-5">
+      <% verificationView.cac.details.forEach(function (detail) { %>
+      <div class="d-flex flex-column flex-sm-row justify-content-between gap-2 mb-3">
+        <span class="text-muted fw-semibold"> <%= detail.label %> </span>
+        <span class="fw-bold text-gray-900 text-break"> <%= detail.value %> </span>
+      </div>
+      <% }); %> <% if (verificationView.cac.identifierLocked) { %>
+      <div class="separator separator-dashed my-4"></div>
+      <div class="text-muted fw-semibold">
+        <i class="ki-duotone ki-lock me-2"></i>
+        <%= verificationView.cac.identityNotice %>
       </div>
       <% } %>
     </div>
+
+    <% if (verificationView.cac.dateValue) { %>
+    <div class="d-flex justify-content-between gap-3 mb-4">
+      <span class="text-muted"> <%= verificationView.cac.dateLabel %> </span>
+      <span class="fw-semibold"> <%= verificationView.cac.dateValue %> </span>
+    </div>
+    <% } %> <% if (verificationView.cac.note) { %>
+    <div class="notice bg-light rounded p-4 text-gray-700 fw-semibold">
+      <%= verificationView.cac.note %>
+    </div>
+    <% } %>
   </div>
 </div>
 
-<!-- ───────────────────── VERIFICATION CARDS ───────────────────── -->
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-4 mb-5">
+  <div>
+    <h4 class="fw-bold text-gray-900 mb-2">Branch Facility Permits</h4>
 
+    <div class="text-muted fw-semibold">
+      Each branch must meet its own regulatory requirements before new shifts or permanent Jobs can
+      be published from that branch.
+    </div>
+  </div>
+
+  <% if (verificationView.canViewBranches) { %>
+  <a href="/employer/business-profile?tab=branches" class="btn btn-light-primary">
+    View Branches
+  </a>
+  <% } %>
+</div>
+
+<% if (verificationView.hasBranches) { %>
 <div class="row g-6 g-xl-8">
-  <% verificationView.items.forEach((item) => { %> <% const details = Array.isArray(item.details) ?
-  item.details : []; %>
-
+  <% verificationView.branches.forEach(function (branch) { %>
   <div class="col-md-6">
     <div class="card card-flush h-100">
       <div class="card-body d-flex flex-column">
-        <!-- Verification heading and status -->
-        <div class="d-flex align-items-start justify-content-between gap-4 mb-6">
-          <div class="d-flex align-items-start">
-            <div class="symbol symbol-45px me-4 flex-shrink-0">
-              <span class="symbol-label bg-light-primary">
-                <i class="ki-duotone ki-shield-tick fs-2 text-primary">
-                  <span class="path1"></span>
-                  <span class="path2"></span>
-                </i>
-              </span>
-            </div>
-
-            <div>
-              <div class="fs-5 fw-bold text-gray-900"><%= item.title %></div>
-
-              <div class="fs-7 fw-semibold text-muted mt-1"><%= item.description %></div>
-            </div>
+        <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-4">
+          <div>
+            <h5 class="fw-bold text-gray-900 mb-1"><%= branch.title %></h5>
+            <div class="text-muted fw-semibold"><%= branch.description %></div>
           </div>
 
-          <span class="badge <%= item.badgeClass %> flex-shrink-0"> <%= item.statusLabel %> </span>
+          <span class="badge <%= branch.badgeClass %>"> <%= branch.statusLabel %> </span>
         </div>
 
-        <!-- Registration details -->
-        <% if (details.length > 0) { %>
+        <div class="d-flex flex-wrap align-items-center gap-3 mb-3">
+          <span class="text-muted fw-semibold"> Branch status: </span>
 
+          <span class="badge <%= branch.branchStatusBadgeClass %>">
+            <%= branch.branchStatusLabel %>
+          </span>
+        </div>
+
+        <div class="d-flex flex-wrap align-items-center gap-3 mb-5">
+          <span class="text-muted fw-semibold"> Facility permit readiness: </span>
+
+          <span class="badge <%= branch.regulatoryReadinessBadgeClass %>">
+            <%= branch.regulatoryReadinessLabel %>
+          </span>
+        </div>
+
+        <% if (branch.hasDetails) { %>
         <div class="bg-light rounded p-5 mb-5">
-          <% details.forEach((detail, index) => { %>
+          <h6 class="fw-bold text-gray-900 mb-3">Applicable Permit Requirements</h6>
 
-          <div
-            class="d-flex flex-column flex-sm-row align-items-sm-start justify-content-between gap-2 <%= index < details.length - 1 ? 'mb-4' : '' %>"
-          >
-            <div class="fs-7 fw-semibold text-muted"><%= detail.label %></div>
+          <% branch.details.forEach(function (detail) { %>
+          <div class="d-flex flex-wrap justify-content-between gap-2 mb-3">
+            <span class="text-muted fw-semibold"> <%= detail.label %> </span>
 
-            <div class="fs-6 fw-bold text-gray-900 text-break text-sm-end"><%= detail.value %></div>
+            <span class="fw-bold text-gray-900"> <%= detail.value %> </span>
           </div>
-
-          <% }) %>
-
-          <!-- Submitted registration details are read-only -->
-          <% if (item.identifierLocked) { %>
-
-          <div class="separator separator-dashed my-4"></div>
-
-          <div class="d-flex align-items-center gap-2 text-muted">
-            <i class="ki-duotone ki-lock fs-5">
-              <span class="path1"></span>
-              <span class="path2"></span>
-              <span class="path3"></span>
-            </i>
-
-            <span class="fs-7 fw-semibold">
-              Registration details are locked after submission.
-            </span>
-          </div>
-
-          <% } %>
+          <% }); %>
         </div>
-
-        <% } %>
-
-        <!-- Verification date -->
-        <% if (item.dateValue) { %>
-
-        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-5">
-          <span class="fs-7 fw-semibold text-muted"> <%= item.dateLabel %> </span>
-
-          <span class="fs-7 fw-semibold text-gray-800"> <%= item.dateValue %> </span>
+        <% } %> <% if (branch.showRequirementsUnavailable) { %>
+        <div class="bg-light rounded p-5 mb-5 text-muted fw-semibold">
+          No applicable facility permit requirements are available for display.
         </div>
-
-        <% } %>
-
-        <!-- Verification feedback -->
-        <% if (item.note) { %>
-
-        <div
-          class="notice d-flex bg-light rounded border-gray-300 border border-dashed p-4 mt-auto"
-        >
-          <i class="ki-duotone ki-message-text-2 fs-2 text-gray-600 me-3">
-            <span class="path1"></span>
-            <span class="path2"></span>
-            <span class="path3"></span>
-          </i>
-
-          <div class="fw-semibold text-gray-700 text-break"><%= item.note %></div>
+        <% } %> <% if (branch.note) { %>
+        <div class="notice bg-light rounded p-4 fw-semibold text-gray-700 mt-auto">
+          <%= branch.note %>
         </div>
-
-        <% } else { %>
-
-        <div class="fs-7 fw-semibold text-muted mt-auto">
-          No additional verification feedback is available.
-        </div>
-
+        <% } %> <% if (branch.operationalNotice) { %>
+        <p class="text-muted fw-semibold mt-4 mb-0"><%= branch.operationalNotice %></p>
+        <% } %> <% if (branch.showManagePermitsAction) { %>
+        <a href="<%= branch.managePermitsUrl %>" class="btn btn-light-primary mt-5">
+          Manage Permits
+        </a>
         <% } %>
       </div>
     </div>
   </div>
-
-  <% }) %>
+  <% }); %>
 </div>
 
-<!-- ───────────────────── BUSINESS DETAILS ───────────────────── -->
+<% } else { %>
+<div class="card card-flush">
+  <div class="card-body py-10 text-center">
+    <h4 class="fw-bold text-gray-900 mb-3">No Branch Permit Information Available</h4>
+
+    <div class="text-muted fw-semibold">
+      <% if (verificationView.canViewBranches) { %> Permit information will appear here for branches
+      available to your account. <% } else { %> Your account does not have permission to view branch
+      permit details. <% } %>
+    </div>
+  </div>
+</div>
+<% } %>
 
 <div class="card mt-8">
   <div
@@ -153,21 +169,20 @@
     <div class="flex-grow-1">
       <h4 class="fw-bold text-gray-900 mb-2">Business Details</h4>
 
+      <% if (verificationView.canManageBusinessDetails) { %>
       <div class="text-muted fw-semibold">
-        <% if (employerContext.canManageBusinessProfile) { %> You can update permitted business
-        contact information from the Business Details tab. Registered business identity and
-        regulatory registration details are protected. Contact Loqum Support if these details need
-        to be corrected. <% } else { %> You can view the business information associated with this
-        account. Only authorised business owners and administrators can update permitted business
-        details. <% } %>
+        Update permitted business contact details from the Business Details tab. Registered identity
+        fields remain protected.
       </div>
+      <% } else { %>
+      <div class="text-muted fw-semibold">
+        View business details. Only authorized owners and administrators may edit them.
+      </div>
+      <% } %>
     </div>
 
-    <a
-      href="/employer/business-profile?tab=business-details"
-      class="btn btn-light-primary flex-shrink-0"
-    >
-      <% if (employerContext.canManageBusinessProfile) { %> Manage Business Details <% } else { %>
+    <a href="/employer/business-profile?tab=business-details" class="btn btn-light-primary">
+      <% if (verificationView.canManageBusinessDetails) { %> Manage Business Details <% } else { %>
       View Business Details <% } %>
     </a>
   </div>

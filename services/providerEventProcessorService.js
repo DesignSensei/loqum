@@ -1069,6 +1069,86 @@ class ProviderEventProcessorService {
     return transaction;
   }
 
+  static getWithdrawalOwnerContext({ withdrawalTransaction, providerEvent }) {
+    const metadata = withdrawalTransaction.metadata || {};
+    const ownerType = ProviderEventProcessorService.cleanString(metadata.ownerType)?.toLowerCase();
+    const employer = ProviderEventProcessorService.getRecordId(metadata.employerProfileId);
+    const professional = ProviderEventProcessorService.getRecordId(metadata.professionalProfileId);
+    const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
+    const invalid = (message) => {
+      throw ProviderEventProcessorService.createProcessingError({
+        message,
+        code: "WITHDRAWAL_PROVIDER_OWNER_MISMATCH",
+        statusCode: 409,
+        retryable: false,
+      });
+    };
+
+    if (
+      !["employer", "professional"].includes(ownerType) ||
+      (ownerType === "employer" && (!employer || metadata.professionalProfileId)) ||
+      (ownerType === "professional" && (!professional || metadata.employerProfileId))
+    ) {
+      invalid("Withdrawal transaction contains an invalid owner identity.");
+    }
+    if (payload.ownerType && payload.ownerType !== ownerType) {
+      invalid("Provider withdrawal owner type does not match the transaction.");
+    }
+    for (const [field, expected] of [
+      ["employer", employer],
+      ["professional", professional],
+    ]) {
+      for (const value of [providerEvent[field], payload[field + "ProfileId"]]) {
+        if (
+          value != null &&
+          value !== "" &&
+          (!expected || String(value._id || value) !== String(expected))
+        ) {
+          invalid("Provider withdrawal profile does not match the transaction.");
+        }
+      }
+    }
+    return {
+      ownerType,
+      employer,
+      professional,
+      employerProfileId: employer,
+      professionalProfileId: professional,
+    };
+  }
+
+  static assertWithdrawalCategoryMatchesOwner({ providerEvent, ownerType }) {
+    const suffix =
+      providerEvent.eventName === "transfer.success"
+        ? "payout"
+        : ["transfer.failed", "transfer.reversed"].includes(providerEvent.eventName)
+          ? "reversal"
+          : null;
+    if (
+      providerEvent.provider !== "paystack" ||
+      !suffix ||
+      providerEvent.eventCategory !== ownerType + "_withdrawal_" + suffix
+    ) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Withdrawal event category, event name or provider does not match its owner.",
+        code: "WITHDRAWAL_PROVIDER_CATEGORY_MISMATCH",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+  }
+
+  static assertIndependentFinalization(options = {}) {
+    if (options.session) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Checkout event finalization must own its claim and completion transactions.",
+        code: "CHECKOUT_EVENT_EXTERNAL_SESSION_NOT_SUPPORTED",
+        statusCode: 500,
+        retryable: false,
+      });
+    }
+  }
+
   static assertWithdrawalProviderEventMatchesTransaction({ providerEvent, withdrawalTransaction }) {
     if (!withdrawalTransaction) {
       throw ProviderEventProcessorService.createProcessingError({
@@ -1152,14 +1232,19 @@ class ProviderEventProcessorService {
       "withdrawal amount"
     );
 
-    if (providerAmount !== null && providerAmount !== Number(withdrawalTransaction.amount)) {
+    const payoutAmount = ProviderEventProcessorService.normalizeRequiredPositiveMinorUnitAmount(
+      withdrawalTransaction.netAmount ?? withdrawalTransaction.amount,
+      "withdrawal bank payout"
+    );
+
+    if (providerAmount === null || providerAmount !== payoutAmount) {
       throw ProviderEventProcessorService.createProcessingError({
         message: "Provider withdrawal amount does not match the resolved withdrawal.",
         code: "WITHDRAWAL_PROVIDER_AMOUNT_MISMATCH",
         statusCode: 409,
         retryable: false,
         details: {
-          expectedAmount: Number(withdrawalTransaction.amount),
+          expectedAmount: payoutAmount,
           providerAmount,
           withdrawalTransactionId: String(withdrawalTransaction._id),
         },
@@ -1171,7 +1256,7 @@ class ProviderEventProcessorService {
     )?.toUpperCase();
 
     if (
-      providerCurrency &&
+      !providerCurrency ||
       providerCurrency !== String(withdrawalTransaction.currency || "").toUpperCase()
     ) {
       throw ProviderEventProcessorService.createProcessingError({
@@ -1361,6 +1446,15 @@ class ProviderEventProcessorService {
         statusCode: 500,
         retryable: false,
       });
+    }
+
+    if (
+      ProviderEventProcessorService.isCategory(providerEvent, [
+        ...ProviderEventProcessorService.eventCategories.shiftCheckoutPayment,
+        ...ProviderEventProcessorService.eventCategories.jobPublicationPayment,
+      ])
+    ) {
+      ProviderEventProcessorService.assertIndependentFinalization(options);
     }
 
     const processingResult = await ProviderEventService.markProcessing(
@@ -1929,6 +2023,7 @@ class ProviderEventProcessorService {
   /* ─────────────────────────────── SHIFT CHECKOUT PAYMENT ─────────────────────────────── */
 
   static async processShiftCheckoutPaymentEvent(providerEvent, processingClaimId, options = {}) {
+    ProviderEventProcessorService.assertIndependentFinalization(options);
     const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
 
     const currentTime = ProviderEventProcessorService.getOperationCurrentTime(options);
@@ -2284,6 +2379,7 @@ class ProviderEventProcessorService {
   /* ─────────────────────────────── PAYG JOB PUBLICATION PAYMENT ─────────────────────────────── */
 
   static async processJobPublicationPaymentEvent(providerEvent, processingClaimId, options = {}) {
+    ProviderEventProcessorService.assertIndependentFinalization(options);
     const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
 
     const currentTime = ProviderEventProcessorService.getOperationCurrentTime(options);
@@ -2946,7 +3042,7 @@ class ProviderEventProcessorService {
 
     const completedTransaction = completedResult.transaction;
 
-    if (completedTransaction.status !== "completed") {
+    if (!["completed", "reversed"].includes(completedTransaction.status)) {
       throw ProviderEventProcessorService.createProcessingError({
         message:
           "Provider withdrawal success did not leave the withdrawal in completed terminal state.",
@@ -3039,7 +3135,11 @@ class ProviderEventProcessorService {
     const paystackTransferReference =
       ProviderEventProcessorService.getPaystackTransferReference(providerEvent);
 
-    const reversalResult = await WalletWithdrawalService.reverseFailedWithdrawal(
+    const creditReversal = ["completed", "reversed"].includes(withdrawalTransaction.status);
+    const reverse = creditReversal
+      ? WalletWithdrawalService.reverseCompletedWithdrawal
+      : WalletWithdrawalService.reverseFailedWithdrawal;
+    const reversalResult = await reverse(
       {
         withdrawalTransactionId: withdrawalTransaction._id,
         paystackTransferCode,
@@ -3061,12 +3161,12 @@ class ProviderEventProcessorService {
       options
     );
 
-    const failedTransaction = reversalResult.transaction;
+    const failedTransaction = reversalResult.originalTransaction || reversalResult.transaction;
 
-    if (failedTransaction.status !== "failed") {
+    if (failedTransaction.status !== (creditReversal ? "reversed" : "failed")) {
       throw ProviderEventProcessorService.createProcessingError({
         message:
-          "Provider withdrawal failure/reversal did not leave the withdrawal in failed terminal state.",
+          "Provider withdrawal failure/reversal did not leave the withdrawal in the expected terminal state.",
         code: "WITHDRAWAL_PROVIDER_REVERSAL_TERMINAL_STATE_INVALID",
         statusCode: 409,
         retryable: false,
@@ -3081,7 +3181,7 @@ class ProviderEventProcessorService {
       {
         providerEventRecordId: providerEvent._id,
         processingClaimId,
-        transaction: failedTransaction._id,
+        transaction: reversalResult.transaction._id,
         wallet: reversalResult.wallet._id,
         employer: ownerContext.employer,
         professional: ownerContext.professional,
@@ -3097,7 +3197,9 @@ class ProviderEventProcessorService {
             ProviderEventProcessorService.cleanString(failedTransaction.paystackTransferCode) ||
             paystackTransferCode,
           withdrawalStatus: failedTransaction.status,
-          withdrawalReservationReleased: true,
+          withdrawalReservationReleased: !creditReversal,
+          withdrawalReversalCredited: creditReversal,
+          reversalTransactionId: creditReversal ? String(reversalResult.transaction._id) : null,
           ownerType: ownerContext.ownerType,
           employerProfileId: ownerContext.employerProfileId
             ? String(ownerContext.employerProfileId)
@@ -3109,7 +3211,9 @@ class ProviderEventProcessorService {
         metadata: {
           processor: "ProviderEventProcessorService",
           withdrawalFailedOrReversed: true,
-          withdrawalReservationReleased: true,
+          withdrawalReservationReleased: !creditReversal,
+          withdrawalReversalCredited: creditReversal,
+          reversalTransactionId: creditReversal ? String(reversalResult.transaction._id) : null,
           withdrawalTerminalStatus: failedTransaction.status,
           ownerType: ownerContext.ownerType,
           idempotentRelease: Boolean(reversalResult.idempotent),
@@ -3122,7 +3226,8 @@ class ProviderEventProcessorService {
     return {
       providerEvent: processedResult.providerEvent,
       wallet: reversalResult.wallet,
-      transaction: failedTransaction,
+      transaction: reversalResult.transaction,
+      originalTransaction: failedTransaction,
       processed: true,
       ownerType: ownerContext.ownerType,
       idempotentRelease: Boolean(reversalResult.idempotent),

@@ -20,12 +20,38 @@ const {
   PIN_DISPLAY_FORMAT,
 } = require("../../constants/shiftPresentation");
 
+const {
+  ACTIVE_APPLICATION_STATUSES,
+  MAX_APPLICATION_NOTE_LENGTH,
+  MAX_REASON_LENGTH,
+} = require("../../constants/shiftApplication");
+
+const { OCCURRENCE_EVIDENCE_TYPES } = require("../../constants/shiftLifecycle");
+
 const { hasValidBranchLocation } = require("../helpers/branchValidationHelpers");
+
+const { OVERTIME_REJECTION_BASES } = require("../../constants/shiftLifecycle");
 
 const DEFAULT_CURRENCY = "NGN";
 const DEFAULT_BADGE_CLASS = "badge-light-secondary";
 const DEFAULT_REFUND_STATUS = "not_eligible";
 const EMPLOYER_CASES_URL = "/employer/cases";
+
+/*
+ * Employer overtime presentation.
+ * Valid rejection basis codes come from shiftLifecycle.js.
+ */
+const OVERTIME_REJECTION_BASIS_LABELS = Object.freeze({
+  overtime_not_worked: "Overtime was not worked",
+  minutes_incorrect: "Requested minutes are incorrect",
+  remained_on_site_not_working: "Stayed on site but was not working",
+  worked_without_authorization: "Work was not authorised",
+  attendance_record_incorrect: "Attendance record is incorrect",
+  other: "Other reason",
+});
+
+const EMPLOYER_OVERTIME_REJECTION_REASON_MAX_LENGTH = 500;
+const PRIVATE_OVERTIME_EVIDENCE_CATEGORY = "occurrence_evidence";
 
 const PAYMENT_REQUIRED_STATUSES = Object.freeze(["unpaid"]);
 
@@ -42,6 +68,59 @@ const ATTENDANCE_REVIEW_STATUSES = Object.freeze([
   "missed_checkin_review",
   "checkout_fallback_review",
 ]);
+
+// Match the evidence types and file formats accepted by uploadMiddleware.
+const PROFESSIONAL_OVERTIME_EVIDENCE_BY_TYPE = Object.freeze({
+  image: {
+    label: "Image",
+    accept: ".jpg,.jpeg,.png,.webp",
+  },
+
+  video: {
+    label: "Video",
+    accept: ".mp4,.webm",
+  },
+
+  document: {
+    label: "Document",
+    accept: ".pdf,.doc,.docx",
+  },
+
+  screenshot: {
+    label: "Screenshot",
+    accept: ".jpg,.jpeg,.png,.webp",
+  },
+
+  message: {
+    label: "Message",
+    accept: ".jpg,.jpeg,.png,.webp,.pdf,.doc,.docx",
+  },
+
+  attendance_record: {
+    label: "Attendance Record",
+    accept: ".jpg,.jpeg,.png,.webp,.pdf,.doc,.docx",
+  },
+
+  other: {
+    label: "Other",
+    accept: ".jpg,.jpeg,.png,.webp,.pdf,.doc,.docx,.mp4,.webm",
+  },
+});
+
+const PROFESSIONAL_OVERTIME_EVIDENCE_OPTIONS = Object.freeze(
+  OCCURRENCE_EVIDENCE_TYPES.map((value) => {
+    const config = PROFESSIONAL_OVERTIME_EVIDENCE_BY_TYPE[value];
+
+    if (!config) {
+      throw new Error(`No professional overtime evidence upload option for ${value}.`);
+    }
+
+    return Object.freeze({
+      value,
+      ...config,
+    });
+  })
+);
 
 const PIN_SELECTION_UNAVAILABLE_MESSAGE = "Select an occurrence to view its attendance PIN state.";
 
@@ -1553,6 +1632,10 @@ class ShiftViewService {
 
     const status = requested ? overtime.status || "pending" : "not_requested";
 
+    const canManageReview = resolvedPermissions.canManagePostShiftWorkflows === true;
+
+    const canViewOvertimeEvidence = requested && canManageReview;
+
     const normalizedCurrentTime = new Date(currentTime);
 
     const deadlineAt = overtime.employerResponseDeadlineAt
@@ -1570,45 +1653,172 @@ class ShiftViewService {
       normalizedCurrentTime < deadlineAt
     );
 
-    const employerCanRespond = Boolean(
-      resolvedPermissions.canManagePostShiftWorkflows && responseWindowOpen
-    );
+    const employerCanRespond = Boolean(canManageReview && responseWindowOpen);
+
+    const shiftId = shift?._id ? String(shift._id) : null;
+
+    const occurrenceId = occurrence?._id ? String(occurrence._id) : null;
 
     const baseUrl =
-      shift?._id && occurrence?._id
-        ? `${EMPLOYER_SHIFTS_URL}/${shift._id}/occurrences/${occurrence._id}/overtime`
+      shiftId && occurrenceId
+        ? `${EMPLOYER_SHIFTS_URL}/${shiftId}/occurrences/${occurrenceId}/overtime`
         : null;
 
+    /* ───────────────────── STATUS PRESENTATION ───────────────────── */
+
     let statusLabel = formatStatus(status);
+    let statusNotice = null;
 
     if (status === "not_requested") {
       statusLabel = "Not requested";
     } else if (status === "pending" && overtime.employerResponseOverdueAt) {
       statusLabel = "Awaiting admin review";
+
+      statusNotice = {
+        title: "Awaiting admin review",
+        message:
+          "The employer response window has expired. An employer decision is no longer available.",
+        className: "bg-light-info border-info",
+        titleClassName: "text-info",
+      };
     } else if (status === "pending") {
       statusLabel = "Awaiting employer review";
+
+      statusNotice = {
+        title: statusLabel,
+        message: employerCanRespond
+          ? "Review the submitted statement and evidence before making a decision."
+          : "An employer decision is not currently available to your account.",
+        className: "bg-light-warning border-warning",
+        titleClassName: "text-warning",
+      };
     } else if (status === "approved") {
       statusLabel = "Approved";
+
+      statusNotice = {
+        title: "Overtime approved",
+        message: "The submitted overtime request has been approved.",
+        className: "bg-light-success border-success",
+        titleClassName: "text-success",
+      };
     } else if (status === "rejected") {
       statusLabel = "Rejected";
+
+      statusNotice = {
+        title: "Overtime rejected",
+        message:
+          "The overtime request was rejected. The professional may have an appeal opportunity.",
+        className: "bg-light-danger border-danger",
+        titleClassName: "text-danger",
+      };
     } else if (status === "disputed") {
       statusLabel = "Awaiting admin review";
+
+      statusNotice = {
+        title: "Awaiting admin review",
+        message: "The overtime case is under administrative review.",
+        className: "bg-light-info border-info",
+        titleClassName: "text-info",
+      };
     }
 
-    const requestEvidence = Array.isArray(overtime.requestEvidence)
-      ? overtime.requestEvidence.map((item) => ({
-          ...item,
+    /* ───────────────────── PROFESSIONAL EVIDENCE ───────────────────── */
+
+    /*
+     * The backend prepares presentation-only evidence items.
+     *
+     * Private storage references are deliberately excluded.
+     * Evidence URLs use the saved array position.
+     *
+     * The download controller must independently verify
+     * employer, business, branch and occurrence authorization.
+     */
+    const savedRequestEvidence = Array.isArray(overtime.requestEvidence)
+      ? overtime.requestEvidence
+      : [];
+
+    const privateReferencePrefix = occurrenceId
+      ? `private://${PRIVATE_OVERTIME_EVIDENCE_CATEGORY}/${occurrenceId}/`
+      : null;
+
+    const requestEvidence = canViewOvertimeEvidence
+      ? savedRequestEvidence.map((item, index) => {
+          const reference = typeof item?.reference === "string" ? item.reference.trim() : "";
+
+          const isPrivateFile = Boolean(
+            privateReferencePrefix &&
+            reference.startsWith(privateReferencePrefix) &&
+            reference.length > privateReferencePrefix.length
+          );
+
+          const canView = Boolean(isPrivateFile && baseUrl);
+
+          const type = typeof item?.type === "string" ? item.type : "other";
+
+          return {
+            index,
+
+            label: `Evidence ${index + 1}`,
+
+            type,
+
+            typeLabel: formatStatus(type),
+
+            description: typeof item?.description === "string" ? item.description : null,
+
+            isStoredFile: isPrivateFile,
+
+            canView,
+
+            viewUrl: canView ? `${baseUrl}/evidence/${index}` : null,
+
+            unavailableMessage: canView ? null : "This item is not available as a stored file.",
+          };
+        })
+      : [];
+
+    /* ───────────────────── EMPLOYER REJECTION EVIDENCE ───────────────────── */
+
+    const savedRejectionEvidence = Array.isArray(overtime.rejectionEvidence)
+      ? overtime.rejectionEvidence
+      : [];
+
+    /*
+     * Employer rejection-evidence retrieval is not yet wired.
+     * Never expose the stored private reference directly.
+     */
+    const rejectionEvidence = canManageReview
+      ? savedRejectionEvidence.map((item, index) => ({
+          index,
+
+          label: `Employer evidence ${index + 1}`,
+
+          typeLabel: formatStatus(item?.type || "other"),
+
+          description: typeof item?.description === "string" ? item.description : null,
+
+          canView: false,
+
+          viewUrl: null,
         }))
       : [];
 
-    const rejectionEvidence = Array.isArray(overtime.rejectionEvidence)
-      ? overtime.rejectionEvidence.map((item) => ({
-          ...item,
+    /* ───────────────────── REJECTION FORM OPTIONS ───────────────────── */
+
+    const rejectionBasisOptions = employerCanRespond
+      ? OVERTIME_REJECTION_BASES.map((value) => ({
+          value,
+
+          label: OVERTIME_REJECTION_BASIS_LABELS[value] || formatStatus(value),
         }))
       : [];
+
+    /* ───────────────────── PRESENTATION DTO ───────────────────── */
 
     return {
       requested,
+
+      showReview: requested,
 
       requestedBy: ShiftViewService.toId(overtime.requestedBy),
 
@@ -1616,11 +1826,29 @@ class ShiftViewService {
 
       sourceLabel: overtime.source ? formatStatus(overtime.source) : null,
 
-      requestStatement: overtime.requestStatement || null,
+      requestStatement: canManageReview ? overtime.requestStatement || null : null,
+
+      hasRequestStatement: Boolean(canManageReview && overtime.requestStatement),
 
       requestEvidence,
 
-      requestEvidenceCount: requestEvidence.length,
+      requestEvidenceCount: savedRequestEvidence.length,
+
+      requestEvidenceCountLabel:
+        `${savedRequestEvidence.length} ` +
+        `${savedRequestEvidence.length === 1 ? "item" : "items"}`,
+
+      hasRequestEvidence: savedRequestEvidence.length > 0,
+
+      canViewOvertimeEvidence,
+
+      evidenceRestrictedMessage: canViewOvertimeEvidence
+        ? null
+        : "Only authorised employer representatives can view the supporting statement and evidence.",
+
+      evidenceEmptyTitle: "No supporting files submitted",
+
+      evidenceEmptyMessage: "Review the professional's statement and recorded attendance details.",
 
       requestedMinutes:
         overtime.requestedMinutes === null || overtime.requestedMinutes === undefined
@@ -1651,6 +1879,8 @@ class ShiftViewService {
 
       statusBadgeClass: badgeClass[status] || DEFAULT_BADGE_CLASS,
 
+      statusNotice,
+
       decisionSource: overtime.decisionSource || null,
 
       decisionSourceLabel: overtime.decisionSource ? formatStatus(overtime.decisionSource) : null,
@@ -1673,7 +1903,7 @@ class ShiftViewService {
 
       responseWindowOpen,
 
-      canManagePostShiftWorkflows: resolvedPermissions.canManagePostShiftWorkflows,
+      canManagePostShiftWorkflows: canManageReview,
 
       employerCanRespond,
 
@@ -1693,7 +1923,7 @@ class ShiftViewService {
 
       rejectionBasisLabel: overtime.rejectionBasis ? formatStatus(overtime.rejectionBasis) : null,
 
-      rejectionReason: overtime.rejectionReason || null,
+      rejectionReason: canManageReview ? overtime.rejectionReason || null : null,
 
       employerProposedMinutes:
         overtime.employerProposedMinutes === null || overtime.employerProposedMinutes === undefined
@@ -1707,9 +1937,15 @@ class ShiftViewService {
 
       rejectionEvidence,
 
-      rejectionEvidenceCount: rejectionEvidence.length,
+      rejectionEvidenceCount: savedRejectionEvidence.length,
 
       rejectionNoSupportingEvidence: overtime.rejectionNoSupportingEvidence === true,
+
+      rejectionBasisOptions,
+
+      rejectionReasonMaxLength: EMPLOYER_OVERTIME_REJECTION_REASON_MAX_LENGTH,
+
+      rejectionEvidenceUploadAvailable: false,
 
       adminReviewReason: overtime.adminReviewReason || null,
 
@@ -1731,7 +1967,7 @@ class ShiftViewService {
 
       adminDecidedBy: ShiftViewService.toId(overtime.adminDecidedBy),
 
-      adminDecisionReason: overtime.adminDecisionReason || null,
+      adminDecisionReason: canManageReview ? overtime.adminDecisionReason || null : null,
 
       actions: {
         approve: {
@@ -1748,6 +1984,11 @@ class ShiftViewService {
           url: employerCanRespond && baseUrl ? `${baseUrl}/reject` : null,
 
           label: "Reject Overtime",
+
+          requestedMinutes:
+            overtime.requestedMinutes === null || overtime.requestedMinutes === undefined
+              ? null
+              : Number(overtime.requestedMinutes),
         },
       },
     };
@@ -3349,11 +3590,15 @@ class ShiftViewService {
 
       checkoutFallback: occurrence.checkoutFallback || null,
 
-      /*
-       * Retained as raw audit data while the frontend is being reworked.
-       * Lifecycle interpretation belongs in overtimeReview/overtimeTopUpPayment.
-       */
-      overtime: occurrence.overtime || null,
+      overtime: {
+        requested: overtimeReview.requested,
+
+        status: overtimeReview.status,
+
+        requestedMinutes: overtimeReview.requestedMinutes,
+
+        approvedMinutes: overtimeReview.approvedMinutes,
+      },
 
       attention,
 
@@ -5610,6 +5855,18 @@ class ShiftViewService {
       return null;
     }
 
+    const applicationId = this.professionalViewId(application);
+    const shiftId = this.professionalViewId(application.shiftId);
+
+    const canWithdraw = Boolean(
+      applicationId && shiftId && ACTIVE_APPLICATION_STATUSES.includes(application.status)
+    );
+
+    const withdrawUrl = canWithdraw
+      ? `${this.getProfessionalShiftsUrl()}/${encodeURIComponent(shiftId)}` +
+        `/applications/${encodeURIComponent(applicationId)}/withdraw`
+      : null;
+
     const timestamps = [
       "createdAt",
       "updatedAt",
@@ -5622,7 +5879,8 @@ class ShiftViewService {
     ];
 
     const view = {
-      id: this.professionalViewId(application),
+      id: applicationId,
+
       ...this.professionalViewFields(application, [
         "shiftId",
         "occurrenceId",
@@ -5637,16 +5895,29 @@ class ShiftViewService {
         "withdrawalReason",
         ...timestamps,
       ]),
+
       statusView: this.buildStatusView(application.status),
+
       typeLabel:
         application.applicationType === "replacement" ? "Replacement" : "Initial application",
+
       scopeLabel:
         application.applicationType !== "replacement"
           ? "Full schedule"
           : application.occurrenceId
             ? "Single occurrence replacement"
             : "Remaining schedule replacement",
+
       detailsUrl: this.professionalDetailsUrl(application.shiftId),
+
+      canWithdraw,
+
+      withdrawAction: {
+        available: canWithdraw,
+        url: withdrawUrl,
+        label: "Withdraw Application",
+        maxReasonLength: MAX_REASON_LENGTH,
+      },
     };
 
     for (const field of timestamps) {
@@ -5783,8 +6054,13 @@ class ShiftViewService {
         occurrence.shiftId,
         this.professionalViewId(occurrence)
       ),
+
       occurrenceLabel: `Position ${occurrence.slotNumber ?? "-"} · Date ${occurrence.sequenceNumber ?? "-"}`,
+
+      attendanceActions: this.buildProfessionalAttendanceActionsView(occurrence),
+
       baseSettlement: this.buildProfessionalSettlementView(occurrence.baseSettlement, currency),
+
       overtimeSettlement: this.buildProfessionalSettlementView(
         occurrence.overtimeSettlement,
         currency
@@ -5830,26 +6106,240 @@ class ShiftViewService {
     return view;
   }
 
+  // ───────────────────── PROFESSIONAL ATTENDANCE ACTIONS ─────────────────────
+
+  static buildProfessionalAttendanceActionsView(occurrence, currentTime = new Date()) {
+    // Attendance is available only for occurrences explicitly owned
+    // by the authenticated professional in the query DTO.
+    if (!occurrence || occurrence.assignedToProfessional !== true) {
+      return null;
+    }
+
+    const shiftId = this.professionalViewId(occurrence.shiftId);
+    const occurrenceId = this.professionalViewId(occurrence);
+
+    if (!shiftId || !occurrenceId) {
+      return null;
+    }
+
+    const baseUrl =
+      `${this.getProfessionalShiftsUrl()}/${encodeURIComponent(shiftId)}` +
+      `/occurrences/${encodeURIComponent(occurrenceId)}`;
+
+    const isAssigned = occurrence.assignmentStatus === "assigned";
+
+    const isNotStarted = Boolean(
+      isAssigned &&
+      occurrence.status === "scheduled" &&
+      occurrence.attendanceStatus === "not_started" &&
+      !occurrence.checkedInAt &&
+      !occurrence.checkedOutAt
+    );
+
+    const isCheckedIn = Boolean(
+      isAssigned &&
+      occurrence.status === "in_progress" &&
+      occurrence.attendanceStatus === "checked_in" &&
+      occurrence.checkedInAt &&
+      !occurrence.checkedOutAt
+    );
+
+    const isNoShow = Boolean(
+      isAssigned && occurrence.status === "no_show" && occurrence.attendanceStatus === "no_show"
+    );
+
+    const now = new Date(currentTime).getTime();
+    const endTime = new Date(occurrence.endTime).getTime();
+
+    const hasEnded = Boolean(Number.isFinite(now) && Number.isFinite(endTime) && now >= endTime);
+
+    const canExplainAbsence = Boolean(
+      isNoShow && hasEnded && !occurrence.absenceExplanation && !occurrence.absenceExplainedAt
+    );
+
+    // These flags are presentation guidance only.
+    // Attendance services revalidate funding, assignment,
+    // PINs, attendance windows, geofencing and current state.
+
+    return {
+      checkIn: {
+        available: isNotStarted,
+        url: isNotStarted ? `${baseUrl}/check-in` : null,
+        label: "Check In",
+        pinLength: 4,
+        requiresLocation: true,
+        locationSource: "browser",
+      },
+
+      checkOut: {
+        available: isCheckedIn,
+        url: isCheckedIn ? `${baseUrl}/check-out` : null,
+        label: "Check Out",
+        pinLength: 4,
+        requiresLocation: true,
+        locationSource: "browser",
+
+        scheduledEndTime: Number.isFinite(endTime) ? new Date(endTime).toISOString() : null,
+
+        lateCheckoutOptions: [
+          {
+            value: "normal_late_checkout",
+            label: "I did not work overtime",
+          },
+          {
+            value: "overtime_requested",
+            label: "I worked overtime",
+          },
+        ],
+
+        lateCheckoutReasons: [
+          {
+            value: "forgot_to_checkout",
+            label: "I forgot to check out",
+          },
+          {
+            value: "system_issue",
+            label: "System issue",
+          },
+          {
+            value: "other",
+            label: "Other reason",
+          },
+        ],
+
+        maxLateCheckoutNotesLength: 300,
+
+        maxOvertimeStatementLength: 1000,
+
+        maxOvertimeMinutes: 1440,
+
+        evidenceUpload: {
+          available: true,
+
+          optional: true,
+
+          inputName: "overtimeEvidenceFiles",
+
+          manifestFieldName: "overtimeEvidenceManifest",
+
+          maxFiles: 3,
+
+          maxFileSizeBytes: 20 * 1024 * 1024,
+
+          maxDescriptionLength: 500,
+
+          privacyNotice:
+            "Do not upload patient-identifiable information or confidential clinical records.",
+
+          types: PROFESSIONAL_OVERTIME_EVIDENCE_OPTIONS.map((option) => ({
+            ...option,
+          })),
+        },
+      },
+
+      checkoutFallback: {
+        available: isCheckedIn,
+        url: isCheckedIn ? `${baseUrl}/checkout-fallback` : null,
+        label: "Request Checkout Review",
+        maxNotesLength: 300,
+
+        reasons: [
+          {
+            value: "professional_forgot",
+            label: "I forgot to check out",
+          },
+          {
+            value: "system_timeout",
+            label: "System timeout",
+          },
+          {
+            value: "outside_geofence",
+            label: "Outside the attendance area",
+          },
+          {
+            value: "gps_accuracy_too_low",
+            label: "GPS accuracy too low",
+          },
+          {
+            value: "location_permission_denied",
+            label: "Location permission denied",
+          },
+          {
+            value: "other",
+            label: "Other reason",
+          },
+        ],
+      },
+
+      absenceExplanation: {
+        available: canExplainAbsence,
+        url: canExplainAbsence ? `${baseUrl}/absence-explanation` : null,
+        label: "Explain My Absence",
+        maxExplanationLength: 1000,
+      },
+
+      attendanceStatus: {
+        isNotStarted,
+        isCheckedIn,
+        isCheckedOut: occurrence.attendanceStatus === "checked_out",
+        isCheckoutReviewPending: occurrence.attendanceStatus === "checkout_fallback_review",
+        isNoShow,
+        hasAbsenceExplanation: Boolean(occurrence.absenceExplainedAt),
+      },
+    };
+  }
+
   static buildProfessionalOpportunityView(opportunity, shiftId, timeZone = null) {
     const application = this.buildProfessionalApplicationView(opportunity.application);
 
     const target = opportunity.applicationTarget;
 
+    const normalizedShiftId = this.professionalViewId(shiftId);
+
     const hasMatchingTarget = Boolean(
       target &&
-      this.professionalViewId(target.shiftId) === this.professionalViewId(shiftId) &&
+      this.professionalViewId(target.shiftId) === normalizedShiftId &&
       this.professionalViewId(target.occurrenceId) ===
         this.professionalViewId(opportunity.occurrenceId) &&
       this.professionalViewId(target.replacementForAssignmentId) ===
         this.professionalViewId(opportunity.replacementForAssignmentId)
     );
 
-    // Only reflect the query service's advisory decision. POST handlers revalidate it.
-    const canApply =
+    // Only reflect the query service's advisory decision.
+    // Application POST handlers must revalidate eligibility.
+    const canApply = Boolean(
       opportunity.canApply === true &&
       hasMatchingTarget &&
       !application &&
-      !opportunity.unavailableReason;
+      !opportunity.unavailableReason
+    );
+
+    const applicationTarget = hasMatchingTarget
+      ? this.professionalViewFields(target, [
+          "shiftId",
+          "occurrenceId",
+          "replacementForAssignmentId",
+        ])
+      : null;
+
+    let applyUrl = null;
+
+    if (canApply && normalizedShiftId) {
+      const baseUrl = `${this.getProfessionalShiftsUrl()}/${encodeURIComponent(normalizedShiftId)}`;
+
+      const occurrenceId = this.professionalViewId(applicationTarget?.occurrenceId);
+
+      applyUrl = occurrenceId
+        ? `${baseUrl}/occurrences/${encodeURIComponent(occurrenceId)}/apply`
+        : `${baseUrl}/apply`;
+    }
+
+    const applyLabel =
+      opportunity.applicationType !== "replacement"
+        ? "Apply for Shift"
+        : opportunity.occurrenceId
+          ? "Apply for Replacement"
+          : "Apply for Remaining Schedule";
 
     return {
       ...this.professionalViewFields(opportunity, [
@@ -5861,24 +6351,31 @@ class ShiftViewService {
         "startSequenceNumber",
         "endSequenceNumber",
       ]),
+
       label:
         opportunity.applicationType !== "replacement"
           ? "Apply for the full schedule"
           : opportunity.occurrenceId
             ? "Apply for this occurrence"
             : "Apply for the remaining schedule",
+
       canApply,
+
       application,
-      applicationTarget: hasMatchingTarget
-        ? this.professionalViewFields(target, [
-            "shiftId",
-            "occurrenceId",
-            "replacementForAssignmentId",
-          ])
-        : null,
+
+      applicationTarget,
+
+      applyAction: {
+        available: canApply,
+        url: applyUrl,
+        label: applyLabel,
+        maxNoteLength: MAX_APPLICATION_NOTE_LENGTH,
+      },
+
       unavailableReason: opportunity.unavailableReason
         ? this.professionalViewFields(opportunity.unavailableReason, ["code", "message"])
         : null,
+
       intervals: (Array.isArray(opportunity.intervals) ? opportunity.intervals : []).map(
         (interval) => ({
           startTime: interval.startTime,

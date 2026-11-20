@@ -924,10 +924,14 @@ const shiftOccurrenceSchema = new mongoose.Schema(
 
     // --- ATTENDANCE PINS ---
 
+    // Generated once for this occurrence, independent of professional assignment.
+    // Both PINs remain hidden from ordinary queries; authorized employer
+    // projections must opt in to both fields explicitly.
     checkInPin: {
       type: String,
       required: true,
       select: false,
+      immutable: true,
       match: [/^\d{4}$/, "checkInPin must contain exactly four digits."],
     },
 
@@ -935,12 +939,23 @@ const shiftOccurrenceSchema = new mongoose.Schema(
       type: String,
       required: true,
       select: false,
+      immutable: true,
       match: [/^\d{4}$/, "checkOutPin must contain exactly four digits."],
+      validate: {
+        validator: function (value) {
+          // The PIN pair must differ on initial creation. On later partial
+          // document loads, checkInPin may be unselected, so do not treat
+          // an absent sibling field as evidence of a matching PIN.
+          return !this.isNew || !this.checkInPin || value !== this.checkInPin;
+        },
+        message: "Check-in and checkout PINs must be different.",
+      },
     },
 
     attendancePinsGeneratedAt: {
       type: Date,
       required: true,
+      immutable: true,
     },
 
     checkInPinUsedAt: {

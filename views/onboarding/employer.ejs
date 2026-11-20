@@ -12,6 +12,8 @@
 >
   <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
 
+  <!-- ───────────────────── ACCOUNT SWITCHING ───────────────────── -->
+
   <div class="d-flex justify-content-center mb-6">
     <button
       type="submit"
@@ -22,150 +24,139 @@
         <span class="path1"></span>
         <span class="path2"></span>
       </i>
+
       Use another account
     </button>
   </div>
 
+  <!-- ───────────────────── PAGE HEADING ───────────────────── -->
+
   <div class="text-center mb-11">
     <h1 class="text-gray-900 fw-bolder mb-3">Business Profile</h1>
-    <div class="text-gray-500 fw-semibold fs-6">Tell us about your business to start hiring.</div>
+
+    <div class="text-gray-500 fw-semibold fs-6">
+      Verify your CAC registration and set up your first business location.
+    </div>
   </div>
 
-  <!-- TYPE CARDS
-       Only Pharmacy is active now.
-       When scaling: uncomment the other cards, change pharmacy col-12
-       back to col-12 col-md-6, and add h-100 to all labels.
+  <!-- ───────────────────── BUSINESS TYPE ───────────────────── -->
+
+  <!--
+    The business type classifies the CAC-registered employer.
+    Operating permits are uploaded and reviewed separately for each branch.
   -->
 
   <div class="fv-row mb-8">
+    <label class="form-label required mb-4">Business Type</label>
+
     <div class="row g-4" data-kt-buttons="true">
-      <div class="col-12">
+      <!-- Pharmacy -->
+
+      <div class="col-12 col-md-6">
         <label
-          class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex align-items-center p-5 w-100 active"
+          class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex align-items-center p-5 w-100 h-100 active"
           id="pharmacyCard"
         >
-          <input
-            class="btn-check"
-            type="radio"
-            name="type"
-            value="pharmacy"
-            checked="checked"
-            data-registration-field="field-pharmacy"
-            data-validator-message="PCN premises registration number is required."
-          />
+          <input class="btn-check" type="radio" name="type" value="pharmacy" checked="checked" />
 
           <i class="ki-duotone ki-address-book fs-2x me-4"></i>
 
           <span class="d-flex flex-column text-start">
             <span class="fw-bold fs-6">Pharmacy</span>
-            <span class="fs-7 text-muted">Retail or community pharmacy</span>
+
+            <span class="fs-7 text-muted"> Retail or community pharmacy </span>
           </span>
         </label>
       </div>
 
-      <!--
+      <!-- Clinic -->
+
       <div class="col-12 col-md-6">
         <label
           class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex align-items-center p-5 w-100 h-100"
           id="clinicCard"
         >
-          <input
-            class="btn-check"
-            type="radio"
-            name="type"
-            value="clinic"
-            data-registration-field="field-clinic"
-            data-validator-message="HEFAMAA / State Ministry of Health registration number is required."
-          />
+          <input class="btn-check" type="radio" name="type" value="clinic" />
 
           <i class="ki-duotone ki-clinic fs-2x me-4"></i>
 
           <span class="d-flex flex-column text-start">
             <span class="fw-bold fs-6">Clinic</span>
-            <span class="fs-7 text-muted">Outpatient clinic</span>
+
+            <span class="fs-7 text-muted"> Outpatient clinic </span>
           </span>
         </label>
       </div>
+
+      <!-- Hospital -->
 
       <div class="col-12 col-md-6">
         <label
           class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex align-items-center p-5 w-100 h-100"
           id="hospitalCard"
         >
-          <input
-            class="btn-check"
-            type="radio"
-            name="type"
-            value="hospital"
-            data-registration-field="field-hospital"
-            data-validator-message="HEFAMAA / State Ministry of Health registration number is required."
-          />
+          <input class="btn-check" type="radio" name="type" value="hospital" />
 
           <i class="ki-duotone ki-hospital fs-2x me-4"></i>
 
           <span class="d-flex flex-column text-start">
             <span class="fw-bold fs-6">Hospital</span>
-            <span class="fs-7 text-muted">Inpatient or specialist hospital</span>
+
+            <span class="fs-7 text-muted"> Inpatient or specialist hospital </span>
           </span>
         </label>
       </div>
+
+      <!-- Laboratory -->
 
       <div class="col-12 col-md-6">
         <label
           class="btn btn-outline btn-outline-dashed btn-active-light-primary d-flex align-items-center p-5 w-100 h-100"
           id="laboratoryCard"
         >
-          <input
-            class="btn-check"
-            type="radio"
-            name="type"
-            value="laboratory"
-            data-registration-field="field-laboratory"
-            data-validator-message="MLSCN registration number is required."
-          />
+          <input class="btn-check" type="radio" name="type" value="laboratory" />
 
           <i class="ki-duotone ki-flask fs-2x me-4"></i>
 
           <span class="d-flex flex-column text-start">
             <span class="fw-bold fs-6">Laboratory</span>
-            <span class="fs-7 text-muted">Diagnostic or research lab</span>
+
+            <span class="fs-7 text-muted"> Diagnostic or research laboratory </span>
           </span>
         </label>
       </div>
-      -->
+    </div>
+
+    <div class="form-text mt-3">
+      Facility operating permits will be requested for each location after setup.
     </div>
   </div>
 
-  <!-- Business Name -->
+  <!-- ───────────────────── CAC REGISTRATION VERIFICATION ───────────────────── -->
 
-  <div class="fv-row mb-8">
-    <label for="businessNameInput" class="form-label required"> Business Name </label>
+  <!--
+    The employer submits only the CAC registration number
+    to the dedicated verification endpoint.
 
-    <input
-      type="text"
-      id="businessNameInput"
-      name="businessName"
-      class="form-control bg-transparent"
-      placeholder="e.g. Your Pharmacy Name"
-      autocomplete="organization"
-    />
+    The service:
+    - Authenticates and authorizes the employer;
+    - Normalizes and validates the registration number;
+    - Selects the configured CAC provider;
+    - Reuses eligible cached results;
+    - Enforces rolling lookup limits;
+    - Blocks active or unresolved provider requests;
+    - Persists temporary verification evidence;
+    - Returns the registered legal business name.
 
-    <div
-      class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
-    ></div>
-  </div>
+    Lookup limits:
+    - Eight total provider lookups per rolling 24 hours;
+    - Six distinct registration numbers per rolling 24 hours;
+    - No mandatory cooldown between completed lookups.
 
-  <!-- CAC REGISTRATION VERIFICATION
-       CAC confirms the registered business entity.
+    The browser does not calculate remaining allowance.
 
-       Verification requires explicit button activation.
-       No paid lookup occurs while typing.
-
-       Business name and registration number are
-       sent to the dedicated CAC verification endpoint.
-
-       A successful CAC result does not automatically
-       approve the employer or verify PCN premises.
+    CAC registry verification does not verify a healthcare premises
+    or authorise regulated shifts at a branch.
   -->
 
   <div class="fv-row mb-8" id="cacVerificationSection">
@@ -176,7 +167,7 @@
         <i
           class="ki-outline ki-information-2 fs-6"
           data-bs-toggle="tooltip"
-          data-bs-original-title="Your Corporate Affairs Commission registration number."
+          data-bs-original-title="Enter the RC or BN registration number issued by the Corporate Affairs Commission."
         ></i>
       </span>
     </label>
@@ -192,7 +183,7 @@
           autocomplete="off"
           spellcheck="false"
           maxlength="14"
-          aria-describedby="cacVerificationHelp"
+          aria-describedby="cacVerificationHelp cacLookupPolicyHelp"
         />
       </div>
 
@@ -202,6 +193,7 @@
           id="kt_onboarding_cac_verify"
           class="btn btn-light-primary w-100"
           data-verify-url="/onboarding/employer/verify-cac"
+          aria-controls="cacVerificationResult"
         >
           <span class="indicator-label"> Verify CAC </span>
 
@@ -218,22 +210,42 @@
       class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
     ></div>
 
+    <!-- CAC VERIFICATION INSTRUCTIONS -->
+
     <div class="form-text mt-2" id="cacVerificationHelp">
-      Enter your registered business name above and your CAC number here, then select Verify CAC.
-      Instant lookup availability depends on the registration type and configured provider.
+      Enter your CAC registration number and select
+      <strong>Verify CAC</strong>. Your registered legal business name will be retrieved
+      automatically from the CAC verification result.
     </div>
 
-    <!--
-      Verification result.
+    <!-- CAC LOOKUP ALLOWANCE -->
 
-      JavaScript will update:
+    <div class="text-muted fs-7 mt-2" id="cacLookupPolicyHelp">
+      To prevent repeated paid lookups, each account is limited to
+      <strong>8 lookup attempts</strong> across
+      <strong>6 different registration numbers</strong>
+      within a rolling 24-hour period. There is no mandatory cooldown between completed lookups.
+      Eligible cached results may be reused without another paid lookup.
+    </div>
+
+    <div class="text-muted fs-7 mt-2">
+      Automated verification currently supports RC and BN registrations. Availability may depend on
+      the configured provider. For another registration category, contact Loqum Support.
+    </div>
+
+    <!-- ───────── CAC VERIFICATION RESULT ───────── -->
+
+    <!--
+      JavaScript updates:
       - Alert styling;
       - Verification message;
       - Registered business name;
-      - Whether a result is provisional.
+      - Additional verification guidance.
 
-      Provider values must be written using textContent,
-      never inserted as raw HTML.
+      Provider values must be inserted using textContent.
+      Never render raw provider values as HTML.
+
+      The frontend does not persist authoritative CAC evidence.
     -->
 
     <div
@@ -254,7 +266,7 @@
           <div id="cacVerificationMessage" class="fw-semibold"></div>
 
           <div id="cacRegisteredBusinessNameRow" class="mt-2 d-none">
-            <div class="text-muted fs-7 mb-1">Registered Business Name</div>
+            <div class="text-muted fs-7 mb-1">Registered Legal Business Name</div>
 
             <div id="cacRegisteredBusinessName" class="fw-bold"></div>
           </div>
@@ -264,139 +276,66 @@
       </div>
     </div>
 
+    <!-- CAC VERIFICATION DISCLAIMER -->
+
     <div class="text-muted fs-7 mt-3">
-      CAC verification confirms business registration details. Your PCN premises registration and
-      final employer approval are assessed separately.
+      CAC verification confirms the registered business. Each branch must have its applicable
+      operating permits reviewed before it can be used for regulated marketplace activities.
     </div>
   </div>
 
-  <!-- FACILITY / REGULATORY REGISTRATION NUMBER
-       Only Pharmacy is active now.
+  <!-- ───────────────────── REGISTERED LEGAL BUSINESS NAME ───────────────────── -->
 
-       CAC confirms the business entity.
-       PCN confirms the pharmacy premises/facility registration.
+  <!--
+    The registered legal business name is returned
+    by the production CAC verification service.
+
+    The employer must not manually supply an
+    authoritative registered business name.
+
+    The field remains named businessName to preserve
+    the existing form and validation contract.
+
+    readonly is intentionally used instead of disabled
+    so FormData can include the displayed value.
+
+    The backend does not trust this browser value.
+    It independently obtains the authoritative name
+    from previously validated CAC evidence.
   -->
 
   <div class="fv-row mb-8">
-    <!-- Pharmacy: PCN -->
+    <label for="businessNameInput" class="form-label required">
+      CAC Registered Legal Business Name
+    </label>
 
-    <div id="field-pharmacy" class="registration-field">
-      <label class="form-label required">
-        PCN Premises Registration Number
+    <input
+      type="text"
+      id="businessNameInput"
+      name="businessName"
+      class="form-control bg-light"
+      placeholder="Filled automatically after CAC verification"
+      autocomplete="off"
+      aria-describedby="businessNameHelp"
+      maxlength="150"
+      readonly
+    />
 
-        <span class="text-muted fs-7">
-          <i
-            class="ki-outline ki-information-2 fs-6"
-            data-bs-toggle="tooltip"
-            data-bs-original-title="Your Pharmacy Council of Nigeria (PCN) premises or pharmacy registration number."
-          ></i>
-        </span>
-      </label>
-
-      <input
-        type="text"
-        id="regulatoryRegistrationInput"
-        name="regulatoryRegistrationNumber"
-        class="form-control bg-transparent"
-        placeholder="Enter exactly as shown on your PCN premises certificate"
-        autocomplete="off"
-      />
-
-      <div
-        class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
-      ></div>
+    <div class="form-text mt-2" id="businessNameHelp">
+      This field is populated from your verified CAC registration. It cannot be edited manually. If
+      the returned legal name is incorrect, do not submit the profile; contact Loqum Support.
     </div>
 
-    <!-- Clinic: HEFAMAA / State MOH
-    <div id="field-clinic" class="registration-field" style="display: none">
-      <label class="form-label required">
-        HEFAMAA / State Ministry of Health Registration Number
-        <span class="text-muted fs-7">
-          <i
-            class="ki-outline ki-information-2 fs-6"
-            data-bs-toggle="tooltip"
-            data-bs-original-title="Your clinic facility registration number issued by HEFAMAA or your State Ministry of Health."
-          ></i>
-        </span>
-      </label>
-
-      <input
-        type="text"
-        name="regulatoryRegistrationNumber"
-        class="form-control bg-transparent"
-        placeholder="Enter clinic facility registration number"
-        autocomplete="off"
-        disabled
-      />
-
-      <div
-        class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
-      ></div>
-    </div>
-    -->
-
-    <!-- Hospital: HEFAMAA / State MOH
-    <div id="field-hospital" class="registration-field" style="display: none">
-      <label class="form-label required">
-        HEFAMAA / State MOH Registration Number
-        <span class="text-muted fs-7">
-          <i
-            class="ki-outline ki-information-2 fs-6"
-            data-bs-toggle="tooltip"
-            data-bs-original-title="Your hospital facility registration number issued by HEFAMAA or your State Ministry of Health."
-          ></i>
-        </span>
-      </label>
-
-      <input
-        type="text"
-        name="regulatoryRegistrationNumber"
-        class="form-control bg-transparent"
-        placeholder="Enter hospital facility registration number"
-        autocomplete="off"
-        disabled
-      />
-
-      <div
-        class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
-      ></div>
-    </div>
-    -->
-
-    <!-- Laboratory: MLSCN
-    <div id="field-laboratory" class="registration-field" style="display: none">
-      <label class="form-label required">
-        MLSCN Registration Number
-        <span class="text-muted fs-7">
-          <i
-            class="ki-outline ki-information-2 fs-6"
-            data-bs-toggle="tooltip"
-            data-bs-original-title="Your Medical Laboratory Science Council of Nigeria (MLSCN) registration number."
-          ></i>
-        </span>
-      </label>
-
-      <input
-        type="text"
-        name="regulatoryRegistrationNumber"
-        class="form-control bg-transparent"
-        placeholder="Enter MLSCN registration number"
-        autocomplete="off"
-        disabled
-      />
-
-      <div
-        class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
-      ></div>
-    </div>
-    -->
+    <div
+      class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
+    ></div>
   </div>
 
-  <!-- State & LGA -->
+  <!-- ───────────────────── STATE AND LGA ───────────────────── -->
 
   <div class="row gx-3 gy-8 mb-8">
     <div class="col-md-6">
-      <label class="form-label required"> State </label>
+      <label for="stateSelect" class="form-label required"> State </label>
 
       <select
         id="stateSelect"
@@ -415,7 +354,7 @@
     </div>
 
     <div class="col-md-6">
-      <label class="form-label required"> LGA </label>
+      <label for="lgaSelect" class="form-label required"> LGA </label>
 
       <select
         id="lgaSelect"
@@ -432,19 +371,21 @@
     </div>
   </div>
 
-  <!-- Location Address -->
+  <!-- ───────────────────── BUSINESS ADDRESS ───────────────────── -->
 
   <div class="fv-row mb-8">
-    <label class="form-label required"> Location Address </label>
+    <label for="addressInput" class="form-label required"> Main Branch Location Address </label>
 
     <input
       type="text"
       id="addressInput"
       name="address"
       class="form-control bg-transparent"
-      placeholder="Business Address"
+      placeholder="Select your main branch address"
       autocomplete="off"
     />
+
+    <!-- Google Places evidence -->
 
     <input type="hidden" id="latitudeInput" name="latitude" />
 
@@ -452,12 +393,17 @@
 
     <input type="hidden" id="googlePlaceIdInput" name="googlePlaceId" />
 
+    <div class="form-text mt-2">
+      Your first branch will be created automatically at this address. You can add more branches and
+      upload each location's applicable permits after completing setup.
+    </div>
+
     <div
       class="fv-plugins-message-container fv-plugins-message-container--enabled invalid-feedback"
     ></div>
   </div>
 
-  <!-- Business Email -->
+  <!-- ───────────────────── BUSINESS EMAIL ───────────────────── -->
 
   <div class="fv-row mb-8">
     <label class="form-label required"> Business Email </label>
@@ -466,7 +412,7 @@
       type="email"
       name="businessEmail"
       class="form-control bg-transparent"
-      placeholder="e.g. pharmacy@example.com"
+      placeholder="e.g. business@example.com"
       autocomplete="off"
     />
 
@@ -475,7 +421,7 @@
     ></div>
   </div>
 
-  <!-- Business Phone -->
+  <!-- ───────────────────── BUSINESS PHONE ───────────────────── -->
 
   <div class="fv-row mb-8">
     <label class="form-label required"> Business Phone Number </label>
@@ -510,7 +456,7 @@
     </div>
   </div>
 
-  <!-- Contact Person -->
+  <!-- ───────────────────── CONTACT PERSON ───────────────────── -->
 
   <div class="row g-9 mb-8">
     <div class="col-md-6">
@@ -546,7 +492,7 @@
     </div>
   </div>
 
-  <!-- Contact Role -->
+  <!-- ───────────────────── CONTACT ROLE ───────────────────── -->
 
   <div class="fv-row mb-8">
     <label class="form-label required"> Contact Role </label>
@@ -574,7 +520,7 @@
     ></div>
   </div>
 
-  <!-- Contact Phone -->
+  <!-- ───────────────────── CONTACT PHONE ───────────────────── -->
 
   <div class="fv-row mb-8">
     <label class="form-label required"> Contact Phone Number </label>
@@ -609,10 +555,21 @@
     </div>
   </div>
 
-  <!-- Submit -->
+  <!-- ───────────────────── SUBMIT ───────────────────── -->
+
+  <!--
+    The employer frontend enables submission
+    only after successful, unexpired production CAC
+    verification is available.
+
+    The backend independently validates and consumes
+    that evidence before completing onboarding.
+
+    Client-side state is never authoritative.
+  -->
 
   <div class="d-grid mb-10">
-    <button type="submit" id="kt_onboarding_submit" class="btn btn-primary">
+    <button type="submit" id="kt_onboarding_submit" class="btn btn-primary" disabled>
       <span class="indicator-label"> Complete Setup </span>
 
       <span class="indicator-progress">
@@ -623,6 +580,8 @@
     </button>
   </div>
 </form>
+
+<!-- ───────────────────── LOCATION DATA ───────────────────── -->
 
 <script>
   window.locations = <%- locations %>;

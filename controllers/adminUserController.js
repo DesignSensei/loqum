@@ -5,7 +5,7 @@ const AdminUserViewService = require("../services/adminUserViewService");
 
 const logger = require("../utils/logger");
 
-// ───────────────────────── RESPONSE HELPERS ─────────────────────────
+// ───────── Response helpers ─────────
 
 function setNoStoreHeaders(res) {
   res.set({
@@ -31,9 +31,9 @@ function sendError(res, error, operation) {
   });
 }
 
-// ───────────────────────── ADMIN USER PAGES ─────────────────────────
+// ───────── Admin user pages ─────────
 
-// Render Employers / Professionals Directory
+// Render the employer or professional directory.
 exports.getUsersPage = async (req, res, next) => {
   try {
     const usersData = await AdminUserQueryService.listUsers({
@@ -78,7 +78,7 @@ exports.getUsersPage = async (req, res, next) => {
   }
 };
 
-// Render Individual Employer / Professional Details
+// Render an individual user's details.
 exports.getUserDetailsPage = async (req, res, next) => {
   try {
     const userData = await AdminUserQueryService.getUserDetails({
@@ -124,9 +124,9 @@ exports.getUserDetailsPage = async (req, res, next) => {
   }
 };
 
-// ───────────────────────── ADMIN USER DATA ─────────────────────────
+// ───────── Admin user data ─────────
 
-// Get Filtered Users and Verification Summary
+// Return the filtered directory and summary.
 exports.getUsersData = async (req, res) => {
   try {
     const result = await AdminUserQueryService.listUsers({
@@ -150,7 +150,7 @@ exports.getUsersData = async (req, res) => {
   }
 };
 
-// Get Individual User Profile and Verification Data
+// Return an individual user's profile and verification.
 exports.getUserDetailsData = async (req, res) => {
   try {
     const result = await AdminUserQueryService.getUserDetails({

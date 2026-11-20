@@ -28,27 +28,32 @@
         <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
 
         <div class="modal-body scroll-y px-10 px-lg-15 pt-0 pb-5">
-          <div class="mb-13 text-center">
+          <div class="mb-10 text-center">
             <h1 class="mb-3">Add Branch</h1>
 
-            <div class="text-muted fw-semibold fs-5">Add a branch under your business account.</div>
+            <div class="text-muted fw-semibold fs-5">
+              Add another location under your business account.
+            </div>
           </div>
 
           <div class="fv-row mb-7">
-            <label class="form-label required"> Branch Name </label>
+            <label for="addBranchNameInput" class="form-label required"> Branch Name </label>
 
             <input
               type="text"
+              id="addBranchNameInput"
               name="name"
               class="form-control"
               placeholder="Example: Ikeja Branch"
               autocomplete="off"
+              maxlength="120"
+              required
             />
           </div>
 
           <div class="row">
             <div class="col-lg-6 fv-row mb-7">
-              <label class="form-label required"> State </label>
+              <label for="addBranchStateSelect" class="form-label required"> State </label>
 
               <select
                 id="addBranchStateSelect"
@@ -57,6 +62,7 @@
                 data-control="select2"
                 data-placeholder="Select State"
                 data-dropdown-parent="#addBranchModal"
+                required
               >
                 <option></option>
                 <option value="">Select State</option>
@@ -64,7 +70,7 @@
             </div>
 
             <div class="col-lg-6 fv-row mb-7">
-              <label class="form-label required"> LGA </label>
+              <label for="addBranchLgaSelect" class="form-label required"> LGA </label>
 
               <select
                 id="addBranchLgaSelect"
@@ -74,6 +80,7 @@
                 data-placeholder="Select LGA"
                 data-dropdown-parent="#addBranchModal"
                 disabled
+                required
               >
                 <option value="">Select LGA</option>
               </select>
@@ -81,7 +88,7 @@
           </div>
 
           <div class="fv-row mb-7">
-            <label class="form-label required"> Branch Address </label>
+            <label for="addBranchAddressInput" class="form-label required"> Branch Address </label>
 
             <input
               type="text"
@@ -90,6 +97,8 @@
               class="form-control"
               placeholder="Start typing and select a Google address suggestion"
               autocomplete="off"
+              maxlength="250"
+              required
             />
 
             <input type="hidden" id="addBranchLatitudeInput" name="latitude" />
@@ -99,57 +108,80 @@
             <input type="hidden" id="addBranchGooglePlaceIdInput" name="googlePlaceId" />
 
             <div class="form-text">
-              Please select an address from the Google suggestions so the branch coordinates can be
-              saved.
+              Select the correct address from Google's suggestions. Your branch location and
+              coordinates will be used for location-based shift clocking.
             </div>
           </div>
 
-          <!-- Branch Contact Phone -->
-
           <div class="fv-row mb-7">
-            <label class="form-label"> Branch Contact Phone </label>
+            <label for="addBranchPhoneInput" class="form-label"> Branch Contact Phone </label>
 
             <div class="row g-3">
               <div class="col-4">
                 <input
                   type="text"
+                  id="addBranchPhoneCodeInput"
                   name="contactPhoneCode"
                   class="form-control"
-                  value="<%= employerProfile.businessPhoneCode %>"
+                  value="<%= employerProfile.businessPhoneCode || '' %>"
                   readonly
+                  aria-label="Contact phone country code"
                 />
               </div>
 
               <div class="col-8">
                 <input
                   type="tel"
+                  id="addBranchPhoneInput"
                   name="contactPhone"
                   class="form-control"
                   placeholder="08012345678"
                   autocomplete="off"
+                  maxlength="30"
                 />
-
-                <div class="form-text">
-                  Optional. Add this if the branch has a separate contact line.
-                </div>
               </div>
+            </div>
+
+            <div class="form-text mt-2">
+              Optional. Enter a number only if the branch has a separate contact line.
             </div>
           </div>
 
           <div
-            class="notice d-flex bg-light-warning rounded border-warning border border-dashed p-6"
+            class="notice d-flex bg-light-info border border-info border-dashed rounded p-5 mb-5"
           >
-            <i class="ki-duotone ki-information-5 fs-2tx text-warning me-4">
+            <i class="ki-duotone ki-information-5 fs-2x text-info me-4">
               <span class="path1"></span>
               <span class="path2"></span>
               <span class="path3"></span>
             </i>
 
-            <div class="d-flex flex-stack flex-grow-1">
-              <div class="fw-semibold">
-                <div class="fs-6 text-gray-700">
-                  Coordinates are required because branch locations will be used for location-based
-                  shift clocking.
+            <div class="fw-semibold text-gray-700 fs-7">
+              Your branch's geofence radius will be set automatically using the platform's
+              configured settings. It can be managed separately through the branch editing workflow.
+            </div>
+          </div>
+
+          <div
+            class="notice d-flex bg-light-warning border border-warning border-dashed rounded p-5"
+          >
+            <i class="ki-duotone ki-shield-tick fs-2x text-warning me-4">
+              <span class="path1"></span>
+              <span class="path2"></span>
+            </i>
+
+            <div class="flex-grow-1">
+              <div class="fw-bold text-gray-900 fs-6 mb-2">Facility Permit Verification</div>
+
+              <div class="fw-semibold text-gray-700 fs-7">
+                After creating this branch, you can submit the applicable facility operating permits
+                for review. Requirements depend on your registered business type and the branch's
+                location.
+
+                <div class="mt-2">
+                  Creating a branch does not automatically authorise regulated shift posting.
+                  Applicable permits must be approved and valid before the branch can be eligible
+                  for those activities.
                 </div>
               </div>
             </div>

@@ -1,5 +1,4 @@
-
- // services/ninjaVerificationService.js
+// services/ninjaVerificationService.js
 
 const axios = require("axios");
 const crypto = require("crypto");
@@ -54,12 +53,7 @@ class NinjaVerificationService {
 
   // ───────────────────── ERRORS ─────────────────────
 
-  static createError({
-    message,
-    code,
-    statusCode = 503,
-    details = null,
-  }) {
+  static createError({ message, code, statusCode = 503, details = null }) {
     return createServiceError({
       name: NINJA_VERIFICATION_SERVICE_ERROR_NAME,
       message,
@@ -154,10 +148,7 @@ class NinjaVerificationService {
       });
     }
 
-    if (
-      environment === "production" &&
-      process.env.NINJA_PRODUCTION_ENABLED !== "true"
-    ) {
+    if (environment === "production" && process.env.NINJA_PRODUCTION_ENABLED !== "true") {
       throw this.createError({
         message: "Ninja production verification is disabled.",
         code: "NINJA_PRODUCTION_DISABLED",
@@ -177,8 +168,7 @@ class NinjaVerificationService {
       });
     }
 
-    const expectedPrefix =
-      environment === "sandbox" ? "sk_sandbox_" : "sk_";
+    const expectedPrefix = environment === "sandbox" ? "sk_sandbox_" : "sk_";
 
     if (!secretKey.startsWith(expectedPrefix)) {
       throw this.createError({
@@ -188,10 +178,7 @@ class NinjaVerificationService {
       });
     }
 
-    if (
-      environment === "production" &&
-      secretKey.startsWith("sk_sandbox_")
-    ) {
+    if (environment === "production" && secretKey.startsWith("sk_sandbox_")) {
       throw this.createError({
         message: "Sandbox credentials cannot be used for production.",
         code: "NINJA_KEY_ENVIRONMENT_MISMATCH",
@@ -219,9 +206,7 @@ class NinjaVerificationService {
     }
 
     const setting =
-      type === "identity"
-        ? "IDENTITY_VERIFICATION_PROVIDER"
-        : "CAC_VERIFICATION_PROVIDER";
+      type === "identity" ? "IDENTITY_VERIFICATION_PROVIDER" : "CAC_VERIFICATION_PROVIDER";
 
     const selectedProvider = String(process.env[setting] || "")
       .trim()
@@ -265,13 +250,9 @@ class NinjaVerificationService {
       return crypto.randomUUID();
     }
 
-    const value = String(reference).trim();
+    const value = typeof reference === "string" ? reference.trim() : "";
 
-    if (
-      !value ||
-      value.length > 64 ||
-      !/^[A-Za-z0-9_.:-]+$/.test(value)
-    ) {
+    if (!value || value.length > 64 || !/^[A-Za-z0-9_.:-]+$/.test(value)) {
       throw this.createError({
         message: "Invalid verification reference.",
         code: "NINJA_INVALID_REFERENCE",
@@ -285,6 +266,17 @@ class NinjaVerificationService {
   // ───────────────────── HTTP REQUESTS ─────────────────────
 
   static async post(path, payload, httpClient = axios) {
+    if (
+      typeof path !== "string" ||
+      (![ENDPOINTS.identity, ENDPOINTS.cac].includes(path) &&
+        !/^\/api\/flows\/vf_[A-Za-z0-9_-]+\/links$/.test(path))
+    ) {
+      throw this.createError({
+        message: "Invalid Ninja request endpoint.",
+        code: "NINJA_INVALID_REQUEST",
+        statusCode: 400,
+      });
+    }
     const environment = this.getEnvironment();
 
     if (!httpClient || typeof httpClient.post !== "function") {
@@ -298,11 +290,7 @@ class NinjaVerificationService {
     const options = this.getRequestOptions(environment);
 
     try {
-      const response = await httpClient.post(
-        BASE_URLS[environment] + path,
-        payload,
-        options
-      );
+      const response = await httpClient.post(BASE_URLS[environment] + path, payload, options);
 
       if (
         !response ||
@@ -327,6 +315,13 @@ class NinjaVerificationService {
   }
 
   static async get(path, httpClient = axios) {
+    if (typeof path !== "string" || !/^\/api\/verifications\/vs_[A-Za-z0-9_-]+$/.test(path)) {
+      throw this.createError({
+        message: "Invalid Ninja request endpoint.",
+        code: "NINJA_INVALID_REQUEST",
+        statusCode: 400,
+      });
+    }
     const environment = this.getEnvironment();
 
     if (!httpClient || typeof httpClient.get !== "function") {
@@ -340,10 +335,7 @@ class NinjaVerificationService {
     const options = this.getRequestOptions(environment);
 
     try {
-      const response = await httpClient.get(
-        BASE_URLS[environment] + path,
-        options
-      );
+      const response = await httpClient.get(BASE_URLS[environment] + path, options);
 
       if (
         !response ||
@@ -406,6 +398,21 @@ class NinjaVerificationService {
     return normalized;
   }
 
+  static normalizeProviderText(value, maxLength = 100) {
+    if (value == null || value === "") return null;
+    if (
+      typeof value !== "string" ||
+      value.length > maxLength ||
+      /[\u0000-\u001f\u007f]/.test(value)
+    ) {
+      throw this.createError({
+        message: "Ninja returned invalid response metadata.",
+        code: "NINJA_INVALID_RESPONSE",
+      });
+    }
+    return value.trim() || null;
+  }
+
   // ───────────────────── IDENTITY METHOD ─────────────────────
 
   /*
@@ -417,7 +424,7 @@ class NinjaVerificationService {
    */
 
   static normalizeIdentityType(method) {
-    const value = String(method || "").trim().toLowerCase();
+    const value = (typeof method === "string" ? method : "").trim().toLowerCase();
 
     if (value !== "nin") {
       throw this.createError({
@@ -431,7 +438,7 @@ class NinjaVerificationService {
   }
 
   static normalizeIdentityNumber(identifier) {
-    const value = String(identifier || "").trim();
+    const value = typeof identifier === "string" ? identifier.trim() : "";
 
     if (!/^\d{11}$/.test(value)) {
       throw this.createError({
@@ -474,11 +481,7 @@ class NinjaVerificationService {
    */
 
   static normalizeIdentityLookupResponse(payload, requestedNIN) {
-    if (
-      !payload ||
-      typeof payload !== "object" ||
-      Array.isArray(payload)
-    ) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       throw this.createError({
         message: "Ninja returned an invalid NIN lookup response.",
         code: "NINJA_INVALID_NIN_LOOKUP_RESPONSE",
@@ -517,37 +520,22 @@ class NinjaVerificationService {
 
     const data = payload.data;
 
-    const returnedNIN = String(data.id_number || "").trim();
+    const returnedNIN = typeof data.id_number === "string" ? data.id_number.trim() : "";
 
-    const returnedType = String(data.type || "")
-      .trim()
-      .toLowerCase();
+    const returnedType = (typeof data.type === "string" ? data.type : "").trim().toLowerCase();
 
-    if (
-      returnedType !== "nin" ||
-      returnedNIN !== requestedNIN
-    ) {
+    if (returnedType !== "nin" || returnedNIN !== requestedNIN) {
       throw this.createError({
         message: "NIN registry response does not match the requested identity.",
         code: "NINJA_NIN_RESPONSE_MISMATCH",
       });
     }
 
-    const firstName = this.normalizeRegistryName(
-      data.first_name,
-      100
-    );
+    const firstName = this.normalizeRegistryName(data.first_name, 100);
 
-    const middleName = this.normalizeRegistryName(
-      data.middle_name,
-      100,
-      true
-    );
+    const middleName = this.normalizeRegistryName(data.middle_name, 100, true);
 
-    const lastName = this.normalizeRegistryName(
-      data.last_name,
-      100
-    );
+    const lastName = this.normalizeRegistryName(data.last_name, 100);
 
     if (!firstName || !lastName || middleName === null) {
       throw this.createError({
@@ -556,13 +544,7 @@ class NinjaVerificationService {
       });
     }
 
-    const nameOnRecord = [
-      firstName,
-      middleName,
-      lastName,
-    ]
-      .filter(Boolean)
-      .join(" ");
+    const nameOnRecord = [firstName, middleName, lastName].filter(Boolean).join(" ");
 
     if (nameOnRecord.length > 150) {
       throw this.createError({
@@ -627,10 +609,7 @@ class NinjaVerificationService {
       httpClient
     );
 
-    const normalized = this.normalizeIdentityLookupResponse(
-      response.data,
-      idNumber
-    );
+    const normalized = this.normalizeIdentityLookupResponse(response.data, idNumber);
 
     return {
       provider: "ninja",
@@ -678,11 +657,11 @@ class NinjaVerificationService {
    */
 
   static normalizeDateOfBirth(value) {
-    if (!value) {
+    if (value == null || value === "") {
       return null;
     }
 
-    const dob = String(value).trim();
+    const dob = typeof value === "string" ? value.trim() : "";
 
     if (
       !/^\d{4}-\d{2}-\d{2}$/.test(dob) ||
@@ -741,11 +720,7 @@ class NinjaVerificationService {
       payload.dateOfBirth = dob;
     }
 
-    const response = await this.post(
-      ENDPOINTS.identity,
-      payload,
-      httpClient
-    );
+    const response = await this.post(ENDPOINTS.identity, payload, httpClient);
 
     const result = response.data;
 
@@ -768,15 +743,14 @@ class NinjaVerificationService {
       environment: response.environment,
 
       reference: payload.reference,
+      requestReference: payload.reference,
+      providerReference: null,
       method: idType,
 
       registryFound: result.found,
       detailsMatched: result.verified,
 
-      recommendation:
-        String(result.recommendation || "")
-          .trim()
-          .toLowerCase() || null,
+      recommendation: this.normalizeProviderText(result.recommendation)?.toLowerCase() || null,
 
       score:
         typeof result.score === "number" &&
@@ -811,7 +785,7 @@ class NinjaVerificationService {
    */
 
   static normalizeCACNumber(value) {
-    const clean = String(value || "")
+    const clean = (typeof value === "string" ? value : "")
       .trim()
       .toUpperCase()
       .replace(/[\s-]/g, "");
@@ -844,11 +818,7 @@ class NinjaVerificationService {
   // ───────────────────── CAC RESPONSE NORMALIZATION ─────────────────────
 
   static normalizeCACResponse(payload, requestedNumber) {
-    if (
-      !payload ||
-      typeof payload !== "object" ||
-      Array.isArray(payload)
-    ) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       throw this.createError({
         message: "Ninja returned an invalid CAC response.",
         code: "NINJA_INVALID_CAC_RESPONSE",
@@ -883,40 +853,24 @@ class NinjaVerificationService {
 
     const data = payload.data;
 
-    const rawRegistrationNumber = String(
-      data.registration_number || ""
+    const rawRegistrationNumber = (
+      typeof data.registration_number === "string" ? data.registration_number : ""
     )
       .trim()
       .toUpperCase()
       .replace(/[\s-]/g, "");
 
-    const match = /^(?:RC)?(\d{4,10})$/.exec(
-      rawRegistrationNumber
-    );
+    const match = /^(?:RC)?(\d{4,10})$/.exec(rawRegistrationNumber);
 
-    const entityName = this.normalizeRegistryName(
-      data.name,
-      150
-    );
+    const entityName = this.normalizeRegistryName(data.name, 150);
 
-    const entityType = String(data.company_type || "")
-      .trim()
-      .toUpperCase();
+    const entityType = this.normalizeRegistryName(data.company_type, 150)?.toUpperCase();
 
-    const entityStatus = String(data.status || "")
-      .trim()
-      .toUpperCase();
+    const entityStatus = this.normalizeRegistryName(data.status, 100)?.toUpperCase();
 
-    if (
-      !match ||
-      match[1] !== requestedNumber ||
-      !entityName ||
-      !entityType ||
-      !entityStatus
-    ) {
+    if (!match || match[1] !== requestedNumber || !entityName || !entityType || !entityStatus) {
       throw this.createError({
-        message:
-          "CAC registry information is incomplete or does not match the request.",
+        message: "CAC registry information is incomplete or does not match the request.",
         code: "NINJA_CAC_RESPONSE_MISMATCH",
       });
     }
@@ -955,16 +909,10 @@ class NinjaVerificationService {
 
   // ───────────────────── CAC LOOKUP ─────────────────────
 
-  static async lookupRegistration({
-    registrationNumber,
-    reference,
-    httpClient = axios,
-  } = {}) {
+  static async lookupRegistration({ registrationNumber, reference, httpClient = axios } = {}) {
     this.assertNewVerificationEnabled("cac");
 
-    const registration = this.normalizeCACNumber(
-      registrationNumber
-    );
+    const registration = this.normalizeCACNumber(registrationNumber);
 
     const requestReference = this.normalizeReference(reference);
 
@@ -977,10 +925,7 @@ class NinjaVerificationService {
       httpClient
     );
 
-    const normalized = this.normalizeCACResponse(
-      response.data,
-      registration.rc_number
-    );
+    const normalized = this.normalizeCACResponse(response.data, registration.rc_number);
 
     return {
       provider: "ninja",
@@ -1021,9 +966,7 @@ class NinjaVerificationService {
    */
 
   static getKycFlowId() {
-    const flowId = String(
-      process.env.NINJA_KYC_FLOW_ID || ""
-    ).trim();
+    const flowId = String(process.env.NINJA_KYC_FLOW_ID || "").trim();
 
     if (!/^vf_[A-Za-z0-9_-]+$/.test(flowId)) {
       throw this.createError({
@@ -1050,13 +993,14 @@ class NinjaVerificationService {
 
     const last = this.normalizeRegistryName(lastName, 100);
 
-    const customerEmail = String(email || "").trim();
+    const customerEmail = typeof email === "string" ? email.trim() : "";
 
     if (
       !first ||
       !last ||
-      !customerEmail ||
-      customerEmail.length > 254
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail) ||
+      customerEmail.length > 254 ||
+      /[\u0000-\u001f\u007f]/.test(customerEmail)
     ) {
       throw this.createError({
         message: "Name and email are required for hosted identity verification.",
@@ -1067,9 +1011,7 @@ class NinjaVerificationService {
 
     const flowId = this.getKycFlowId();
 
-    const customerRef = this.normalizeReference(
-      customerReference
-    );
+    const customerRef = this.normalizeReference(customerReference);
 
     const response = await this.post(
       `${ENDPOINTS.hostedKyc}/${flowId}/links`,
@@ -1122,9 +1064,7 @@ class NinjaVerificationService {
 
     if (
       linkUrl.protocol !== "https:" ||
-      !["www.ninja.ng", "ninja.ng"].includes(
-        linkUrl.hostname
-      ) ||
+      !["www.ninja.ng", "ninja.ng"].includes(linkUrl.hostname) ||
       !linkUrl.pathname.startsWith("/kyc/") ||
       linkUrl.username ||
       linkUrl.password ||
@@ -1154,11 +1094,8 @@ class NinjaVerificationService {
 
   // ───────────────────── HOSTED RESULT SYNCHRONIZATION ─────────────────────
 
-  static async getHostedIdentityResult({
-    verificationId,
-    httpClient = axios,
-  } = {}) {
-    const id = String(verificationId || "").trim();
+  static async getHostedIdentityResult({ verificationId, httpClient = axios } = {}) {
+    const id = typeof verificationId === "string" ? verificationId.trim() : "";
 
     if (!/^vs_[A-Za-z0-9_-]+$/.test(id)) {
       throw this.createError({
@@ -1177,10 +1114,7 @@ class NinjaVerificationService {
      * verification ID, flow ID and customer reference.
      */
 
-    const response = await this.get(
-      `${ENDPOINTS.verification}/${id}`,
-      httpClient
-    );
+    const response = await this.get(`${ENDPOINTS.verification}/${id}`, httpClient);
 
     const data = response.data;
 
@@ -1188,6 +1122,7 @@ class NinjaVerificationService {
       !data ||
       typeof data !== "object" ||
       Array.isArray(data) ||
+      (data.id != null && data.id !== id) ||
       typeof data.sandbox !== "boolean" ||
       data.sandbox !== (response.environment === "sandbox")
     ) {
@@ -1203,33 +1138,27 @@ class NinjaVerificationService {
 
       verificationId: id,
 
-      status: data.status || null,
-      outcome: data.outcome || null,
+      status: this.normalizeProviderText(data.status, 64),
+      outcome: this.normalizeProviderText(data.outcome, 64),
 
       sandbox: data.sandbox,
 
-      flowId: data.flow_id || null,
+      flowId: this.normalizeProviderText(data.flow_id, 128),
 
-      customerReference:
-        data.customer_ref || null,
+      customerReference: this.normalizeProviderText(data.customer_ref, 64),
 
       /*
        * These scores are informational.
        *
        * A completed session without trusted
-       * selfie/liveness evidence must not be
+       * holder-authentication evidence must not be
        * treated as holder authentication.
        */
 
-      score:
-        typeof data.score === "number" &&
-        Number.isFinite(data.score)
-          ? data.score
-          : null,
+      score: typeof data.score === "number" && Number.isFinite(data.score) ? data.score : null,
 
       faceScore:
-        typeof data.face_score === "number" &&
-        Number.isFinite(data.face_score)
+        typeof data.face_score === "number" && Number.isFinite(data.face_score)
           ? data.face_score
           : null,
     };
@@ -1237,14 +1166,11 @@ class NinjaVerificationService {
 
   // ───────────────────── SIGNED WEBHOOKS ─────────────────────
 
-  static verifyWebhookSignature({
-    rawBody,
-    signature,
-    secret,
-  } = {}) {
+  static verifyWebhookSignature({ rawBody, signature, secret } = {}) {
     if (
       !Buffer.isBuffer(rawBody) ||
-      !signature ||
+      typeof signature !== "string" ||
+      !/^hmac-sha256=[a-f0-9]{64}$/.test(signature) ||
       typeof secret !== "string" ||
       !secret
     ) {
@@ -1252,39 +1178,22 @@ class NinjaVerificationService {
     }
 
     const expected =
-      "hmac-sha256=" +
-      crypto
-        .createHmac("sha256", secret)
-        .update(rawBody)
-        .digest("hex");
+      "hmac-sha256=" + crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
 
-    const receivedBuffer = Buffer.from(
-      String(signature),
-      "utf8"
-    );
+    const receivedBuffer = Buffer.from(signature, "utf8");
 
-    const expectedBuffer = Buffer.from(
-      expected,
-      "utf8"
-    );
+    const expectedBuffer = Buffer.from(expected, "utf8");
 
     if (receivedBuffer.length !== expectedBuffer.length) {
       return false;
     }
 
-    return crypto.timingSafeEqual(
-      receivedBuffer,
-      expectedBuffer
-    );
+    return crypto.timingSafeEqual(receivedBuffer, expectedBuffer);
   }
 
   // ───────────────────── PARSE HOSTED KYC WEBHOOK ─────────────────────
 
-  static parseHostedIdentityWebhook({
-    rawBody,
-    signature,
-    secret,
-  } = {}) {
+  static parseHostedIdentityWebhook({ rawBody, signature, secret } = {}) {
     if (
       !this.verifyWebhookSignature({
         rawBody,
@@ -1302,9 +1211,7 @@ class NinjaVerificationService {
     let event;
 
     try {
-      event = JSON.parse(
-        rawBody.toString("utf8")
-      );
+      event = JSON.parse(rawBody.toString("utf8"));
     } catch (_) {
       throw this.createError({
         message: "Invalid Ninja webhook payload.",
@@ -1316,13 +1223,23 @@ class NinjaVerificationService {
     if (
       event?.event !== "verification.completed" ||
       typeof event.event_id !== "string" ||
-      !event.event_id ||
+      !event.event_id.trim() ||
+      event.event_id.length > 128 ||
+      /[\u0000-\u001f\u007f]/.test(event.event_id) ||
       typeof event.data?.verification_id !== "string" ||
-      !event.data.verification_id ||
+      !/^vs_[A-Za-z0-9_-]+$/.test(event.data.verification_id) ||
       typeof event.data.flow_id !== "string" ||
-      !event.data.flow_id ||
+      !/^vf_[A-Za-z0-9_-]+$/.test(event.data.flow_id) ||
       typeof event.data.customer_ref !== "string" ||
-      !event.data.customer_ref ||
+      !/^[A-Za-z0-9_.:-]{1,64}$/.test(event.data.customer_ref) ||
+      typeof event.data.status !== "string" ||
+      !event.data.status.trim() ||
+      event.data.status.length > 64 ||
+      /[\u0000-\u001f\u007f]/.test(event.data.status) ||
+      typeof event.data.outcome !== "string" ||
+      !event.data.outcome.trim() ||
+      event.data.outcome.length > 64 ||
+      /[\u0000-\u001f\u007f]/.test(event.data.outcome) ||
       typeof event.data.sandbox !== "boolean"
     ) {
       throw this.createError({
@@ -1332,9 +1249,7 @@ class NinjaVerificationService {
       });
     }
 
-    const method = String(
-      event.data.id_type || ""
-    )
+    const method = (typeof event.data.id_type === "string" ? event.data.id_type : "")
       .trim()
       .toLowerCase();
 
@@ -1363,7 +1278,7 @@ class NinjaVerificationService {
      * - Match provider and environment;
      * - Match verification, flow and customer IDs;
      * - Validate the final outcome;
-     * - Require trusted biometric evidence;
+     * - Apply the configured holder-authentication policy;
      * - Apply approval rules transactionally.
      *
      * Sandbox events cannot approve production
@@ -1376,34 +1291,27 @@ class NinjaVerificationService {
       eventId: String(event.event_id),
       eventType: String(event.event),
 
-      verificationId:
-        String(event.data.verification_id),
+      verificationId: String(event.data.verification_id),
 
-      flowId:
-        String(event.data.flow_id),
+      flowId: String(event.data.flow_id),
 
-      customerReference:
-        String(event.data.customer_ref),
+      customerReference: String(event.data.customer_ref),
 
-      status:
-        String(event.data.status || ""),
+      status: String(event.data.status || ""),
 
-      outcome:
-        String(event.data.outcome || ""),
+      outcome: String(event.data.outcome || ""),
 
       method,
 
       sandbox: event.data.sandbox,
 
       score:
-        typeof event.data.score === "number" &&
-        Number.isFinite(event.data.score)
+        typeof event.data.score === "number" && Number.isFinite(event.data.score)
           ? event.data.score
           : null,
 
       faceScore:
-        typeof event.data.face_score === "number" &&
-        Number.isFinite(event.data.face_score)
+        typeof event.data.face_score === "number" && Number.isFinite(event.data.face_score)
           ? event.data.face_score
           : null,
     };

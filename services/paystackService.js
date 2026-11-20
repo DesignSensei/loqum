@@ -1466,6 +1466,24 @@ class PaystackService {
     };
   }
 
+  static assertTransferRecordComplete(transfer) {
+    if (
+      !transfer.reference ||
+      !transfer.status ||
+      !Number.isSafeInteger(transfer.amount) ||
+      transfer.amount <= 0 ||
+      !transfer.currency
+    ) {
+      throw PaystackService.createPaystackError({
+        message:
+          "Paystack returned a Transfer without its reference, status, positive amount or currency.",
+        code: "INCOMPLETE_PAYSTACK_TRANSFER_RESPONSE",
+        statusCode: 502,
+        providerResponse: transfer.raw || null,
+      });
+    }
+  }
+
   static normalizeTransferRecord(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw PaystackService.createPaystackError({
@@ -1578,6 +1596,19 @@ class PaystackService {
       });
     }
 
+    if (
+      recipient.active === false ||
+      recipient.isDeleted === true ||
+      (recipient.type && recipient.type !== normalizedType)
+    ) {
+      throw PaystackService.createPaystackError({
+        message: "Paystack returned an inactive, deleted or unexpected type of Transfer recipient.",
+        code: "INVALID_PAYSTACK_TRANSFER_RECIPIENT_STATE",
+        statusCode: 502,
+        providerResponse: response.data || null,
+      });
+    }
+
     if (recipient.currency && recipient.currency !== normalizedCurrency) {
       throw PaystackService.createPaystackError({
         message: "Paystack returned a Transfer recipient with an unexpected currency.",
@@ -1652,6 +1683,8 @@ class PaystackService {
 
     const transfer = PaystackService.normalizeTransferRecord(response.data);
 
+    PaystackService.assertTransferRecordComplete(transfer);
+
     if (!transfer.reference || !transfer.status) {
       throw PaystackService.createPaystackError({
         message: "Paystack returned an incomplete Transfer initiation response.",
@@ -1710,6 +1743,8 @@ class PaystackService {
 
     const transfer = PaystackService.normalizeTransferRecord(response.data);
 
+    PaystackService.assertTransferRecordComplete(transfer);
+
     if (!transfer.reference || !transfer.status) {
       throw PaystackService.createPaystackError({
         message: "Paystack returned an incomplete Transfer verification response.",
@@ -1746,6 +1781,8 @@ class PaystackService {
     });
 
     const transfer = PaystackService.normalizeTransferRecord(response.data);
+
+    PaystackService.assertTransferRecordComplete(transfer);
 
     if (!transfer.status) {
       throw PaystackService.createPaystackError({
@@ -2148,7 +2185,25 @@ class PaystackService {
       },
     });
 
-    return response.data;
+    const account = response.data;
+    if (
+      !account ||
+      typeof account !== "object" ||
+      Array.isArray(account) ||
+      typeof account.account_number !== "string" ||
+      account.account_number.replace(/\s+/g, "") !== cleanAccountNumber ||
+      typeof account.account_name !== "string" ||
+      !account.account_name.trim()
+    ) {
+      throw PaystackService.createPaystackError({
+        message: "Paystack returned an incomplete or mismatched bank account resolution.",
+        code: "INVALID_PAYSTACK_BANK_ACCOUNT_RESOLUTION",
+        statusCode: 502,
+        providerResponse: account || null,
+      });
+    }
+
+    return account;
   }
 }
 

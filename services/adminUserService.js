@@ -26,7 +26,7 @@ const ALLOWED_VERIFICATION_FILTERS = [
 const ALLOWED_ACCOUNT_STATUSES = ["active", "restricted", "suspended", "deactivated", "banned"];
 
 class AdminUserService {
-  // ───────────────────────── VALIDATION ─────────────────────────
+  // ───────── Validation ─────────
 
   static createError(message, statusCode = 400) {
     const error = new Error(message);
@@ -43,9 +43,14 @@ class AdminUserService {
       throw this.createError("Invalid administrator ID.", 400);
     }
 
-    const admin = await User.findById(adminUserId).select("role accountStatus").lean();
+    const admin = await User.findById(adminUserId).select("role accountStatus isVerified").lean();
 
-    if (!admin || admin.role !== "admin" || admin.accountStatus !== "active") {
+    if (
+      !admin ||
+      admin.role !== "admin" ||
+      admin.accountStatus !== "active" ||
+      admin.isVerified !== true
+    ) {
       throw this.createError("An active administrator is required.", 403);
     }
 
@@ -110,7 +115,7 @@ class AdminUserService {
     return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
-  // ───────────────────────── PROFILE CONFIGURATION ─────────────────────────
+  // ───────── Profile configuration ─────────
 
   static getProfileModel(role) {
     return role === "employer" ? EmployerProfile : ProfessionalProfile;
@@ -129,10 +134,6 @@ class AdminUserService {
         countryCode: 1,
         cacRegistrationNumber: 1,
         cacVerificationStatus: 1,
-        regulatoryBody: 1,
-        regulatoryRegistrationNumber: 1,
-        regulatoryVerificationStatus: 1,
-        employerApprovalStatus: 1,
         accountStatus: 1,
       };
     }
@@ -156,31 +157,15 @@ class AdminUserService {
     };
   }
 
-  // ───────────────────────── VERIFICATION RULES ─────────────────────────
-
-  /**
-   * These statuses summarize core registration
-   * and identity verification for admin display.
-   *
-   * Employer:
-   * CAC registration + regulatory registration.
-   *
-   * Professional:
-   * Identity + professional licence.
-   *
-   * BVN status is displayed separately because
-   * payout KYC and professional licensing are
-   * distinct verification requirements.
-   *
-   * Final administrative approval is also separate.
-   */
+  // ───────── Verification rules ─────────
+  // Employers use CAC; professionals use identity and licence.
 
   static getVerificationStatusExpression(role, now) {
     const profile = "$profile";
 
     const fields =
       role === "employer"
-        ? [`${profile}.cacVerificationStatus`, `${profile}.regulatoryVerificationStatus`]
+        ? [`${profile}.cacVerificationStatus`]
         : [`${profile}.identityVerificationStatus`, `${profile}.licenceVerificationStatus`];
 
     const anyStatus = (status) => ({
@@ -251,7 +236,7 @@ class AdminUserService {
 
     const statuses =
       role === "employer"
-        ? [profile.cacVerificationStatus, profile.regulatoryVerificationStatus]
+        ? [profile.cacVerificationStatus]
         : [profile.identityVerificationStatus, profile.licenceVerificationStatus];
 
     if (statuses.includes("rejected")) {
@@ -282,15 +267,10 @@ class AdminUserService {
     return ["pending", "needs_review", "rejected", "expired"].includes(status);
   }
 
-  // ───────────────────────── AGGREGATION PIPELINE ─────────────────────────
+  // ───────── Aggregation pipeline ─────────
 
   static buildUserViewPipeline(role, now) {
     const ProfileModel = this.getProfileModel(role);
-
-    const approvalField =
-      role === "employer"
-        ? "$profile.employerApprovalStatus"
-        : "$profile.professionalApprovalStatus";
 
     return [
       {
@@ -320,9 +300,14 @@ class AdminUserService {
         $addFields: {
           verificationStatus: this.getVerificationStatusExpression(role, now),
 
-          approvalStatus: {
-            $ifNull: [approvalField, "pending"],
-          },
+          // Only professionals have an approval stage.
+          ...(role === "professional"
+            ? {
+                approvalStatus: {
+                  $ifNull: ["$profile.professionalApprovalStatus", "pending"],
+                },
+              }
+            : {}),
         },
       },
       {
@@ -335,7 +320,7 @@ class AdminUserService {
     ];
   }
 
-  // ───────────────────────── SEARCH AND FILTERS ─────────────────────────
+  // ───────── Search and filters ─────────
 
   static buildListFilters({ role, search, verificationStatus, accountStatus }) {
     const conditions = [];
@@ -362,11 +347,7 @@ class AdminUserService {
       const searchFields = ["firstName", "lastName", "displayName", "email"];
 
       if (role === "employer") {
-        searchFields.push(
-          "profile.businessName",
-          "profile.cacRegistrationNumber",
-          "profile.regulatoryRegistrationNumber"
-        );
+        searchFields.push("profile.businessName", "profile.cacRegistrationNumber");
       } else {
         searchFields.push("profile.licenceNumber", "profile.specialty");
       }
@@ -390,72 +371,79 @@ class AdminUserService {
     };
   }
 
-  // ───────────────────────── SUMMARY CARDS ─────────────────────────
+  // ───────── Summary counts ─────────
+  // Approval counts apply only to professionals.
 
-  static getSummaryGroupStage() {
+  static getSummaryGroupStage(role) {
     const countWhere = (expression) => ({
       $sum: {
         $cond: [expression, 1, 0],
       },
     });
 
-    return {
-      $group: {
-        _id: null,
+    const group = {
+      _id: null,
 
-        total: { $sum: 1 },
-
-        pending: countWhere({
-          $eq: ["$verificationStatus", "pending"],
-        }),
-
-        needsReview: countWhere({
-          $eq: ["$verificationStatus", "needs_review"],
-        }),
-
-        verified: countWhere({
-          $eq: ["$verificationStatus", "verified"],
-        }),
-
-        rejected: countWhere({
-          $eq: ["$verificationStatus", "rejected"],
-        }),
-
-        expired: countWhere({
-          $eq: ["$verificationStatus", "expired"],
-        }),
-
-        notOnboarded: countWhere({
-          $eq: ["$verificationStatus", "not_onboarded"],
-        }),
-
-        requiresAttention: countWhere({
-          $eq: ["$requiresAttention", true],
-        }),
-
-        approved: countWhere({
-          $eq: ["$approvalStatus", "approved"],
-        }),
-
-        awaitingApproval: countWhere({
-          $and: [
-            {
-              $eq: ["$verificationStatus", "verified"],
-            },
-            {
-              $eq: ["$approvalStatus", "pending"],
-            },
-          ],
-        }),
-
-        restrictedAccounts: countWhere({
-          $in: ["$accountStatus", ["restricted", "suspended", "banned"]],
-        }),
+      total: {
+        $sum: 1,
       },
+
+      pending: countWhere({
+        $eq: ["$verificationStatus", "pending"],
+      }),
+
+      needsReview: countWhere({
+        $eq: ["$verificationStatus", "needs_review"],
+      }),
+
+      verified: countWhere({
+        $eq: ["$verificationStatus", "verified"],
+      }),
+
+      rejected: countWhere({
+        $eq: ["$verificationStatus", "rejected"],
+      }),
+
+      expired: countWhere({
+        $eq: ["$verificationStatus", "expired"],
+      }),
+
+      notOnboarded: countWhere({
+        $eq: ["$verificationStatus", "not_onboarded"],
+      }),
+
+      requiresAttention: countWhere({
+        $eq: ["$requiresAttention", true],
+      }),
+
+      restrictedAccounts: countWhere({
+        $in: ["$accountStatus", ["restricted", "suspended", "banned"]],
+      }),
+    };
+
+    if (role === "professional") {
+      group.approved = countWhere({
+        $eq: ["$approvalStatus", "approved"],
+      });
+
+      group.awaitingApproval = countWhere({
+        $and: [
+          {
+            $eq: ["$verificationStatus", "verified"],
+          },
+          {
+            $eq: ["$approvalStatus", "pending"],
+          },
+        ],
+      });
+    }
+
+    return {
+      $group: group,
     };
   }
 
-  static emptySummary() {
+  static emptySummary(role) {
     return {
       total: 0,
       pending: 0,
@@ -465,31 +453,20 @@ class AdminUserService {
       expired: 0,
       notOnboarded: 0,
       requiresAttention: 0,
-      approved: 0,
-      awaitingApproval: 0,
       restrictedAccounts: 0,
+
+      ...(role === "professional"
+        ? {
+            approved: 0,
+            awaitingApproval: 0,
+          }
+        : {}),
     };
   }
 
-  // ───────────────────────── LIST USERS ─────────────────────────
+  // ───────── List users ─────────
+  // Summary counts cover the full role, independent of filters.
 
-  /**
-   * Supplies the Employers or Professionals page.
-   *
-   * Includes:
-   * - Summary card counts
-   * - Search
-   * - Verification status filtering
-   * - Account status filtering
-   * - Pagination
-   * - Core verification badges
-   * - Administrative approval status
-   *
-   * Counts represent the entire selected role,
-   * independently of the current search or filter.
-   *
-   * Users without profiles remain visible.
-   */
   static async listUsers({ adminUserId, role, search, status, accountStatus, page, limit }) {
     await this.assertAdmin(adminUserId);
 
@@ -525,7 +502,7 @@ class AdminUserService {
 
       {
         $facet: {
-          summary: [this.getSummaryGroupStage()],
+          summary: [this.getSummaryGroupStage(selectedRole)],
 
           totalMatching: [
             ...filteredStages,
@@ -570,8 +547,9 @@ class AdminUserService {
                 profile: 1,
 
                 verificationStatus: 1,
-                approvalStatus: 1,
                 requiresAttention: 1,
+
+                ...(selectedRole === "professional" ? { approvalStatus: 1 } : {}),
 
                 createdAt: 1,
                 updatedAt: 1,
@@ -583,12 +561,11 @@ class AdminUserService {
     ];
 
     const results = await User.aggregate(pipeline);
-
     const result = results[0] || {};
 
     const users = result.users || [];
 
-    const summary = result.summary?.[0] || this.emptySummary();
+    const summary = result.summary?.[0] || this.emptySummary(selectedRole);
 
     const total = result.totalMatching?.[0]?.total || 0;
 
@@ -601,8 +578,9 @@ class AdminUserService {
 
       data: {
         role: selectedRole,
-
         users,
+
+        ...(selectedRole === "professional" ? { approvalApplicable: true } : {}),
 
         summary,
 
@@ -623,18 +601,9 @@ class AdminUserService {
     };
   }
 
-  // ───────────────────────── USER DETAILS ─────────────────────────
+  // ───────── User details ─────────
+  // Exclude private documents and payment data.
 
-  /**
-   * Retrieves one employer or professional with
-   * the relevant verification summary.
-   *
-   * This does not retrieve private identity
-   * documents, raw BVN data, payment details,
-   * or password information.
-   *
-   * Role comes from the User record.
-   */
   static async getUserDetails({ adminUserId, userId }) {
     await this.assertAdmin(adminUserId);
 
@@ -699,24 +668,6 @@ class AdminUserService {
             "cacVerificationNote",
             "cacRejectionReason",
 
-            "regulatoryBody",
-            "regulatoryRegistrationNumber",
-            "regulatoryVerificationStatus",
-            "regulatoryVerificationMethod",
-            "regulatoryVerificationSource",
-            "regulatoryNameOnRecord",
-            "regulatoryVerifiedAt",
-            "regulatoryLastCheckedAt",
-            "regulatoryVerifiedBy",
-            "regulatoryVerificationNote",
-            "regulatoryRejectionReason",
-
-            "employerApprovalStatus",
-            "approvedToPostShiftsAt",
-            "approvedToPostShiftsBy",
-            "employerApprovalNote",
-            "employerRejectionReason",
-
             "accountStatus",
             "accountStatusReason",
             "createdAt",
@@ -779,11 +730,6 @@ class AdminUserService {
 
     const verificationStatus = this.deriveVerificationStatus(user.role, profile);
 
-    const approvalStatus =
-      user.role === "employer"
-        ? profile?.employerApprovalStatus || "pending"
-        : profile?.professionalApprovalStatus || "pending";
-
     const verification = {
       status: verificationStatus,
 
@@ -791,17 +737,19 @@ class AdminUserService {
 
       coreVerified: verificationStatus === "verified",
 
-      approvalStatus,
-
       accountStatus: user.accountStatus,
+
       profileAccountStatus: profile?.accountStatus || null,
     };
 
     if (user.role === "employer") {
       verification.cacStatus = profile?.cacVerificationStatus || null;
-
-      verification.regulatoryStatus = profile?.regulatoryVerificationStatus || null;
     } else {
+      // Professional approval is separate from verification.
+      verification.approvalStatus = profile?.professionalApprovalStatus || "pending";
+
+      verification.approvalApplicable = true;
+
       verification.identityStatus = profile?.identityVerificationStatus || null;
 
       verification.licenceStatus = profile?.licenceVerificationStatus || null;
@@ -824,14 +772,9 @@ class AdminUserService {
     };
   }
 
-  // ───────────────────────── PAGE OPTIONS ─────────────────────────
+  // ───────── Page options ─────────
+  // The controller supplies the CSRF token.
 
-  /**
-   * Prepares the shared user-management page
-   * for Employers and Professionals.
-   *
-   * The controller supplies the CSRF token.
-   */
   static async getUsersPageOptions({ adminUserId, role }) {
     await this.assertAdmin(adminUserId);
 
@@ -841,7 +784,6 @@ class AdminUserService {
 
     return {
       layout: "layouts/app-layout",
-
       title: label,
 
       breadcrumbs: [

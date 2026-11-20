@@ -1,60 +1,72 @@
+назар;
 // controllers/professionalVerificationController.js
 
-const ProfessionalVerificationService = require("../services/professionalVerificationService");
+const mongoose = require("mongoose");
 
+const ProfessionalVerificationService = require("../services/professionalVerificationService");
 const logger = require("../utils/logger");
 
 /**
- * PROFESSIONAL VERIFICATION CONTROLLER
+ * PROFESSIONAL VERIFICATION CONTROLLER — POST-ONBOARDING MVP
  *
- * PROFESSIONAL-FACING OPERATIONS ONLY
+ * The production NIN lookup and registry legal-name capture happen during
+ * onboarding. Here, the professional can inspect verification readiness,
+ * submit a practising-licence document and correct its registration number.
+ * There is no second paid NIN/BVN lookup, government-ID approval,
+ * hosted selfie/liveness step, or separate
+ * admin NIN documentary review.
  *
- * This controller allows authenticated professionals to:
+ * An administrator reviews the uploaded practising licence against the
+ * original NIN evidence, profession, number and validity period, then gives
+ * an independent final approval. Council lookup is optional and recorded
+ * accurately if undertaken. Expired licences do not authorize clinical work;
+ * the 30-day grace period is for renewal access only.
  *
- * - Read their verification status;
- * - Submit NIN/BVN registry evidence;
- * - Start hosted identity verification;
- * - Check an existing hosted verification result;
- * - Update their professional licence number.
+ * LICENCE UPLOAD CONTRACT:
+ * parseProfessionalLicenceUpload must run before submitLicenceDocument.
+ * It validates and stores the binary privately and populates a trusted
+ * req.professionalLicenceUpload value, cleanup and commit callbacks.
+ * Only the domain service persists that reference to a pending licence.
+ * After transaction success the controller commits the private upload,
+ * before responding. A failed submission deletes the uncommitted upload.
+ * The professional router must mount the upload middleware before this handler.
  *
- * Administrative licence decisions and final
- * professional approval must be handled by
- * adminProfessionalVerificationController.
- *
- * VERIFICATION AUTHORITY
- *
- * ProfessionalVerificationService owns the underlying
- * verification business logic and persistence.
- *
- * Ninja and Dojah API requests are coordinated through
- * IdentityVerificationService.
- *
- * SECURITY
- *
- * - Authentication must be enforced by route middleware.
- * - req.user._id must come from trusted authentication.
- * - Never accept userId from request body or query.
- * - Never log NIN, BVN, provider credentials, or KYC URLs.
- * - Never automatically approve identity from a registry lookup.
- * - Never allow ordinary professionals to approve themselves.
+ * The router must enforce authentication, role/onboarding checks and CSRF
+ * on mutations. The service independently checks profile ownership.
  */
+
+const PUBLIC_ERROR_NAMES = new Set(["ProfessionalVerificationServiceError"]);
 
 // ───────────────────────── ERROR HANDLING ─────────────────────────
 
 function sendError(res, error, operation) {
+  const rawCode = typeof error?.code === "string" ? error.code : "";
+  const code = /^[A-Z][A-Z0-9_]{2,99}$/.test(rawCode) ? rawCode : "PROFESSIONAL_VERIFICATION_ERROR";
+
+  const authenticationError = code === "PROFESSIONAL_VERIFICATION_AUTH_REQUIRED";
+
+  const trustedError = authenticationError || PUBLIC_ERROR_NAMES.has(error?.name);
+
   const statusCode =
-    Number.isInteger(error?.statusCode) && error.statusCode >= 400 && error.statusCode < 500
+    trustedError &&
+    Number.isInteger(error?.statusCode) &&
+    error.statusCode >= 400 &&
+    error.statusCode < 500
       ? error.statusCode
       : 500;
 
   if (statusCode >= 500) {
-    logger.error(`${operation}: ${error?.code || "PROFESSIONAL_VERIFICATION_ERROR"}`);
+    logger.error(`${operation}: ${code}`);
   }
 
   return res.status(statusCode).json({
     success: false,
-
-    message: statusCode === 500 ? "Unable to complete the verification request." : error.message,
+    message:
+      statusCode === 500
+        ? "Unable to complete the verification request."
+        : authenticationError
+          ? "Authentication is required."
+          : error?.message || "Invalid verification request.",
   });
 }
 
@@ -69,25 +81,24 @@ function setNoStoreHeaders(res) {
 function getAuthenticatedUserId(req) {
   const userId = req.user?._id;
 
-  if (!userId) {
+  if (!mongoose.isValidObjectId(userId)) {
     const error = new Error("Authentication is required.");
-
     error.code = "PROFESSIONAL_VERIFICATION_AUTH_REQUIRED";
     error.statusCode = 401;
-
     throw error;
   }
 
   return userId;
 }
 
-// ───────────────────────── VERIFICATION STATUS ─────────────────────────
+// ───────────────────────── EVIDENCE-BASED STATUS ─────────────────────────
 
 /**
- * Returns the authenticated professional's
- * verification and marketplace-readiness summary.
+ * GET /verification/:professionalProfileId
  *
- * This is a read-only operation.
+ * Status-only response; no NIN number, private document URL or provider
+ * secret is included. It reports stored NIN evidence, current licence
+ * validity, renewal state, final approval and verified KYC audit readiness.
  */
 exports.getVerificationStatus = async (req, res) => {
   setNoStoreHeaders(res);
@@ -95,188 +106,103 @@ exports.getVerificationStatus = async (req, res) => {
   try {
     const userId = getAuthenticatedUserId(req);
 
-    const profile = await ProfessionalVerificationService.getOwnedProfessional(
-      req.params.professionalProfileId,
-      userId
-    );
-
-    const readiness = ProfessionalVerificationService.getVerificationReadiness(profile);
+    const data = await ProfessionalVerificationService.getVerificationStatus({
+      professionalProfileId: req.params.professionalProfileId,
+      userId,
+    });
 
     return res.status(200).json({
       success: true,
-
-      data: {
-        professionalProfileId: String(profile._id),
-
-        identityVerificationStatus: profile.identityVerificationStatus,
-
-        licenceVerificationStatus: profile.licenceVerificationStatus,
-
-        professionalApprovalStatus: profile.professionalApprovalStatus,
-
-        marketplaceStatus: profile.marketplaceStatus,
-
-        verificationReadiness: readiness,
-      },
+      data,
     });
   } catch (error) {
     return sendError(res, error, "Get professional verification status");
   }
 };
 
-// ───────────────────────── IDENTITY REGISTRY LOOKUP ─────────────────────────
+// ───────────────────────── LICENCE DOCUMENT SUBMISSION ─────────────────────────
 
 /**
- * Performs a provider-selected NIN/BVN registry lookup.
+ * POST /verification/:professionalProfileId/licence-document
  *
- * Ninja or Dojah is selected through:
+ * Middleware (in order):
+ *   1. Router-wide authentication, onboarding and profile attachment;
+ *   2. parseProfessionalLicenceUpload;
+ *   3. This handler.
  *
- * IDENTITY_VERIFICATION_PROVIDER
+ * Multipart field: licenceDocument (one PDF, JPG, PNG or WEBP, up to 10 MB).
  *
- * A matching registry record does not authenticate
- * the person submitting the identity number.
+ * Upload middleware creates a profile-scoped private:// file reference. The
+ * domain service authenticates ownership again and transactionally records a
+ * pending licence submission plus KYC audit. It preserves a currently verified
+ * licence, final approval and any valid existing review evidence.
  *
- * The professional service stores non-authoritative
- * lookup evidence without automatically approving
- * the professional.
+ * req.commitProfessionalLicenceUpload must be called AFTER the transaction
+ * succeeds and BEFORE sending success. For failed submissions, cleanup
+ * removes the newly stored file, without touching existing approved files.
+ *
+ * Storage cleanup does not make database commits atomic with object storage.
+ * An orphan reconciliation job is still appropriate for process crashes.
  */
-exports.lookupIdentityEvidence = async (req, res) => {
+exports.submitLicenceDocument = async (req, res) => {
   setNoStoreHeaders(res);
+
+  // This distinguishes an uncommitted upload from a database write that has
+  // already succeeded. Never remove a newly persisted document on a later
+  // response/commit error, since that would leave a dangling DB reference.
+  let persisted = false;
 
   try {
     const userId = getAuthenticatedUserId(req);
 
-    const result = await ProfessionalVerificationService.lookupIdentityEvidence({
+    if (
+      !req.professionalLicenceUpload ||
+      typeof req.commitProfessionalLicenceUpload !== "function" ||
+      typeof req.cleanupProfessionalLicenceUpload !== "function"
+    ) {
+      const error = new Error("The practising-licence upload middleware is required.");
+      error.name = "ProfessionalVerificationServiceError";
+      error.code = "PROFESSIONAL_VERIFICATION_UPLOAD_CONTEXT_REQUIRED";
+      error.statusCode = 500;
+      throw error;
+    }
+
+    const result = await ProfessionalVerificationService.submitLicenceDocument({
       professionalProfileId: req.params.professionalProfileId,
-
       userId,
-
-      method: req.body?.method,
-
-      identifier: req.body?.identifier,
-
-      firstName: req.body?.firstName,
-
-      lastName: req.body?.lastName,
-
-      dateOfBirth: req.body?.dateOfBirth,
+      licenceUpload: req.professionalLicenceUpload,
     });
 
-    return res.status(result.skipped ? 200 : 201).json({
+    persisted = true;
+    req.commitProfessionalLicenceUpload();
+
+    return res.status(201).json({
       success: true,
       data: result,
     });
   } catch (error) {
-    return sendError(res, error, "Lookup professional identity evidence");
-  }
-};
+    if (!persisted && typeof req.cleanupProfessionalLicenceUpload === "function") {
+      try {
+        await req.cleanupProfessionalLicenceUpload();
+      } catch (_cleanupError) {
+        // Keep the original API error and avoid logging private file details.
+        logger.error("Professional licence upload cleanup failed.");
+      }
+    }
 
-// ───────────────────────── HOSTED IDENTITY VERIFICATION ─────────────────────────
-
-/**
- * Initiates a hosted identity verification.
- *
- * Currently uses Ninja hosted KYC.
- *
- * The service must:
- *
- * - Confirm professional ownership;
- * - Prevent unnecessary repeated paid attempts;
- * - Enforce selected-provider configuration;
- * - Create a pending KYC record;
- * - Return a trusted provider verification URL.
- *
- * The verification URL is returned only to
- * the authenticated professional.
- */
-exports.startHostedIdentityVerification = async (req, res) => {
-  setNoStoreHeaders(res);
-
-  try {
-    const userId = getAuthenticatedUserId(req);
-
-    const result = await ProfessionalVerificationService.startHostedIdentityVerification({
-      professionalProfileId: req.params.professionalProfileId,
-
-      userId,
-
-      firstName: req.body?.firstName,
-
-      lastName: req.body?.lastName,
-
-      email: req.body?.email,
-    });
-
-    return res.status(result.skipped ? 200 : 201).json({
-      success: true,
-      data: result,
-    });
-  } catch (error) {
-    return sendError(res, error, "Start professional hosted identity verification");
-  }
-};
-
-// ───────────────────────── HOSTED RESULT SYNCHRONIZATION ─────────────────────────
-
-/**
- * Checks the result of an existing hosted
- * verification attempt.
- *
- * The verification ID refers to Loqum's
- * KYCVerification document.
- *
- * The service verifies:
- *
- * - Professional ownership;
- * - Original provider;
- * - Original provider environment;
- * - Original flow and request references.
- *
- * A completed hosted flow does not automatically
- * establish that selfie/liveness checks passed.
- *
- * Identity approval remains blocked until the
- * trusted biometric evidence contract is satisfied.
- */
-exports.syncHostedIdentityResult = async (req, res) => {
-  setNoStoreHeaders(res);
-
-  try {
-    const userId = getAuthenticatedUserId(req);
-
-    const result = await ProfessionalVerificationService.syncHostedIdentityResult({
-      professionalProfileId: req.params.professionalProfileId,
-
-      userId,
-
-      verificationId: req.params.verificationId,
-    });
-
-    return res.status(200).json({
-      success: true,
-      data: result,
-    });
-  } catch (error) {
-    return sendError(res, error, "Synchronize professional hosted identity result");
+    return sendError(res, error, "Submit professional practising licence");
   }
 };
 
 // ───────────────────────── LICENCE NUMBER CHANGE ─────────────────────────
 
 /**
- * Updates the professional's licence number.
+ * POST /verification/:professionalProfileId/licence-number
  *
- * Changing the licence number requires:
- *
- * - Reset of licence verification;
- * - Creation of a fresh pending licence attempt;
- * - Reset of professional platform approval;
- * - Withdrawal of marketplace visibility.
- *
- * Existing verified identity remains unchanged.
- *
- * An unchanged licence number does not trigger
- * unnecessary re-verification.
+ * Changing the licence number transactionally invalidates existing licence
+ * verification and independent final approval, while retaining the original
+ * production NIN evidence. Re-entering the same number is a no-op.
+ * The service, not this controller, owns all verification mutations.
  */
 exports.changeLicenceNumber = async (req, res) => {
   setNoStoreHeaders(res);
@@ -286,9 +212,7 @@ exports.changeLicenceNumber = async (req, res) => {
 
     const result = await ProfessionalVerificationService.changeLicenceNumber({
       professionalProfileId: req.params.professionalProfileId,
-
       userId,
-
       licenceNumber: req.body?.licenceNumber,
     });
 

@@ -13,6 +13,11 @@ var EmployerBusinessProfile = (function () {
   var businessDetailsSubmitButton = null;
   var businessDetailsValidator = null;
 
+  var addBranchSubmissionPending = false;
+  var editBranchSubmissionPending = false;
+  var editBranchOriginalLocation = null;
+  var pendingBranchStatusChanges = Object.create(null);
+
   /*
    * ───────────────────── BUSINESS PROFILE FIELD POLICY ─────────────────────
    *
@@ -62,6 +67,94 @@ var EmployerBusinessProfile = (function () {
     return String(countryCodeInput ? countryCodeInput.value : "ng")
       .trim()
       .toLowerCase();
+  }
+
+  /* ---------- Shared branch payload and location helpers ---------- */
+
+  function hasValidAddressSelection(latitudeSelector, longitudeSelector, placeIdSelector) {
+    var latitudeInput = document.querySelector(latitudeSelector);
+    var longitudeInput = document.querySelector(longitudeSelector);
+    var placeIdInput = document.querySelector(placeIdSelector);
+
+    if (!latitudeInput || !longitudeInput || !placeIdInput) return false;
+
+    var latitudeValue = String(latitudeInput.value || "").trim();
+    var longitudeValue = String(longitudeInput.value || "").trim();
+    var placeIdValue = String(placeIdInput.value || "").trim();
+
+    if (!latitudeValue || !longitudeValue || !placeIdValue) return false;
+
+    var latitude = Number(latitudeValue);
+    var longitude = Number(longitudeValue);
+
+    return (
+      Number.isFinite(latitude) &&
+      latitude >= -90 &&
+      latitude <= 90 &&
+      Number.isFinite(longitude) &&
+      longitude >= -180 &&
+      longitude <= 180
+    );
+  }
+
+  function buildBranchSubmissionData(form) {
+    var data = Object.fromEntries(new FormData(form));
+    var contactPhone = String(data.contactPhone || "")
+      .replace(/\s+/g, "")
+      .trim();
+
+    data.contactPhone = contactPhone;
+    data.contactPhoneCode = contactPhone ? String(data.contactPhoneCode || "").trim() : "";
+
+    if (form === editBranchForm && !data.branchId) {
+      var branchIdInput = document.querySelector("#editBranchIdInput");
+      data.branchId = normalizeLocationText(
+        branchIdInput ? branchIdInput.value : editBranchOriginalLocation?.branchId
+      );
+    }
+
+    // Do not strip _csrf or managerMemberId. The form owns those fields.
+    return data;
+  }
+
+  function normalizeLocationText(value) {
+    return String(value == null ? "" : value).trim();
+  }
+
+  function normalizeLocationCoordinate(value) {
+    var raw = normalizeLocationText(value);
+    if (!raw) return null;
+
+    var number = Number(raw);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function captureOriginalBranchLocation(button) {
+    return {
+      branchId: normalizeLocationText(button.getAttribute("data-branch-id")),
+      address: normalizeLocationText(button.getAttribute("data-branch-address")),
+      state: normalizeLocationText(button.getAttribute("data-branch-state")),
+      lga: normalizeLocationText(button.getAttribute("data-branch-lga")),
+      googlePlaceId: normalizeLocationText(button.getAttribute("data-branch-google-place-id")),
+      latitude: normalizeLocationCoordinate(button.getAttribute("data-branch-latitude")),
+      longitude: normalizeLocationCoordinate(button.getAttribute("data-branch-longitude")),
+    };
+  }
+
+  function hasBranchPremisesChanged(formData) {
+    if (!editBranchOriginalLocation) return true;
+    if (normalizeLocationText(formData.branchId) !== editBranchOriginalLocation.branchId) {
+      return true;
+    }
+
+    return (
+      normalizeLocationText(formData.address) !== editBranchOriginalLocation.address ||
+      normalizeLocationText(formData.state) !== editBranchOriginalLocation.state ||
+      normalizeLocationText(formData.lga) !== editBranchOriginalLocation.lga ||
+      normalizeLocationText(formData.googlePlaceId) !== editBranchOriginalLocation.googlePlaceId ||
+      normalizeLocationCoordinate(formData.latitude) !== editBranchOriginalLocation.latitude ||
+      normalizeLocationCoordinate(formData.longitude) !== editBranchOriginalLocation.longitude
+    );
   }
 
   /* ---------- Initialise Select2 ---------- */
@@ -637,19 +730,10 @@ var EmployerBusinessProfile = (function () {
 
                   if (!addressValue) return false;
 
-                  var latitudeInput = document.querySelector("#addBranchLatitudeInput");
-
-                  var longitudeInput = document.querySelector("#addBranchLongitudeInput");
-
-                  var googlePlaceIdInput = document.querySelector("#addBranchGooglePlaceIdInput");
-
-                  return Boolean(
-                    latitudeInput &&
-                    longitudeInput &&
-                    googlePlaceIdInput &&
-                    latitudeInput.value &&
-                    longitudeInput.value &&
-                    googlePlaceIdInput.value
+                  return hasValidAddressSelection(
+                    "#addBranchLatitudeInput",
+                    "#addBranchLongitudeInput",
+                    "#addBranchGooglePlaceIdInput"
                   );
                 },
               },
@@ -697,13 +781,15 @@ var EmployerBusinessProfile = (function () {
 
     addBranchForm.addEventListener("submit", function (event) {
       event.preventDefault();
+      if (addBranchSubmissionPending || addBranchSubmitButton.disabled) return;
+
+      addBranchSubmissionPending = true;
 
       var submitForm = function () {
         addBranchSubmitButton.setAttribute("data-kt-indicator", "on");
         addBranchSubmitButton.disabled = true;
 
-        var formData = new FormData(addBranchForm);
-        var data = Object.fromEntries(formData);
+        var data = buildBranchSubmissionData(addBranchForm);
 
         axios
           .post(addBranchForm.action, data)
@@ -725,6 +811,7 @@ var EmployerBusinessProfile = (function () {
             });
           })
           .catch(function (error) {
+            addBranchSubmissionPending = false;
             addBranchSubmitButton.removeAttribute("data-kt-indicator");
             addBranchSubmitButton.disabled = false;
 
@@ -743,16 +830,142 @@ var EmployerBusinessProfile = (function () {
       };
 
       if (addBranchValidator) {
-        addBranchValidator.validate().then(function (status) {
-          if (status !== "Valid") return;
+        addBranchValidator
+          .validate()
+          .then(function (status) {
+            if (status !== "Valid") {
+              addBranchSubmissionPending = false;
+              return;
+            }
 
-          submitForm();
-        });
+            submitForm();
+          })
+          .catch(function () {
+            addBranchSubmissionPending = false;
+            Swal.fire({
+              text: "Unable to validate branch details. Please try again.",
+              icon: "error",
+            });
+          });
 
         return;
       }
 
       submitForm();
+    });
+  }
+
+  /* ---------- Branch activation and deactivation ---------- */
+
+  function handleBranchStatusActions() {
+    document.addEventListener("click", function (event) {
+      var actionLink = event.target.closest(".js-toggle-branch-status");
+      if (!actionLink) return;
+
+      event.preventDefault();
+
+      var branchId = String(actionLink.getAttribute("data-branch-id") || "").trim();
+      var action = String(actionLink.getAttribute("data-branch-action") || "").trim();
+
+      if (pendingBranchStatusChanges[branchId]) return;
+      if (actionLink.getAttribute("aria-disabled") === "true") return;
+
+      if (!/^[a-f0-9]{24}$/i.test(branchId) || (action !== "activate" && action !== "deactivate")) {
+        Swal.fire({
+          text: "Unable to identify a valid branch status action.",
+          icon: "error",
+        });
+        return;
+      }
+
+      // Branch management modals contain the server-issued CSRF token.
+      // Do not submit a status mutation when a token is unavailable.
+      var csrfInput = document.querySelector(
+        '#kt_edit_branch_form input[name="_csrf"], #kt_add_branch_form input[name="_csrf"], input[name="_csrf"]'
+      );
+      var csrfToken = csrfInput ? String(csrfInput.value || "").trim() : "";
+
+      if (!csrfToken) {
+        Swal.fire({
+          text: "Security token unavailable. Refresh the page and try again.",
+          icon: "error",
+        });
+        return;
+      }
+
+      pendingBranchStatusChanges[branchId] = true;
+
+      var activating = action === "activate";
+      Swal.fire({
+        title: activating ? "Reactivate this branch?" : "Deactivate this branch?",
+        text: activating
+          ? "Reactivation changes the branch's administrative status only. " +
+            "It does not reinstate expired or deactivated facility permits " +
+            "or bypass regulatory readiness requirements."
+          : "Deactivation marks this branch administratively inactive. " +
+            "It does not automatically cancel existing shift obligations.",
+        icon: "warning",
+        showCancelButton: true,
+        buttonsStyling: false,
+        confirmButtonText: activating ? "Yes, reactivate" : "Yes, deactivate",
+        cancelButtonText: "Cancel",
+        customClass: {
+          confirmButton: activating ? "btn btn-primary" : "btn btn-danger",
+          cancelButton: "btn btn-light",
+        },
+      })
+        .then(function (result) {
+          if (!result.isConfirmed) {
+            delete pendingBranchStatusChanges[branchId];
+            return;
+          }
+
+          actionLink.setAttribute("aria-disabled", "true");
+          actionLink.classList.add("disabled");
+
+          axios
+            .post("/employer/branches/" + encodeURIComponent(branchId) + "/status", {
+              action: action,
+              _csrf: csrfToken,
+            })
+            .then(function (response) {
+              if (!response.data || response.data.success !== true) {
+                throw new Error(response.data?.message || "Unable to change branch status.");
+              }
+
+              Swal.fire({
+                text: response.data.message || "Branch status updated successfully.",
+                icon: "success",
+                buttonsStyling: false,
+                confirmButtonText: "Ok, got it!",
+                customClass: { confirmButton: "btn btn-primary" },
+              }).then(function () {
+                window.location.href =
+                  response.data.redirectUrl || "/employer/business-profile?tab=branches";
+              });
+            })
+            .catch(function (error) {
+              delete pendingBranchStatusChanges[branchId];
+              actionLink.removeAttribute("aria-disabled");
+              actionLink.classList.remove("disabled");
+
+              Swal.fire({
+                text:
+                  error.response?.data?.message ||
+                  error.message ||
+                  "Unable to change branch status.",
+                icon: "error",
+                buttonsStyling: false,
+                confirmButtonText: "Ok, got it!",
+                customClass: { confirmButton: "btn btn-primary" },
+              });
+            });
+        })
+        .catch(function () {
+          delete pendingBranchStatusChanges[branchId];
+          actionLink.removeAttribute("aria-disabled");
+          actionLink.classList.remove("disabled");
+        });
     });
   }
 
@@ -801,6 +1014,20 @@ var EmployerBusinessProfile = (function () {
       var viewBranchStatus = document.querySelector("#viewBranchStatus");
 
       var viewBranchEditButton = document.querySelector("#viewBranchEditButton");
+      var viewBranchPermitsLink = document.querySelector("#viewBranchPermitsLink");
+
+      if (viewBranchPermitsLink) {
+        if (branchId) {
+          viewBranchPermitsLink.href =
+            "/employer/branches/" + encodeURIComponent(branchId) + "/permits";
+          viewBranchPermitsLink.removeAttribute("aria-disabled");
+          viewBranchPermitsLink.classList.remove("disabled");
+        } else {
+          viewBranchPermitsLink.removeAttribute("href");
+          viewBranchPermitsLink.setAttribute("aria-disabled", "true");
+          viewBranchPermitsLink.classList.add("disabled");
+        }
+      }
 
       if (viewBranchName) {
         viewBranchName.textContent = name;
@@ -879,6 +1106,8 @@ var EmployerBusinessProfile = (function () {
   function populateEditBranchForm(button) {
     if (!button) return;
 
+    editBranchOriginalLocation = captureOriginalBranchLocation(button);
+
     var branchId = button.getAttribute("data-branch-id") || "";
 
     var name = button.getAttribute("data-branch-name") || "";
@@ -895,7 +1124,8 @@ var EmployerBusinessProfile = (function () {
 
     var phone = button.getAttribute("data-branch-phone") || "";
 
-    var geofenceRadius = button.getAttribute("data-branch-geofence-radius") || "100";
+    // The server owns the default geofence policy; do not impose 100m here.
+    var geofenceRadius = button.getAttribute("data-branch-geofence-radius") || "";
 
     var latitude = button.getAttribute("data-branch-latitude") || "";
 
@@ -1074,19 +1304,10 @@ var EmployerBusinessProfile = (function () {
 
                   if (!addressValue) return false;
 
-                  var latitudeInput = document.querySelector("#editBranchLatitudeInput");
-
-                  var longitudeInput = document.querySelector("#editBranchLongitudeInput");
-
-                  var googlePlaceIdInput = document.querySelector("#editBranchGooglePlaceIdInput");
-
-                  return Boolean(
-                    latitudeInput &&
-                    longitudeInput &&
-                    googlePlaceIdInput &&
-                    latitudeInput.value &&
-                    longitudeInput.value &&
-                    googlePlaceIdInput.value
+                  return hasValidAddressSelection(
+                    "#editBranchLatitudeInput",
+                    "#editBranchLongitudeInput",
+                    "#editBranchGooglePlaceIdInput"
                   );
                 },
               },
@@ -1112,12 +1333,14 @@ var EmployerBusinessProfile = (function () {
           geofenceRadiusMeters: {
             validators: {
               callback: {
-                message: "Enter a whole-number radius between 20 and 1000 meters.",
+                message: "Enter a valid positive whole-number geofence radius.",
 
                 callback: function (input) {
-                  var value = Number(input.value);
+                  var raw = String(input.value || "").trim();
+                  if (!raw) return true; // On edit, the server preserves the saved radius.
 
-                  return Number.isSafeInteger(value) && value >= 20 && value <= 1000;
+                  var value = Number(raw);
+                  return Number.isSafeInteger(value) && value > 0;
                 },
               },
             },
@@ -1148,16 +1371,18 @@ var EmployerBusinessProfile = (function () {
 
     editBranchForm.addEventListener("submit", function (event) {
       event.preventDefault();
+      if (editBranchSubmissionPending || editBranchSubmitButton.disabled) return;
+
+      editBranchSubmissionPending = true;
+
+      var branchUpdateData = null;
 
       var submitForm = function () {
         editBranchSubmitButton.setAttribute("data-kt-indicator", "on");
         editBranchSubmitButton.disabled = true;
 
-        var formData = new FormData(editBranchForm);
-        var data = Object.fromEntries(formData);
-
         axios
-          .post(editBranchForm.action, data)
+          .post(editBranchForm.action, branchUpdateData)
           .then(function (response) {
             editBranchSubmitButton.removeAttribute("data-kt-indicator");
 
@@ -1177,6 +1402,7 @@ var EmployerBusinessProfile = (function () {
             });
           })
           .catch(function (error) {
+            editBranchSubmissionPending = false;
             editBranchSubmitButton.removeAttribute("data-kt-indicator");
             editBranchSubmitButton.disabled = false;
 
@@ -1194,17 +1420,72 @@ var EmployerBusinessProfile = (function () {
           });
       };
 
-      if (editBranchValidator) {
-        editBranchValidator.validate().then(function (status) {
-          if (status !== "Valid") return;
+      var confirmLocationChangeIfNeeded = function () {
+        branchUpdateData = buildBranchSubmissionData(editBranchForm);
 
+        if (!branchUpdateData.branchId) {
+          editBranchSubmissionPending = false;
+          Swal.fire({ text: "Please select a branch to edit.", icon: "error" });
+          return;
+        }
+
+        if (!hasBranchPremisesChanged(branchUpdateData)) {
           submitForm();
-        });
+          return;
+        }
+
+        Swal.fire({
+          title: "Confirm change of physical premises",
+          text:
+            "Changing this branch's physical premises will deactivate its current " +
+            "facility permits. Any permits required for the new location must " +
+            "be submitted and approved before regulatory readiness is restored.",
+          icon: "warning",
+          showCancelButton: true,
+          buttonsStyling: false,
+          confirmButtonText: "Yes, move this branch",
+          cancelButtonText: "Cancel",
+          customClass: {
+            confirmButton: "btn btn-danger",
+            cancelButton: "btn btn-light",
+          },
+        })
+          .then(function (result) {
+            if (!result.isConfirmed) {
+              editBranchSubmissionPending = false;
+              return;
+            }
+
+            submitForm();
+          })
+          .catch(function () {
+            editBranchSubmissionPending = false;
+          });
+      };
+
+      if (editBranchValidator) {
+        editBranchValidator
+          .validate()
+          .then(function (status) {
+            if (status !== "Valid") {
+              editBranchSubmissionPending = false;
+              return;
+            }
+
+            confirmLocationChangeIfNeeded();
+          })
+          .catch(function () {
+            editBranchSubmissionPending = false;
+            Swal.fire({
+              text: "Unable to validate branch details. Please try again.",
+              icon: "error",
+            });
+          });
 
         return;
       }
 
-      submitForm();
+      confirmLocationChangeIfNeeded();
     });
   }
 
@@ -1298,19 +1579,10 @@ var EmployerBusinessProfile = (function () {
 
               if (!addressValue) return false;
 
-              var latitudeInput = document.querySelector("#businessDetailsLatitude");
-
-              var longitudeInput = document.querySelector("#businessDetailsLongitude");
-
-              var googlePlaceIdInput = document.querySelector("#businessDetailsGooglePlaceId");
-
-              return Boolean(
-                latitudeInput &&
-                longitudeInput &&
-                googlePlaceIdInput &&
-                latitudeInput.value &&
-                longitudeInput.value &&
-                googlePlaceIdInput.value
+              return hasValidAddressSelection(
+                "#businessDetailsLatitude",
+                "#businessDetailsLongitude",
+                "#businessDetailsGooglePlaceId"
               );
             },
           },
@@ -1573,6 +1845,7 @@ var EmployerBusinessProfile = (function () {
       setBusinessDetailsInitialSelectValues();
 
       handleCopyTextButtons();
+      handleBranchStatusActions();
 
       handleViewBranchModal();
       handleEditBranchModal();

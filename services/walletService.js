@@ -352,6 +352,14 @@ class WalletService {
     return true;
   }
 
+  // A freeze prevents new spending, but must not strand an existing reservation
+  // or prevent recording a provider outcome for money already submitted.
+  static assertWalletCanReconcile(wallet) {
+    if (!wallet || !["active", "frozen"].includes(wallet.status)) {
+      throw new Error("Only active or frozen wallets can reconcile existing reservations.");
+    }
+  }
+
   /* ---------- Check wallets use the same country and currency ---------- */
 
   static assertSameCountryAndCurrency(walletA, walletB) {
@@ -639,7 +647,7 @@ class WalletService {
   /* ---------- Create employer wallet if missing ---------- */
 
   static async createEmployerWalletIfMissing(employerProfile, options = {}) {
-    if (!employerProfile) {
+    if (!employerProfile || !employerProfile._id) {
       throw new Error("Employer profile is required to create employer wallet.");
     }
 
@@ -715,7 +723,7 @@ class WalletService {
   /* ---------- Create professional wallet if missing ---------- */
 
   static async createProfessionalWalletIfMissing(professionalProfile, options = {}) {
-    if (!professionalProfile) {
+    if (!professionalProfile || !professionalProfile._id) {
       throw new Error("Professional profile is required to create professional wallet.");
     }
 
@@ -1128,6 +1136,15 @@ class WalletService {
   }) {
     WalletService.assertActiveTransaction(session);
     WalletService.assertWalletIsActive(wallet);
+
+    if (
+      status !== "completed" &&
+      !(status === "processing" && INTERNAL_PAYMENT_RAILS.includes(paymentRail))
+    ) {
+      throw new Error(
+        "Wallet movements must be completed, or processing as part of an internal transfer."
+      );
+    }
 
     if (
       String(paymentRail || "")
@@ -2223,6 +2240,22 @@ class WalletService {
         settlementBatch,
       });
 
+      if (type === "withdrawal") {
+        if (!["employer", "professional"].includes(wallet.ownerType)) {
+          throw new Error("Bank withdrawals require an employer or professional wallet.");
+        }
+
+        if (wallet.minimumWithdrawalAmount != null) {
+          const minimum = WalletService.normalizePositiveMinorUnitAmount(
+            wallet.minimumWithdrawalAmount,
+            "Minimum withdrawal amount"
+          );
+          if (normalizedAmount < minimum) {
+            throw new Error("Withdrawal amount is below the wallet minimum.");
+          }
+        }
+      }
+
       const balanceBefore = WalletService.getBalanceSnapshot(wallet);
 
       if (balanceBefore.availableBalance < normalizedAmount) {
@@ -2564,7 +2597,7 @@ class WalletService {
 
       WalletService.assertTransactionWallet(transaction, wallet);
 
-      WalletService.assertWalletIsActive(wallet);
+      WalletService.assertWalletCanReconcile(wallet);
 
       const normalizedAmount = WalletService.normalizePositiveMinorUnitAmount(
         transaction.amount,
@@ -2733,7 +2766,7 @@ class WalletService {
 
       WalletService.assertTransactionWallet(transaction, wallet);
 
-      WalletService.assertWalletIsActive(wallet);
+      WalletService.assertWalletCanReconcile(wallet);
 
       const normalizedAmount = WalletService.normalizePositiveMinorUnitAmount(
         transaction.amount,
@@ -2961,7 +2994,7 @@ class WalletService {
 
       WalletService.assertTransactionWallet(transaction, wallet);
 
-      WalletService.assertWalletIsActive(wallet);
+      WalletService.assertWalletCanReconcile(wallet);
 
       const normalizedAmount = WalletService.normalizePositiveMinorUnitAmount(
         transaction.amount,
@@ -3312,10 +3345,6 @@ class WalletService {
         throw new Error("Both source and destination wallets are required.");
       }
 
-      WalletService.assertWalletIsActive(fromWallet);
-
-      WalletService.assertWalletIsActive(toWallet);
-
       WalletService.assertSameCountryAndCurrency(fromWallet, toWallet);
 
       {
@@ -3446,6 +3475,11 @@ class WalletService {
           };
         }
       }
+
+      // A completed retry only reads the original result; wallet status may
+      // have changed since that transfer. New transfers still require active wallets.
+      WalletService.assertWalletIsActive(fromWallet);
+      WalletService.assertWalletIsActive(toWallet);
 
       const sharedGroupReference = requestedGroupReference || generateGroupReference();
 

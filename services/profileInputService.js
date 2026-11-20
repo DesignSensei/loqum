@@ -12,8 +12,71 @@ const regulatoryBodyLabels = {
 
 // ───────────────────── TEXT NORMALIZATION ─────────────────────
 
-function normalizeText(value) {
-  return String(value || "").trim();
+function normalizeText(value, maxLength = Infinity, multiline = false) {
+  if (value === undefined || value === null) return "";
+
+  if (typeof value !== "string") {
+    throw new Error("Profile text fields must be strings.");
+  }
+
+  // Check before trimming so malformed identifiers cannot be cleaned into validity.
+  const controls = multiline
+    ? /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/
+    : /[\u0000-\u001F\u007F]/;
+
+  if (controls.test(value)) {
+    throw new Error("Profile text contains invalid control characters.");
+  }
+
+  const normalized = value.normalize("NFC").trim();
+  if (normalized.length > maxLength) {
+    throw new Error("Profile text exceeds the permitted length.");
+  }
+  return normalized;
+}
+
+function assertProfileInput(data) {
+  if (
+    !data ||
+    typeof data !== "object" ||
+    Array.isArray(data) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(data))
+  ) {
+    throw new Error("Profile details must be an object.");
+  }
+}
+
+// Form inputs are decimal strings; API clients may supply finite numbers.
+// Never turn blanks, booleans, arrays or objects into numeric values.
+function normalizeDecimal(value, message) {
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(text)) {
+      throw new Error(message);
+    }
+    value = Number(text);
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(message);
+  }
+  return value;
+}
+
+function buildProfileLocation(latitude, longitude, message) {
+  return buildGeoPoint(
+    normalizeDecimal(latitude, message),
+    normalizeDecimal(longitude, message),
+    message
+  );
+}
+
+function normalizeExperience(value) {
+  if (value === undefined || value === null || (typeof value === "string" && value.trim() === ""))
+    return 0;
+  const message = "Years of experience must be a finite, non-negative number.";
+  const years = normalizeDecimal(value, message);
+  if (years < 0) throw new Error(message);
+  return years;
 }
 
 function normalizeLowercase(value) {
@@ -47,9 +110,9 @@ function assertRequiredFields(values, message) {
  * Format validation does not establish that
  * the applicant owns the licence.
  *
- * ProfessionalVerificationService remains
- * responsible for independent PCN verification
- * and subsequent professional approval.
+ * ProfessionalVerificationService handles document review and
+ * licence readiness after onboarding; regulator checks depend
+ * on the professional type.
  */
 
 function validateProfessionalLicenceNumber(type, licenceNumber) {
@@ -58,7 +121,14 @@ function validateProfessionalLicenceNumber(type, licenceNumber) {
   }
 }
 
-// ───────────────────── REGULATORY BODY SUPPORT ─────────────────────
+// ───────────────────── LEGACY REGULATORY BODY DISPLAY SUPPORT ─────────────────────
+
+/*
+ * Retained for existing employer profile display consumers.
+ * This returns a suggested label only. It does not determine
+ * all permits required for a particular branch or activity.
+ * Authoritative requirements belong to facility verification.
+ */
 
 function getRegulatoryBody(type, state) {
   const cleanType = normalizeLowercase(type);
@@ -136,23 +206,13 @@ function normalizeRegisteredBusinessName(value) {
     throw new Error("Verified CAC registered business name is required.");
   }
 
-  const businessName = value.trim();
+  const businessName = normalizeText(value, 150).replace(/\s+/g, " ");
 
   if (!businessName || businessName.length > 150 || /[\u0000-\u001F\u007F]/.test(businessName)) {
     throw new Error("Verified CAC registered business name is invalid.");
   }
 
   return businessName;
-}
-
-// ───────────────────── REGULATORY REGISTRATION VALIDATION ─────────────────────
-
-function normalizeRegulatoryRegistrationNumber(value) {
-  return normalizeText(value).replace(/\s+/g, " ");
-}
-
-function isValidRegulatoryRegistrationNumber(value) {
-  return /^[A-Z0-9/ -]{4,30}$/i.test(value);
 }
 
 class ProfileInputService {
@@ -181,6 +241,7 @@ class ProfileInputService {
    */
 
   static buildProfessionalProfileData(data = {}) {
+    assertProfileInput(data);
     const {
       type,
       licenceNumber,
@@ -221,13 +282,27 @@ class ProfileInputService {
       "Missing required professional or location fields."
     );
 
+    if (
+      ![
+        "pharmacist",
+        "pharmacy_technician",
+        "nurse",
+        "doctor",
+        "lab_scientist",
+        "radiographer",
+        "physiotherapist",
+      ].includes(cleanType)
+    ) {
+      throw new Error("Invalid professional type selected.");
+    }
+
     validateProfessionalLicenceNumber(cleanType, cleanLicenceNumber);
 
     if (!cleanGooglePlaceId) {
       throw new Error("Please select a valid address from the suggestions.");
     }
 
-    const location = buildGeoPoint(
+    const location = buildProfileLocation(
       latitude,
       longitude,
       "Please select a valid address from the suggestions."
@@ -248,9 +323,9 @@ class ProfileInputService {
       state: cleanState,
       lga: cleanLga,
 
-      yearsOfExperience: Number(yearsOfExperience) || 0,
+      yearsOfExperience: normalizeExperience(yearsOfExperience),
 
-      bio: normalizeText(bio),
+      bio: normalizeText(bio, 500, true),
     };
   }
 
@@ -265,8 +340,10 @@ class ProfileInputService {
    * - CAC registration number;
    * - Business contact information;
    * - Business location;
-   * - Regulatory premises information;
-   * - Representative contact details.
+   * - Contact-person details.
+   *
+   * Premises permits are submitted after onboarding against
+   * the initial or a subsequently added Branch.
    *
    * The registered legal business name must
    * already have been obtained from CAC evidence.
@@ -274,21 +351,18 @@ class ProfileInputService {
    * OnboardingService supplies that trusted value
    * after successful transactional consumption.
    *
-   * Representative names are contact declarations.
-   * They do not establish representative authority
-   * or replace separate identity checks.
-   *
-   * The builder does not grant CAC, regulatory,
-   * representative or administrative approval.
+   * Contact details are ordinary employer-submitted data.
+   * The builder does not verify the CAC registration or
+   * grant facility-permit or marketplace eligibility.
    */
 
   static buildEmployerProfileData(data = {}) {
+    assertProfileInput(data);
     const {
       type,
       businessName,
       businessEmail,
       cacRegistrationNumber,
-      regulatoryRegistrationNumber,
       state,
       lga,
       address,
@@ -305,21 +379,21 @@ class ProfileInputService {
     } = data;
 
     const cleanType = normalizeLowercase(type);
-    const cleanBusinessEmail = normalizeEmail(businessEmail);
+    const cleanBusinessEmail = normalizeEmail(normalizeText(businessEmail, 254));
 
-    const cleanState = normalizeText(state);
-    const cleanLga = normalizeText(lga);
-    const cleanAddress = normalizeText(address);
-    const cleanGooglePlaceId = normalizeText(googlePlaceId);
+    const cleanState = normalizeText(state, 100);
+    const cleanLga = normalizeText(lga, 100);
+    const cleanAddress = normalizeText(address, 250);
+    const cleanGooglePlaceId = normalizeText(googlePlaceId, 250);
 
-    const cleanBusinessPhoneCode = normalizeText(businessPhoneCode);
-    const cleanBusinessPhone = normalizeText(businessPhone);
+    const cleanBusinessPhoneCode = normalizeText(businessPhoneCode, 10);
+    const cleanBusinessPhone = normalizeText(businessPhone, 30);
 
-    const cleanContactFirstName = normalizeText(contactFirstName);
-    const cleanContactLastName = normalizeText(contactLastName);
+    const cleanContactFirstName = normalizeText(contactFirstName, 100);
+    const cleanContactLastName = normalizeText(contactLastName, 100);
     const cleanContactRole = normalizeText(contactRole);
-    const cleanContactPhoneCode = normalizeText(contactPhoneCode);
-    const cleanContactPhone = normalizeText(contactPhone);
+    const cleanContactPhoneCode = normalizeText(contactPhoneCode, 10);
+    const cleanContactPhone = normalizeText(contactPhone, 30);
 
     /*
      * Validate the ordinary applicant-provided
@@ -337,7 +411,6 @@ class ProfileInputService {
         cleanType,
         cleanBusinessEmail,
         cacRegistrationNumber,
-        regulatoryRegistrationNumber,
         cleanState,
         cleanLga,
         cleanAddress,
@@ -352,15 +425,28 @@ class ProfileInputService {
       "Missing required employer profile fields."
     );
 
+    if (
+      ![
+        "owner",
+        "director",
+        "superintendent_pharmacist",
+        "branch_manager",
+        "hr_admin",
+        "operations_manager",
+        "procurement_manager",
+        "other",
+      ].includes(cleanContactRole)
+    ) {
+      throw new Error("Invalid contact role selected.");
+    }
+
     // ───────── AUTHORITATIVE BUSINESS NAME ─────────
 
     const cleanBusinessName = normalizeRegisteredBusinessName(businessName);
 
-    // ───────── REGULATORY BODY ─────────
+    // ───────── EMPLOYER BUSINESS TYPE ─────────
 
-    const regulatoryBody = getRegulatoryBody(cleanType, cleanState);
-
-    if (!regulatoryBody) {
+    if (!["pharmacy", "clinic", "hospital", "laboratory"].includes(cleanType)) {
       throw new Error("Invalid employer type selected.");
     }
 
@@ -370,7 +456,7 @@ class ProfileInputService {
       throw new Error("Please select a valid business address from the suggestions.");
     }
 
-    const location = buildGeoPoint(
+    const location = buildProfileLocation(
       latitude,
       longitude,
       "Please select a valid business address from the suggestions."
@@ -390,18 +476,6 @@ class ProfileInputService {
       throw new Error("Enter a valid CAC number, e.g. RC1234567 or BN1234567.");
     }
 
-    // ───────── REGULATORY REGISTRATION NUMBER ─────────
-
-    const normalizedRegulatoryRegistrationNumber = normalizeRegulatoryRegistrationNumber(
-      regulatoryRegistrationNumber
-    );
-
-    if (!isValidRegulatoryRegistrationNumber(normalizedRegulatoryRegistrationNumber)) {
-      throw new Error(
-        "Enter a valid regulatory registration number exactly as shown on the certificate."
-      );
-    }
-
     return {
       type: cleanType,
 
@@ -416,9 +490,6 @@ class ProfileInputService {
 
       cacRegistrationNumber: normalizedCACRegistrationNumber,
 
-      regulatoryBody,
-      regulatoryRegistrationNumber: normalizedRegulatoryRegistrationNumber,
-
       businessPhoneCode: cleanBusinessPhoneCode,
       businessPhone: cleanBusinessPhone,
 
@@ -428,10 +499,8 @@ class ProfileInputService {
       state: cleanState,
       lga: cleanLga,
 
-      /*
-       * Contact names remain user-provided
-       * declarations until separately reviewed.
-       */
+      // Contact details are employer-supplied and do not establish
+      // regulatory or marketplace approval.
 
       contactFirstName: cleanContactFirstName,
       contactLastName: cleanContactLastName,
@@ -441,14 +510,18 @@ class ProfileInputService {
     };
   }
 
-  // ───────────────────── REGULATORY BODY HELPERS ─────────────────────
+  // ───────────────────── LEGACY REGULATOR LABEL HELPERS ─────────────────────
+
+  // Retained for existing display callers. Not a permit requirement decision.
 
   static getRegulatoryBody(type, state) {
     return getRegulatoryBody(type, state);
   }
 
   static getRegulatoryBodyLabel(regulatoryBody) {
-    return regulatoryBodyLabels[regulatoryBody] || "-";
+    return typeof regulatoryBody === "string" && Object.hasOwn(regulatoryBodyLabels, regulatoryBody)
+      ? regulatoryBodyLabels[regulatoryBody]
+      : "-";
   }
 
   static getRegulatoryBodyLabels() {

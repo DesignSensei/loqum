@@ -36,6 +36,7 @@ const DEFAULT_LIMIT = 50;
 class WithdrawalReversalScheduler {
   static intervalHandle = null;
   static isRunning = false;
+  static recoveryCursor = null;
 
   /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
 
@@ -110,10 +111,13 @@ class WithdrawalReversalScheduler {
       });
 
       const result = await WithdrawalReversalCronService.run({
+        cursor: WithdrawalReversalScheduler.recoveryCursor,
         olderThanMinutes: normalizedOlderThanMinutes,
         limit: normalizedLimit,
         completeSuccessfulTransfers: normalizedCompleteSuccessfulTransfers,
       });
+
+      WithdrawalReversalScheduler.recoveryCursor = result.nextCursor || null;
 
       logger.info("Withdrawal reversal scheduler run completed.", {
         checked: result?.checked || 0,

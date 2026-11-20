@@ -254,12 +254,21 @@ class IdentityVerificationService {
         "NINJA_NIN_NAME_TOO_LONG",
         "DOJAH_NIN_NAME_TOO_LONG",
         "DOJAH_INVALID_RESPONSE",
+        "NINJA_INVALID_RESPONSE",
       ].includes(code)
     ) {
       return this.createError({
         message: "Identity provider returned invalid registry information.",
         code: "IDENTITY_INVALID_RESPONSE",
         statusCode: 502,
+      });
+    }
+
+    if (code === "NINJA_INCOMPLETE_KYC_REQUEST") {
+      return this.createError({
+        message: "Valid names and email are required for hosted verification.",
+        code: "IDENTITY_INCOMPLETE_KYC_REQUEST",
+        statusCode: 400,
       });
     }
 
@@ -454,9 +463,7 @@ class IdentityVerificationService {
    */
 
   static normalizeMethod(method) {
-    const value = String(method || "")
-      .trim()
-      .toLowerCase();
+    const value = (typeof method === "string" ? method : "").trim().toLowerCase();
 
     if (value !== "nin") {
       throw this.createError({
@@ -470,7 +477,7 @@ class IdentityVerificationService {
   }
 
   static normalizeIdentifier(identifier) {
-    const value = String(identifier ?? "").trim();
+    const value = typeof identifier === "string" ? identifier.trim() : "";
 
     if (!/^\d{11}$/.test(value)) {
       throw this.createError({
@@ -629,7 +636,12 @@ class IdentityVerificationService {
 
     const returnedReference = lookup.requestReference ?? lookup.reference;
 
-    if (typeof returnedReference !== "string" || returnedReference !== requestReference) {
+    if (
+      typeof returnedReference !== "string" ||
+      returnedReference !== requestReference ||
+      (lookup.requestReference != null && lookup.requestReference !== requestReference) ||
+      (lookup.reference != null && lookup.reference !== requestReference)
+    ) {
       throw this.createError({
         message: "Identity provider response reference mismatch.",
         code: "IDENTITY_REFERENCE_MISMATCH",
@@ -670,7 +682,8 @@ class IdentityVerificationService {
       if (
         typeof lookup.providerReference !== "string" ||
         !lookup.providerReference.trim() ||
-        lookup.providerReference.length > 128
+        lookup.providerReference.length > 128 ||
+        /[\u0000-\u001f\u007f]/.test(lookup.providerReference)
       ) {
         throw this.createError({
           message: "Identity provider returned an invalid reference.",
@@ -680,6 +693,7 @@ class IdentityVerificationService {
       }
 
       providerReference = lookup.providerReference.trim();
+      if (providerReference === requestReference) providerReference = null;
     }
 
     // ───────── REGISTRY RECORD NOT CONFIRMED ─────────
@@ -961,11 +975,12 @@ class IdentityVerificationService {
 
     const environment = this.getEnvironment(provider);
 
+    const requestReference = this.normalizeReference(customerReference);
     let link;
 
     try {
       link = await NinjaVerificationService.createHostedIdentityLink({
-        customerReference,
+        customerReference: requestReference,
         firstName,
         lastName,
         email,
@@ -986,6 +1001,20 @@ class IdentityVerificationService {
 
     this.assertResponseEnvironment(link.environment, environment);
 
+    if (
+      link.customerReference !== requestReference ||
+      typeof link.verificationId !== "string" ||
+      !/^vs_[A-Za-z0-9_-]+$/.test(link.verificationId) ||
+      typeof link.flowId !== "string" ||
+      !/^vf_[A-Za-z0-9_-]+$/.test(link.flowId)
+    ) {
+      throw this.createError({
+        message: "Hosted verification references are inconsistent.",
+        code: "IDENTITY_INVALID_RESPONSE",
+        statusCode: 502,
+      });
+    }
+
     /*
      * Hosted verification URLs are sensitive
      * access links.
@@ -1003,7 +1032,7 @@ class IdentityVerificationService {
 
       verificationId: link.verificationId,
 
-      requestReference: link.customerReference,
+      requestReference,
 
       flowId: link.flowId,
 
@@ -1036,6 +1065,14 @@ class IdentityVerificationService {
    */
 
   static async getHostedIdentityResult({ verificationId, httpClient } = {}) {
+    const id = typeof verificationId === "string" ? verificationId.trim() : "";
+    if (!/^vs_[A-Za-z0-9_-]+$/.test(id)) {
+      throw this.createError({
+        message: "Invalid hosted verification identifier.",
+        code: "IDENTITY_INVALID_VERIFICATION_ID",
+        statusCode: 400,
+      });
+    }
     /*
      * This operation is intentionally pinned
      * to Ninja because it retrieves a Ninja
@@ -1052,7 +1089,7 @@ class IdentityVerificationService {
 
     try {
       outcome = await NinjaVerificationService.getHostedIdentityResult({
-        verificationId,
+        verificationId: id,
 
         ...(httpClient !== undefined ? { httpClient } : {}),
       });
@@ -1069,6 +1106,17 @@ class IdentityVerificationService {
     }
 
     this.assertResponseEnvironment(outcome.environment, environment);
+    if (
+      outcome.verificationId !== id ||
+      typeof outcome.sandbox !== "boolean" ||
+      outcome.sandbox !== (environment === "staging")
+    ) {
+      throw this.createError({
+        message: "Hosted verification result does not match the requested attempt.",
+        code: "IDENTITY_INVALID_RESPONSE",
+        statusCode: 502,
+      });
+    }
 
     /*
      * A successful hosted session must still
@@ -1083,7 +1131,7 @@ class IdentityVerificationService {
      * - Flow ID;
      * - Customer reference;
      * - Final verification outcome;
-     * - Required selfie/liveness evidence.
+     * - Evidence required by the configured holder-authentication policy.
      *
      * Scores are informational evidence only.
      * This coordinator does not apply biometric
@@ -1129,7 +1177,7 @@ class IdentityVerificationService {
    * - Match the original provider and environment;
    * - Validate verification and flow references;
    * - Retrieve and validate final identity evidence;
-   * - Confirm required selfie/liveness results;
+   * - Apply the configured holder-authentication policy;
    * - Update KYC records transactionally.
    *
    * A sandbox event cannot grant production
@@ -1166,8 +1214,21 @@ class IdentityVerificationService {
     }
 
     return {
-      ...event,
-
+      provider: "ninja",
+      eventId: event.eventId,
+      eventType: event.eventType,
+      verificationId: event.verificationId,
+      flowId: event.flowId,
+      customerReference: event.customerReference,
+      status: event.status,
+      outcome: event.outcome,
+      method: "nin",
+      sandbox: event.sandbox,
+      score: typeof event.score === "number" && Number.isFinite(event.score) ? event.score : null,
+      faceScore:
+        typeof event.faceScore === "number" && Number.isFinite(event.faceScore)
+          ? event.faceScore
+          : null,
       environment: event.sandbox ? "staging" : "production",
     };
   }

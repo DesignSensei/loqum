@@ -1,5 +1,13 @@
 <!-- views/account/settings.ejs -->
 
+<%
+  const accountIdentityUser = typeof user !== "undefined" ? user : null;
+  const accountLegalNameIsProtected =
+    !accountIdentityUser ||
+    accountIdentityUser.role === "professional" ||
+    accountIdentityUser.legalNameSource === "nin_registry";
+%>
+
 <input type="hidden" id="accountSettingsCsrfToken" value="<%= csrfToken %>" />
 
 <!-- Profile -->
@@ -469,26 +477,43 @@
         </div>
 
         <div class="modal-body py-10 px-lg-17">
+          <% if (accountLegalNameIsProtected) { %>
+          <div id="accountLegalNameNotice" class="alert alert-info mb-7">
+            Legal names are managed through identity verification and cannot be edited here.
+            You can still update your phone number.
+          </div>
+          <% } %>
+
           <div class="row g-6">
             <div class="col-md-6">
-              <label class="form-label required">First Name</label>
+              <label for="accountFirstName" class="form-label<%= accountLegalNameIsProtected ? '' : ' required' %>">First Name</label>
               <input
                 type="text"
+                id="accountFirstName"
                 name="firstName"
-                class="form-control"
+                class="form-control<%= accountLegalNameIsProtected ? ' bg-light' : '' %>"
                 value="<%= accountSettingsView.profileView.firstName %>"
                 autocomplete="given-name"
+                <% if (accountLegalNameIsProtected) { %>
+                readonly
+                aria-describedby="accountLegalNameNotice"
+                <% } %>
               />
             </div>
 
             <div class="col-md-6">
-              <label class="form-label required">Last Name</label>
+              <label for="accountLastName" class="form-label<%= accountLegalNameIsProtected ? '' : ' required' %>">Last Name</label>
               <input
                 type="text"
+                id="accountLastName"
                 name="lastName"
-                class="form-control"
+                class="form-control<%= accountLegalNameIsProtected ? ' bg-light' : '' %>"
                 value="<%= accountSettingsView.profileView.lastName %>"
                 autocomplete="family-name"
+                <% if (accountLegalNameIsProtected) { %>
+                readonly
+                aria-describedby="accountLegalNameNotice"
+                <% } %>
               />
             </div>
 

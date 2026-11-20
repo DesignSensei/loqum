@@ -2,8 +2,6 @@
 
 const DIRECTORY_URL = "/admin/users";
 
-const PCN_PREMISES_SEARCH_URL = "https://pcncore.azurewebsites.net/PublicSearch/SearchForPremises";
-
 const STATUS_LABELS = {
   active: "Active",
   approved: "Approved",
@@ -57,7 +55,7 @@ const STATUS_COLORS = {
 };
 
 class AdminUserViewService {
-  // ───────────────────────── FORMATTING ─────────────────────────
+  // ───────── Formatting ─────────
 
   static displayValue(value, fallback = "—") {
     if (value === undefined || value === null || value === "") {
@@ -130,7 +128,7 @@ class AdminUserViewService {
     return this.displayValue([lga, state].filter(Boolean).join(", "));
   }
 
-  // ───────────────────────── PRESENTATION HELPERS ─────────────────────────
+  // ───────── Presentation helpers ─────────
 
   static badge(status, label) {
     const normalized = String(status || "not_available").toLowerCase();
@@ -198,7 +196,7 @@ class AdminUserViewService {
         role: "employer",
         singular: "Employer",
         plural: "Employers",
-        description: "Manage employer accounts, business verification, and platform approval.",
+        description: "Manage employer accounts and CAC business verification.",
         searchPlaceholder: "Search name, business, email, or registration number",
       };
     }
@@ -213,7 +211,7 @@ class AdminUserViewService {
     };
   }
 
-  // ───────────────────────── NAVIGATION ─────────────────────────
+  // ───────── Navigation ─────────
 
   static buildDirectoryUrl(role, filters = {}) {
     const params = new URLSearchParams();
@@ -260,7 +258,7 @@ class AdminUserViewService {
     ];
   }
 
-  // ───────────────────────── DIRECTORY SUMMARY ─────────────────────────
+  // ───────── Directory summary ─────────
 
   static buildSummaryCards(role, summary, status) {
     const metadata = this.getRoleMetadata(role);
@@ -286,7 +284,8 @@ class AdminUserViewService {
         key: "verified",
         label: "Verified",
         value: summary.verified,
-        description: "Core verification complete",
+        description:
+          role === "employer" ? "CAC identity verified" : "Identity and licence verified",
         filter: "verified",
         color: "success",
       },
@@ -310,7 +309,7 @@ class AdminUserViewService {
     }));
   }
 
-  // ───────────────────────── DIRECTORY FILTERS ─────────────────────────
+  // ───────── Directory filters ─────────
 
   static buildSelectOptions(options, selectedValue) {
     return options.map((option) => ({
@@ -419,7 +418,7 @@ class AdminUserViewService {
     };
   }
 
-  // ───────────────────────── DIRECTORY TABLE ─────────────────────────
+  // ───────── Directory table ─────────
 
   static buildVerificationComponents(role, profile) {
     if (!profile) {
@@ -431,10 +430,6 @@ class AdminUserViewService {
         {
           label: "CAC",
           badge: this.badge(profile.cacVerificationStatus),
-        },
-        {
-          label: "Regulatory",
-          badge: this.badge(profile.regulatoryVerificationStatus),
         },
       ];
     }
@@ -485,7 +480,7 @@ class AdminUserViewService {
         requiresAttention: Boolean(user.requiresAttention),
       },
 
-      approval: this.badge(user.approvalStatus),
+      ...(role === "professional" ? { approval: this.badge(user.approvalStatus) } : {}),
 
       account: {
         badge: this.badge(user.accountStatus),
@@ -518,7 +513,7 @@ class AdminUserViewService {
         role === "employer" ? "Employer / Business" : "Professional",
         role === "employer" ? "Facility Type" : "Profession",
         "Verification",
-        "Approval",
+        ...(role === "professional" ? ["Approval"] : []),
         "Account",
         "Onboarding",
         "Joined",
@@ -536,7 +531,7 @@ class AdminUserViewService {
     };
   }
 
-  // ───────────────────────── PAGINATION ─────────────────────────
+  // ───────── Pagination ─────────
 
   static buildPagination(role, filters, pagination) {
     const { page, limit, total, totalPages } = pagination;
@@ -582,7 +577,7 @@ class AdminUserViewService {
     };
   }
 
-  // ───────────────────────── INDEX VIEW MODEL ─────────────────────────
+  // ───────── Index view model ─────────
 
   static buildDirectoryView(queryResult) {
     const { role, users, summary, filters, pagination } = queryResult;
@@ -612,8 +607,8 @@ class AdminUserViewService {
 
       verificationGuidance:
         role === "employer"
-          ? "Employer verification covers CAC and facility regulatory registration. Final platform approval is a separate decision."
-          : "Professional verification covers identity and professional licensing. BVN/payout KYC and final platform approval are assessed separately.",
+          ? "CAC verifies business identity. Each branch must separately satisfy its operating permit requirements."
+          : "Professional verification covers identity and licensing. Payout KYC and final approval are separate.",
 
       refreshUrl: this.buildDirectoryUrl(role, {
         ...filters,
@@ -622,7 +617,7 @@ class AdminUserViewService {
     };
   }
 
-  // ───────────────────────── USER OVERVIEW ─────────────────────────
+  // ───────── User overview ─────────
 
   static buildAccountOverview(user) {
     return this.section(
@@ -688,7 +683,7 @@ class AdminUserViewService {
     );
   }
 
-  // ───────────────────────── EMPLOYER VERIFICATION ─────────────────────────
+  // ───────── Employer verification ─────────
 
   static buildCACSection(profile) {
     const baseUrl = `/admin/employers/${encodeURIComponent(String(profile._id))}` + "/verification";
@@ -716,8 +711,8 @@ class AdminUserViewService {
         notice: {
           color: "info",
           text:
-            "CAC checks use the configured server-side environment. " +
-            "Staging results cannot grant production verification.",
+            "Only production CAC evidence verifies a business. " +
+            "Branch operating permits are reviewed separately.",
         },
 
         action: {
@@ -732,126 +727,7 @@ class AdminUserViewService {
     );
   }
 
-  static buildPCNReviewForm(profile) {
-    const profileId = encodeURIComponent(String(profile._id));
-
-    return {
-      id: "adminUserPCNReviewForm",
-
-      method: "POST",
-
-      url: `/admin/employers/${profileId}` + "/verification/pcn/review",
-
-      decision: {
-        id: "adminUserPCNDecision",
-        name: "decision",
-        label: "Review Decision",
-
-        options: [
-          {
-            value: "",
-            label: "Select Decision",
-          },
-          {
-            value: "verified",
-            label: "Verified",
-          },
-          {
-            value: "needs_review",
-            label: "Needs Review",
-          },
-          {
-            value: "rejected",
-            label: "Rejected",
-          },
-        ],
-      },
-
-      registeredName: {
-        id: "adminUserPCNRegisteredName",
-        name: "nameOnRecord",
-        label: "Name on PCN Record",
-        value: profile.regulatoryNameOnRecord || "",
-        maxlength: 150,
-        placeholder: "Enter registered premises name",
-        helpText: "Required when marking the record as verified.",
-      },
-
-      note: {
-        id: "adminUserPCNReviewNote",
-        name: "note",
-        label: "Review Note",
-        minLength: 10,
-        maxLength: 500,
-        placeholder: "Describe the records checked and the reason for your decision.",
-        helpText: "Minimum 10 characters. Maximum 500 characters.",
-      },
-
-      submit: {
-        id: "adminUserPCNSubmit",
-        label: "Save PCN Review",
-        loadingLabel: "Saving...",
-      },
-    };
-  }
-
-  static buildRegulatorySection(profile) {
-    const isPCN = profile.regulatoryBody === "pcn";
-
-    const bodyLabel = isPCN
-      ? "Pharmacists Council of Nigeria (PCN)"
-      : this.formatLabel(profile.regulatoryBody);
-
-    return this.section(
-      "Regulatory Verification",
-      [
-        this.field("Regulatory Body", bodyLabel),
-        this.field("Registration Number", profile.regulatoryRegistrationNumber),
-        this.field("Registered Name", profile.regulatoryNameOnRecord),
-        this.field("Verification Method", this.formatLabel(profile.regulatoryVerificationMethod)),
-        this.field("Verification Source", this.formatLabel(profile.regulatoryVerificationSource)),
-        this.field("Verified At", profile.regulatoryVerifiedAt, { dateTime: true }),
-        this.field("Last Checked", profile.regulatoryLastCheckedAt, { dateTime: true }),
-      ],
-      {
-        key: "regulatory",
-
-        badge: this.badge(profile.regulatoryVerificationStatus),
-
-        notes: this.withoutEmptyNotes([
-          this.note("Regulatory Review Note", profile.regulatoryVerificationNote),
-          this.note("Rejection Reason", profile.regulatoryRejectionReason),
-        ]),
-
-        externalLink: isPCN
-          ? {
-              label: "Open PCN Premises Search",
-              url: PCN_PREMISES_SEARCH_URL,
-              target: "_blank",
-              rel: "noopener noreferrer",
-            }
-          : null,
-
-        reviewForm: isPCN ? this.buildPCNReviewForm(profile) : null,
-
-        notice: isPCN
-          ? {
-              color: "info",
-              text:
-                "Check the official PCN premises register before " +
-                "recording a manual verification decision.",
-            }
-          : {
-              color: "info",
-              text:
-                "This facility uses a different regulatory authority. " +
-                "Its administrative verification workflow will be connected separately.",
-            },
-      }
-    );
-  }
-
-  // ───────────────────────── PROFESSIONAL VERIFICATION ─────────────────────────
+  // ───────── Professional verification ─────────
 
   static buildIdentitySection(profile) {
     return this.section(
@@ -939,16 +815,12 @@ class AdminUserViewService {
     );
   }
 
-  // ───────────────────────── APPROVAL ─────────────────────────
+  // ───────── Approval ─────────
 
-  static buildApprovalSection(role, profile, verification) {
-    const isEmployer = role === "employer";
-
-    const approvedAt = isEmployer ? profile.approvedToPostShiftsAt : profile.approvedForShiftsAt;
-
-    const approvalNote = isEmployer ? profile.employerApprovalNote : profile.approvalNote;
-
-    const rejectionReason = isEmployer ? profile.employerRejectionReason : profile.rejectionReason;
+  static buildProfessionalApprovalSection(profile, verification) {
+    const approvedAt = profile.approvedForShiftsAt;
+    const approvalNote = profile.approvalNote;
+    const rejectionReason = profile.rejectionReason;
 
     return this.section(
       "Platform Approval",
@@ -976,7 +848,7 @@ class AdminUserViewService {
     );
   }
 
-  // ───────────────────────── DETAILS VIEW MODEL ─────────────────────────
+  // ───────── Details view model ─────────
 
   static buildUserDetailsView(queryResult) {
     const { user, profile, verification } = queryResult;
@@ -998,21 +870,17 @@ class AdminUserViewService {
       if (role === "employer") {
         overviewSections.push(this.buildEmployerOverview(profile));
 
-        verificationSections.push(
-          this.buildCACSection(profile),
-          this.buildRegulatorySection(profile)
-        );
+        verificationSections.push(this.buildCACSection(profile));
       } else {
         overviewSections.push(this.buildProfessionalOverview(profile));
 
         verificationSections.push(
           this.buildIdentitySection(profile),
           this.buildLicenceSection(profile, verification),
-          this.buildBVNSection(profile)
+          this.buildBVNSection(profile),
+          this.buildProfessionalApprovalSection(profile, verification)
         );
       }
-
-      verificationSections.push(this.buildApprovalSection(role, profile, verification));
     }
 
     const profileAccountNote = this.note(
@@ -1055,11 +923,15 @@ class AdminUserViewService {
           label: "Verification",
           badge: this.badge(verification.status),
         },
-        {
-          key: "approval",
-          label: "Platform Approval",
-          badge: this.badge(verification.approvalStatus),
-        },
+        ...(role === "professional"
+          ? [
+              {
+                key: "approval",
+                label: "Platform Approval",
+                badge: this.badge(verification.approvalStatus),
+              },
+            ]
+          : []),
         {
           key: "account",
           label: "Account Status",
@@ -1098,7 +970,10 @@ class AdminUserViewService {
           }
         : null,
 
-      verificationGuidance: "Verification and final platform approval are separate decisions.",
+      verificationGuidance:
+        role === "employer"
+          ? "CAC confirms business identity. Branch operating permits determine facility readiness."
+          : "Identity and licence verification are separate from professional approval.",
 
       professionalReadOnlyNotice:
         role === "professional" && hasProfile

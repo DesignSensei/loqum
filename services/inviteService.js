@@ -53,6 +53,7 @@ class InviteService {
 
   static getInviteUrl(token) {
     const clientUrl = String(process.env.CLIENT_URL || "http://localhost:3000").replace(/\/+$/, "");
+
     const normalizedToken = InviteService.normalizeToken(token);
 
     return `${clientUrl}/signup?inviteToken=${encodeURIComponent(normalizedToken)}`;
@@ -92,9 +93,8 @@ class InviteService {
 
   static buildMemberPayload({ userId, businessId, branchId, role }) {
     /*
-     * The admin role here belongs to EmployerMember.
-     * It is business-wide employer administration,
-     * never the platform-level User.role "admin".
+     * EmployerMember.role "admin" is business-wide
+     * administration, not platform User.role "admin".
      */
 
     if (InviteService.isAdminRole(role)) {
@@ -119,27 +119,7 @@ class InviteService {
     };
   }
 
-  /* ---------- EMPLOYER-ONLY INVITATION ELIGIBILITY ---------- */
-
-  /*
-   * Employer team invitations are exclusively
-   * for accounts with User.role "employer".
-   *
-   * Professionals and platform administrators
-   * cannot accept employer team invitations.
-   *
-   * Existing users must also belong to the
-   * same employer business, if already linked.
-   *
-   * An invitation must not reactivate a
-   * restricted, suspended, deactivated or
-   * banned account.
-   *
-   * Historical memberships are not current
-   * memberships and must remain available
-   * for audit without blocking legitimate
-   * subsequent employer team membership.
-   */
+  // ───────────────────── EMPLOYER INVITATION ELIGIBILITY ─────────────────────
 
   static async validateExistingUserForInvite({ user, businessId, session = null }) {
     if (!user) return null;
@@ -153,16 +133,8 @@ class InviteService {
     }
 
     /*
-     * Only a current EmployerMember record
-     * represents an existing team membership.
-     *
-     * Removed historical memberships have
-     * isCurrent: false and must not be returned.
-     *
-     * The current membership is checked before
-     * considering the User.employerProfile link
-     * because that link may still point to a
-     * previously removed employer membership.
+     * Only current membership counts as an
+     * existing employer team membership.
      */
 
     const memberQuery = EmployerMember.findOne({
@@ -181,15 +153,8 @@ class InviteService {
     }
 
     /*
-     * A primary business owner is different
-     * from an invited employer team member.
-     *
-     * Removing an EmployerMember record does
-     * not remove EmployerProfile.user ownership.
-     *
-     * A user who owns another employer business
-     * cannot use a team invitation to silently
-     * transfer or replace that ownership.
+     * Business ownership is independent of
+     * employer team membership.
      */
 
     const ownedBusinessQuery = EmployerProfile.findOne({
@@ -209,35 +174,11 @@ class InviteService {
     }
 
     /*
-     * User.employerProfile may retain the ID
-     * of a former employer after a team member
-     * has been removed.
+     * A previous employerProfile reference may
+     * remain after documented membership removal.
      *
-     * A stale link must not permanently prevent
-     * the user from joining a different business.
-     *
-     * However, a mismatched employerProfile
-     * reference must not be ignored without
-     * evidence that the previous membership
-     * was genuinely removed.
-     *
-     * Allow the new invitation only when:
-     *
-     * - The user has no current membership
-     *   in another business;
-     *
-     * - The previous business membership
-     *   exists as a removed historical record;
-     *
-     * - The user is not the primary owner
-     *   of another business.
-     *
-     * Successful invitation acceptance updates
-     * User.employerProfile to the new business
-     * within the existing transaction.
-     *
-     * The previous EmployerMember document
-     * remains untouched for audit purposes.
+     * Permit a new membership only when the
+     * previous membership is confirmed removed.
      */
 
     if (user.employerProfile && !InviteService.idsMatch(user.employerProfile, businessId)) {
@@ -285,10 +226,78 @@ class InviteService {
     });
 
     member.branches = branchesWithoutCurrentBranch;
+
     member.role = InviteService.deriveMemberRoleFromBranches(branchesWithoutCurrentBranch);
 
     return member;
   }
+
+  static assertInviteRecipientAssignment({ member, role, branchId }) {
+    if (!member) return;
+
+    if (member.role === "admin") {
+      throw new Error("This user already has business-wide access.");
+    }
+
+    if (
+      !InviteService.isAdminRole(role) &&
+      InviteService.userIsAssignedToBranch(member, branchId)
+    ) {
+      throw new Error("This user is already assigned to this branch.");
+    }
+  }
+
+  // ───────────────────── CONDITIONAL INVITE ROTATION ─────────────────────
+
+  static async rotateInviteIfUnchanged({ invite, businessId, updates, unset = {} }) {
+    const replacement = await Invite.findOneAndUpdate(
+      {
+        _id: invite._id,
+        business: businessId,
+        token: invite.token,
+        status: { $in: ["pending", "expired"] },
+      },
+      {
+        $set: {
+          ...updates,
+          status: "pending",
+          expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
+          token: crypto.randomBytes(32).toString("hex"),
+        },
+        $unset: {
+          acceptedAt: "",
+          revokedAt: "",
+          ...unset,
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
+
+    if (!replacement) {
+      throw new Error("This invitation has changed or is no longer editable. Please reload.");
+    }
+
+    return replacement;
+  }
+
+  // ───────────────────── BRANCH MANAGER REPLACEMENT ─────────────────────
+
+  /*
+   * IMPORTANT:
+   *
+   * TeamMemberService uses a write to the
+   * relevant Branch document to coordinate
+   * competing manager assignments.
+   *
+   * Invitation acceptance must use that
+   * same coordination mechanism.
+   *
+   * Both operations must execute inside a
+   * MongoDB transaction.
+   */
 
   static async demoteExistingBranchManagers({
     businessId,
@@ -296,52 +305,103 @@ class InviteService {
     newManagerUserId,
     session = null,
   }) {
-    if (!branchId || !newManagerUserId) return;
+    if (!branchId || !newManagerUserId) {
+      return;
+    }
 
-    const query = EmployerMember.find({
+    if (!session) {
+      throw new Error("Branch manager reassignment requires a MongoDB transaction.");
+    }
+
+    /*
+     * Write to the shared Branch document before
+     * inspecting or modifying existing managers.
+     *
+     * Concurrent transactions assigning managers
+     * to this branch must coordinate through
+     * this same database document.
+     *
+     * timestamps: false prevents Mongoose from
+     * adding another updatedAt update operator.
+     *
+     * This matches the branch coordination used
+     * by TeamMemberService.
+     */
+
+    const lockedBranch = await Branch.findOneAndUpdate(
+      {
+        _id: branchId,
+        business: businessId,
+      },
+      {
+        $currentDate: {
+          updatedAt: true,
+        },
+      },
+      {
+        session,
+        new: true,
+        timestamps: false,
+      }
+    ).select("_id");
+
+    if (!lockedBranch) {
+      throw new Error("Selected branch no longer belongs to this business.");
+    }
+
+    /*
+     * Removed historical memberships must never
+     * be changed during manager replacement.
+     *
+     * Restricted and suspended current managers
+     * are included so their outdated manager
+     * assignments cannot return if reactivated.
+     */
+
+    const existingManagers = await EmployerMember.find({
       business: businessId,
       user: { $ne: newManagerUserId },
+      isCurrent: true,
+      accountStatus: { $ne: "removed" },
       branches: {
         $elemMatch: {
           branch: branchId,
           role: "branch_manager",
         },
       },
-    });
-
-    if (session) {
-      query.session(session);
-    }
-
-    const existingManagers = await query;
+    }).session(session);
 
     /*
-     * Save sequentially so that all writes can
-     * safely share the same MongoDB transaction
-     * session when invitation acceptance
-     * promotes a new branch manager.
+     * Process sequentially because all writes
+     * share the same transaction session.
      */
 
     for (const member of existingManagers) {
-      const updatedBranches = InviteService.getMemberBranches(member).map((assignment) => {
+      let changed = false;
+
+      for (const assignment of InviteService.getMemberBranches(member)) {
         if (
           InviteService.idsMatch(assignment.branch, branchId) &&
           assignment.role === "branch_manager"
         ) {
           assignment.role = "branch_staff";
+          changed = true;
         }
+      }
 
-        return assignment;
-      });
+      if (!changed) {
+        continue;
+      }
 
-      member.branches = updatedBranches;
-      member.role = InviteService.deriveMemberRoleFromBranches(updatedBranches);
+      member.role = InviteService.deriveMemberRoleFromBranches(
+        InviteService.getMemberBranches(member)
+      );
 
-      await member.save(session ? { session } : {});
+      await member.save({ session });
     }
   }
 
-  //─────────────────────────────── SEND / RESEND INVITE ───────────────────────────────//
+  // ───────────────────── SEND / RESEND INVITE ─────────────────────
 
   static async sendInvite({ businessId, branchId, role, email, invitedBy }) {
     InviteService.validateRole(role);
@@ -375,37 +435,20 @@ class InviteService {
       }
     }
 
-    /*
-     * Check the recipient's existing account.
-     *
-     * A pharmacist or platform administrator
-     * must never receive an employer team invite
-     * through an existing Loqum account.
-     */
-
-    const existingUser = await User.findOne({ email: normalizedEmail });
+    const existingUser = await User.findOne({
+      email: normalizedEmail,
+    });
 
     const existingMember = await InviteService.validateExistingUserForInvite({
       user: existingUser,
       businessId,
     });
 
-    if (existingMember) {
-      if (existingMember.role === "admin") {
-        throw new Error("This user already has business-wide access.");
-      }
-
-      if (!InviteService.isAdminRole(role)) {
-        const alreadyAssignedToBranch = InviteService.userIsAssignedToBranch(
-          existingMember,
-          branchId
-        );
-
-        if (alreadyAssignedToBranch) {
-          throw new Error("This user is already assigned to this branch.");
-        }
-      }
-    }
+    InviteService.assertInviteRecipientAssignment({
+      member: existingMember,
+      role,
+      branchId,
+    });
 
     const inviteLabel = InviteService.isAdminRole(role)
       ? business.businessName || "your business"
@@ -418,35 +461,27 @@ class InviteService {
     });
 
     if (existingPendingBusinessInvite) {
-      existingPendingBusinessInvite.expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
-      existingPendingBusinessInvite.invitedBy = invitedBy;
-      existingPendingBusinessInvite.role = role;
+      const updatedInvite = await InviteService.rotateInviteIfUnchanged({
+        invite: existingPendingBusinessInvite,
+        businessId,
+        updates: {
+          invitedBy,
+          role,
+          ...(InviteService.isAdminRole(role) ? {} : { branch: branch._id }),
+        },
+        unset: InviteService.isAdminRole(role) ? { branch: "" } : {},
+      });
 
-      /*
-       * Rotate the token when resending.
-       *
-       * Previously issued links must not
-       * remain usable after a resend.
-       */
-
-      existingPendingBusinessInvite.token = crypto.randomBytes(32).toString("hex");
-
-      if (InviteService.isAdminRole(role)) {
-        existingPendingBusinessInvite.branch = undefined;
-      } else {
-        existingPendingBusinessInvite.branch = branch._id;
-      }
-
-      await existingPendingBusinessInvite.save();
-
-      const inviteUrl = InviteService.getInviteUrl(existingPendingBusinessInvite.token);
-
-      await EmailService.sendInvite(normalizedEmail, inviteUrl, inviteLabel);
+      await EmailService.sendInvite(
+        normalizedEmail,
+        InviteService.getInviteUrl(updatedInvite.token),
+        inviteLabel
+      );
 
       logger.info(`Invite resent to ${normalizedEmail} for ${inviteLabel}`);
 
       return {
-        invite: existingPendingBusinessInvite,
+        invite: updatedInvite,
         resent: true,
       };
     }
@@ -464,11 +499,21 @@ class InviteService {
 
     const invite = new Invite(invitePayload);
 
-    await invite.save();
+    try {
+      await invite.save();
+    } catch (error) {
+      if (error?.code === 11000) {
+        throw new Error("This email already has an invitation for this business. Please retry.");
+      }
 
-    const inviteUrl = InviteService.getInviteUrl(invite.token);
+      throw error;
+    }
 
-    await EmailService.sendInvite(normalizedEmail, inviteUrl, inviteLabel);
+    await EmailService.sendInvite(
+      normalizedEmail,
+      InviteService.getInviteUrl(invite.token),
+      inviteLabel
+    );
 
     logger.info(`Invite sent to ${normalizedEmail} for ${inviteLabel}`);
 
@@ -478,7 +523,7 @@ class InviteService {
     };
   }
 
-  //─────────────────────────────── VALIDATE INVITE TOKEN ───────────────────────────────//
+  // ───────────────────── VALIDATE INVITE TOKEN ─────────────────────
 
   static async validateInviteToken(token) {
     const normalizedToken = InviteService.normalizeToken(token);
@@ -487,7 +532,9 @@ class InviteService {
       throw new Error("Invite token is required.");
     }
 
-    const invite = await Invite.findOne({ token: normalizedToken })
+    const invite = await Invite.findOne({
+      token: normalizedToken,
+    })
       .populate("business")
       .populate("branch");
 
@@ -503,10 +550,23 @@ class InviteService {
       throw new Error("This invite has been revoked.");
     }
 
-    if (invite.status === "expired" || (invite.expiresAt && invite.expiresAt < new Date())) {
-      if (invite.status !== "expired") {
-        invite.status = "expired";
-        await invite.save();
+    const now = new Date();
+
+    if (invite.status === "expired" || !invite.expiresAt || invite.expiresAt <= now) {
+      if (invite.status === "pending" && invite.expiresAt && invite.expiresAt <= now) {
+        await Invite.updateOne(
+          {
+            _id: invite._id,
+            token: normalizedToken,
+            status: "pending",
+            expiresAt: { $lte: now },
+          },
+          {
+            $set: {
+              status: "expired",
+            },
+          }
+        );
       }
 
       throw new Error("This invite link has expired. Please request a new one.");
@@ -517,14 +577,6 @@ class InviteService {
     }
 
     InviteService.validateRole(invite.role);
-
-    /*
-     * Every invitation must belong to an
-     * existing employer business.
-     *
-     * Branch-scoped invitations must reference
-     * a branch belonging to that same business.
-     */
 
     if (!invite.business) {
       throw new Error("The business associated with this invite no longer exists.");
@@ -549,25 +601,41 @@ class InviteService {
     return invite;
   }
 
-  static async markInviteAccepted(invite) {
-    invite.status = "accepted";
-    invite.acceptedAt = new Date();
+  // ───────────────────── INVITATION STATE CHANGES ─────────────────────
 
-    await invite.save();
-
-    return invite;
+  static async markInviteAccepted() {
+    throw new Error(
+      "Use acceptAuthenticatedInvite so membership and invitation acceptance happen atomically."
+    );
   }
 
   static async markInviteRevoked(invite) {
-    invite.status = "revoked";
-    invite.revokedAt = new Date();
+    const updated = await Invite.findOneAndUpdate(
+      {
+        _id: invite._id,
+        token: invite.token,
+        status: { $in: ["pending", "expired"] },
+      },
+      {
+        $set: {
+          status: "revoked",
+          revokedAt: new Date(),
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
 
-    await invite.save();
+    if (!updated) {
+      throw new Error("This invitation has already changed or is no longer revocable.");
+    }
 
-    return invite;
+    return updated;
   }
 
-  //─────────────────────────────── SIGNUP INVITE CONTEXT ───────────────────────────────//
+  // ───────────────────── SIGNUP INVITE CONTEXT ─────────────────────
 
   static async getSignupInviteContext(inviteToken) {
     const token = InviteService.normalizeToken(inviteToken);
@@ -592,6 +660,7 @@ class InviteService {
 
       submitLabel: token ? "Accept Invite" : "Continue",
       loginUrl: token ? `/login?inviteToken=${encodeURIComponent(token)}` : "/login",
+
       shouldDisableSubmit: false,
 
       showGoogleSignup: !token,
@@ -609,15 +678,6 @@ class InviteService {
         email: invite.email,
       });
 
-      /*
-       * Reject invitations addressed to an
-       * existing professional or platform admin.
-       *
-       * Do not direct an ineligible account to
-       * log in merely to discover the restriction
-       * at the final acceptance step.
-       */
-
       if (existingUser) {
         await InviteService.validateExistingUserForInvite({
           user: existingUser,
@@ -626,6 +686,7 @@ class InviteService {
       }
 
       const existingInviteUser = Boolean(existingUser);
+
       const inviteBusinessName = InviteService.getBusinessName(invite.business);
 
       return {
@@ -639,6 +700,7 @@ class InviteService {
         inviteRoleLabel: InviteService.formatInviteRole(invite.role),
 
         pageTitle: existingInviteUser ? "Log In to Accept Invite" : "Accept Team Invite",
+
         subtitle: existingInviteUser
           ? "This email already has a Loqum account. Please log in to accept the invite."
           : `Create your account to join ${inviteBusinessName}.`,
@@ -646,6 +708,7 @@ class InviteService {
         shouldDisableSubmit: existingInviteUser,
 
         showGoogleSignup: !existingInviteUser,
+
         googleSignupUrl: `/auth/google?intent=signup&inviteToken=${encodeURIComponent(token)}`,
       };
     } catch (error) {
@@ -659,7 +722,7 @@ class InviteService {
     }
   }
 
-  //─────────────────────────────── LOGIN INVITE CONTEXT ───────────────────────────────//
+  // ───────────────────── LOGIN INVITE CONTEXT ─────────────────────
 
   static async getLoginInviteContext(inviteToken) {
     const token = InviteService.normalizeToken(inviteToken);
@@ -677,12 +740,15 @@ class InviteService {
       inviteRoleLabel: "",
 
       pageTitle: token ? "Log In to Accept Invite" : "Log In",
+
       subtitle: token ? "Log in to accept your team invite." : "Log in to continue.",
 
       submitLabel: token ? "Log In & Accept Invite" : "Log In",
+
       signupUrl: token ? `/signup?inviteToken=${encodeURIComponent(token)}` : "/signup",
 
       showGoogleLogin: true,
+
       googleLoginUrl: token
         ? `/auth/google?intent=login&inviteToken=${encodeURIComponent(token)}`
         : "/auth/google",
@@ -696,6 +762,7 @@ class InviteService {
 
     try {
       const invite = await InviteService.validateInviteToken(token);
+
       const inviteBusinessName = InviteService.getBusinessName(invite.business);
 
       const existingUser = await User.findOne({
@@ -733,7 +800,7 @@ class InviteService {
     }
   }
 
-  //─────────────────────────────── ACCEPT INVITE FROM SIGNUP ───────────────────────────────//
+  // ───────────────────── ACCEPT INVITE FROM SIGNUP ─────────────────────
 
   static async acceptSignupInvite({ token, firstName, lastName, password, confirmPassword }) {
     const invite = await InviteService.validateInviteToken(token);
@@ -768,25 +835,20 @@ class InviteService {
     const cleanFirstName = firstName.trim();
     const cleanLastName = lastName.trim();
 
-    /*
-     * Employer team invitations create only
-     * employer User accounts.
-     *
-     * These names identify the team member.
-     * They are not NIN-derived professional
-     * names or CAC-registered business names.
-     */
-
     const user = new User({
       firstName: cleanFirstName,
       lastName: cleanLastName,
       displayName: `${cleanFirstName} ${cleanLastName}`,
+
       legalNameSource: "unverified",
       legalNameEvidence: null,
+
       email: InviteService.normalizeEmail(invite.email),
       password,
+
       role: "employer",
       authProvider: "local",
+
       isVerified: false,
       isOnboarded: false,
       twoFactorEnabled: true,
@@ -799,6 +861,7 @@ class InviteService {
     return {
       user,
       invite,
+
       pendingAuth: {
         userId: user._id,
         inviteToken: InviteService.normalizeToken(token),
@@ -807,7 +870,7 @@ class InviteService {
     };
   }
 
-  //─────────────────────────────── ACCEPT INVITE AFTER LOGIN / OTP ───────────────────────────────//
+  // ───────────────────── ACCEPT INVITE AFTER LOGIN / OTP ─────────────────────
 
   static async acceptLoginInvite({ token, userId }) {
     return InviteService.acceptAuthenticatedInvite({
@@ -824,23 +887,17 @@ class InviteService {
     }
 
     const businessId = InviteService.getObjectId(invite.business);
+
     const branchId = invite.branch ? InviteService.getObjectId(invite.branch) : null;
 
     /*
-     * Accepting an invitation updates:
+     * The following operations must commit together:
      *
-     * - The employer team membership;
-     * - Any existing branch manager assignments;
-     * - The invited user's employer profile;
-     * - The invitation acceptance status.
-     *
-     * These updates must succeed or fail together.
-     *
-     * A conditional update claims the pending
-     * invitation within the same transaction,
-     * preventing successful reuse of a token.
-     *
-     * This requires MongoDB transaction support.
+     * - Claim the pending invitation;
+     * - Validate the invited user;
+     * - Create or update current team membership;
+     * - Replace existing branch managers if needed;
+     * - Update the user's employer profile link.
      */
 
     const session = await mongoose.startSession();
@@ -898,9 +955,8 @@ class InviteService {
         }
 
         /*
-         * Recheck the branch assignment inside
-         * the transaction before changing team
-         * membership records.
+         * Validate branch ownership again inside
+         * the invitation acceptance transaction.
          */
 
         if (InviteService.requiresBranch(invite.role)) {
@@ -913,17 +969,6 @@ class InviteService {
             throw new Error("This invite has an invalid business branch assignment.");
           }
         }
-
-        /*
-         * Membership validation now ignores
-         * removed historical EmployerMember
-         * records and permits documented
-         * previous-business removal.
-         *
-         * The current membership and any stale
-         * User.employerProfile reference are
-         * checked within this transaction.
-         */
 
         const existingMember = await InviteService.validateExistingUserForInvite({
           user,
@@ -974,6 +1019,12 @@ class InviteService {
           await member.save({ session });
         }
 
+        /*
+         * Branch-manager invitations now use
+         * the same branch-level transactional
+         * coordination as TeamMemberService.
+         */
+
         if (invite.role === "branch_manager") {
           await InviteService.demoteExistingBranchManagers({
             businessId,
@@ -984,19 +1035,11 @@ class InviteService {
         }
 
         /*
-         * The platform-level User.role remains
-         * "employer" regardless of the invited
-         * business team role.
+         * Business-team admin does not change
+         * the platform-level User.role.
          *
-         * An EmployerMember admin invitation
-         * never creates a platform administrator.
-         *
-         * Updating employerProfile here replaces
-         * a stale link to a previous business
-         * only after the membership checks pass.
-         *
-         * The historical membership itself
-         * remains unchanged.
+         * Previous removed memberships remain
+         * intact as audit records.
          */
 
         user.role = "employer";
@@ -1004,12 +1047,6 @@ class InviteService {
         user.isOnboarded = true;
 
         await user.save({ session });
-
-        /*
-         * Keep the populated invitation returned
-         * by validateInviteToken() for callers
-         * that use the linked business or branch.
-         */
 
         invite.status = acceptedInvite.status;
         invite.acceptedAt = acceptedInvite.acceptedAt;
@@ -1030,7 +1067,7 @@ class InviteService {
     return acceptedResult;
   }
 
-  //─────────────────────────────── MANAGE EXISTING INVITES ───────────────────────────────//
+  // ───────────────────── MANAGE EXISTING INVITES ─────────────────────
 
   static async getInviteForBusiness({ inviteId, businessId }) {
     const invite = await Invite.findOne({
@@ -1045,6 +1082,8 @@ class InviteService {
     return invite;
   }
 
+  // ───────────────────── RESEND EXISTING INVITE ─────────────────────
+
   static async resendInvite({ inviteId, businessId }) {
     const invite = await InviteService.getInviteForBusiness({
       inviteId,
@@ -1058,6 +1097,8 @@ class InviteService {
     if (invite.status === "revoked") {
       throw new Error("Deleted invites cannot be resent. Please create a new invite.");
     }
+
+    InviteService.validateRole(invite.role);
 
     const business = await EmployerProfile.findById(businessId).select("businessName");
 
@@ -1078,50 +1119,56 @@ class InviteService {
       }
     }
 
-    /*
-     * The recipient may have created or changed
-     * a Loqum account since the invitation was
-     * originally issued.
-     *
-     * Recheck employer-only eligibility before
-     * sending a replacement invitation link.
-     */
+    const normalizedEmail = InviteService.normalizeEmail(invite.email);
 
     const existingUser = await User.findOne({
-      email: InviteService.normalizeEmail(invite.email),
+      email: normalizedEmail,
     });
 
-    await InviteService.validateExistingUserForInvite({
+    const member = await InviteService.validateExistingUserForInvite({
       user: existingUser,
       businessId,
     });
 
-    invite.status = "pending";
-    invite.expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
-    invite.revokedAt = undefined;
-    invite.acceptedAt = undefined;
+    InviteService.assertInviteRecipientAssignment({
+      member,
+      role: invite.role,
+      branchId: invite.branch,
+    });
 
-    /*
-     * Issue a new token when resending so the
-     * previous invitation link is invalidated.
-     */
+    const duplicatePendingInvite = await Invite.findOne({
+      _id: { $ne: invite._id },
+      email: normalizedEmail,
+      business: businessId,
+      status: "pending",
+    });
 
-    invite.token = crypto.randomBytes(32).toString("hex");
+    if (duplicatePendingInvite) {
+      throw new Error("This email already has a pending invite for this business.");
+    }
 
-    await invite.save();
+    const updatedInvite = await InviteService.rotateInviteIfUnchanged({
+      invite,
+      businessId,
+      updates: {},
+    });
 
-    const inviteLabel = InviteService.isAdminRole(invite.role)
+    const inviteLabel = InviteService.isAdminRole(updatedInvite.role)
       ? business.businessName || "your business"
       : branch.name;
 
-    const inviteUrl = InviteService.getInviteUrl(invite.token);
+    await EmailService.sendInvite(
+      updatedInvite.email,
+      InviteService.getInviteUrl(updatedInvite.token),
+      inviteLabel
+    );
 
-    await EmailService.sendInvite(invite.email, inviteUrl, inviteLabel);
+    logger.info(`Invite resent to ${updatedInvite.email} for ${inviteLabel}`);
 
-    logger.info(`Invite resent to ${invite.email} for ${inviteLabel}`);
-
-    return invite;
+    return updatedInvite;
   }
+
+  // ───────────────────── EDIT AND RESEND INVITE ─────────────────────
 
   static async updateInviteAndResend({ inviteId, businessId, email, role, branchId, invitedBy }) {
     InviteService.validateRole(role);
@@ -1179,59 +1226,49 @@ class InviteService {
       throw new Error("This email already has a pending invite for this business.");
     }
 
-    const existingUser = await User.findOne({ email: normalizedEmail });
+    const existingUser = await User.findOne({
+      email: normalizedEmail,
+    });
 
     const existingMember = await InviteService.validateExistingUserForInvite({
       user: existingUser,
       businessId,
     });
 
-    if (existingMember) {
-      if (existingMember.role === "admin") {
-        throw new Error("This user already has business-wide access.");
-      }
+    InviteService.assertInviteRecipientAssignment({
+      member: existingMember,
+      role,
+      branchId,
+    });
 
-      if (!InviteService.isAdminRole(role)) {
-        const alreadyAssignedToBranch = InviteService.userIsAssignedToBranch(
-          existingMember,
-          branchId
-        );
-
-        if (alreadyAssignedToBranch) {
-          throw new Error("This user is already assigned to this branch.");
-        }
-      }
-    }
-
-    invite.email = normalizedEmail;
-    invite.role = role;
-    invite.invitedBy = invitedBy;
-    invite.status = "pending";
-    invite.expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
-    invite.revokedAt = undefined;
-    invite.acceptedAt = undefined;
-    invite.token = crypto.randomBytes(32).toString("hex");
-
-    if (InviteService.isAdminRole(role)) {
-      invite.branch = undefined;
-    } else {
-      invite.branch = branch._id;
-    }
-
-    await invite.save();
+    const updatedInvite = await InviteService.rotateInviteIfUnchanged({
+      invite,
+      businessId,
+      updates: {
+        email: normalizedEmail,
+        role,
+        invitedBy,
+        ...(InviteService.isAdminRole(role) ? {} : { branch: branch._id }),
+      },
+      unset: InviteService.isAdminRole(role) ? { branch: "" } : {},
+    });
 
     const inviteLabel = InviteService.isAdminRole(role)
       ? business.businessName || "your business"
       : branch.name;
 
-    const inviteUrl = InviteService.getInviteUrl(invite.token);
-
-    await EmailService.sendInvite(normalizedEmail, inviteUrl, inviteLabel);
+    await EmailService.sendInvite(
+      normalizedEmail,
+      InviteService.getInviteUrl(updatedInvite.token),
+      inviteLabel
+    );
 
     logger.info(`Invite ${inviteId} updated and resent to ${normalizedEmail}`);
 
-    return invite;
+    return updatedInvite;
   }
+
+  // ───────────────────── REVOKE INVITE ─────────────────────
 
   static async revokeInvite({ inviteId, businessId }) {
     const invite = await InviteService.getInviteForBusiness({
@@ -1247,14 +1284,14 @@ class InviteService {
       throw new Error("This invite has already been deleted.");
     }
 
-    await InviteService.markInviteRevoked(invite);
+    const revokedInvite = await InviteService.markInviteRevoked(invite);
 
     logger.info(`Invite ${inviteId} revoked`);
 
-    return invite;
+    return revokedInvite;
   }
 
-  //─────────────────────────────── BUSINESS INVITES VIEW ───────────────────────────────//
+  // ───────────────────── BUSINESS INVITES VIEW ─────────────────────
 
   static normalizeInviteStatus(status) {
     const normalizedStatus = String(status || "active")
@@ -1345,7 +1382,9 @@ class InviteService {
     if (status) {
       const queryStatus = InviteService.getInviteQueryStatus(status);
 
-      if (queryStatus !== "active" && queryStatus !== "all") {
+      if (queryStatus === "active") {
+        query.status = { $ne: "revoked" };
+      } else if (queryStatus !== "all") {
         query.status = queryStatus;
       }
     }
@@ -1398,10 +1437,12 @@ class InviteService {
       roleLabel: inviteRole ? InviteService.formatInviteText(inviteRole) : "-",
 
       branchId: inviteBranch && inviteBranch._id ? String(inviteBranch._id) : "",
+
       branchName: inviteBranch && inviteBranch.name ? inviteBranch.name : "Business-wide",
 
       status: inviteStatus,
       statusLabel: InviteService.formatInviteText(inviteStatus),
+
       statusBadgeClass: InviteService.getInviteStatusBadgeClass(inviteStatus),
 
       canModify: inviteStatus === "pending" || inviteStatus === "expired",
@@ -1433,6 +1474,7 @@ class InviteService {
     });
 
     const filters = InviteService.getInviteFilterOptions(activeStatus);
+
     const activeFilter = filters.find((filter) => filter.isActive);
 
     return {

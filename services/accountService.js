@@ -178,7 +178,7 @@ class AccountService {
     };
   }
 
-  static async updateProfile({ userId, data }) {
+  static async updateProfile({ userId, data = {} }) {
     if (!userId) {
       throw new Error("User is required.");
     }
@@ -189,16 +189,19 @@ class AccountService {
       throw new Error("User not found.");
     }
 
-    const firstName = String(data.firstName || "").trim();
-    const lastName = String(data.lastName || "").trim();
+    const legalNameIsProtected =
+      user.role === "professional" || user.legalNameSource === "nin_registry";
+
+    const firstName = legalNameIsProtected ? user.firstName : String(data.firstName || "").trim();
+    const lastName = legalNameIsProtected ? user.lastName : String(data.lastName || "").trim();
     const phoneCode = String(data.phoneCode || "").trim();
     const phoneNumber = String(data.phoneNumber || "").trim();
 
-    if (!firstName) {
+    if (!legalNameIsProtected && !firstName) {
       throw new Error("First name is required.");
     }
 
-    if (!lastName) {
+    if (!legalNameIsProtected && !lastName) {
       throw new Error("Last name is required.");
     }
 
@@ -210,9 +213,13 @@ class AccountService {
       throw new Error("Phone number is required.");
     }
 
-    user.firstName = firstName;
-    user.lastName = lastName;
-    user.displayName = `${firstName} ${lastName}`.trim();
+    // Professional legal names are supplied by trusted NIN onboarding only.
+    // Contact updates must not rewrite legal identity or its display name.
+    if (!legalNameIsProtected) {
+      user.firstName = firstName;
+      user.lastName = lastName;
+      user.displayName = `${firstName} ${lastName}`.trim();
+    }
     user.phoneCode = phoneCode;
     user.phoneNumber = phoneNumber;
 
@@ -315,23 +322,30 @@ class AccountService {
     return true;
   }
 
+  static buildEmailChangeChallenge({ userId, currentEmail, newEmail, nonce, otp }) {
+    const digest = crypto
+      .createHash("sha256")
+      .update(
+        JSON.stringify(["email_change:v1", String(userId), currentEmail, newEmail, nonce, otp])
+      )
+      .digest("hex");
+
+    return `email_change:v1:${nonce}:${digest}`;
+  }
+
   static async sendChangeEmailOTP({ userId, newEmail }) {
-    if (!userId) {
-      throw new Error("User is required.");
-    }
+    if (!userId) throw new Error("User is required.");
 
     const normalizedEmail = this.normalizeEmail(newEmail);
-
     if (!this.isValidEmail(normalizedEmail)) {
       throw new Error("Enter a valid email address.");
     }
 
-    const user = await User.findById(userId).select("+otp +otpExpiry +otpAttempts +otpLastSentAt");
-
-    if (!user) {
-      throw new Error("User not found.");
+    const user = await User.findById(userId);
+    if (!user) throw new Error("User not found.");
+    if (!["active", "restricted"].includes(user.accountStatus)) {
+      throw new Error("This account is not permitted to change its email address.");
     }
-
     if (this.normalizeEmail(user.email) === normalizedEmail) {
       throw new Error("This is already your current email address.");
     }
@@ -340,75 +354,148 @@ class AccountService {
       email: normalizedEmail,
       _id: { $ne: user._id },
     });
-
     if (existingUser) {
       throw new Error("Another account already uses this email address.");
     }
 
-    if (user.otpLastSentAt) {
-      const secondsSinceLastSent = (Date.now() - user.otpLastSentAt) / 1000;
+    const now = new Date();
+    const otp = crypto.randomInt(100000, 1000000).toString();
+    const nonce = crypto.randomBytes(16).toString("hex");
+    const challenge = this.buildEmailChangeChallenge({
+      userId: user._id,
+      currentEmail: user.email,
+      newEmail: normalizedEmail,
+      nonce,
+      otp,
+    });
 
-      if (secondsSinceLastSent < 60) {
-        throw new Error("Please wait 6o seconds before requesting another OTP.");
-      }
+    // Reuse the existing private OTP field, but store a purpose-bound digest.
+    // The generic six-digit OTP verifier cannot accept this challenge.
+    // A later OTP request replaces it, safely invalidating the email change.
+    const claimed = await User.findOneAndUpdate(
+      {
+        _id: user._id,
+        email: user.email,
+        accountStatus: { $in: ["active", "restricted"] },
+        $or: [
+          { otpLastSentAt: null },
+          { otpLastSentAt: { $lte: new Date(now.getTime() - 60 * 1000) } },
+        ],
+      },
+      {
+        $set: {
+          otp: challenge,
+          otpExpiry: new Date(now.getTime() + 10 * 60 * 1000),
+          otpAttempts: 0,
+          otpLastSentAt: now,
+        },
+        $inc: { __v: 1 },
+      },
+      { new: true, runValidators: true }
+    );
+
+    if (!claimed) {
+      throw new Error(
+        "Email change request could not be started. Please wait 60 seconds and try again."
+      );
     }
 
-    const otp = crypto.randomInt(100000, 999999).toString();
-
-    user.otp = otp;
-    user.otpExpiry = new Date(Date.now() + 10 * 60 * 1000);
-    user.otpAttempts = 0;
-    user.otpLastSentAt = new Date();
-
-    await user.save();
-
+    // Send only after successfully claiming the shared resend window.
     await EmailService.sendOTP(normalizedEmail, otp);
-
-    return {
-      newEmail: normalizedEmail,
-    };
+    return { newEmail: normalizedEmail };
   }
 
   static async confirmEmailChange({ userId, newEmail, otp }) {
-    if (!userId) {
-      throw new Error("User is required.");
-    }
+    if (!userId) throw new Error("User is required.");
 
     const normalizedEmail = this.normalizeEmail(newEmail);
-
     if (!this.isValidEmail(normalizedEmail)) {
       throw new Error("Enter a valid email address.");
     }
+    if (!otp) throw new Error("OTP is required.");
 
-    if (!otp) {
-      throw new Error("OTP is required.");
+    const user = await User.findById(userId).select("+otp +otpExpiry");
+    if (!user) throw new Error("User not found.");
+    if (!["active", "restricted"].includes(user.accountStatus)) {
+      throw new Error("This account is not permitted to change its email address.");
+    }
+    if (user.otpAttempts >= 5) {
+      throw new Error("Too many attempts. Please request a new email-change OTP.");
+    }
+
+    const stored =
+      typeof user.otp === "string"
+        ? /^email_change:v1:([a-f0-9]{32}):([a-f0-9]{64})$/.exec(user.otp)
+        : null;
+    if (!stored || !user.otpExpiry || user.otpExpiry <= new Date()) {
+      throw new Error("Email-change OTP has expired or was replaced. Please request a new one.");
+    }
+
+    const candidate = typeof otp === "string" || typeof otp === "number" ? String(otp).trim() : "";
+    const expected = this.buildEmailChangeChallenge({
+      userId: user._id,
+      currentEmail: user.email,
+      newEmail: normalizedEmail,
+      nonce: stored[1],
+      otp: candidate,
+    });
+    const matches =
+      /^\d{6}$/.test(candidate) &&
+      crypto.timingSafeEqual(Buffer.from(user.otp, "utf8"), Buffer.from(expected, "utf8"));
+
+    // Compare-and-set protects against resends, concurrent confirmations,
+    // expiry, account restrictions and changes to the current email address.
+    const challengeFilter = () => ({
+      _id: user._id,
+      email: user.email,
+      accountStatus: { $in: ["active", "restricted"] },
+      otp: user.otp,
+      otpLastSentAt: user.otpLastSentAt,
+      otpExpiry: { $eq: user.otpExpiry, $gt: new Date() },
+      otpAttempts: { $lt: 5 },
+    });
+
+    if (!matches) {
+      const failed = await User.findOneAndUpdate(
+        challengeFilter(),
+        { $inc: { otpAttempts: 1, __v: 1 } },
+        { new: true, runValidators: true }
+      );
+      if (!failed) {
+        throw new Error("Email-change OTP is no longer available. Please request a new one.");
+      }
+      throw new Error(`Invalid email-change OTP. ${5 - failed.otpAttempts} attempts remaining.`);
     }
 
     const existingUser = await User.findOne({
       email: normalizedEmail,
-      _id: { $ne: userId },
+      _id: { $ne: user._id },
     });
-
     if (existingUser) {
       throw new Error("Another account already uses this email address.");
     }
 
-    const user = await AuthService.verifyOTP(userId, otp);
-
-    user.email = normalizedEmail;
-    user.isVerified = true;
-
     try {
-      await user.save();
+      // Consume the exact challenge and change the email in one atomic write.
+      const updatedUser = await User.findOneAndUpdate(
+        challengeFilter(),
+        {
+          $set: { email: normalizedEmail, isVerified: true, otpAttempts: 0 },
+          $unset: { otp: 1, otpExpiry: 1 },
+          $inc: { __v: 1 },
+        },
+        { new: true, runValidators: true }
+      );
+      if (!updatedUser) {
+        throw new Error("Email-change OTP is no longer available. Please request a new one.");
+      }
+      return updatedUser;
     } catch (error) {
       if (error.code === 11000 && error.keyPattern?.email) {
         throw new Error("Another account already uses this email address.");
       }
-
       throw error;
     }
-
-    return user;
   }
 
   static async sendDisableTwoFactorOTP(userId) {
@@ -426,7 +513,7 @@ class AccountService {
       throw new Error("Two-factor authentication is already disabled.");
     }
 
-    await AuthService.sendOTP(user._id);
+    await AuthService.sendOTP(user._id, { purpose: "disable_2fa", email: user.email });
 
     return true;
   }
@@ -450,13 +537,10 @@ class AccountService {
       throw new Error("Two-factor authentication is already disabled.");
     }
 
-    const user = await AuthService.verifyOTP(userId, otp);
-
-    user.twoFactorEnabled = false;
-
-    await user.save();
-
-    return user;
+    return AuthService.verifyOTP(userId, otp, {
+      purpose: "disable_2fa",
+      email: existingUser.email,
+    });
   }
 
   static async sendEnableTwoFactorOTP(userId) {
@@ -474,7 +558,7 @@ class AccountService {
       throw new Error("Two-factor authentication is already enabled.");
     }
 
-    await AuthService.sendOTP(user._id);
+    await AuthService.sendOTP(user._id, { purpose: "enable_2fa", email: user.email });
 
     return true;
   }
@@ -498,13 +582,10 @@ class AccountService {
       throw new Error("Two-factor authentication is already enabled.");
     }
 
-    const user = await AuthService.verifyOTP(userId, otp);
-
-    user.twoFactorEnabled = true;
-
-    await user.save();
-
-    return user;
+    return AuthService.verifyOTP(userId, otp, {
+      purpose: "enable_2fa",
+      email: existingUser.email,
+    });
   }
 }
 

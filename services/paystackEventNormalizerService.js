@@ -62,6 +62,18 @@ class PaystackEventNormalizerService {
     return id;
   }
 
+  static resolveConsistentIdentity(
+    values,
+    label,
+    normalize = PaystackEventNormalizerService.cleanString
+  ) {
+    const identities = values.map((value) => normalize(value)).filter((value) => value !== null);
+    if (new Set(identities).size > 1) {
+      throw new Error(`Provider event contains conflicting ${label}.`);
+    }
+    return identities[0] || null;
+  }
+
   static getEventName(payload = {}) {
     return PaystackEventNormalizerService.cleanLowerString(payload.event);
   }
@@ -107,9 +119,10 @@ class PaystackEventNormalizerService {
         ? data.recipient
         : {};
 
-    const metadata = recipient.metadata;
-
-    return metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata : {};
+    // Apply the same object/JSON-text validation used for payment metadata.
+    return PaystackEventNormalizerService.getPaystackMetadata({
+      data: { metadata: recipient.metadata },
+    });
   }
 
   static getWithdrawalMetadata(payload = {}) {
@@ -126,11 +139,9 @@ class PaystackEventNormalizerService {
 
   static getProviderEventId(payload = {}) {
     // data.id belongs to the affected Paystack resource, not the webhook itself.
-    return (
-      PaystackEventNormalizerService.cleanString(payload.id) ||
-      PaystackEventNormalizerService.cleanString(payload.event_id) ||
-      PaystackEventNormalizerService.cleanString(payload.eventId) ||
-      null
+    return PaystackEventNormalizerService.resolveConsistentIdentity(
+      [payload.id, payload.event_id, payload.eventId],
+      "webhook event IDs"
     );
   }
 
@@ -291,13 +302,15 @@ class PaystackEventNormalizerService {
         ? transaction.reference
         : null;
 
-    return (
-      PaystackEventNormalizerService.cleanString(data.transaction_reference) ||
-      PaystackEventNormalizerService.cleanString(data.transactionReference) ||
-      PaystackEventNormalizerService.cleanString(nestedReference) ||
-      PaystackEventNormalizerService.cleanString(data.original_transaction_reference) ||
-      PaystackEventNormalizerService.cleanString(data.originalTransactionReference) ||
-      null
+    return PaystackEventNormalizerService.resolveConsistentIdentity(
+      [
+        data.transaction_reference,
+        data.transactionReference,
+        nestedReference,
+        data.original_transaction_reference,
+        data.originalTransactionReference,
+      ],
+      "original transaction references"
     );
   }
 
@@ -305,25 +318,21 @@ class PaystackEventNormalizerService {
     const data = PaystackEventNormalizerService.getData(payload);
     const transaction = data.transaction;
 
-    if (transaction && typeof transaction === "object" && !Array.isArray(transaction)) {
-      return PaystackEventNormalizerService.normalizeOptionalProviderId(transaction.id);
-    }
+    const nestedId =
+      transaction && typeof transaction === "object" && !Array.isArray(transaction)
+        ? transaction.id
+        : null;
+    const scalarId =
+      typeof transaction === "number" ||
+      (typeof transaction === "string" && /^\d+$/.test(transaction.trim()))
+        ? transaction
+        : null;
 
-    const transactionId = data.transaction_id ?? data.transactionId;
-
-    if (transactionId !== null && transactionId !== undefined) {
-      return PaystackEventNormalizerService.normalizeOptionalProviderId(transactionId);
-    }
-
-    if (typeof transaction === "number") {
-      return PaystackEventNormalizerService.normalizeOptionalProviderId(transaction);
-    }
-
-    if (typeof transaction === "string" && /^\d+$/.test(transaction.trim())) {
-      return PaystackEventNormalizerService.normalizeOptionalProviderId(transaction.trim());
-    }
-
-    return null;
+    return PaystackEventNormalizerService.resolveConsistentIdentity(
+      [nestedId, data.transaction_id, data.transactionId, scalarId],
+      "original transaction IDs",
+      PaystackEventNormalizerService.normalizeOptionalProviderId
+    );
   }
 
   static getProviderReference(payload = {}) {

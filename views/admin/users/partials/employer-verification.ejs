@@ -4,6 +4,7 @@
   id="adminEmployerVerifications"
   class="container-fluid py-5"
   data-queue-url="/admin/employer-verifications/data"
+  data-permit-queue-url="/admin/employer-verifications/permits"
   data-employer-base-url="/admin/employers"
   data-csrf-token="<%= csrfToken %>"
 >
@@ -11,27 +12,43 @@
   <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-6">
     <div>
       <h1 class="fs-2 fw-bold text-gray-900 mb-1">Employer Verification</h1>
+
       <p class="text-gray-600 mb-0">
-        Review business registrations, CAC checks, and facility compliance.
+        Review CAC business verification and branch-specific facility permits.
+      </p>
+    </div>
+  </div>
+
+  <!-- SHARED FEEDBACK -->
+  <div id="verificationFeedback" class="alert d-none mb-6" role="alert" aria-live="polite"></div>
+
+  <!-- ===================================================== -->
+  <!-- SECTION A: BUSINESS CAC VERIFICATION                  -->
+  <!-- ===================================================== -->
+
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+    <div>
+      <h2 class="fw-bold fs-4 mb-1">Business Registration</h2>
+
+      <p class="text-muted fs-7 mb-0">
+        CAC identity verification is separate from branch facility-permit compliance.
       </p>
     </div>
 
     <button type="button" class="btn btn-light-primary" id="refreshVerificationQueue">
       <i class="ki-outline ki-arrows-circle fs-3 me-1"></i>
-      Refresh
+      Refresh Employers
     </button>
   </div>
 
-  <!-- FEEDBACK -->
-  <div id="verificationFeedback" class="alert d-none mb-5" role="alert" aria-live="polite"></div>
-
-  <div class="row g-5">
+  <div class="row g-5 mb-10">
     <!-- EMPLOYER QUEUE -->
     <div class="col-12 col-xl-5">
       <div class="card h-100">
         <div class="card-header border-0 pt-5">
           <div class="card-title d-flex flex-column align-items-start">
-            <h2 class="fw-bold fs-4 mb-1">Verification Queue</h2>
+            <h3 class="fw-bold fs-5 mb-1">Employer Queue</h3>
+
             <span id="verificationQueueCount" class="text-muted fs-7"> Loading employers... </span>
           </div>
         </div>
@@ -39,17 +56,16 @@
         <div class="card-body pt-2">
           <div class="mb-4">
             <label class="form-label fw-semibold" for="verificationStatusFilter">
-              Filter employers
+              Filter by CAC or account status
             </label>
 
             <select id="verificationStatusFilter" class="form-select form-select-solid">
               <option value="review">Needs attention</option>
               <option value="all">All employers</option>
-              <option value="pending">Pending verification</option>
-              <option value="needs_review">Needs review</option>
-              <option value="verified">Verified registration</option>
-              <option value="rejected">Rejected verification</option>
-              <option value="approved">Approved employers</option>
+              <option value="pending">Pending CAC verification</option>
+              <option value="needs_review">CAC needs review</option>
+              <option value="verified">CAC verified</option>
+              <option value="rejected">CAC rejected</option>
               <option value="restricted">Restricted accounts</option>
               <option value="suspended">Suspended accounts</option>
             </select>
@@ -57,22 +73,24 @@
 
           <div id="verificationQueueLoading" class="text-center py-10" role="status">
             <span class="spinner-border text-primary"></span>
-            <p class="text-muted mt-3">Loading verification queue...</p>
+
+            <p class="text-muted mt-3">Loading employer queue...</p>
           </div>
 
           <div id="verificationQueueEmpty" class="text-center py-10 d-none">
             <i class="ki-outline ki-check-circle fs-3x text-gray-400"></i>
-            <h3 class="fs-5 mt-4">No employers found</h3>
-            <p class="text-muted mb-0">There are no employers matching the selected filter.</p>
+
+            <h4 class="fs-5 mt-4">No employers found</h4>
+
+            <p class="text-muted mb-0">No employers match the selected filter.</p>
           </div>
 
           <div
             id="verificationQueueItems"
             class="d-flex flex-column gap-3"
-            aria-label="Employers awaiting verification"
+            aria-label="Employer verification results"
           ></div>
 
-          <!-- PAGINATION -->
           <div class="d-flex align-items-center justify-content-between gap-3 mt-5 pt-4 border-top">
             <span id="verificationPageLabel" class="text-muted fs-7"> Page 1 </span>
 
@@ -100,35 +118,38 @@
       <div class="card h-100">
         <div class="card-header border-0 pt-5">
           <div class="card-title d-flex flex-column align-items-start">
-            <h2 class="fw-bold fs-4 mb-1">Verification Details</h2>
-            <span class="text-muted fs-7"> Select an employer to inspect their registration. </span>
+            <h3 class="fw-bold fs-5 mb-1">Business Verification Details</h3>
+
+            <span class="text-muted fs-7">
+              Select an employer to inspect its CAC verification.
+            </span>
           </div>
         </div>
 
         <div class="card-body pt-3">
-          <!-- NO EMPLOYER SELECTED -->
           <div id="verificationNoSelection" class="text-center py-15">
             <i class="ki-outline ki-shield-search fs-3x text-gray-400"></i>
-            <h3 class="fs-5 mt-4">Select an employer</h3>
+
+            <h4 class="fs-5 mt-4">Select an employer</h4>
+
             <p class="text-muted mb-0">
-              CAC verification, PCN compliance, and review history will appear here.
+              Business registration, CAC checks and audit history will appear here.
             </p>
           </div>
 
-          <!-- LOADING -->
           <div id="verificationDetailsLoading" class="text-center py-10 d-none" role="status">
             <span class="spinner-border text-primary"></span>
-            <p class="text-muted mt-3">Loading employer details...</p>
+
+            <p class="text-muted mt-3">Loading business verification...</p>
           </div>
 
-          <!-- SELECTED EMPLOYER -->
           <div id="verificationDetailsContent" class="d-none">
             <input type="hidden" id="selectedVerificationEmployerId" />
 
             <!-- BUSINESS IDENTITY -->
             <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-5">
               <div>
-                <h3 id="verificationBusinessName" class="fw-bold fs-3 text-gray-900 mb-1"></h3>
+                <h4 id="verificationBusinessName" class="fw-bold fs-3 text-gray-900 mb-1"></h4>
 
                 <div id="verificationBusinessType" class="text-muted fs-7"></div>
               </div>
@@ -141,21 +162,7 @@
                 <div class="border rounded p-4 h-100">
                   <div class="text-muted fs-7 mb-1">CAC Registration Number</div>
 
-                  <div
-                    id="verificationCACNumber"
-                    class="fw-semibold text-gray-900 text-break"
-                  ></div>
-                </div>
-              </div>
-
-              <div class="col-sm-6">
-                <div class="border rounded p-4 h-100">
-                  <div class="text-muted fs-7 mb-1">Regulatory Registration</div>
-
-                  <div
-                    id="verificationRegulatoryNumber"
-                    class="fw-semibold text-gray-900 text-break"
-                  ></div>
+                  <div id="verificationCACNumber" class="fw-semibold text-break"></div>
                 </div>
               </div>
 
@@ -163,21 +170,15 @@
                 <div class="border rounded p-4 h-100">
                   <div class="text-muted fs-7 mb-1">Registered Business Email</div>
 
-                  <div
-                    id="verificationBusinessEmail"
-                    class="fw-semibold text-gray-900 text-break"
-                  ></div>
+                  <div id="verificationBusinessEmail" class="fw-semibold text-break"></div>
                 </div>
               </div>
 
-              <div class="col-sm-6">
-                <div class="border rounded p-4 h-100">
+              <div class="col-12">
+                <div class="border rounded p-4">
                   <div class="text-muted fs-7 mb-1">Business Location</div>
 
-                  <div
-                    id="verificationBusinessLocation"
-                    class="fw-semibold text-gray-900 text-break"
-                  ></div>
+                  <div id="verificationBusinessLocation" class="fw-semibold text-break"></div>
                 </div>
               </div>
             </div>
@@ -187,6 +188,7 @@
               <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
                 <div>
                   <h4 class="fw-bold fs-5 mb-1">CAC Verification</h4>
+
                   <div class="text-muted fs-7">Corporate Affairs Commission</div>
                 </div>
 
@@ -194,7 +196,7 @@
               </div>
 
               <div class="mb-3">
-                <div class="text-muted fs-7 mb-1">Name on CAC Record</div>
+                <div class="text-muted fs-7 mb-1">Registered Name on CAC Record</div>
 
                 <div id="verificationCACName" class="fw-semibold"></div>
               </div>
@@ -213,132 +215,35 @@
               </button>
 
               <p class="text-muted fs-8 mt-3 mb-0">
-                CAC lookups use the configured VAS environment. Staging results do not approve
-                employers.
+                CAC rechecks use the configured verification provider. Staging results do not
+                establish production verification.
               </p>
             </div>
 
-            <!-- PCN VERIFICATION -->
-            <div id="verificationPCNSection" class="border rounded p-5 mb-5">
-              <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
-                <div>
-                  <h4 class="fw-bold fs-5 mb-1">PCN Premises Verification</h4>
-
-                  <div class="text-muted fs-7">Manual review of pharmacy premises registration</div>
-                </div>
-
-                <span id="verificationPCNStatus" class="badge badge-light-warning"></span>
-              </div>
-
-              <div class="mb-4">
-                <div class="text-muted fs-7 mb-1">Previously Recorded Premises Name</div>
-
-                <div id="verificationPCNName" class="fw-semibold"></div>
-              </div>
-
-              <div class="mb-4">
-                <a
-                  href="https://pcncore.azurewebsites.net/PublicSearch/SearchForPremises"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="btn btn-sm btn-light-info"
-                >
-                  <i class="ki-outline ki-exit-right-corner fs-4 me-1"></i>
-                  Open PCN Premises Search
-                </a>
-              </div>
-
-              <form id="verificationPCNForm">
-                <div class="mb-4">
-                  <label class="form-label required" for="verificationPCNDecision">
-                    Review Decision
-                  </label>
-
-                  <select
-                    id="verificationPCNDecision"
-                    class="form-select form-select-solid"
-                    required
-                  >
-                    <option value="">Select a decision</option>
-
-                    <option value="verified">Verified</option>
-
-                    <option value="needs_review">Needs Review</option>
-
-                    <option value="rejected">Rejected</option>
-                  </select>
-                </div>
-
-                <div class="mb-4">
-                  <label class="form-label" for="verificationPCNRegisteredName">
-                    Registered Premises Name
-                  </label>
-
-                  <input
-                    type="text"
-                    id="verificationPCNRegisteredName"
-                    class="form-control form-control-solid"
-                    maxlength="150"
-                    placeholder="Name returned by PCN premises search"
-                  />
-
-                  <div class="form-text">Required when recording a verified decision.</div>
-                </div>
-
-                <div class="mb-4">
-                  <label class="form-label required" for="verificationPCNReviewNote">
-                    Review Note
-                  </label>
-
-                  <textarea
-                    id="verificationPCNReviewNote"
-                    class="form-control form-control-solid"
-                    rows="4"
-                    maxlength="500"
-                    minlength="10"
-                    required
-                    placeholder="Record what you checked and the reason for your decision."
-                  ></textarea>
-                </div>
-
-                <button type="submit" class="btn btn-primary" id="verificationPCNSubmit">
-                  Save PCN Review
-                </button>
-              </form>
-            </div>
-
-            <!-- EMPLOYER APPROVAL -->
+            <!-- BRANCH SUMMARY -->
             <div class="border rounded p-5 mb-5">
-              <div class="d-flex align-items-center justify-content-between gap-3 mb-3">
-                <h4 class="fw-bold fs-5 mb-0">Employer Approval</h4>
+              <h4 class="fw-bold fs-5 mb-2">Registered Branches</h4>
 
-                <span
-                  id="verificationEmployerApprovalStatus"
-                  class="badge badge-light-warning"
-                ></span>
-              </div>
-
-              <div id="verificationEmployerApprovalNote" class="text-gray-600 fs-7"></div>
-
-              <p class="text-muted fs-8 mt-3 mb-0">
-                Final approval requires CAC verification, regulatory verification, and
-                administrative sanctions screening. Verification checks alone do not grant
-                marketplace access.
+              <p class="text-muted fs-7">
+                Each branch has separate facility-permit requirements. CAC verification does not
+                establish branch regulatory readiness.
               </p>
+
+              <div id="verificationBranchSummary" class="d-flex flex-column gap-3"></div>
             </div>
 
-            <!-- VERIFICATION HISTORY -->
+            <!-- CAC AUDIT HISTORY -->
             <div class="border rounded p-5">
-              <h4 class="fw-bold fs-5 mb-4">Verification History</h4>
+              <h4 class="fw-bold fs-5 mb-4">CAC Verification History</h4>
 
               <div class="table-responsive">
                 <table class="table table-row-dashed align-middle">
                   <thead>
                     <tr class="text-muted fw-semibold fs-7">
-                      <th>Type</th>
-                      <th>Provider</th>
-                      <th>Status</th>
-                      <th>Checked</th>
+                      <th scope="col">Type</th>
+                      <th scope="col">Provider</th>
+                      <th scope="col">Status</th>
+                      <th scope="col">Checked</th>
                     </tr>
                   </thead>
 
@@ -353,10 +258,379 @@
               </div>
 
               <p class="text-muted fs-8 mb-0">
-                Previous checks remain available for audit. Staging checks and provider failures are
-                not treated as authoritative production verification.
+                Previous checks are retained for audit. Failed or staging checks must not be
+                presented as completed production verification.
               </p>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================== -->
+  <!-- SECTION B: BRANCH FACILITY PERMIT REVIEW              -->
+  <!-- ===================================================== -->
+
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+    <div>
+      <h2 class="fw-bold fs-4 mb-1">Facility Permit Reviews</h2>
+
+      <p class="text-muted fs-7 mb-0">
+        Review individual submissions against their branch, applicable requirement, regulatory
+        authority and premises.
+      </p>
+    </div>
+
+    <button type="button" class="btn btn-light-primary" id="refreshPermitReviewQueue">
+      <i class="ki-outline ki-arrows-circle fs-3 me-1"></i>
+      Refresh Permits
+    </button>
+  </div>
+
+  <div class="row g-5">
+    <!-- PERMIT QUEUE -->
+    <div class="col-12 col-xl-5">
+      <div class="card h-100">
+        <div class="card-header border-0 pt-5">
+          <div class="card-title d-flex flex-column align-items-start">
+            <h3 class="fw-bold fs-5 mb-1">Permit Review Queue</h3>
+
+            <span id="permitReviewQueueCount" class="text-muted fs-7"> Loading permits... </span>
+          </div>
+        </div>
+
+        <div class="card-body pt-2">
+          <div class="mb-4">
+            <label for="permitReviewStatusFilter" class="form-label fw-semibold">
+              Filter permits
+            </label>
+
+            <select id="permitReviewStatusFilter" class="form-select form-select-solid">
+              <option value="review">Needs attention</option>
+              <option value="all">All permits</option>
+              <option value="pending">Pending review</option>
+              <option value="needs_review">Needs review</option>
+              <option value="verified">Verified</option>
+              <option value="rejected">Rejected</option>
+            </select>
+          </div>
+
+          <div id="permitReviewQueueLoading" class="text-center py-10" role="status">
+            <span class="spinner-border text-primary"></span>
+
+            <p class="text-muted mt-3">Loading facility permits...</p>
+          </div>
+
+          <div id="permitReviewQueueEmpty" class="text-center py-10 d-none">
+            <i class="ki-outline ki-check-circle fs-3x text-gray-400"></i>
+
+            <h4 class="fs-5 mt-4">No permits found</h4>
+
+            <p class="text-muted mb-0">No permits match the selected filter.</p>
+          </div>
+
+          <div
+            id="permitReviewQueueItems"
+            class="d-flex flex-column gap-3"
+            aria-label="Facility permit review results"
+          ></div>
+
+          <div class="d-flex align-items-center justify-content-between gap-3 mt-5 pt-4 border-top">
+            <span id="permitReviewPageLabel" class="text-muted fs-7"> Page 1 </span>
+
+            <div class="d-flex gap-2">
+              <button
+                type="button"
+                id="permitReviewPreviousPage"
+                class="btn btn-sm btn-light"
+                disabled
+              >
+                Previous
+              </button>
+
+              <button type="button" id="permitReviewNextPage" class="btn btn-sm btn-light" disabled>
+                Next
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PERMIT DETAILS -->
+    <div class="col-12 col-xl-7">
+      <div class="card h-100">
+        <div class="card-header border-0 pt-5">
+          <div class="card-title d-flex flex-column align-items-start">
+            <h3 class="fw-bold fs-5 mb-1">Permit Details and Decision</h3>
+
+            <span class="text-muted fs-7">
+              Select a permit to inspect its evidence and review eligibility.
+            </span>
+          </div>
+        </div>
+
+        <div class="card-body pt-3">
+          <div id="permitReviewNoSelection" class="text-center py-15">
+            <i class="ki-outline ki-document fs-3x text-gray-400"></i>
+
+            <h4 class="fs-5 mt-4">Select a facility permit</h4>
+
+            <p class="text-muted mb-0">
+              Submission details and permitted review actions will appear here.
+            </p>
+          </div>
+
+          <div id="permitReviewDetailsLoading" class="text-center py-10 d-none" role="status">
+            <span class="spinner-border text-primary"></span>
+
+            <p class="text-muted mt-3">Loading permit details...</p>
+          </div>
+
+          <div id="permitReviewDetailsContent" class="d-none">
+            <input type="hidden" id="selectedPermitReviewEmployerId" />
+            <input type="hidden" id="selectedPermitReviewBranchId" />
+            <input type="hidden" id="selectedPermitReviewPermitId" />
+
+            <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-5">
+              <div>
+                <h4 id="permitReviewEmployerName" class="fw-bold fs-4 mb-1"></h4>
+
+                <div id="permitReviewBranchName" class="text-muted fs-7"></div>
+              </div>
+
+              <span id="permitReviewStatus" class="badge badge-light-warning"></span>
+            </div>
+
+            <!-- PERMIT INFORMATION -->
+            <div class="border rounded p-5 mb-5">
+              <h4 class="fw-bold fs-5 mb-4">Permit Information</h4>
+
+              <div class="row g-4">
+                <div class="col-sm-6">
+                  <div class="text-muted fs-7 mb-1">Regulatory Requirement</div>
+
+                  <div id="permitReviewRequirementKey" class="fw-semibold text-break"></div>
+                </div>
+
+                <div class="col-sm-6">
+                  <div class="text-muted fs-7 mb-1">Permit Scope</div>
+
+                  <div id="permitReviewScope" class="fw-semibold text-break"></div>
+                </div>
+
+                <div class="col-sm-6">
+                  <div class="text-muted fs-7 mb-1">Regulatory Authority</div>
+
+                  <div id="permitReviewAuthority" class="fw-semibold text-break"></div>
+                </div>
+
+                <div class="col-sm-6">
+                  <div class="text-muted fs-7 mb-1">Permit Number</div>
+
+                  <div id="permitReviewNumber" class="fw-semibold text-break"></div>
+                </div>
+
+                <div class="col-12">
+                  <div class="text-muted fs-7 mb-1">Description</div>
+
+                  <div id="permitReviewDescription" class="fw-semibold text-break"></div>
+                </div>
+
+                <div class="col-sm-6">
+                  <div class="text-muted fs-7 mb-1">Submitted</div>
+
+                  <div id="permitReviewSubmittedAt" class="fw-semibold"></div>
+                </div>
+
+                <div class="col-sm-6">
+                  <div class="text-muted fs-7 mb-1">Current / Renewal Status</div>
+
+                  <div id="permitReviewLifecycleStatus" class="fw-semibold"></div>
+                </div>
+
+                <div class="col-12">
+                  <div class="text-muted fs-7 mb-1">Premises Recorded at Submission</div>
+
+                  <div id="permitReviewPremises" class="fw-semibold text-break"></div>
+                </div>
+
+                <div class="col-12">
+                  <div class="text-muted fs-7 mb-1">Approved Validity</div>
+
+                  <div id="permitReviewValidity" class="fw-semibold"></div>
+                </div>
+              </div>
+
+              <div class="mt-5 pt-4 border-top">
+                <a
+                  id="permitReviewDocumentLink"
+                  class="btn btn-light-info d-none"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <i class="ki-outline ki-document fs-4 me-1"></i>
+                  View Submitted Document
+                </a>
+
+                <p class="text-muted fs-8 mt-3 mb-0">
+                  Documents must be accessed through the authenticated administrator endpoint.
+                  Private storage references must not be exposed in the page.
+                </p>
+              </div>
+            </div>
+
+            <!-- EXISTING DECISION -->
+            <div class="border rounded p-5 mb-5">
+              <h4 class="fw-bold fs-5 mb-3">Review History</h4>
+
+              <div id="permitReviewExistingDecision" class="text-gray-600 fs-7">
+                No completed review information loaded.
+              </div>
+            </div>
+
+            <!-- REVIEW FORM -->
+            <form id="permitReviewDecisionForm" class="border rounded p-5 mb-5 d-none">
+              <h4 class="fw-bold fs-5 mb-2">Review Submission</h4>
+
+              <p class="text-muted fs-7 mb-5">
+                Verify the document, applicable requirement, permitted activities, authority,
+                validity and premises before recording a decision.
+              </p>
+
+              <div class="mb-4">
+                <label for="permitReviewDecision" class="form-label required">
+                  Review Decision
+                </label>
+
+                <select id="permitReviewDecision" class="form-select form-select-solid" required>
+                  <option value="">Select a decision</option>
+                  <option value="verified">Verified</option>
+                  <option value="needs_review">Needs Review</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              </div>
+
+              <!-- SHOWN ONLY FOR VERIFIED DECISIONS -->
+              <div id="permitReviewValidityFields" class="d-none">
+                <div class="mb-4">
+                  <label for="permitReviewValidityType" class="form-label required">
+                    Approved Validity Type
+                  </label>
+
+                  <select id="permitReviewValidityType" class="form-select form-select-solid">
+                    <option value="">Select validity type</option>
+                    <option value="expiry_date">Actual Expiry Date</option>
+                    <option value="licensing_year">Approved Licensing Year</option>
+                    <option value="indefinite">Confirmed Life Licence</option>
+                  </select>
+
+                  <div class="form-text">
+                    Only validity modes permitted by the applicable regulatory requirement may be
+                    approved.
+                  </div>
+                </div>
+
+                <div class="mb-4">
+                  <label for="permitReviewValidFromDate" class="form-label required">
+                    Valid From
+                  </label>
+
+                  <input
+                    type="date"
+                    id="permitReviewValidFromDate"
+                    class="form-control form-control-solid"
+                  />
+                </div>
+
+                <div id="permitReviewExpiryDateField" class="mb-4 d-none">
+                  <label for="permitReviewExpiryDate" class="form-label required">
+                    Actual Expiry Date
+                  </label>
+
+                  <input
+                    type="date"
+                    id="permitReviewExpiryDate"
+                    class="form-control form-control-solid"
+                  />
+                </div>
+
+                <div id="permitReviewLicensingYearField" class="mb-4 d-none">
+                  <label for="permitReviewLicensingYear" class="form-label required">
+                    Approved Licensing Year
+                  </label>
+
+                  <input
+                    type="number"
+                    id="permitReviewLicensingYear"
+                    class="form-control form-control-solid"
+                    min="1900"
+                    max="2199"
+                    step="1"
+                    placeholder="YYYY"
+                  />
+
+                  <div class="form-text">
+                    This mode applies only when the official licensing rules support calendar-year
+                    validity.
+                  </div>
+                </div>
+              </div>
+
+              <div class="mb-5">
+                <label for="permitReviewNote" class="form-label required">
+                  Administrative Review Note
+                </label>
+
+                <textarea
+                  id="permitReviewNote"
+                  class="form-control form-control-solid"
+                  rows="4"
+                  maxlength="1000"
+                  required
+                  placeholder="Record the checks performed and the reasons for the decision."
+                ></textarea>
+
+                <div class="form-text">
+                  Verification requires a meaningful review note of at least 20 characters.
+                </div>
+              </div>
+
+              <button type="submit" class="btn btn-primary" id="permitReviewDecisionSubmit">
+                Save Permit Review
+              </button>
+            </form>
+
+            <!-- REVOCATION FORM -->
+            <form id="permitReviewRevocationForm" class="border rounded p-5 d-none">
+              <h4 class="fw-bold fs-5 mb-2">Revoke Verified Permit</h4>
+
+              <p class="text-muted fs-7 mb-4">
+                Revocation removes the permit from regulatory readiness. It does not automatically
+                deactivate the branch itself.
+              </p>
+
+              <div class="mb-4">
+                <label for="permitReviewRevocationReason" class="form-label required">
+                  Revocation Reason
+                </label>
+
+                <textarea
+                  id="permitReviewRevocationReason"
+                  class="form-control form-control-solid"
+                  rows="4"
+                  minlength="15"
+                  maxlength="500"
+                  required
+                  placeholder="Explain why this verified permit must be revoked."
+                ></textarea>
+              </div>
+
+              <button type="submit" class="btn btn-light-danger" id="permitReviewRevokeSubmit">
+                Revoke Permit
+              </button>
+            </form>
           </div>
         </div>
       </div>

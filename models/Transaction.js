@@ -50,7 +50,6 @@ const {
   isNonNegativeSafeInteger,
   isPositiveSafeInteger,
   isSignedSafeInteger,
-  sameId,
 } = require("./helpers/schemaValidators");
 
 /**
@@ -151,6 +150,11 @@ const {
 
 /* ─────────────────────────────── HELPERS ─────────────────────────────── */
 
+function sameId(left, right) {
+  if (!left || !right) return false;
+  return String(left._id || left) === String(right._id || right);
+}
+
 function hasAnyNonZeroBalanceDelta(balanceDelta) {
   if (!balanceDelta) {
     return false;
@@ -168,11 +172,17 @@ function getNetBalanceDelta(balanceDelta) {
     return 0;
   }
 
-  return [
+  const values = [
     balanceDelta.availableBalance,
     balanceDelta.pendingBalance,
     balanceDelta.outstandingBalance,
-  ].reduce((total, value) => total + Number(value || 0), 0);
+  ];
+
+  if (!values.every(Number.isSafeInteger)) return NaN;
+
+  // Sum exactly: intermediate Number sums can exceed safe-integer precision
+  // even when each component and the final net movement are safe integers.
+  return Number(values.reduce((total, value) => total + BigInt(value), 0n));
 }
 
 /* ─────────────────────────────── BALANCE SUB-SCHEMAS ─────────────────────────────── */
@@ -432,6 +442,7 @@ const transactionSchema = new mongoose.Schema(
 
     balanceDelta: {
       type: balanceDeltaSchema,
+      required: true,
       default: () => ({}),
     },
 
@@ -1533,6 +1544,32 @@ transactionSchema.pre("validate", function validateTransaction() {
   if (this.status !== "cancelled") {
     this.cancelledAt = null;
     this.cancellationReason = null;
+  }
+
+  // --- TIMESTAMP ORDER ---
+
+  const lifecycleDateFields = [
+    "processingStartedAt",
+    "completedAt",
+    "failedAt",
+    "reversedAt",
+    "cancelledAt",
+  ];
+
+  for (const field of lifecycleDateFields) {
+    if (this[field] && this.createdAt && this[field] < this.createdAt) {
+      this.invalidate(field, `${field} cannot precede Transaction creation.`);
+    }
+  }
+
+  for (const field of ["completedAt", "failedAt", "reversedAt", "cancelledAt"]) {
+    if (this[field] && this.processingStartedAt && this[field] < this.processingStartedAt) {
+      this.invalidate(field, `${field} cannot precede processingStartedAt.`);
+    }
+  }
+
+  if (this.reversedAt && this.completedAt && this.reversedAt < this.completedAt) {
+    this.invalidate("reversedAt", "reversedAt cannot precede completedAt.");
   }
 
   // --- INITIATOR ---

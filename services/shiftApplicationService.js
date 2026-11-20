@@ -1,16 +1,36 @@
 // services/shiftApplicationService.js
 
 const mongoose = require("mongoose");
-
 const Shift = require("../models/Shift");
 const ShiftOccurrence = require("../models/ShiftOccurrence");
 const ShiftApplication = require("../models/ShiftApplication");
 const ShiftAssignment = require("../models/ShiftAssignment");
 const ShiftAssignmentCase = require("../models/ShiftAssignmentCase");
 const ProfessionalProfile = require("../models/ProfessionalProfile");
-
+const Branch = require("../models/Branch");
+const EmployerProfile = require("../models/EmployerProfile");
+const EmployerMember = require("../models/EmployerMember");
+const User = require("../models/User");
+const FacilityPermitVerificationService = require("./facilityPermitVerificationService");
 const ShiftAssignmentService = require("./shiftAssignmentService");
 const EmployerDelinquencyService = require("./employerDelinquencyService");
+const ProfessionalVerificationService = require("./professionalVerificationService");
+
+const EXPECTED_PROFESSIONAL_EVIDENCE_ERRORS = new Set([
+  "PROFESSIONAL_VERIFICATION_ACCOUNT_INELIGIBLE",
+  "PROFESSIONAL_VERIFICATION_ACCOUNT_NAME_REQUIRED",
+  "PROFESSIONAL_VERIFICATION_NIN_EVIDENCE_REQUIRED",
+  "PROFESSIONAL_VERIFICATION_NIN_EVIDENCE_MISMATCH",
+  "PROFESSIONAL_VERIFICATION_REVIEW_EVIDENCE_REQUIRED",
+  "PROFESSIONAL_VERIFICATION_REVIEW_EVIDENCE_MISMATCH",
+  "PROFESSIONAL_VERIFICATION_CONFLICTING_REVIEWS",
+  "PROFESSIONAL_VERIFICATION_UNSUPPORTED_PROFESSIONAL_TYPE",
+  "PROFESSIONAL_VERIFICATION_UPCOMING_INCONSISTENT",
+  "PROFESSIONAL_VERIFICATION_UPCOMING_EVIDENCE_MISMATCH",
+  "PROFESSIONAL_VERIFICATION_INVALID_VALIDITY_START",
+  "PROFESSIONAL_VERIFICATION_RENEWAL_NOT_EXTENDED",
+  "PROFESSIONAL_VERIFICATION_LIFE_LICENCE_REPLACEMENT",
+]);
 
 const {
   MAX_APPLICATION_ROUNDS,
@@ -27,7 +47,6 @@ const {
 } = require("../constants/shiftApplication");
 
 const { REPLACEABLE_ASSIGNMENT_STATUSES } = require("../constants/shiftAssignment");
-
 const { createServiceError } = require("./helpers/serviceErrorHelper");
 
 const {
@@ -37,7 +56,6 @@ const {
 } = require("./helpers/serviceValidationHelpers");
 
 const { runWithOptionalTransaction } = require("./helpers/transactionHelper");
-
 const logger = require("../utils/logger");
 
 const SHIFT_APPLICATION_SERVICE_ERROR_NAME = "ShiftApplicationServiceError";
@@ -48,19 +66,18 @@ class ShiftApplicationService {
   static createError({ message, code, statusCode = 400, details = null }) {
     return createServiceError({
       name: SHIFT_APPLICATION_SERVICE_ERROR_NAME,
-
       message,
-
       code,
-
       statusCode,
-
       details,
     });
   }
 
   static async runWithOptionalTransaction(options = {}, callback) {
-    if (options.session && !options.session.inTransaction()) {
+    if (
+      options.session &&
+      (typeof options.session.inTransaction !== "function" || !options.session.inTransaction())
+    ) {
       throw this.createError({
         message: "An active transaction is required for the supplied session.",
         code: "APPLICATION_TRANSACTION_REQUIRED",
@@ -78,11 +95,8 @@ class ShiftApplicationService {
   static normalizeObjectId(value, fieldName, required = true) {
     return normalizeObjectId({
       value,
-
       fieldName,
-
       required,
-
       createError: ShiftApplicationService.createError,
     });
   }
@@ -90,13 +104,9 @@ class ShiftApplicationService {
   static normalizeOptionalText(value, fieldName, maximumLength) {
     return normalizeOptionalText({
       value,
-
       fieldName,
-
       maximumLength,
-
       createError: ShiftApplicationService.createError,
-
       emptyValue: null,
     });
   }
@@ -107,7 +117,6 @@ class ShiftApplicationService {
     if (Number.isNaN(currentTime.getTime())) {
       throw ShiftApplicationService.createError({
         message: "Current time is invalid.",
-
         code: "INVALID_CURRENT_TIME",
       });
     }
@@ -123,7 +132,6 @@ class ShiftApplicationService {
     if (!APPLICATION_STATUSES.includes(status)) {
       throw ShiftApplicationService.createError({
         message: "Shift application status is invalid.",
-
         code: "INVALID_SHIFT_APPLICATION_STATUS",
       });
     }
@@ -135,7 +143,6 @@ class ShiftApplicationService {
 
   static buildEmployerShiftFilter({ shiftId, employerProfileId, employerContext = null }) {
     const normalizedShiftId = ShiftApplicationService.normalizeObjectId(shiftId, "shift ID");
-
     const normalizedEmployerProfileId = ShiftApplicationService.normalizeObjectId(
       employerProfileId,
       "employer profile ID"
@@ -149,16 +156,13 @@ class ShiftApplicationService {
     if (!canManageAllBranches && !isBranchManager) {
       throw ShiftApplicationService.createError({
         message: "You do not have permission to manage shift applications.",
-
         code: "SHIFT_APPLICATION_MANAGEMENT_NOT_ALLOWED",
-
         statusCode: 403,
       });
     }
 
     const filter = {
       _id: normalizedShiftId,
-
       business: normalizedEmployerProfileId,
     };
 
@@ -175,12 +179,99 @@ class ShiftApplicationService {
     return filter;
   }
 
+  static async assertBranchEligibleForApplication({ shift, session, actorUserId = null }) {
+    if (!session || typeof session.inTransaction !== "function" || !session.inTransaction()) {
+      throw this.createError({
+        message: "An active transaction is required for branch eligibility.",
+        code: "APPLICATION_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+    const businessId = this.normalizeObjectId(shift.business, "business ID");
+    const branchId = this.normalizeObjectId(shift.branch, "branch ID");
+    const branch = await Branch.findOne({
+      _id: branchId,
+      business: businessId,
+      isActive: true,
+    }).session(session);
+    const business = await EmployerProfile.findById(businessId).session(session);
+    if (
+      !branch ||
+      !business ||
+      business.accountStatus !== "active" ||
+      business.cacVerificationStatus !== "verified"
+    ) {
+      throw this.createError({
+        message: "The employer branch is not eligible for new applications or assignments.",
+        code: "SHIFT_APPLICATION_BRANCH_INELIGIBLE",
+        statusCode: 403,
+      });
+    }
+    if (actorUserId != null) {
+      const actor = await User.findOne({
+        _id: actorUserId,
+        role: "employer",
+        accountStatus: "active",
+        isVerified: true,
+      }).session(session);
+      let allowed = Boolean(actor && String(business.user) === String(actorUserId));
+      if (actor && !allowed) {
+        const member = await EmployerMember.findOne({
+          user: actorUserId,
+          business: businessId,
+          accountStatus: "active",
+          isCurrent: true,
+        }).session(session);
+        allowed = Boolean(
+          member &&
+          (member.role === "admin" ||
+            (member.role === "branch_manager" &&
+              Array.isArray(member.branches) &&
+              member.branches.some(
+                (a) => String(a.branch) === String(branchId) && a.role === "branch_manager"
+              )))
+        );
+      }
+      if (!allowed) {
+        throw this.createError({
+          message: "Current assignment permission for this branch is required.",
+          code: "SHIFT_APPLICATION_BRANCH_PERMISSION_REQUIRED",
+          statusCode: 403,
+        });
+      }
+    }
+    // Activation joins this transaction and fences the same branch document
+    // written by permit reviews/revocations and branch edits.
+    await FacilityPermitVerificationService.activateDuePermits({ businessId, branchId, session });
+    const readiness = await FacilityPermitVerificationService.getBranchReadiness({
+      businessId,
+      branchId,
+      session,
+    });
+    if (
+      readiness?.canPost !== true ||
+      readiness.identityReady !== true ||
+      readiness.branchActive !== true ||
+      !Array.isArray(readiness.missingRequirementKeys) ||
+      readiness.missingRequirementKeys.length !== 0
+    ) {
+      throw this.createError({
+        message: "Current facility permits are required for this Shift branch.",
+        code: "SHIFT_APPLICATION_BRANCH_PERMITS_REQUIRED",
+        statusCode: 403,
+        details: {
+          reason: readiness?.reason || "branch_not_ready",
+          missingRequirementKeys: readiness?.missingRequirementKeys || [],
+        },
+      });
+    }
+  }
+
   static async assertBusinessCanCreateAssignment({ businessId, currentTime, session = null }) {
     try {
       return await EmployerDelinquencyService.assertCanCreateNewObligation(
         {
           businessId,
-
           currentTime,
         },
         {
@@ -194,11 +285,8 @@ class ShiftApplicationService {
 
       throw ShiftApplicationService.createError({
         message: error.message,
-
         code: error.code || "EMPLOYER_NEW_OBLIGATIONS_RESTRICTED",
-
         statusCode: error.statusCode || 403,
-
         details: error.details && typeof error.details === "object" ? error.details : null,
       });
     }
@@ -249,9 +337,7 @@ class ShiftApplicationService {
     if (!shift) {
       throw ShiftApplicationService.createError({
         message: "Shift was not found.",
-
         code: "SHIFT_NOT_FOUND",
-
         statusCode: 404,
       });
     }
@@ -268,9 +354,7 @@ class ShiftApplicationService {
     const query = Shift.findOne(
       ShiftApplicationService.buildEmployerShiftFilter({
         shiftId,
-
         employerProfileId,
-
         employerContext,
       })
     ).select(ShiftApplicationService.getShiftFields());
@@ -284,9 +368,7 @@ class ShiftApplicationService {
     if (!shift) {
       throw ShiftApplicationService.createError({
         message: "Shift was not found or is not available to you.",
-
         code: "SHIFT_NOT_FOUND",
-
         statusCode: 404,
       });
     }
@@ -306,10 +388,23 @@ class ShiftApplicationService {
         "yearsOfExperience",
         "averageRating",
         "totalShiftsCompleted",
+        "licenceNumber",
         "licenceVerificationStatus",
+        "licenceVerificationMethod",
+        "licenceVerificationSource",
+        "licenceNameOnRecord",
+        "licenceVerifiedAt",
+        "licenceLastCheckedAt",
+        "licenceVerifiedBy",
+        "licenceValidityType",
+        "licenceLicensingYear",
         "licenceExpiryDate",
-        "identityVerificationStatus",
+        "upcomingLicence",
+        "+upcomingLicence.documentUrl",
+        "+licenceDocumentUrl",
         "professionalApprovalStatus",
+        "approvedForShiftsAt",
+        "approvedForShiftsBy",
         "accountStatus",
         "marketplaceStatus",
         "availabilityStatus",
@@ -325,9 +420,7 @@ class ShiftApplicationService {
     if (!professional) {
       throw ShiftApplicationService.createError({
         message: "Professional profile was not found.",
-
         code: "PROFESSIONAL_PROFILE_NOT_FOUND",
-
         statusCode: 404,
       });
     }
@@ -358,9 +451,7 @@ class ShiftApplicationService {
     if (!application) {
       throw ShiftApplicationService.createError({
         message: "Shift application was not found.",
-
         code: "SHIFT_APPLICATION_NOT_FOUND",
-
         statusCode: 404,
       });
     }
@@ -376,36 +467,29 @@ class ShiftApplicationService {
   }) {
     const application = await ShiftApplicationService.getApplication({
       applicationId,
-
       session,
     });
 
     const shift = await ShiftApplicationService.getEmployerShift({
       shiftId: application.shift,
-
       employerProfileId,
-
       employerContext,
-
       session,
     });
 
     return {
       application,
-
       shift,
     };
   }
 
   /* ─────────────────────────────── PROFESSIONAL ELIGIBILITY ─────────────────────────────── */
 
-  static assertProfessionalEligible({ professional, shift, now = new Date() }) {
+  static async assertProfessionalEligible({ professional, shift, session, now = new Date() }) {
     if (professional.type !== shift.professionalType) {
       throw ShiftApplicationService.createError({
         message: "Your professional type does not match this shift.",
-
         code: "SHIFT_PROFESSIONAL_TYPE_MISMATCH",
-
         statusCode: 403,
       });
     }
@@ -413,9 +497,25 @@ class ShiftApplicationService {
     if (professional.professionalApprovalStatus !== "approved") {
       throw ShiftApplicationService.createError({
         message: "Your professional profile must be approved before applying for shifts.",
-
         code: "PROFESSIONAL_NOT_APPROVED_FOR_SHIFTS",
+        statusCode: 403,
+      });
+    }
 
+    // Final approval must be a recorded administrative act, not merely a status flag.
+    const approvedAt = professional.approvedForShiftsAt;
+
+    if (
+      !(approvedAt instanceof Date) ||
+      Number.isNaN(approvedAt.getTime()) ||
+      approvedAt > now ||
+      !mongoose.isValidObjectId(professional.approvedForShiftsBy) ||
+      String(professional.approvedForShiftsBy) === String(professional.user)
+    ) {
+      throw this.createError({
+        message:
+          "A valid independent administrative approval is required before applying for shifts.",
+        code: "PROFESSIONAL_SHIFT_APPROVAL_EVIDENCE_INVALID",
         statusCode: 403,
       });
     }
@@ -423,9 +523,7 @@ class ShiftApplicationService {
     if (professional.accountStatus !== "active") {
       throw ShiftApplicationService.createError({
         message: "Your professional account is not active.",
-
         code: "PROFESSIONAL_ACCOUNT_NOT_ACTIVE",
-
         statusCode: 403,
       });
     }
@@ -433,9 +531,7 @@ class ShiftApplicationService {
     if (professional.marketplaceStatus !== "visible") {
       throw ShiftApplicationService.createError({
         message: "Your professional profile is not currently visible in the marketplace.",
-
         code: "PROFESSIONAL_MARKETPLACE_ACCESS_NOT_AVAILABLE",
-
         statusCode: 403,
       });
     }
@@ -443,9 +539,7 @@ class ShiftApplicationService {
     if (PROFESSIONAL_UNAVAILABLE_STATUSES.includes(professional.availabilityStatus)) {
       throw ShiftApplicationService.createError({
         message: "Update your availability before applying for this shift.",
-
         code: "PROFESSIONAL_NOT_AVAILABLE",
-
         statusCode: 403,
       });
     }
@@ -453,31 +547,57 @@ class ShiftApplicationService {
     if (professional.licenceVerificationStatus !== "verified") {
       throw ShiftApplicationService.createError({
         message: "Your professional licence must be verified before applying for shifts.",
-
         code: "PROFESSIONAL_LICENCE_NOT_VERIFIED",
-
         statusCode: 403,
       });
     }
 
-    if (professional.licenceExpiryDate && new Date(professional.licenceExpiryDate) <= now) {
-      throw ShiftApplicationService.createError({
-        message: "Your professional licence has expired.",
-
-        code: "PROFESSIONAL_LICENCE_EXPIRED",
-
-        statusCode: 403,
+    // This method runs for both submission and employer acceptance.
+    // The current MongoDB transaction is mandatory: verified readiness may
+    // promote a previously approved renewal before checking its active KYC
+    // audit. Never rely on the earlier HTTP middleware guard or on a bare
+    // profile-only readiness without trusted NIN evidence.
+    if (!session?.inTransaction()) {
+      throw this.createError({
+        message: "An active transaction is required for professional eligibility.",
+        code: "APPLICATION_TRANSACTION_REQUIRED",
+        statusCode: 500,
       });
     }
 
-    if (professional.identityVerificationStatus !== "verified") {
-      throw ShiftApplicationService.createError({
-        message: "Your identity must be verified before applying for shifts.",
-
-        code: "PROFESSIONAL_IDENTITY_NOT_VERIFIED",
-
-        statusCode: 403,
+    try {
+      const readiness = await ProfessionalVerificationService.getVerifiedReadiness({
+        profile: professional,
+        session,
       });
+
+      if (
+        readiness.verificationReady !== true ||
+        readiness.ninEvidenceConfirmed !== true ||
+        readiness.licenceVerified !== true ||
+        readiness.licenceCurrent !== true ||
+        readiness.namesConsistent !== true ||
+        readiness.adminApproved !== true ||
+        readiness.accountActive !== true
+      ) {
+        throw this.createError({
+          message:
+            "A current reviewed practising licence, trusted NIN name evidence and final approval are required before applying for shifts.",
+          code: "PROFESSIONAL_VERIFICATION_NOT_READY_FOR_SHIFTS",
+          statusCode: 403,
+        });
+      }
+    } catch (error) {
+      if (EXPECTED_PROFESSIONAL_EVIDENCE_ERRORS.has(error?.code)) {
+        throw this.createError({
+          message:
+            "Your verification evidence requires administrative review before you can apply for shifts.",
+          code: "PROFESSIONAL_VERIFICATION_EVIDENCE_NOT_READY",
+          statusCode: 403,
+        });
+      }
+
+      throw error;
     }
 
     return professional;
@@ -489,9 +609,7 @@ class ShiftApplicationService {
     if (occurrence.assignmentStatus !== "replacement_required") {
       throw ShiftApplicationService.createError({
         message: "This occurrence is no longer accepting replacement applications.",
-
         code: "OCCURRENCE_NOT_REQUIRING_REPLACEMENT",
-
         statusCode: 409,
       });
     }
@@ -499,9 +617,7 @@ class ShiftApplicationService {
     if (occurrence.assignedProfessional || occurrence.assignment || occurrence.assignedAt) {
       throw ShiftApplicationService.createError({
         message: "A professional has already been assigned to this occurrence.",
-
         code: "OCCURRENCE_ALREADY_ASSIGNED",
-
         statusCode: 409,
       });
     }
@@ -517,9 +633,7 @@ class ShiftApplicationService {
     ) {
       throw ShiftApplicationService.createError({
         message: "This occurrence is no longer available for replacement hiring.",
-
         code: "OCCURRENCE_REPLACEMENT_APPLICATION_NOT_AVAILABLE",
-
         statusCode: 409,
       });
     }
@@ -527,9 +641,7 @@ class ShiftApplicationService {
     if (!occurrence.replacementRequiredAt || !occurrence.replacementForAssignment) {
       throw ShiftApplicationService.createError({
         message: "The occurrence replacement context is incomplete.",
-
         code: "INCOMPLETE_OCCURRENCE_REPLACEMENT_CONTEXT",
-
         statusCode: 409,
       });
     }
@@ -537,9 +649,7 @@ class ShiftApplicationService {
     if (!occurrence.fillCutoffAt) {
       throw ShiftApplicationService.createError({
         message: "The occurrence fill cutoff is missing.",
-
         code: "OCCURRENCE_FILL_CUTOFF_MISSING",
-
         statusCode: 500,
       });
     }
@@ -547,9 +657,7 @@ class ShiftApplicationService {
     if (new Date(occurrence.fillCutoffAt) <= now) {
       throw ShiftApplicationService.createError({
         message: "Applications for this occurrence are now closed.",
-
         code: "OCCURRENCE_APPLICATION_WINDOW_CLOSED",
-
         statusCode: 409,
       });
     }
@@ -557,9 +665,7 @@ class ShiftApplicationService {
     if (occurrence.unfilledFinalizationAt && new Date(occurrence.unfilledFinalizationAt) <= now) {
       throw ShiftApplicationService.createError({
         message: "This occurrence is being finalized as unfilled.",
-
         code: "OCCURRENCE_UNFILLED_FINALIZATION_STARTED",
-
         statusCode: 409,
       });
     }
@@ -567,9 +673,7 @@ class ShiftApplicationService {
     if (new Date(occurrence.endTime) <= now) {
       throw ShiftApplicationService.createError({
         message: "This occurrence no longer has a remaining work interval.",
-
         code: "OCCURRENCE_HAS_NO_AVAILABLE_WORK_INTERVAL",
-
         statusCode: 409,
       });
     }
@@ -577,9 +681,7 @@ class ShiftApplicationService {
     if (occurrence.refundStatus !== "not_eligible") {
       throw ShiftApplicationService.createError({
         message: "This occurrence has already entered the refund workflow.",
-
         code: "OCCURRENCE_REFUND_ALREADY_STARTED",
-
         statusCode: 409,
       });
     }
@@ -600,12 +702,13 @@ class ShiftApplicationService {
       shift: shift._id,
     }).session(session);
 
-    if (!occurrence)
+    if (!occurrence) {
       throw this.createError({
         message: "Replacement occurrence was not found.",
         code: "REPLACEMENT_OCCURRENCE_NOT_FOUND",
         statusCode: 404,
       });
+    }
 
     this.assertOccurrenceTargetAvailable({ occurrence, now });
 
@@ -707,12 +810,13 @@ class ShiftApplicationService {
       status: { $in: ["replacement_requested", "resolved_exit"] },
     }).session(session);
 
-    if (!assignmentCase)
+    if (!assignmentCase) {
       throw this.createError({
         message: "The case does not authorize replacement.",
         code: "REPLACEMENT_CASE_NOT_AVAILABLE",
         statusCode: 409,
       });
+    }
 
     return assignmentCase;
   }
@@ -725,12 +829,13 @@ class ShiftApplicationService {
     requestedApplicationRound,
     session,
   }) {
-    if (!openedAt || !Number.isFinite(new Date(openedAt).getTime()))
+    if (!openedAt || !Number.isFinite(new Date(openedAt).getTime())) {
       throw this.createError({
         message: "Replacement opening time is missing.",
         code: "REPLACEMENT_OPENING_MISSING",
         statusCode: 409,
       });
+    }
 
     const scope = {
       shift: shift._id,
@@ -756,19 +861,21 @@ class ShiftApplicationService {
       round = (previousApplication?.applicationRound || 1) + 1;
     }
 
-    if (!Number.isSafeInteger(round) || round < 2 || round > MAX_APPLICATION_ROUNDS)
+    if (!Number.isSafeInteger(round) || round < 2 || round > MAX_APPLICATION_ROUNDS) {
       throw this.createError({
         message: "No further application round is available for this opportunity.",
         code: "REPLACEMENT_APPLICATION_ROUND_LIMIT_REACHED",
         statusCode: 409,
       });
+    }
 
-    if (requestedApplicationRound != null && Number(requestedApplicationRound) !== round)
+    if (requestedApplicationRound != null && Number(requestedApplicationRound) !== round) {
       throw this.createError({
         message: "The application belongs to an earlier replacement round.",
         code: "STALE_SHIFT_APPLICATION_ROUND",
         statusCode: 409,
       });
+    }
 
     return round;
   }
@@ -781,7 +888,7 @@ class ShiftApplicationService {
     session,
     now = new Date(),
   }) {
-    if (occurrenceId)
+    if (occurrenceId) {
       return this.getOccurrenceReplacementRoundContext({
         shift,
         occurrenceId,
@@ -790,13 +897,15 @@ class ShiftApplicationService {
         session,
         now,
       });
+    }
 
     if (!replacementForAssignmentId) {
-      if (requestedApplicationRound != null && Number(requestedApplicationRound) !== 1)
+      if (requestedApplicationRound != null && Number(requestedApplicationRound) !== 1) {
         throw this.createError({
           message: "Tail replacement requires its prior assignment ID.",
           code: "REPLACEMENT_ASSIGNMENT_ID_REQUIRED",
         });
+      }
 
       return {
         applicationType: "initial",
@@ -819,12 +928,16 @@ class ShiftApplicationService {
 
     this.assertReplacementIdentity({ shift, previous, occurrences: [] });
 
-    if (!REPLACEABLE_ASSIGNMENT_STATUSES.includes(previous.status) || previous.replacedByAssignment)
+    if (
+      !REPLACEABLE_ASSIGNMENT_STATUSES.includes(previous.status) ||
+      previous.replacedByAssignment
+    ) {
       throw this.createError({
         message: "This assignment is not available for tail replacement.",
         code: "REPLACED_ASSIGNMENT_NOT_AVAILABLE",
         statusCode: 409,
       });
+    }
 
     const candidates = await ShiftOccurrence.find({
       shift: shift._id,
@@ -839,12 +952,13 @@ class ShiftApplicationService {
 
     const caseIds = [...new Set(candidates.map((o) => String(o.replacementCase)))];
 
-    if (caseIds.length !== 1)
+    if (caseIds.length !== 1) {
       throw this.createError({
         message: "A unique case-authorized tail could not be resolved.",
         code: "REPLACEMENT_OPPORTUNITY_NOT_AVAILABLE",
         statusCode: 409,
       });
+    }
 
     const assignmentCase = await this.loadReplacementCase({
       shift,
@@ -868,12 +982,13 @@ class ShiftApplicationService {
       end !== previous.plannedEndSequence ||
       start > end ||
       range.replacementOccurrenceCount !== end - start + 1
-    )
+    ) {
       throw this.createError({
         message: "The case replacement range is invalid.",
         code: "REPLACEMENT_CASE_RANGE_INVALID",
         statusCode: 409,
       });
+    }
 
     const authorizationAnchor = await ShiftOccurrence.findOne({
       shift: shift._id,
@@ -893,12 +1008,13 @@ class ShiftApplicationService {
       })
       .session(session);
 
-    if (!authorizationAnchor?.replacementRequiredAt)
+    if (!authorizationAnchor?.replacementRequiredAt) {
       throw this.createError({
         message: "The replacement opportunity opening could not be resolved.",
         code: "REPLACEMENT_OPENING_MISSING",
         statusCode: 409,
       });
+    }
 
     const authorizedRoundContext = {
       slotNumber: previous.slotNumber,
@@ -926,12 +1042,13 @@ class ShiftApplicationService {
       occurrences: availableOccurrences,
     });
 
-    if (!availableOccurrences.length)
+    if (!availableOccurrences.length) {
       throw this.createError({
         message: "No case-authorized replacement work remains available.",
         code: "REPLACEMENT_OPPORTUNITY_NOT_AVAILABLE",
         statusCode: 409,
       });
+    }
 
     for (const occurrence of availableOccurrences) {
       this.assertOccurrenceTargetAvailable({
@@ -944,12 +1061,13 @@ class ShiftApplicationService {
       availableOccurrences.map((occurrence) => Number(occurrence.sequenceNumber))
     );
 
-    if (!availableSequences.has(end))
+    if (!availableSequences.has(end)) {
       throw this.createError({
         message: "The remaining replacement work no longer forms an assignable tail.",
         code: "REPLACEMENT_OPPORTUNITY_NOT_CONTIGUOUS",
         statusCode: 409,
       });
+    }
 
     let executableStart = end;
 
@@ -957,12 +1075,13 @@ class ShiftApplicationService {
       executableStart -= 1;
     }
 
-    if (availableOccurrences.some((occurrence) => occurrence.sequenceNumber < executableStart))
+    if (availableOccurrences.some((occurrence) => occurrence.sequenceNumber < executableStart)) {
       throw this.createError({
         message: "The remaining replacement work is fragmented and cannot be assigned as one tail.",
         code: "REPLACEMENT_OPPORTUNITY_NOT_CONTIGUOUS",
         statusCode: 409,
       });
+    }
 
     const executableOccurrences = availableOccurrences.filter(
       (occurrence) => occurrence.sequenceNumber >= executableStart
@@ -975,12 +1094,13 @@ class ShiftApplicationService {
       executableOccurrences.some(
         (occurrence, index) => occurrence.sequenceNumber !== executableStart + index
       )
-    )
+    ) {
       throw this.createError({
         message: "The remaining replacement work is not a complete contiguous tail.",
         code: "REPLACEMENT_OPPORTUNITY_NOT_CONTIGUOUS",
         statusCode: 409,
       });
+    }
 
     const openedAt = authorizationAnchor.replacementRequiredAt;
 
@@ -1038,18 +1158,20 @@ class ShiftApplicationService {
         });
       }
     } else {
-      if (!REPLACEMENT_APPLICATION_PARENT_STATUSES.includes(shift.status))
+      if (!REPLACEMENT_APPLICATION_PARENT_STATUSES.includes(shift.status)) {
         throw this.createError({
           message: "Replacement hiring is not available in this Shift state.",
           code: "SHIFT_NOT_ACCEPTING_REPLACEMENT_APPLICATIONS",
           statusCode: 409,
         });
+      }
 
-      if (roundContext.occurrence)
+      if (roundContext.occurrence) {
         this.assertOccurrenceTargetAvailable({
           occurrence: roundContext.occurrence,
           now,
         });
+      }
     }
 
     return shift;
@@ -1099,43 +1221,25 @@ class ShiftApplicationService {
   static buildOccurrenceTargetFilter({ shift, occurrence, now = new Date() }) {
     return {
       _id: occurrence._id,
-
       shift: shift._id,
-
       assignmentStatus: "replacement_required",
-
       assignedProfessional: null,
-
       assignment: null,
-
       assignedAt: null,
-
       status: "scheduled",
-
       attendanceStatus: "not_started",
-
       settlementStatus: "not_due",
-
       checkedInAt: null,
-
       checkedOutAt: null,
-
       checkInPinUsedAt: null,
-
       checkOutPinUsedAt: null,
-
       replacementRequiredAt: occurrence.replacementRequiredAt,
-
       replacementForAssignment: occurrence.replacementForAssignment,
-
       replacementCase: occurrence.replacementCase || null,
-
       refundStatus: "not_eligible",
-
       fillCutoffAt: {
         $gt: now,
       },
-
       endTime: {
         $gt: now,
       },
@@ -1197,13 +1301,14 @@ class ShiftApplicationService {
   }
 
   static async getCandidateIntervals({ shift, roundContext, session, now = new Date() }) {
-    if (roundContext.isOccurrenceTargeted)
+    if (roundContext.isOccurrenceTargeted) {
       return [
         {
           startTime: roundContext.occurrence.startTime,
           endTime: roundContext.occurrence.endTime,
         },
       ];
+    }
 
     const filter =
       roundContext.applicationType === "replacement"
@@ -1233,12 +1338,13 @@ class ShiftApplicationService {
       })
       .session(session);
 
-    if (!occurrences.length)
+    if (!occurrences.length) {
       throw this.createError({
         message: "No work dates are available for this application.",
         code: "SHIFT_HAS_NO_AVAILABLE_WORK_DATES",
         statusCode: 409,
       });
+    }
 
     if (roundContext.applicationType === "initial") {
       const groups = new Map();
@@ -1257,12 +1363,13 @@ class ShiftApplicationService {
           group.every((occurrence, index) => occurrence.sequenceNumber === index + 1)
       );
 
-      if (!complete)
+      if (!complete) {
         throw this.createError({
           message: "No complete initial position remains.",
           code: "INITIAL_ASSIGNMENT_CAPACITY_FILLED",
           statusCode: 409,
         });
+      }
 
       return complete.map((occurrence) => ({
         startTime: occurrence.startTime,
@@ -1281,7 +1388,6 @@ class ShiftApplicationService {
       startTime: {
         $lt: interval.endTime,
       },
-
       endTime: {
         $gt: interval.startTime,
       },
@@ -1311,7 +1417,7 @@ class ShiftApplicationService {
       $or: this.buildOverlapFilter(intervals),
     }).session(session);
 
-    if (conflict)
+    if (conflict) {
       throw this.createError({
         message: "This application overlaps with work already assigned to you.",
         code: "PROFESSIONAL_SHIFT_SCHEDULE_CONFLICT",
@@ -1322,28 +1428,25 @@ class ShiftApplicationService {
           conflictingSlotNumber: conflict.slotNumber,
         },
       });
+    }
   }
 
   static buildMatchSnapshot(professional) {
     return {
       professionalType: professional.type,
-
       specialty: professional.specialty || null,
-
       yearsOfExperience: Number(professional.yearsOfExperience || 0),
-
       preferredRate:
         professional.preferredRate === null || professional.preferredRate === undefined
           ? null
           : Number(professional.preferredRate),
-
       distanceKm: null,
-
       rating: Number(professional.averageRating || 0),
-
       completedShifts: Number(professional.totalShiftsCompleted || 0),
     };
   }
+
+  /* ─────────────────────────────── APPLICATION CREATION ─────────────────────────────── */
 
   static async createApplication(
     {
@@ -1357,33 +1460,22 @@ class ShiftApplicationService {
   ) {
     return this.runWithOptionalTransaction(options, async (session) => {
       const now = new Date();
-
       const normalizedShiftId = this.normalizeObjectId(shiftId, "shift ID");
 
-      // Serialize hiring-opportunity reads and counters with assignment writes.
-      const shift = await Shift.findOneAndUpdate(
-        {
-          _id: normalizedShiftId,
-        },
-        {
-          $inc: {
-            __v: 1,
-          },
-        },
-        {
-          new: true,
-          session,
-        }
+      // Serialize application creation with assignment acceptance and profile changes.
+      // Match the Shift-then-professional lock order used during acceptance.
+      const normalizedProfessionalProfileId = this.normalizeObjectId(
+        professionalProfileId,
+        "professional profile ID"
       );
 
-      if (!shift)
-        throw this.createError({
-          message: "Shift was not found.",
-          code: "SHIFT_NOT_FOUND",
-          statusCode: 404,
-        });
+      const shift = await ShiftAssignmentService.lockShiftAndProfessional({
+        shiftId: normalizedShiftId,
+        professionalId: normalizedProfessionalProfileId,
+        session,
+      });
 
-      const professional = await this.getProfessional(professionalProfileId, session);
+      const professional = await this.getProfessional(normalizedProfessionalProfileId, session);
 
       const roundContext = await this.getApplicationRoundContext({
         shift,
@@ -1399,19 +1491,23 @@ class ShiftApplicationService {
         now,
       });
 
-      this.assertProfessionalEligible({
+      await this.assertProfessionalEligible({
         professional,
         shift,
+        session,
         now,
       });
 
-      if (roundContext.applicationType === "replacement")
+      await this.assertBranchEligibleForApplication({ shift, session });
+
+      if (roundContext.applicationType === "replacement") {
         await this.assertReplacementOccurrencesAvailable({
           shift,
           roundContext,
           session,
           now,
         });
+      }
 
       await this.assertNoConfirmedScheduleConflict({
         shift,
@@ -1433,12 +1529,13 @@ class ShiftApplicationService {
       const existing = await ShiftApplication.findOne(scope).session(session);
 
       if (existing) {
-        if (!ACTIVE_APPLICATION_STATUSES.includes(existing.status))
+        if (!ACTIVE_APPLICATION_STATUSES.includes(existing.status)) {
           throw this.createError({
             message: "You already applied for this opportunity.",
             code: "SHIFT_APPLICATION_ALREADY_EXISTS",
             statusCode: 409,
           });
+        }
 
         return {
           application: existing,
@@ -1460,6 +1557,8 @@ class ShiftApplicationService {
         matchSnapshot: this.buildMatchSnapshot(professional),
       });
 
+      await this.assertBranchEligibleForApplication({ shift, session });
+      await this.assertProfessionalEligible({ professional, shift, session, now: new Date() });
       await application.save({
         session,
       });
@@ -1514,71 +1613,58 @@ class ShiftApplicationService {
     });
   }
 
+  /* ─────────────────────────────── WITHDRAW APPLICATION ─────────────────────────────── */
+
   static async withdrawApplication(
     { applicationId, professionalProfileId, withdrawalReason = null },
     options = {}
   ) {
-    return ShiftApplicationService.runWithOptionalTransaction(
-      options,
+    return ShiftApplicationService.runWithOptionalTransaction(options, async (session) => {
+      const application = await ShiftApplicationService.getApplication({
+        applicationId,
+        professionalProfileId,
+        session,
+      });
 
-      async (session) => {
-        const application = await ShiftApplicationService.getApplication({
-          applicationId,
-
-          professionalProfileId,
-
-          session,
+      if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
+        throw ShiftApplicationService.createError({
+          message: "This application can no longer be withdrawn.",
+          code: "SHIFT_APPLICATION_WITHDRAWAL_NOT_ALLOWED",
+          statusCode: 409,
+          details: {
+            status: application.status,
+          },
         });
-
-        if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
-          throw ShiftApplicationService.createError({
-            message: "This application can no longer be withdrawn.",
-
-            code: "SHIFT_APPLICATION_WITHDRAWAL_NOT_ALLOWED",
-
-            statusCode: 409,
-
-            details: {
-              status: application.status,
-            },
-          });
-        }
-
-        const now = new Date();
-
-        application.status = "withdrawn";
-
-        application.withdrawnAt = now;
-
-        application.withdrawalReason = ShiftApplicationService.normalizeOptionalText(
-          withdrawalReason,
-          "Withdrawal reason",
-          MAX_REASON_LENGTH
-        );
-
-        await application.save({
-          session,
-        });
-
-        logger.info(`Shift application ${application._id} withdrawn`);
-
-        return {
-          application,
-
-          events: [
-            {
-              type: "shift_application_withdrawn",
-
-              shiftId: String(application.shift),
-
-              applicationId: String(application._id),
-
-              professionalId: String(application.professional),
-            },
-          ],
-        };
       }
-    );
+
+      const now = new Date();
+
+      application.status = "withdrawn";
+      application.withdrawnAt = now;
+      application.withdrawalReason = ShiftApplicationService.normalizeOptionalText(
+        withdrawalReason,
+        "Withdrawal reason",
+        MAX_REASON_LENGTH
+      );
+
+      await application.save({
+        session,
+      });
+
+      logger.info(`Shift application ${application._id} withdrawn`);
+
+      return {
+        application,
+        events: [
+          {
+            type: "shift_application_withdrawn",
+            shiftId: String(application.shift),
+            applicationId: String(application._id),
+            professionalId: String(application.professional),
+          },
+        ],
+      };
+    });
   }
 
   /* ─────────────────────────────── EMPLOYER REVIEW ─────────────────────────────── */
@@ -1587,11 +1673,8 @@ class ShiftApplicationService {
     if (!ACTIVE_APPLICATION_STATUSES.includes(application.status)) {
       throw ShiftApplicationService.createError({
         message: "This application can no longer be reviewed.",
-
         code: "SHIFT_APPLICATION_REVIEW_NOT_ALLOWED",
-
         statusCode: 409,
-
         details: {
           status: application.status,
         },
@@ -1609,78 +1692,59 @@ class ShiftApplicationService {
     },
     options = {}
   ) {
-    return ShiftApplicationService.runWithOptionalTransaction(
-      options,
+    return ShiftApplicationService.runWithOptionalTransaction(options, async (session) => {
+      const reviewedBy = ShiftApplicationService.normalizeObjectId(
+        reviewedByUserId,
+        "reviewed-by user ID"
+      );
 
-      async (session) => {
-        const reviewedBy = ShiftApplicationService.normalizeObjectId(
-          reviewedByUserId,
-          "reviewed-by user ID"
-        );
+      const { application, shift } = await ShiftApplicationService.getEmployerApplication({
+        applicationId,
+        employerProfileId,
+        employerContext,
+        session,
+      });
 
-        const { application, shift } = await ShiftApplicationService.getEmployerApplication({
-          applicationId,
+      ShiftApplicationService.assertApplicationReviewable(application);
 
-          employerProfileId,
-
-          employerContext,
-
-          session,
-        });
-
-        ShiftApplicationService.assertApplicationReviewable(application);
-
-        if (application.status === "shortlisted") {
-          return {
-            application,
-
-            shift,
-
-            idempotent: true,
-          };
-        }
-
-        const now = new Date();
-
-        application.status = "shortlisted";
-
-        application.shortlistedAt = now;
-
-        application.reviewedAt = now;
-
-        application.reviewedBy = reviewedBy;
-
-        application.employerPrivateNote = ShiftApplicationService.normalizeOptionalText(
-          employerPrivateNote,
-          "Employer private note",
-          MAX_REVIEW_NOTE_LENGTH
-        );
-
-        await application.save({
-          session,
-        });
-
+      if (application.status === "shortlisted") {
         return {
           application,
-
           shift,
-
-          idempotent: false,
-
-          events: [
-            {
-              type: "shift_application_shortlisted",
-
-              shiftId: String(shift._id),
-
-              applicationId: String(application._id),
-
-              professionalId: String(application.professional),
-            },
-          ],
+          idempotent: true,
         };
       }
-    );
+
+      const now = new Date();
+
+      application.status = "shortlisted";
+      application.shortlistedAt = now;
+      application.reviewedAt = now;
+      application.reviewedBy = reviewedBy;
+      application.employerPrivateNote = ShiftApplicationService.normalizeOptionalText(
+        employerPrivateNote,
+        "Employer private note",
+        MAX_REVIEW_NOTE_LENGTH
+      );
+
+      await application.save({
+        session,
+      });
+
+      return {
+        application,
+        shift,
+        idempotent: false,
+        events: [
+          {
+            type: "shift_application_shortlisted",
+            shiftId: String(shift._id),
+            applicationId: String(application._id),
+            professionalId: String(application.professional),
+          },
+        ],
+      };
+    });
   }
 
   static async rejectApplication(
@@ -1694,72 +1758,55 @@ class ShiftApplicationService {
     },
     options = {}
   ) {
-    return ShiftApplicationService.runWithOptionalTransaction(
-      options,
+    return ShiftApplicationService.runWithOptionalTransaction(options, async (session) => {
+      const reviewedBy = ShiftApplicationService.normalizeObjectId(
+        reviewedByUserId,
+        "reviewed-by user ID"
+      );
 
-      async (session) => {
-        const reviewedBy = ShiftApplicationService.normalizeObjectId(
-          reviewedByUserId,
-          "reviewed-by user ID"
-        );
+      const { application, shift } = await ShiftApplicationService.getEmployerApplication({
+        applicationId,
+        employerProfileId,
+        employerContext,
+        session,
+      });
 
-        const { application, shift } = await ShiftApplicationService.getEmployerApplication({
-          applicationId,
+      ShiftApplicationService.assertApplicationReviewable(application);
 
-          employerProfileId,
+      const now = new Date();
 
-          employerContext,
+      application.status = "rejected";
+      application.rejectedAt = now;
+      application.reviewedAt = now;
+      application.reviewedBy = reviewedBy;
+      application.rejectedReason = ShiftApplicationService.normalizeOptionalText(
+        rejectedReason,
+        "Rejection reason",
+        MAX_REASON_LENGTH
+      );
+      application.employerPrivateNote = ShiftApplicationService.normalizeOptionalText(
+        employerPrivateNote,
+        "Employer private note",
+        MAX_REVIEW_NOTE_LENGTH
+      );
 
-          session,
-        });
+      await application.save({
+        session,
+      });
 
-        ShiftApplicationService.assertApplicationReviewable(application);
-
-        const now = new Date();
-
-        application.status = "rejected";
-
-        application.rejectedAt = now;
-
-        application.reviewedAt = now;
-
-        application.reviewedBy = reviewedBy;
-
-        application.rejectedReason = ShiftApplicationService.normalizeOptionalText(
-          rejectedReason,
-          "Rejection reason",
-          MAX_REASON_LENGTH
-        );
-
-        application.employerPrivateNote = ShiftApplicationService.normalizeOptionalText(
-          employerPrivateNote,
-          "Employer private note",
-          MAX_REVIEW_NOTE_LENGTH
-        );
-
-        await application.save({
-          session,
-        });
-
-        return {
-          application,
-
-          shift,
-
-          events: [
-            {
-              type: "shift_application_rejected",
-
-              shiftId: String(shift._id),
-
-              applicationId: String(application._id),
-
-              professionalId: String(application.professional),
-            },
-          ],
-        };
-      }
-    );
+      return {
+        application,
+        shift,
+        events: [
+          {
+            type: "shift_application_rejected",
+            shiftId: String(shift._id),
+            applicationId: String(application._id),
+            professionalId: String(application.professional),
+          },
+        ],
+      };
+    });
   }
 
   /* ─────────────────────────────── ACCEPTANCE ─────────────────────────────── */
@@ -1777,7 +1824,6 @@ class ShiftApplicationService {
   ) {
     return this.runWithOptionalTransaction(options, async (session) => {
       const now = this.normalizeCurrentTime(currentTime);
-
       const reviewedBy = this.normalizeObjectId(reviewedByUserId, "reviewed-by user ID");
 
       const loaded = await this.getEmployerApplication({
@@ -1801,6 +1847,7 @@ class ShiftApplicationService {
 
       this.assertApplicationReviewable(application);
 
+      await this.assertBranchEligibleForApplication({ shift, session, actorUserId: reviewedBy });
       const professional = await this.getProfessional(application.professional, session);
 
       const roundContext = await this.getApplicationRoundContext({
@@ -1824,9 +1871,10 @@ class ShiftApplicationService {
         });
       }
 
-      this.assertProfessionalEligible({
+      await this.assertProfessionalEligible({
         professional,
         shift,
+        session,
         now,
       });
 
@@ -1836,13 +1884,14 @@ class ShiftApplicationService {
         now,
       });
 
-      if (roundContext.applicationType === "replacement")
+      if (roundContext.applicationType === "replacement") {
         await this.assertReplacementOccurrencesAvailable({
           shift,
           roundContext,
           session,
           now,
         });
+      }
 
       await this.assertNoConfirmedScheduleConflict({
         shift,
@@ -1867,6 +1916,8 @@ class ShiftApplicationService {
         assignedAt: now,
       };
 
+      await this.assertBranchEligibleForApplication({ shift, session, actorUserId: reviewedBy });
+      await this.assertProfessionalEligible({ professional, shift, session, now: new Date() });
       const assignmentResult =
         roundContext.applicationType === "initial"
           ? await ShiftAssignmentService.createInitialAssignment(payload, {
@@ -1893,7 +1944,6 @@ class ShiftApplicationService {
       application.acceptedAt = now;
       application.reviewedAt = now;
       application.reviewedBy = reviewedBy;
-
       application.employerPrivateNote = this.normalizeOptionalText(
         employerPrivateNote,
         "Employer private note",
@@ -1954,7 +2004,6 @@ class ShiftApplicationService {
       }
 
       const acceptedShift = await this.getShift(shift._id, session);
-
       const applicationType = application.applicationType;
       const assignmentStatus = assignmentResult.assignment.status;
 
@@ -1998,7 +2047,7 @@ class ShiftApplicationService {
               ? "isolated"
               : "tail"
             : null,
-        applicationRound: application.applicationRound,
+        applicationRound: roundContext.applicationRound,
         isOccurrenceTargeted: roundContext.isOccurrenceTargeted,
         rejectedOtherApplicationCount,
         events: [
@@ -2015,6 +2064,8 @@ class ShiftApplicationService {
       };
     });
   }
+
+  /* ─────────────────────────────── APPLICATION CLEANUP ─────────────────────────────── */
 
   static async expireOpenApplicationsForShift(
     {
@@ -2037,34 +2088,36 @@ class ShiftApplicationService {
       if (applicationRound != null) {
         const round = Number(applicationRound);
 
-        if (!Number.isSafeInteger(round) || round < 1 || round > MAX_APPLICATION_ROUNDS)
+        if (!Number.isSafeInteger(round) || round < 1 || round > MAX_APPLICATION_ROUNDS) {
           throw this.createError({
             message: "Invalid application round.",
             code: "INVALID_APPLICATION_ROUND",
           });
+        }
 
         filter.applicationRound = round;
       }
 
       if (applicationType != null) {
-        if (!["initial", "replacement"].includes(applicationType))
+        if (!["initial", "replacement"].includes(applicationType)) {
           throw this.createError({
             message: "Invalid application type.",
             code: "INVALID_APPLICATION_TYPE",
           });
+        }
 
         filter.applicationType = applicationType;
       }
 
       if (replacementForAssignmentId) {
-        if (applicationType === "initial")
+        if (applicationType === "initial") {
           throw this.createError({
             message: "Initial cleanup cannot target a replacement.",
             code: "INVALID_APPLICATION_CLEANUP_SCOPE",
           });
+        }
 
         filter.applicationType = "replacement";
-
         filter.replacementForAssignment = this.normalizeObjectId(
           replacementForAssignmentId,
           "replaced assignment ID"
@@ -2119,51 +2172,41 @@ class ShiftApplicationService {
   }
 
   static async cancelOpenApplicationsForShift({ shiftId }, options = {}) {
-    return ShiftApplicationService.runWithOptionalTransaction(
-      options,
+    return ShiftApplicationService.runWithOptionalTransaction(options, async (session) => {
+      const normalizedShiftId = ShiftApplicationService.normalizeObjectId(shiftId, "shift ID");
 
-      async (session) => {
-        const normalizedShiftId = ShiftApplicationService.normalizeObjectId(shiftId, "shift ID");
-
-        const result = await ShiftApplication.updateMany(
-          {
-            shift: normalizedShiftId,
-
-            status: {
-              $in: ACTIVE_APPLICATION_STATUSES,
-            },
+      const result = await ShiftApplication.updateMany(
+        {
+          shift: normalizedShiftId,
+          status: {
+            $in: ACTIVE_APPLICATION_STATUSES,
           },
-          {
-            $set: {
-              status: "cancelled",
-
-              cancelledAt: new Date(),
-            },
+        },
+        {
+          $set: {
+            status: "cancelled",
+            cancelledAt: new Date(),
           },
-          {
-            session,
+        },
+        {
+          session,
+          runValidators: true,
+        }
+      );
 
-            runValidators: true,
-          }
-        );
-
-        return {
-          shiftId: String(normalizedShiftId),
-
-          cancelledApplicationCount: result.modifiedCount,
-        };
-      }
-    );
+      return {
+        shiftId: String(normalizedShiftId),
+        cancelledApplicationCount: result.modifiedCount,
+      };
+    });
   }
 
   static async getApplicationsByStatus({ shiftId, status, occurrenceId = undefined }) {
     const normalizedShiftId = ShiftApplicationService.normalizeObjectId(shiftId, "shift ID");
-
     const normalizedStatus = ShiftApplicationService.normalizeStatus(status);
 
     const filter = {
       shift: normalizedShiftId,
-
       status: normalizedStatus,
     };
 

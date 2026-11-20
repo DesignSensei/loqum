@@ -185,6 +185,29 @@ class PaystackTransferService {
     };
   }
 
+  static getPayoutAmount(transaction) {
+    const amount = transaction.netAmount ?? transaction.amount;
+    if (!Number.isSafeInteger(amount) || amount <= 0 || amount > transaction.amount) {
+      throw new Error(
+        "Withdrawal bank payout must be a positive safe integer no greater than the wallet debit."
+      );
+    }
+    return amount;
+  }
+
+  static assertBankAccountMatches(transaction, bankAccount) {
+    const owner = PaystackTransferService.getWithdrawalOwnerContext(transaction);
+    const profileId =
+      owner.ownerType === "employer" ? owner.employerProfileId : owner.professionalProfileId;
+    if (
+      String(bankAccount?._id) !== String(transaction.bankAccount) ||
+      bankAccount.ownerType !== owner.ownerType ||
+      String(bankAccount[owner.ownerType]) !== String(profileId)
+    ) {
+      throw new Error("Withdrawal bank account does not match the recorded owner and account.");
+    }
+  }
+
   static assertTransferOutcomeMatches({ withdrawalTransaction, outcome }) {
     if (!withdrawalTransaction || !outcome) {
       throw new Error("Withdrawal Transaction and Paystack Transfer outcome are required.");
@@ -198,11 +221,14 @@ class PaystackTransferService {
       throw new Error("Withdrawal Transaction has no deterministic Paystack Transfer reference.");
     }
 
-    if (outcome.reference && outcome.reference !== expectedReference) {
+    if (!outcome.reference || outcome.reference !== expectedReference) {
       throw new Error("Paystack returned an unexpected withdrawal Transfer reference.");
     }
 
-    if (outcome.amount !== null && outcome.amount !== Number(withdrawalTransaction.amount)) {
+    if (
+      outcome.amount !== null &&
+      outcome.amount !== PaystackTransferService.getPayoutAmount(withdrawalTransaction)
+    ) {
       throw new Error("Paystack returned an unexpected withdrawal Transfer amount.");
     }
 
@@ -213,25 +239,25 @@ class PaystackTransferService {
       throw new Error("Paystack returned an unexpected withdrawal Transfer currency.");
     }
 
+    if (
+      outcome.transferCode &&
+      withdrawalTransaction.paystackTransferCode &&
+      outcome.transferCode !== withdrawalTransaction.paystackTransferCode
+    ) {
+      throw new Error("Paystack returned an unexpected withdrawal Transfer code.");
+    }
+    const expectedRecipient = withdrawalTransaction.metadata?.paystackRecipientCode;
+    if (outcome.recipientCode && expectedRecipient && outcome.recipientCode !== expectedRecipient) {
+      throw new Error("Paystack returned an unexpected withdrawal Transfer recipient.");
+    }
+
     return true;
   }
 
-  static isDefinitiveTransferSubmissionFailure(error) {
-    if (!error || error.code === "PAYSTACK_REQUEST_TIMEOUT") {
-      return false;
-    }
-
-    const providerStatusCode = Number(error.providerStatusCode);
-
-    if (
-      Number.isInteger(providerStatusCode) &&
-      providerStatusCode >= 400 &&
-      providerStatusCode < 500
-    ) {
-      return true;
-    }
-
-    return Boolean(error.code === "PAYSTACK_PROVIDER_REJECTED_REQUEST" && error.providerResponse);
+  static isDefinitiveTransferSubmissionFailure(_error) {
+    // HTTP errors describe a request, not the final state of its transfer.
+    // Preserve the reservation until reference reconciliation confirms failure.
+    return false;
   }
 
   /* ─────────────────────────────── LOADERS ─────────────────────────────── */
@@ -579,6 +605,21 @@ class PaystackTransferService {
       outcome,
     });
 
+    if (
+      withdrawalTransaction.status === "reversed" ||
+      (withdrawalTransaction.status === "completed" &&
+        ["success", "pending", "otp"].includes(outcome.status))
+    ) {
+      return {
+        transaction: withdrawalTransaction,
+        outcome,
+        persisted: true,
+        idempotent: true,
+        completed: withdrawalTransaction.status === "completed",
+        reversed: withdrawalTransaction.status === "reversed",
+      };
+    }
+
     const transferMetadata = {
       ...metadata,
 
@@ -668,7 +709,7 @@ class PaystackTransferService {
     }
 
     if (["failed", "reversed"].includes(outcome.status)) {
-      if (outcome.transferCode) {
+      if (outcome.transferCode && withdrawalTransaction.status === "processing") {
         await WalletWithdrawalService.markWithdrawalSubmittedToProvider({
           withdrawalTransactionId: withdrawalTransaction._id,
 
@@ -678,7 +719,12 @@ class PaystackTransferService {
         });
       }
 
-      const reversedResult = await WalletWithdrawalService.reverseFailedWithdrawal({
+      const reverse =
+        withdrawalTransaction.status === "completed"
+          ? WalletWithdrawalService.reverseCompletedWithdrawal
+          : WalletWithdrawalService.reverseFailedWithdrawal;
+      const reversedResult = await reverse({
+        currentTime: normalizedCurrentTime,
         withdrawalTransactionId: withdrawalTransaction._id,
 
         reversalReason:
@@ -692,7 +738,10 @@ class PaystackTransferService {
       return {
         transaction: reversedResult.originalTransaction || withdrawalTransaction,
 
-        reversalTransaction: reversedResult.transaction || null,
+        reversalTransaction:
+          reversedResult.originalTransaction?.status === "reversed"
+            ? reversedResult.transaction
+            : null,
 
         wallet: reversedResult.wallet || null,
 
@@ -759,6 +808,8 @@ class PaystackTransferService {
       bankAccount ||
       (await PaystackTransferService.getBankAccount(withdrawalTransaction.bankAccount));
 
+    PaystackTransferService.assertBankAccountMatches(withdrawalTransaction, resolvedBankAccount);
+
     const authoritativeMetadata = {
       ...metadata,
 
@@ -793,6 +844,15 @@ class PaystackTransferService {
         },
       }));
 
+    const persistedRecipient = PaystackTransferService.cleanString(
+      withdrawalTransaction.metadata?.paystackRecipientCode
+    );
+    if (!persistedRecipient || resolvedRecipientResult.recipientCode !== persistedRecipient) {
+      throw new Error(
+        "Transfer recipient differs from the persisted provider boundary. Manual reconciliation is required."
+      );
+    }
+
     const transferReason =
       PaystackTransferService.cleanString(withdrawalTransaction.metadata?.paystackTransferReason) ||
       PaystackTransferService.cleanString(reason) ||
@@ -804,7 +864,7 @@ class PaystackTransferService {
       transfer = await PaystackService.initiateTransfer({
         source: "balance",
 
-        amount: withdrawalTransaction.amount,
+        amount: PaystackTransferService.getPayoutAmount(withdrawalTransaction),
 
         recipient: resolvedRecipientResult.recipientCode,
 
@@ -845,7 +905,7 @@ class PaystackTransferService {
 
           recipientCode: resolvedRecipientResult.recipientCode,
 
-          amount: Number(withdrawalTransaction.amount),
+          amount: PaystackTransferService.getPayoutAmount(withdrawalTransaction),
 
           currency: PaystackTransferService.cleanCurrency(withdrawalTransaction.currency),
 
@@ -955,18 +1015,6 @@ class PaystackTransferService {
 
     const withdrawalTransaction = referenceResult.transaction;
 
-    if (withdrawalTransaction.status === "completed") {
-      return {
-        transaction: withdrawalTransaction,
-
-        reconciled: true,
-
-        completed: true,
-
-        idempotent: true,
-      };
-    }
-
     if (["failed", "reversed", "cancelled"].includes(withdrawalTransaction.status)) {
       return {
         transaction: withdrawalTransaction,
@@ -981,7 +1029,7 @@ class PaystackTransferService {
       };
     }
 
-    if (withdrawalTransaction.status !== "processing") {
+    if (!["processing", "completed"].includes(withdrawalTransaction.status)) {
       return {
         transaction: withdrawalTransaction,
 
@@ -996,7 +1044,10 @@ class PaystackTransferService {
     try {
       transfer = await PaystackService.verifyTransfer(referenceResult.transferReference);
     } catch (error) {
-      if (Number(error?.providerStatusCode) === 404) {
+      if (
+        Number(error?.providerStatusCode) === 404 &&
+        withdrawalTransaction.status === "processing"
+      ) {
         /*
          * The local processing boundary may have committed
          * before this process actually reached POST /transfer.
@@ -1146,6 +1197,8 @@ class PaystackTransferService {
       withdrawalTransaction.bankAccount
     );
 
+    PaystackTransferService.assertBankAccountMatches(withdrawalTransaction, bankAccount);
+
     const transferReference = referenceResult.transferReference;
 
     /*
@@ -1234,6 +1287,13 @@ class PaystackTransferService {
     });
 
     withdrawalTransaction = processingResult.transaction;
+
+    if (processingResult.idempotent || processingResult.alreadyCompleted) {
+      return PaystackTransferService.reconcileWithdrawalTransfer({
+        withdrawalTransactionId: withdrawalTransaction._id,
+        currentTime: normalizedCurrentTime,
+      });
+    }
 
     /*
      * The actual provider POST is centralized in

@@ -1,6 +1,7 @@
 // models/ShiftOccurrenceDispute.js
 
 const mongoose = require("mongoose");
+const { isDeepStrictEqual } = require("node:util");
 
 const occurrenceEvidenceSchema = require("./helpers/occurrenceEvidenceSchema");
 
@@ -86,8 +87,14 @@ const hasValue = (value) => {
 
 const hasAny = (values) => values.some(hasValue);
 
-const isPlainObject = (value) =>
-  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const isPlainObject = (value) => {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
 
 const normalizeComponents = (components) => {
   if (!Array.isArray(components)) {
@@ -778,6 +785,11 @@ function validateAdminOutcome(dispute, outcome, pathPrefix) {
 function validateDisputeIssue(dispute, issue, index) {
   const pathPrefix = `issues.${index}`;
 
+  if (!issue) {
+    dispute.invalidate(pathPrefix, "A dispute issue must be a non-null issue document.");
+    return;
+  }
+
   const affectedComponents = normalizeComponents(issue.affectedSettlementComponents);
 
   const details = issue.details || {};
@@ -1202,9 +1214,71 @@ function validateDisputeIssue(dispute, issue, index) {
   }
 }
 
+/* ───────────────────── PERSISTED SUBMISSION PROTECTION ───────────────────── */
+
+// Path-level immutable setters do not cover edits inside Mixed values, nested
+// documents, or replacement of items in the mutable issue workflow array.
+// Keep a detached baseline for documents loaded or saved through this model.
+// Query updates and direct database writes still require service-level guards.
+const persistedSubmissions = new WeakMap();
+
+function getProtectedSubmission(dispute) {
+  const value = dispute.toObject({
+    depopulate: true,
+    getters: false,
+    virtuals: false,
+    transform: false,
+    minimize: false,
+  });
+  const submission = {};
+
+  for (const [path, schemaType] of Object.entries(shiftOccurrenceDisputeSchema.paths)) {
+    if (schemaType.options.immutable && path !== "createdAt") {
+      submission[path] = value[path];
+    }
+  }
+
+  const protectedIssueFields = Object.entries(disputeIssueSchema.paths)
+    .filter(([, schemaType]) => schemaType.options.immutable)
+    .map(([path]) => path);
+
+  submission.issues = (value.issues || []).map((issue) => {
+    if (!issue) return null;
+    const original = { _id: issue._id };
+    for (const path of protectedIssueFields) original[path] = issue[path];
+    return original;
+  });
+  // Issue order is presentation only; identity and submission content are fixed.
+  submission.issues.sort((left, right) =>
+    String(left?._id || "").localeCompare(String(right?._id || ""))
+  );
+  return submission;
+}
+
+function rememberProtectedSubmission(dispute) {
+  persistedSubmissions.set(dispute, getProtectedSubmission(dispute));
+}
+
+shiftOccurrenceDisputeSchema.post("init", rememberProtectedSubmission);
+shiftOccurrenceDisputeSchema.post("save", rememberProtectedSubmission);
+
+function validateProtectedSubmission(dispute) {
+  if (dispute.isNew) return;
+  const original = persistedSubmissions.get(dispute);
+  if (!original) return;
+  const current = getProtectedSubmission(dispute);
+  for (const path of Object.keys(original)) {
+    if (!isDeepStrictEqual(original[path], current[path])) {
+      dispute.invalidate(path, "The original employer submission cannot change after persistence.");
+    }
+  }
+}
+
 /* ─────────────────────────────── CASE VALIDATION ─────────────────────────────── */
 
 shiftOccurrenceDisputeSchema.pre("validate", function validateShiftOccurrenceDispute() {
+  validateProtectedSubmission(this);
+
   const issues = Array.isArray(this.issues) ? this.issues : [];
 
   const submittedIssueTypes = normalizeIssueTypes(this.submittedIssueTypes);

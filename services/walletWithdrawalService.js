@@ -19,7 +19,14 @@ const money = require("../utils/money");
 
 const WITHDRAWAL_OWNER_TYPES = ["employer", "professional"];
 
-const WITHDRAWAL_STATUSES = ["pending", "processing", "completed", "failed", "cancelled"];
+const WITHDRAWAL_STATUSES = [
+  "pending",
+  "processing",
+  "completed",
+  "failed",
+  "cancelled",
+  "reversed",
+];
 
 const MAX_REASON_LENGTH = 300;
 
@@ -138,7 +145,7 @@ class WalletWithdrawalService {
       return true;
     }
 
-    return cleanMetadata.source === "withdrawal_reversal_cron";
+    return false;
   }
 
   /* ─────────────────────────────── OWNER CONFIGURATION ─────────────────────────────── */
@@ -546,7 +553,10 @@ class WalletWithdrawalService {
       transaction.paystackTransferReference
     );
 
-    if (["processing", "completed", "failed"].includes(transaction.status) && !transferReference) {
+    if (
+      ["processing", "completed", "failed", "reversed"].includes(transaction.status) &&
+      !transferReference
+    ) {
       throw WalletWithdrawalService.createError({
         message:
           "Provider-bound withdrawal does not contain its deterministic Paystack transfer reference.",
@@ -563,7 +573,10 @@ class WalletWithdrawalService {
       });
     }
 
-    if (transaction.status === "completed" && !transaction.paystackTransferCode) {
+    if (
+      ["completed", "reversed"].includes(transaction.status) &&
+      !transaction.paystackTransferCode
+    ) {
       throw WalletWithdrawalService.createError({
         message: "Completed withdrawal does not contain a Paystack transfer code.",
         code: "WITHDRAWAL_PAYSTACK_TRANSFER_CODE_REQUIRED",
@@ -594,6 +607,7 @@ class WalletWithdrawalService {
       pending: "pending",
       processing: "pending",
       completed: "success",
+      reversed: "reversed",
       failed: "failed",
       cancelled: null,
     }[transaction.status];
@@ -610,6 +624,11 @@ class WalletWithdrawalService {
       },
 
       completed: {
+        availableBalance: 0,
+        pendingBalance: -amount,
+      },
+
+      reversed: {
         availableBalance: 0,
         pendingBalance: -amount,
       },
@@ -659,6 +678,27 @@ class WalletWithdrawalService {
     }
 
     return true;
+  }
+
+  static resolveTransferCode(transaction, suppliedCode, metadata = {}) {
+    const codes = [
+      transaction.paystackTransferCode,
+      suppliedCode,
+      metadata.paystackTransferCode,
+      metadata.transferCode,
+    ]
+      .map(WalletWithdrawalService.cleanString)
+      .filter(Boolean);
+
+    if (new Set(codes).size > 1) {
+      throw WalletWithdrawalService.createError({
+        message: "Withdrawal contains conflicting Paystack transfer codes.",
+        code: "WITHDRAWAL_TRANSFER_CODE_CONFLICT",
+        statusCode: 409,
+      });
+    }
+
+    return codes[0] || null;
   }
 
   static getWithdrawalOwnerType(transaction) {
@@ -740,6 +780,57 @@ class WalletWithdrawalService {
         });
       }
 
+      const idempotencyKey = WalletWithdrawalService.buildWithdrawalIdempotencyKey({
+        ownerType: config.ownerType,
+
+        ownerProfileId: profile._id,
+
+        requestReference: requestRef,
+      });
+
+      const existingTransaction = await WalletService.getExistingTransactionByIdempotencyKey(
+        idempotencyKey,
+        session
+      );
+
+      if (existingTransaction) {
+        const existingWallet = await Wallet.findById(existingTransaction.wallet).session(session);
+        const normalizedAmount = money.normalizePositiveMinorUnitAmount(
+          amount,
+          "Withdrawal amount"
+        );
+        const { normalizedProviderFee, normalizedNetAmount } =
+          WalletWithdrawalService.validateWithdrawalFeeAmounts({
+            amount: normalizedAmount,
+            providerFee,
+            netAmount,
+          });
+        const result = {
+          wallet: existingWallet,
+          transaction: existingTransaction,
+          idempotent: true,
+        };
+
+        WalletWithdrawalService.assertWithdrawalMatchesRequest({
+          result,
+          config,
+          profile,
+          // An omitted bank account means the account selected on the first attempt.
+          bankAccount: { _id: accountId || existingTransaction.bankAccount },
+          userId: actorUserId,
+          amount: normalizedAmount,
+          providerFee: normalizedProviderFee,
+          netAmount: normalizedNetAmount,
+          requestReference: requestRef,
+        });
+        WalletService.assertTransactionWallet(existingTransaction, existingWallet);
+
+        return {
+          ...result,
+          providerSubmissionRequired: existingTransaction.status === "pending",
+        };
+      }
+
       const bankAccount = await WalletWithdrawalService.getActiveBankAccount(
         {
           ownerType: config.ownerType,
@@ -779,14 +870,6 @@ class WalletWithdrawalService {
 
           netAmount,
         });
-
-      const idempotencyKey = WalletWithdrawalService.buildWithdrawalIdempotencyKey({
-        ownerType: config.ownerType,
-
-        ownerProfileId: profile._id,
-
-        requestReference: requestRef,
-      });
 
       /*
        * Reserve the requested value before any provider call:
@@ -1121,7 +1204,13 @@ class WalletWithdrawalService {
 
       WalletWithdrawalService.assertWithdrawalTransaction(transaction);
 
-      if (transaction.status === "completed") {
+      const transferCode = WalletWithdrawalService.resolveTransferCode(
+        transaction,
+        paystackTransferCode,
+        cleanMetadata
+      );
+
+      if (["completed", "reversed"].includes(transaction.status)) {
         const wallet = await Wallet.findById(transaction.wallet).session(session);
 
         if (!wallet) {
@@ -1136,6 +1225,7 @@ class WalletWithdrawalService {
           wallet,
           transaction,
           alreadyCompleted: true,
+          alreadyReversed: transaction.status === "reversed",
           idempotent: true,
         };
       }
@@ -1158,12 +1248,6 @@ class WalletWithdrawalService {
           },
         });
       }
-
-      const transferCode =
-        WalletWithdrawalService.cleanString(transaction.paystackTransferCode) ||
-        WalletWithdrawalService.cleanString(paystackTransferCode) ||
-        WalletWithdrawalService.cleanString(cleanMetadata.paystackTransferCode) ||
-        WalletWithdrawalService.cleanString(cleanMetadata.transferCode);
 
       if (!transferCode) {
         throw WalletWithdrawalService.createError({
@@ -1269,6 +1353,179 @@ class WalletWithdrawalService {
     });
   }
 
+  // Restore a completed debit only after a confirmed provider reversal.
+  // The original debit remains intact; the credit is a separate ledger entry.
+  static async reverseCompletedWithdrawal(
+    {
+      withdrawalTransactionId,
+      paystackTransferCode = null,
+      providerEventId = null,
+      reversalReason = "Paystack reversed the completed withdrawal.",
+      currentTime = new Date(),
+      metadata = {},
+    },
+    options = {}
+  ) {
+    const reversedAt = WalletWithdrawalService.normalizeCurrentTime(currentTime);
+    const reason = WalletWithdrawalService.normalizeReason(reversalReason, "Withdrawal reversed.");
+    const evidence = WalletWithdrawalService.normalizeMetadata(metadata);
+    const statuses = [
+      evidence.paystackTransferStatus,
+      evidence.providerTransferStatus,
+      evidence.paystackStatus,
+    ]
+      .map((v) => WalletWithdrawalService.cleanString(v)?.toLowerCase())
+      .filter(Boolean);
+    const eventName = WalletWithdrawalService.cleanString(evidence.sourceEventName)?.toLowerCase();
+    if (
+      (!statuses.includes("reversed") && eventName !== "transfer.reversed") ||
+      statuses.some((v) => v !== "reversed") ||
+      (eventName && eventName !== "transfer.reversed")
+    ) {
+      throw WalletWithdrawalService.createError({
+        message: "A completed withdrawal requires confirmed provider reversal evidence.",
+        code: "WITHDRAWAL_REVERSAL_NOT_CONFIRMED",
+        statusCode: 409,
+      });
+    }
+
+    return WalletService.runWithOptionalTransaction(options, async (session) => {
+      const withdrawal = await WalletWithdrawalService.getWithdrawalTransaction(
+        withdrawalTransactionId,
+        session
+      );
+      WalletWithdrawalService.assertWithdrawalTransaction(withdrawal);
+      WalletWithdrawalService.resolveTransferCode(withdrawal, paystackTransferCode, evidence);
+      if (!["completed", "reversed"].includes(withdrawal.status)) {
+        throw new Error(
+          "Only completed or already reversed withdrawals use the reversal-credit flow."
+        );
+      }
+      for (const reference of [evidence.paystackTransferReference, evidence.providerReference]) {
+        if (reference != null && reference !== withdrawal.paystackTransferReference) {
+          throw new Error("Provider reversal reference does not match the withdrawal.");
+        }
+      }
+      const wallet = await Wallet.findById(withdrawal.wallet).session(session);
+      WalletService.assertTransactionWallet(withdrawal, wallet);
+      const amount = WalletService.normalizePositiveMinorUnitAmount(
+        withdrawal.amount,
+        "Reversal credit amount"
+      );
+      const key = `withdrawal-reversal:${withdrawal._id}`;
+      const existing = await WalletService.getExistingTransactionByIdempotencyKey(key, session);
+      if (withdrawal.status === "reversed") {
+        if (
+          !existing ||
+          existing.type !== "withdrawal_reversal" ||
+          existing.status !== "completed" ||
+          existing.direction !== "credit" ||
+          existing.purpose !== "withdrawal_reversal" ||
+          existing.netAmount !== amount ||
+          existing.providerFee !== 0 ||
+          existing.provider !== "internal" ||
+          existing.paymentRail !== "system_action" ||
+          existing.amount !== amount ||
+          String(existing.relatedTransaction) !== String(withdrawal._id) ||
+          String(existing.bankAccount) !== String(withdrawal.bankAccount) ||
+          existing.balanceDelta?.availableBalance !== amount ||
+          existing.balanceDelta?.pendingBalance !== 0 ||
+          existing.balanceDelta?.outstandingBalance !== 0
+        ) {
+          throw new Error("Reversed withdrawal has no consistent reversal credit.");
+        }
+        WalletService.assertTransactionWallet(existing, wallet);
+        return {
+          wallet,
+          transaction: existing,
+          originalTransaction: withdrawal,
+          idempotent: true,
+          reversed: true,
+        };
+      }
+      if (existing)
+        throw new Error(
+          "Completed withdrawal already has a reversal credit; reconciliation is required."
+        );
+      WalletService.assertWalletCanReconcile(wallet);
+      if (
+        !withdrawal.completedAt ||
+        reversedAt < withdrawal.completedAt ||
+        (wallet.lastTransactionAt && reversedAt < wallet.lastTransactionAt)
+      ) {
+        throw new Error("Reversal time cannot precede completion or the latest wallet movement.");
+      }
+      const before = WalletService.getBalanceSnapshot(wallet);
+      const after = {
+        ...before,
+        availableBalance: WalletService.normalizeMinorUnitAmount(
+          before.availableBalance + amount,
+          "Available balance after reversal"
+        ),
+      };
+      const lifetimeCredit = WalletService.normalizeMinorUnitAmount(
+        WalletService.normalizeMinorUnitAmount(wallet.lifetimeCredit, "Existing lifetime credit") +
+          amount,
+        "Lifetime credit after reversal"
+      );
+      const [credit] = await Transaction.create(
+        [
+          {
+            reference: `LQ-WITHDRAWAL-REVERSAL-${withdrawal._id}`,
+            idempotencyKey: key,
+            provider: "internal",
+            type: "withdrawal_reversal",
+            purpose: "withdrawal_reversal",
+            direction: "credit",
+            wallet: wallet._id,
+            bankAccount: withdrawal.bankAccount,
+            relatedTransaction: withdrawal._id,
+            amount,
+            netAmount: amount,
+            providerFee: 0,
+            countryCode: wallet.countryCode,
+            currency: wallet.currency,
+            balanceBefore: before,
+            balanceAfter: after,
+            balanceDelta: { availableBalance: amount, pendingBalance: 0, outstandingBalance: 0 },
+            paymentRail: "system_action",
+            status: "completed",
+            createdAt: reversedAt,
+            completedAt: reversedAt,
+            initiatedBy: { role: "system", userId: null },
+            description: reason,
+            metadata: {
+              ...evidence,
+              originalWithdrawalId: String(withdrawal._id),
+              providerReversalEventId: WalletWithdrawalService.cleanString(providerEventId),
+            },
+          },
+        ],
+        { session }
+      );
+      wallet.availableBalance = after.availableBalance;
+      wallet.lifetimeCredit = lifetimeCredit;
+      wallet.lastTransactionAt = reversedAt;
+      await wallet.save({ session });
+      withdrawal.status = "reversed";
+      withdrawal.paystackStatus = "reversed";
+      withdrawal.reversedAt = reversedAt;
+      withdrawal.reversalReason = reason;
+      withdrawal.metadata = {
+        ...(withdrawal.metadata || {}),
+        reversalTransactionId: String(credit._id),
+      };
+      await withdrawal.save({ session });
+      return {
+        wallet,
+        transaction: credit,
+        originalTransaction: withdrawal,
+        idempotent: false,
+        reversed: true,
+      };
+    });
+  }
+
   /* ─────────────────────────────── FAILED WITHDRAWAL RESTORATION ─────────────────────────────── */
 
   static async reverseFailedWithdrawal(
@@ -1305,6 +1562,12 @@ class WalletWithdrawalService {
       );
 
       WalletWithdrawalService.assertWithdrawalTransaction(withdrawal);
+
+      const transferCode = WalletWithdrawalService.resolveTransferCode(
+        withdrawal,
+        paystackTransferCode,
+        cleanMetadata
+      );
 
       if (withdrawal.status === "completed") {
         throw WalletWithdrawalService.createError({
@@ -1405,11 +1668,7 @@ class WalletWithdrawalService {
 
             failureReason: reason,
 
-            paystackTransferCode:
-              WalletWithdrawalService.cleanString(withdrawal.paystackTransferCode) ||
-              WalletWithdrawalService.cleanString(paystackTransferCode) ||
-              WalletWithdrawalService.cleanString(cleanMetadata.paystackTransferCode) ||
-              WalletWithdrawalService.cleanString(cleanMetadata.transferCode),
+            paystackTransferCode: transferCode,
 
             providerEventId: eventId,
 

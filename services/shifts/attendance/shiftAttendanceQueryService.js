@@ -10,7 +10,6 @@ const ShiftQueryService = require("../shiftQueryService");
 const { ATTENDANCE_STATUSES } = require("../../../constants/shiftLifecycle");
 
 const { createServiceError } = require("../../helpers/serviceErrorHelper");
-
 const { normalizeObjectId } = require("../../helpers/serviceValidationHelpers");
 
 const SHIFT_ATTENDANCE_QUERY_SERVICE_ERROR_NAME = "ShiftAttendanceQueryServiceError";
@@ -21,6 +20,8 @@ const ATTENDANCE_REVIEW_STATUSES = Object.freeze([
   "missed_checkin_review",
   "checkout_fallback_review",
 ]);
+
+/* ─────────────────────────────── QUERY PROJECTIONS ─────────────────────────────── */
 
 const SHIFT_FIELDS = Object.freeze([
   "referenceCode",
@@ -115,10 +116,11 @@ const ASSIGNMENT_FIELDS = Object.freeze([
   "isCurrentAssignment",
 ]);
 
+/* ─────────────────────────────── ERRORS ─────────────────────────────── */
+
 function createAttendanceQueryError(options) {
   return createServiceError({
     ...options,
-
     name: SHIFT_ATTENDANCE_QUERY_SERVICE_ERROR_NAME,
   });
 }
@@ -132,9 +134,7 @@ class ShiftAttendanceQueryService {
     if (Number.isNaN(currentTime.getTime())) {
       throw createAttendanceQueryError({
         message: "Current time is invalid.",
-
         code: "INVALID_CURRENT_TIME",
-
         statusCode: 500,
       });
     }
@@ -143,7 +143,13 @@ class ShiftAttendanceQueryService {
   }
 
   static normalizePageNumber(value) {
-    const page = Number.parseInt(value, 10);
+    const rawPage = String(value ?? "").trim();
+
+    if (!/^\d+$/.test(rawPage)) {
+      return 1;
+    }
+
+    const page = Number(rawPage);
 
     return Number.isSafeInteger(page) && page > 0 ? page : 1;
   }
@@ -163,9 +169,7 @@ class ShiftAttendanceQueryService {
 
     return normalizeObjectId({
       value,
-
       fieldName: "Shift ID",
-
       createError: createAttendanceQueryError,
     });
   }
@@ -187,9 +191,19 @@ class ShiftAttendanceQueryService {
   }
 
   static getAssignedBranchObjectIds(employerContext = null) {
-    return (employerContext?.assignedBranchIds || [])
-      .filter((branchId) => mongoose.isValidObjectId(branchId))
-      .map((branchId) => new mongoose.Types.ObjectId(String(branchId)));
+    const assignedBranchIds = Array.isArray(employerContext?.assignedBranchIds)
+      ? employerContext.assignedBranchIds
+      : [];
+
+    const uniqueBranchIds = new Set();
+
+    for (const branchId of assignedBranchIds) {
+      if (mongoose.isValidObjectId(branchId)) {
+        uniqueBranchIds.add(String(branchId));
+      }
+    }
+
+    return [...uniqueBranchIds].map((branchId) => new mongoose.Types.ObjectId(branchId));
   }
 
   /* ─────────────────────────────── SHIFT SCOPE ─────────────────────────────── */
@@ -201,9 +215,7 @@ class ShiftAttendanceQueryService {
 
     const shiftFilter = ShiftQueryService.buildEmployerShiftAccessFilter({
       employerProfileId,
-
       employerContext,
-
       shiftId,
     });
 
@@ -215,9 +227,7 @@ class ShiftAttendanceQueryService {
     if (!shift) {
       throw createAttendanceQueryError({
         message: "Shift was not found or is not available to you.",
-
         code: "SHIFT_NOT_FOUND",
-
         statusCode: 404,
       });
     }
@@ -225,39 +235,34 @@ class ShiftAttendanceQueryService {
     return shift;
   }
 
+  /**
+   * Attendance visibility is occurrence-based.
+   *
+   * Every occurrence within the authorized employer and
+   * branch scope can appear from the moment it is created.
+   *
+   * A professional assignment is not required for listing.
+   *
+   * This allows authorized employers to access both PIN
+   * actions before staffing and attendance begin.
+   *
+   * Actual PIN values remain excluded from page queries.
+   */
   static buildAttendanceScopeFilter({ employerProfileId, employerContext = null, shiftId = null }) {
     const normalizedEmployerProfileId = normalizeObjectId({
       value: employerProfileId,
-
       fieldName: "employer profile ID",
-
       createError: createAttendanceQueryError,
     });
 
     const filter = {
       business: normalizedEmployerProfileId,
-
-      assignmentStatus: "assigned",
-
-      assignedProfessional: {
-        $ne: null,
-      },
-
-      assignment: {
-        $ne: null,
-      },
-
-      assignedAt: {
-        $ne: null,
-      },
     };
 
     if (shiftId) {
       filter.shift = normalizeObjectId({
         value: shiftId,
-
         fieldName: "Shift ID",
-
         createError: createAttendanceQueryError,
       });
     }
@@ -280,42 +285,43 @@ class ShiftAttendanceQueryService {
 
     return {
       ...filter,
-
       attendanceStatus: status,
     };
   }
 
   /* ─────────────────────────────── POPULATED QUERY ─────────────────────────────── */
 
+  /**
+   * Retrieve occurrence attendance facts, together with
+   * the parent Shift and branch.
+   *
+   * Professional and assignment population is optional
+   * because newly created occurrences may be unassigned.
+   *
+   * PIN values are never included in these page queries.
+   */
   static buildOccurrenceQuery(filter) {
     return ShiftOccurrence.find(filter)
       .select(OCCURRENCE_FIELDS.join(" "))
       .populate({
         path: "shift",
-
         select: SHIFT_FIELDS.join(" "),
-
         populate: {
           path: "branch",
-
           select: "name address state lga geofenceRadiusMeters",
         },
       })
       .populate("branch", "name address state lga geofenceRadiusMeters")
       .populate({
         path: "assignedProfessional",
-
         select: PROFESSIONAL_FIELDS.join(" "),
-
         populate: {
           path: "user",
-
           select: USER_IDENTITY_FIELDS.join(" "),
         },
       })
       .populate({
         path: "assignment",
-
         select: ASSIGNMENT_FIELDS.join(" "),
       });
   }
@@ -333,8 +339,30 @@ class ShiftAttendanceQueryService {
 
     return {
       all: Number(allCount || 0),
-
       ...counts,
+    };
+  }
+
+  static buildAttendanceScopeCounts(results = [], totalOccurrences = 0) {
+    const countsByStatus = new Map(
+      results.map((result) => [String(result._id), Number(result.count || 0)])
+    );
+
+    const countFor = (status) => countsByStatus.get(status) || 0;
+
+    return {
+      totalOccurrences: Number(totalOccurrences || 0),
+
+      currentlyCheckedIn: countFor("checked_in"),
+
+      reviewRequired: ATTENDANCE_REVIEW_STATUSES.reduce(
+        (total, status) => total + countFor(status),
+        0
+      ),
+
+      noShow: countFor("no_show"),
+
+      settledAttendance: countFor("settled"),
     };
   }
 
@@ -368,17 +396,13 @@ class ShiftAttendanceQueryService {
 
     const focusedShift = await ShiftAttendanceQueryService.getFocusedShift({
       employerProfileId: profile._id,
-
       employerContext,
-
       shiftId: selectedShiftId,
     });
 
     const scopeFilter = ShiftAttendanceQueryService.buildAttendanceScopeFilter({
       employerProfileId: profile._id,
-
       employerContext,
-
       shiftId: selectedShiftId,
     });
 
@@ -387,60 +411,46 @@ class ShiftAttendanceQueryService {
       selectedAttendanceStatus
     );
 
-    const [
-      totalFilteredOccurrences,
-      totalOccurrences,
-      attendanceStatusResults,
-      currentlyCheckedInCount,
-      reviewRequiredCount,
-      noShowCount,
-      settledAttendanceCount,
-    ] = await Promise.all([
-      ShiftOccurrence.countDocuments(filteredOccurrenceFilter),
+    /*
+     * All summary counts use the same employer and branch
+     * scope as the occurrence listing.
+     *
+     * Counts now include unassigned occurrences because
+     * these are valid attendance/PIN records from creation.
+     */
+    const [totalFilteredOccurrences, totalOccurrences, attendanceStatusResults] = await Promise.all(
+      [
+        ShiftOccurrence.countDocuments(filteredOccurrenceFilter),
 
-      ShiftOccurrence.countDocuments(scopeFilter),
+        ShiftOccurrence.countDocuments(scopeFilter),
 
-      ShiftOccurrence.aggregate([
-        {
-          $match: scopeFilter,
-        },
-        {
-          $group: {
-            _id: "$attendanceStatus",
-
-            count: {
-              $sum: 1,
+        ShiftOccurrence.aggregate([
+          {
+            $match: scopeFilter,
+          },
+          {
+            $group: {
+              _id: "$attendanceStatus",
+              count: {
+                $sum: 1,
+              },
             },
           },
-        },
-      ]),
+        ]),
+      ]
+    );
 
-      ShiftOccurrence.countDocuments({
-        ...scopeFilter,
+    const attendanceStatusCounts = ShiftAttendanceQueryService.buildAttendanceStatusCounts(
+      attendanceStatusResults,
+      totalOccurrences
+    );
 
-        attendanceStatus: "checked_in",
-      }),
+    const scopeCounts = ShiftAttendanceQueryService.buildAttendanceScopeCounts(
+      attendanceStatusResults,
+      totalOccurrences
+    );
 
-      ShiftOccurrence.countDocuments({
-        ...scopeFilter,
-
-        attendanceStatus: {
-          $in: ATTENDANCE_REVIEW_STATUSES,
-        },
-      }),
-
-      ShiftOccurrence.countDocuments({
-        ...scopeFilter,
-
-        attendanceStatus: "no_show",
-      }),
-
-      ShiftOccurrence.countDocuments({
-        ...scopeFilter,
-
-        attendanceStatus: "settled",
-      }),
-    ]);
+    /* ─────────────────────────────── PAGINATION ─────────────────────────────── */
 
     const totalPages = Math.max(
       Math.ceil(totalFilteredOccurrences / ATTENDANCE_OCCURRENCES_PER_PAGE),
@@ -456,17 +466,18 @@ class ShiftAttendanceQueryService {
         ? await ShiftAttendanceQueryService.buildOccurrenceQuery(filteredOccurrenceFilter)
             .sort({
               startTime: -1,
-
               slotNumber: 1,
-
               sequenceNumber: 1,
-
               _id: 1,
             })
             .skip(skip)
             .limit(ATTENDANCE_OCCURRENCES_PER_PAGE)
             .lean()
         : [];
+
+    /* ─────────────────────────────── RESULT ─────────────────────────────── */
+
+    const canManageAttendance = ShiftAttendanceQueryService.canManageAttendance(employerContext);
 
     return {
       employer: {
@@ -485,26 +496,13 @@ class ShiftAttendanceQueryService {
 
       selectedAttendanceStatus,
 
-      attendanceStatusCounts: ShiftAttendanceQueryService.buildAttendanceStatusCounts(
-        attendanceStatusResults,
-        totalOccurrences
-      ),
+      attendanceStatusCounts,
 
-      scopeCounts: {
-        totalOccurrences: Number(totalOccurrences || 0),
+      scopeCounts,
 
-        currentlyCheckedIn: Number(currentlyCheckedInCount || 0),
+      canManageAttendance,
 
-        reviewRequired: Number(reviewRequiredCount || 0),
-
-        noShow: Number(noShowCount || 0),
-
-        settledAttendance: Number(settledAttendanceCount || 0),
-      },
-
-      canManageAttendance: ShiftAttendanceQueryService.canManageAttendance(employerContext),
-
-      canRevealAttendancePins: ShiftAttendanceQueryService.canManageAttendance(employerContext),
+      canRevealAttendancePins: canManageAttendance,
 
       currentTime: normalizedCurrentTime,
 

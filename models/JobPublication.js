@@ -490,7 +490,7 @@ const employerSnapshotSchema = new mongoose.Schema(
       required: true,
     },
 
-    regulatoryVerified: {
+    branchReadyAtPublication: {
       type: Boolean,
       required: true,
     },

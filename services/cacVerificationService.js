@@ -1,5 +1,7 @@
 // services/cacVerificationService.js
 
+const { randomUUID } = require("crypto");
+
 const { createServiceError } = require("./helpers/serviceErrorHelper");
 
 const NinjaVerificationService = require("./ninjaVerificationService");
@@ -378,7 +380,7 @@ class CACVerificationService {
   // ───────────────────── REGISTRATION VALIDATION ─────────────────────
 
   static normalizeRegistrationNumber(input) {
-    const clean = String(input ?? "")
+    const clean = (typeof input === "string" ? input : "")
       .trim()
       .toUpperCase()
       .replace(/[\s-]/g, "");
@@ -420,6 +422,38 @@ class CACVerificationService {
     }
   }
 
+  static normalizeEvidenceText(value, maxLength) {
+    if (value == null || value === "") return "";
+
+    if (
+      typeof value !== "string" ||
+      /[\u0000-\u001f\u007f]/.test(value) ||
+      value.trim().length > maxLength
+    ) {
+      throw this.createError({
+        message: "CAC provider returned invalid registration data.",
+        code: "CAC_INVALID_RESPONSE",
+        statusCode: 502,
+      });
+    }
+
+    return value.trim();
+  }
+
+  static normalizeRequestReference(reference) {
+    if (reference == null || reference === "") return randomUUID();
+
+    if (typeof reference !== "string" || !/^[A-Za-z0-9_.:-]{1,64}$/.test(reference.trim())) {
+      throw this.createError({
+        message: "Invalid CAC verification reference.",
+        code: "CAC_INVALID_REFERENCE",
+        statusCode: 400,
+      });
+    }
+
+    return reference.trim();
+  }
+
   // ───────────────────── RESPONSE NORMALIZATION ─────────────────────
 
   static normalizeProviderResponse(lookup, registration, provider, expectedEnvironment) {
@@ -454,6 +488,14 @@ class CACVerificationService {
      * as a CAC company-not-found result.
      */
 
+    if (lookup.found === false && lookup.result != null) {
+      throw this.createError({
+        message: "CAC provider returned a contradictory lookup outcome.",
+        code: "CAC_INVALID_RESPONSE",
+        statusCode: 502,
+      });
+    }
+
     if (lookup.found === false) {
       throw this.createError({
         message: "No matching CAC registration was found.",
@@ -480,21 +522,20 @@ class CACVerificationService {
       });
     }
 
-    const registrationNumber = String(result.registrationNumber ?? "")
-      .trim()
-      .toUpperCase()
-      .replace(/[\s-]/g, "")
-      .replace(/^(RC|BN)/, "");
+    const reportedNumber =
+      typeof result.registrationNumber === "string"
+        ? result.registrationNumber.trim().toUpperCase().replace(/[\s-]/g, "")
+        : "";
+    const numberMatch = /^(RC|BN)?(\d{4,10})$/.exec(reportedNumber);
+    const registrationNumber = numberMatch?.[2];
 
-    const entityName = String(result.entityName ?? "").trim();
-
-    const entityType = String(result.entityType ?? "")
-      .trim()
-      .toUpperCase();
-
-    const entityStatus = String(result.entityStatus ?? "")
-      .trim()
-      .toUpperCase();
+    const entityName = this.normalizeEvidenceText(result.entityName, 150);
+    const entityType = this.normalizeEvidenceText(result.entityType, 150).toUpperCase();
+    const entityStatus = this.normalizeEvidenceText(result.entityStatus, 100).toUpperCase();
+    const registrationDate =
+      result.registrationDate == null || result.registrationDate === ""
+        ? null
+        : this.normalizeEvidenceText(result.registrationDate, 100);
 
     /*
      * Registration numbers must match exactly.
@@ -502,7 +543,11 @@ class CACVerificationService {
      * Leading zeroes are preserved.
      */
 
-    if (!/^\d+$/.test(registrationNumber) || registrationNumber !== registration.rc_number) {
+    if (
+      !numberMatch ||
+      (numberMatch[1] && numberMatch[1] !== registration.prefix) ||
+      registrationNumber !== registration.rc_number
+    ) {
       throw this.createError({
         message: "CAC returned a different registration number.",
         code: "CAC_REGISTRATION_MISMATCH",
@@ -523,7 +568,7 @@ class CACVerificationService {
      *
      * EmployerVerificationService determines:
      *
-     * - company name matching;
+     * - representative authority checks;
      * - registration type matching;
      * - active/inactive status;
      * - verification eligibility;
@@ -538,7 +583,7 @@ class CACVerificationService {
       entityName,
       entityType,
       entityStatus,
-      registrationDate: result.registrationDate || null,
+      registrationDate,
     };
   }
 
@@ -585,6 +630,7 @@ class CACVerificationService {
      * Resolve the environment for the selected provider.
      */
 
+    const requestReference = this.normalizeRequestReference(reference);
     const environment = this.getEnvironment(provider);
     const adapter = this.getAdapter(provider);
 
@@ -609,7 +655,7 @@ class CACVerificationService {
       lookup = await adapter[method]({
         registrationNumber: registration.submitted,
 
-        ...(reference !== undefined ? { reference } : {}),
+        reference: requestReference,
 
         ...(httpClient !== undefined ? { httpClient } : {}),
       });
@@ -622,6 +668,21 @@ class CACVerificationService {
      * Never automatically retry a failed lookup.
      */
 
+    if (
+      !lookup ||
+      typeof lookup !== "object" ||
+      Array.isArray(lookup) ||
+      (lookup.requestReference == null && lookup.reference == null) ||
+      (lookup.requestReference != null && lookup.requestReference !== requestReference) ||
+      (lookup.reference != null && lookup.reference !== requestReference)
+    ) {
+      throw this.createError({
+        message: "CAC provider returned an invalid request reference.",
+        code: "CAC_INVALID_RESPONSE",
+        statusCode: 502,
+      });
+    }
+
     const result = this.normalizeProviderResponse(lookup, registration, provider, environment);
 
     /*
@@ -632,7 +693,7 @@ class CACVerificationService {
      * This is NOT a provider-issued transaction ID.
      */
 
-    const requestReference = lookup.requestReference || lookup.reference || null;
+    // The returned evidence is bound to the reference sent to the adapter.
 
     /*
      * Provider reference:

@@ -36,27 +36,15 @@ function getActiveBusinessProfileTab(requestedTab) {
 }
 
 function getInviteStatusFilter(requestedStatus) {
-  if (!allowedInviteStatusFilters.includes(requestedStatus)) {
-    return "active";
-  }
-
-  return requestedStatus;
+  return allowedInviteStatusFilters.includes(requestedStatus) ? requestedStatus : "active";
 }
 
 function getMemberStatusFilter(requestedStatus) {
-  if (!allowedMemberStatusFilters.includes(requestedStatus)) {
-    return "active";
-  }
-
-  return requestedStatus;
+  return allowedMemberStatusFilters.includes(requestedStatus) ? requestedStatus : "active";
 }
 
 function getBranchStatusFilter(requestedStatus) {
-  if (!allowedBranchStatusFilters.includes(requestedStatus)) {
-    return "active";
-  }
-
-  return requestedStatus;
+  return allowedBranchStatusFilters.includes(requestedStatus) ? requestedStatus : "active";
 }
 
 // ───────────────────── RESPONSE HELPERS ─────────────────────
@@ -96,17 +84,8 @@ function sendConflict(res, message) {
   });
 }
 
-// ───────────────────── BUSINESS PROFILE AUTHORISATION ─────────────────────
+// ───────────────────── PROFILE AUTHORISATION ─────────────────────
 
-/**
- * Employer context comes from authenticated middleware.
- *
- * Team details and invitations are restricted to business owners
- * and authorised business administrators. Branch users retain
- * only their permitted profile and branch access.
- *
- * EmployerMember.role "admin" is not a platform administrator.
- */
 function canAccessBusinessProfileTab(employerContext, activeTab) {
   if (!employerContext?.canViewBusinessProfile) {
     return false;
@@ -127,16 +106,67 @@ function canAccessBusinessProfileTab(employerContext, activeTab) {
   return true;
 }
 
+// ───────────────────── PAGE PRESENTATION ─────────────────────
+
+function buildBusinessProfilePageView({
+  employerProfile,
+  activeTab,
+  employerContext,
+  employerPermissions,
+}) {
+  const access = employerPermissions;
+
+  const canManageBranches = Boolean(
+    access.isBusinessWide === true &&
+    access.canViewBranches === true &&
+    employerContext.canManageBranches === true
+  );
+
+  const showOverview = activeTab === "overview";
+  const showBusinessDetails = activeTab === "business-details";
+  const showVerification = activeTab === "verification";
+
+  const showBranches = Boolean(activeTab === "branches" && access.canViewBranches === true);
+
+  const showTeamMembers = Boolean(activeTab === "team" && access.canViewTeamMembers === true);
+
+  const showInvites = Boolean(activeTab === "invites" && access.canInviteMembers === true);
+
+  return {
+    countryCode: String(employerProfile.countryCode || "NG")
+      .trim()
+      .toLowerCase(),
+
+    showOverview,
+    showBusinessDetails,
+    showVerification,
+    showBranches,
+    showTeamMembers,
+    showInvites,
+
+    showAddBranchModal: showBranches && canManageBranches,
+    showViewBranchModal: showBranches,
+    showEditBranchModal: showBranches && canManageBranches,
+
+    showTeamMemberModals: showTeamMembers,
+    showInviteModals: showInvites,
+  };
+}
+
+// Encode data as a safe JavaScript literal for an HTML script element.
+function serializeForInlineScript(value) {
+  return JSON.stringify(value)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/&/g, "\\u0026")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
 // ───────────────────── UPDATE ERROR HANDLING ─────────────────────
 
-/**
- * Return safe, actionable errors for recognised update failures.
- * Unexpected errors pass to the central Express error handler.
- */
 function handleBusinessDetailsUpdateError(error, res, next) {
   const message = typeof error?.message === "string" ? error.message : "";
-
-  // ───────────────────── AUTHORISATION ERRORS ─────────────────────
 
   const forbiddenMessages = new Set([
     "This business account is not eligible for profile editing.",
@@ -148,9 +178,6 @@ function handleBusinessDetailsUpdateError(error, res, next) {
     return sendForbidden(res, message);
   }
 
-  // ───────────────────── PROTECTED IDENTITY CHANGES ─────────────────────
-
-  // Verified business identity cannot be changed through ordinary editing.
   const protectedIdentityChange =
     /^(type|businessName|cacRegistrationNumber|regulatoryBody|regulatoryRegistrationNumber) cannot be changed through ordinary business profile editing\./.test(
       message
@@ -160,20 +187,17 @@ function handleBusinessDetailsUpdateError(error, res, next) {
     return sendConflict(res, message);
   }
 
-  // ───────────────────── VERIFICATION AND REVIEW CONFLICTS ─────────────────────
-
   const conflictMessages = new Set([
     "Business registration or regulatory identity changes require a separate verification process.",
     "Changes to reviewed business premises require additional regulatory review. Please contact support.",
     "This location change affects your regulatory body and requires a separate verification process.",
     "Changing a reviewed business representative requires administrative review. Please contact support.",
+    "Change the main facility's location through Branch management so its permits can be reassessed.",
   ]);
 
   if (conflictMessages.has(message)) {
     return sendConflict(res, message);
   }
-
-  // ───────────────────── INVALID REQUESTS ─────────────────────
 
   const invalidRequestMessages = new Set([
     "A valid employer profile is required.",
@@ -198,8 +222,6 @@ function handleBusinessDetailsUpdateError(error, res, next) {
     return sendBadRequest(res, "The submitted business details are invalid.");
   }
 
-  // ───────────────────── PROFILE NOT FOUND ─────────────────────
-
   if (message === "Employer profile not found.") {
     return res.status(404).json({
       success: false,
@@ -207,18 +229,16 @@ function handleBusinessDetailsUpdateError(error, res, next) {
     });
   }
 
-  // ───────────────────── UNEXPECTED ERRORS ─────────────────────
-
   return next(error);
 }
 
 // ───────────────────── BUSINESS PROFILE SCRIPTS ─────────────────────
 
 function getBusinessProfileScripts(activeTab) {
-  const scripts = [`<script src="/js/employer/business-profile.js"></script>`];
+  const scripts = ['<script src="/js/employer/business-profile.js"></script>'];
 
   if (activeTab === "branches" || activeTab === "business-details") {
-    scripts.unshift(`<script src="/js/location-picker.js"></script>`);
+    scripts.unshift('<script src="/js/location-picker.js"></script>');
 
     scripts.push(`
       <script
@@ -230,11 +250,11 @@ function getBusinessProfileScripts(activeTab) {
   }
 
   if (activeTab === "team") {
-    scripts.push(`<script src="/js/employer/team-members.js"></script>`);
+    scripts.push('<script src="/js/employer/team-members.js"></script>');
   }
 
   if (activeTab === "invites") {
-    scripts.push(`<script src="/js/employer/invite-member.js"></script>`);
+    scripts.push('<script src="/js/employer/invite-member.js"></script>');
   }
 
   return scripts.join("\n");
@@ -256,8 +276,14 @@ exports.getDashboard = async (req, res, next) => {
       title: "Dashboard",
 
       breadcrumbs: [
-        { label: "Home", url: "/employer/dashboard" },
-        { label: "Dashboard", url: null },
+        {
+          label: "Home",
+          url: "/employer/dashboard",
+        },
+        {
+          label: "Dashboard",
+          url: null,
+        },
       ],
 
       ...dashboardData,
@@ -271,35 +297,22 @@ exports.getDashboard = async (req, res, next) => {
 
 // ───────────────────── EMPLOYER BUSINESS PROFILE ─────────────────────
 
-/**
- * Render the requested business-profile tab.
- *
- * Middleware establishes employer context; the service independently
- * enforces account, membership and data-access permissions.
- */
 exports.getBusinessProfile = async (req, res, next) => {
   try {
     const employerProfile = req.employerProfile;
     const employerContext = req.employerContext;
 
-    // ───────────────────── BUSINESS ACCESS ─────────────────────
-
     if (!employerProfile?._id || !employerContext?.canViewBusinessProfile) {
       return sendForbiddenPage(res);
     }
-
-    // ───────────────────── ACTIVE TAB ─────────────────────
 
     const requestedTab = req.query.tab || "overview";
 
     const activeTab = getActiveBusinessProfileTab(requestedTab);
 
-    // Restricted tabs must also be protected against direct URLs.
     if (!canAccessBusinessProfileTab(employerContext, activeTab)) {
       return sendForbiddenPage(res);
     }
-
-    // ───────────────────── PROFILE FILTERS ─────────────────────
 
     const branchStatus = getBranchStatusFilter(req.query.branchStatus || "active");
 
@@ -307,37 +320,44 @@ exports.getBusinessProfile = async (req, res, next) => {
 
     const memberStatus = getMemberStatusFilter(req.query.memberStatus || "active");
 
-    // ───────────────────── BUSINESS PROFILE DATA ─────────────────────
-
-    /**
-     * The service prepares verificationView and other tab data.
-     * Restricted datasets are not fetched for unauthorised users.
-     */
     const businessProfileData = await EmployerService.getBusinessProfileData(employerProfile, {
       actorUserId: req.user._id,
-      employerContext: req.employerContext,
+      employerContext,
       activeTab,
       branchStatus,
       inviteStatus,
       memberStatus,
     });
 
-    // ───────────────────── RENDER PROFILE ─────────────────────
+    const businessProfilePage = buildBusinessProfilePageView({
+      employerProfile,
+      activeTab,
+      employerContext,
+      employerPermissions: businessProfileData.employerPermissions,
+    });
 
     return res.render("employer/business-profile/index", {
       layout: "layouts/app-layout",
       title: "Business Profile",
 
       breadcrumbs: [
-        { label: "Home", url: "/employer/dashboard" },
-        { label: "Business Profile", url: null },
+        {
+          label: "Home",
+          url: "/employer/dashboard",
+        },
+        {
+          label: "Business Profile",
+          url: null,
+        },
       ],
 
       activeTab,
+      businessProfilePage,
 
       csrfToken: req.csrfToken(),
 
-      locations: JSON.stringify(locations),
+      locations: serializeForInlineScript(locations),
+
       googleMapsApiKey: process.env.GOOGLE_MAPS_BROWSER_KEY,
 
       scripts: getBusinessProfileScripts(activeTab),
@@ -353,26 +373,13 @@ exports.getBusinessProfile = async (req, res, next) => {
 
 // ───────────────────── UPDATE BUSINESS DETAILS ─────────────────────
 
-/**
- * Update ordinary business details for an authorised employer.
- *
- * The authenticated actor comes from middleware, never request input.
- * EmployerService rechecks permissions and protects CAC identity,
- * regulatory registrations, verification states and approval history.
- *
- * Protected identity corrections require a separate support-led flow.
- */
 exports.postUpdateBusinessDetails = async (req, res, next) => {
   try {
-    // ───────────────────── AUTHENTICATED ACTOR ─────────────────────
-
     const actorUserId = req.user?._id || req.user?.id;
 
     if (!actorUserId) {
       return sendUnauthorized(res);
     }
-
-    // ───────────────────── TARGET EMPLOYER ─────────────────────
 
     const employerProfile = req.employerProfile;
 
@@ -380,35 +387,19 @@ exports.postUpdateBusinessDetails = async (req, res, next) => {
       return sendBadRequest(res, "Employer profile is required.");
     }
 
-    // ───────────────────── BUSINESS-LEVEL AUTHORISATION ─────────────────────
-
-    // Only the owner or an authorised business admin may update details.
     if (req.employerContext?.canManageBusinessProfile !== true) {
       return sendForbidden(res, "You are not authorised to update this business profile.");
     }
-
-    // ───────────────────── REQUEST VALIDATION ─────────────────────
 
     if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
       return sendBadRequest(res, "Valid business profile details are required.");
     }
 
-    // ───────────────────── AUTHORISED PROFILE UPDATE ─────────────────────
-
-    /**
-     * Service validation restricts writable fields and detects
-     * reviewed premises or representative changes.
-     *
-     * Ordinary profile edits do not trigger paid registry lookups
-     * or silently invalidate authoritative KYC evidence.
-     */
     await EmployerService.updateBusinessDetails({
       employerProfileId: employerProfile._id,
       actorUserId,
       data: req.body,
     });
-
-    // ───────────────────── SUCCESS RESPONSE ─────────────────────
 
     return res.json({
       success: true,

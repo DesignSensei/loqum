@@ -180,7 +180,24 @@ exports.isAccountAllowed = (req, res, next) => {
     return requireLogin(req, res);
   }
 
-  const accountStatus = req.user.accountStatus || "active";
+  /*
+   * Fail closed.
+   *
+   * Only an explicitly active account may
+   * continue to protected application routes.
+   *
+   * A missing, null or unrecognized account
+   * status must not be treated as active.
+   *
+   * User.accountStatus defaults to "active"
+   * when an account is created.
+   */
+
+  const accountStatus = req.user.accountStatus;
+
+  if (accountStatus === "active") {
+    return next();
+  }
 
   const blockedStatuses = {
     suspended: {
@@ -205,17 +222,27 @@ exports.isAccountAllowed = (req, res, next) => {
     },
   };
 
-  const restriction = blockedStatuses[accountStatus];
+  /*
+   * Unknown account statuses are denied rather
+   * than falling through to next().
+   */
 
-  if (!restriction) {
-    return next();
-  }
+  const restriction = blockedStatuses[accountStatus] || {
+    title: "Account Unavailable",
+    message: "Your account access could not be confirmed. Please contact support.",
+  };
+
+  const safeAccountStatus =
+    typeof accountStatus === "string" &&
+    Object.prototype.hasOwnProperty.call(blockedStatuses, accountStatus)
+      ? accountStatus
+      : "unknown";
 
   if (expectsJSON(req)) {
     return res.status(403).json({
       success: false,
       message: restriction.message,
-      accountStatus,
+      accountStatus: safeAccountStatus,
     });
   }
 
@@ -223,6 +250,6 @@ exports.isAccountAllowed = (req, res, next) => {
     layout: "layouts/auth-layout-no-index",
     title: restriction.title,
     message: restriction.message,
-    accountStatus,
+    accountStatus: safeAccountStatus,
   });
 };

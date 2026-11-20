@@ -1,3 +1,4 @@
+
 <!-- views/employer/shifts/show.ejs -->
 
 <div
@@ -5,93 +6,84 @@
   data-shift-id="<%= shiftDetailsView.shift.id %>"
   data-csrf-token="<%= csrfToken %>"
 >
-  
-  <!-- ─────────────────────────────── STATUS NOTICES ─────────────────────────────── -->
 
- <% if (shiftDetailsView.shift.isExpired) { %>
-  <div
-    class="notice d-flex align-items-center bg-light-danger rounded border border-danger border-dashed p-6 mb-8"
-  >
-    <div class="symbol symbol-50px me-4">
-      <span class="symbol-label bg-light-danger">
-        <i class="ki-duotone ki-information fs-2tx text-danger">
-          <span class="path1"></span>
-          <span class="path2"></span>
-          <span class="path3"></span>
-        </i>
-      </span>
-    </div>
+  <!-- STATUS NOTICES -->
 
-    <div class="fw-semibold">
-      <div class="fs-6 fw-bold text-danger">
-        This Shift expired.
+  <% if (shiftDetailsView.shift.isExpired) { %>
+    <div class="notice d-flex align-items-center bg-light-danger rounded border border-danger border-dashed p-6 mb-8">
+      <div class="symbol symbol-50px me-4">
+        <span class="symbol-label bg-light-danger">
+          <i class="ki-duotone ki-information fs-2tx text-danger">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+          </i>
+        </span>
       </div>
 
-      <div class="fs-7 text-gray-700 mt-1">
-        It was not funded before its scheduled start time.
-      </div>
-    </div>
-  </div>
-<% } %>
-
-<% if (shiftDetailsView.shift.needsPayment) { %>
-  <div
-    class="notice d-flex align-items-center bg-light-warning rounded border border-warning border-dashed p-6 mb-8"
-  >
-    <div class="symbol symbol-50px me-4">
-      <span class="symbol-label bg-light-warning">
-        <i class="ki-duotone ki-wallet fs-2tx text-warning">
-          <span class="path1"></span>
-          <span class="path2"></span>
-          <span class="path3"></span>
-          <span class="path4"></span>
-        </i>
-      </span>
-    </div>
-
-    <div class="d-flex flex-wrap flex-stack flex-grow-1 gap-4">
       <div class="fw-semibold">
-        <div class="fs-6 fw-bold text-warning">
-          Funding is required.
+        <div class="fs-6 fw-bold text-danger">
+          This Shift expired.
         </div>
-
         <div class="fs-7 text-gray-700 mt-1">
-          This Shift will not be published until the full employer charge has
-          been protected.
+          It was not funded before its scheduled start time.
         </div>
       </div>
-
-      <button
-        type="button"
-        class="btn btn-sm btn-warning"
-        data-bs-toggle="modal"
-        data-bs-target="#<%= shiftDetailsView.actions.fundShiftModalId %>"
-      >
-        <i class="ki-duotone ki-wallet fs-3 me-1">
-          <span class="path1"></span>
-          <span class="path2"></span>
-          <span class="path3"></span>
-          <span class="path4"></span>
-        </i>
-
-        <%= shiftDetailsView.shift.canRetryPayment ? "Retry Payment" : "Complete Payment" %>
-      </button>
     </div>
-  </div>
-<% } %>
+  <% } %>
+
+  <% if (shiftDetailsView.shift.needsPayment) { %>
+    <div class="notice d-flex align-items-center bg-light-warning rounded border border-warning border-dashed p-6 mb-8">
+      <div class="symbol symbol-50px me-4">
+        <span class="symbol-label bg-light-warning">
+          <i class="ki-duotone ki-wallet fs-2tx text-warning">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+            <span class="path4"></span>
+          </i>
+        </span>
+      </div>
+
+      <div class="d-flex flex-wrap flex-stack flex-grow-1 gap-4">
+        <div class="fw-semibold">
+          <div class="fs-6 fw-bold text-warning">
+            Funding is required.
+          </div>
+          <div class="fs-7 text-gray-700 mt-1">
+            This Shift will not be published until the full employer charge has been protected.
+          </div>
+        </div>
+
+        <button
+          type="button"
+          class="btn btn-sm btn-warning"
+          data-bs-toggle="modal"
+          data-bs-target="#<%= shiftDetailsView.actions.fundShiftModalId %>"
+        >
+          <i class="ki-duotone ki-wallet fs-3 me-1">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+            <span class="path4"></span>
+          </i>
+          <%= shiftDetailsView.shift.canRetryPayment ? "Retry Payment" : "Complete Payment" %>
+        </button>
+      </div>
+    </div>
+  <% } %>
 
   <!-- MAIN CONTENT -->
 
   <div class="row g-6 g-xl-8">
     <div class="col-xl-8">
+
       <!-- SCHEDULE OVERVIEW -->
 
       <div class="card card-flush mb-6">
         <div class="card-header">
           <div class="card-title">
-            <h2 class="fw-bold mb-0">
-              Schedule
-            </h2>
+            <h2 class="fw-bold mb-0">Schedule</h2>
           </div>
         </div>
 
@@ -99,10 +91,7 @@
           <div class="row g-5">
             <div class="col-sm-6 col-lg-4">
               <div class="border border-dashed rounded p-4 h-100">
-                <div class="fs-7 text-muted mb-1">
-                  Schedule type
-                </div>
-
+                <div class="fs-7 text-muted mb-1">Schedule type</div>
                 <div class="fs-6 fw-bold text-gray-900">
                   <%= shiftDetailsView.shift.scheduleModeLabel %>
                 </div>
@@ -111,10 +100,7 @@
 
             <div class="col-sm-6 col-lg-4">
               <div class="border border-dashed rounded p-4 h-100">
-                <div class="fs-7 text-muted mb-1">
-                  Number of shifts
-                </div>
-
+                <div class="fs-7 text-muted mb-1">Number of shifts</div>
                 <div class="fs-6 fw-bold text-gray-900">
                   <%= shiftDetailsView.shift.occurrenceCountLabel %>
                 </div>
@@ -123,10 +109,7 @@
 
             <div class="col-sm-6 col-lg-4">
               <div class="border border-dashed rounded p-4 h-100">
-                <div class="fs-7 text-muted mb-1">
-                  Total scheduled time
-                </div>
-
+                <div class="fs-7 text-muted mb-1">Total scheduled time</div>
                 <div class="fs-6 fw-bold text-gray-900">
                   <%= shiftDetailsView.shift.totalScheduledHoursDisplay %>
                 </div>
@@ -135,10 +118,7 @@
 
             <div class="col-sm-6 col-lg-4">
               <div class="border border-dashed rounded p-4 h-100">
-                <div class="fs-7 text-muted mb-1">
-                  First work date
-                </div>
-
+                <div class="fs-7 text-muted mb-1">First work date</div>
                 <div class="fs-6 fw-bold text-gray-900">
                   <%= shiftDetailsView.shift.firstOccurrenceDateDisplay %>
                 </div>
@@ -147,10 +127,7 @@
 
             <div class="col-sm-6 col-lg-4">
               <div class="border border-dashed rounded p-4 h-100">
-                <div class="fs-7 text-muted mb-1">
-                  Last work date
-                </div>
-
+                <div class="fs-7 text-muted mb-1">Last work date</div>
                 <div class="fs-6 fw-bold text-gray-900">
                   <%= shiftDetailsView.shift.lastOccurrenceDateDisplay %>
                 </div>
@@ -159,10 +136,7 @@
 
             <div class="col-sm-6 col-lg-4">
               <div class="border border-dashed rounded p-4 h-100">
-                <div class="fs-7 text-muted mb-1">
-                  Break
-                </div>
-
+                <div class="fs-7 text-muted mb-1">Break</div>
                 <div class="fs-6 fw-bold text-gray-900">
                   <%= shiftDetailsView.shift.breakDurationDisplay %>
                 </div>
@@ -175,30 +149,21 @@
 
             <div class="row g-5">
               <div class="col-md-4">
-                <div class="fs-7 text-muted mb-1">
-                  Repeat days
-                </div>
-
+                <div class="fs-7 text-muted mb-1">Repeat days</div>
                 <div class="fs-6 fw-semibold text-gray-900">
                   <%= shiftDetailsView.shift.repeatDaysLabel || "Not specified" %>
                 </div>
               </div>
 
               <div class="col-md-4">
-                <div class="fs-7 text-muted mb-1">
-                  Daily start time
-                </div>
-
+                <div class="fs-7 text-muted mb-1">Daily start time</div>
                 <div class="fs-6 fw-semibold text-gray-900">
                   <%= shiftDetailsView.shift.dailyStartTimeDisplay %>
                 </div>
               </div>
 
               <div class="col-md-4">
-                <div class="fs-7 text-muted mb-1">
-                  Daily end time
-                </div>
-
+                <div class="fs-7 text-muted mb-1">Daily end time</div>
                 <div class="fs-6 fw-semibold text-gray-900">
                   <%= shiftDetailsView.shift.dailyEndTimeDisplay %>
 
@@ -227,9 +192,7 @@
 
             <% if (shiftDetailsView.shift.selectedOccurrence) { %>
               <div class="card-toolbar">
-                <span
-                  class="badge <%= shiftDetailsView.shift.selectedOccurrence.statusBadgeClass %>"
-                >
+                <span class="badge <%= shiftDetailsView.shift.selectedOccurrence.statusBadgeClass %>">
                   <%= shiftDetailsView.shift.selectedOccurrence.statusLabel %>
                 </span>
               </div>
@@ -253,9 +216,7 @@
 
                   <tbody class="fw-semibold text-gray-700">
                     <% shiftDetailsView.shift.occurrences.forEach((occurrence) => { %>
-                      <tr
-                        class="<%= occurrence.isSelectedOccurrence ? 'bg-light-primary' : '' %>"
-                      >
+                      <tr class="<%= occurrence.isSelectedOccurrence ? 'bg-light-primary' : '' %>">
                         <td>
                           <div class="d-flex align-items-center gap-2">
                             <span class="fw-bold text-gray-900">
@@ -325,14 +286,10 @@
               <div class="row g-5">
                 <div class="col-md-6">
                   <div class="border border-dashed rounded p-4 h-100">
-                    <div class="fs-7 text-muted mb-1">
-                      Selected work date
-                    </div>
-
+                    <div class="fs-7 text-muted mb-1">Selected work date</div>
                     <div class="fs-5 fw-bold text-gray-900">
                       <%= shiftDetailsView.shift.selectedOccurrence.occurrenceDateDisplay %>
                     </div>
-
                     <div class="fs-7 text-muted mt-2">
                       <%= shiftDetailsView.shift.selectedOccurrence.startTimeDisplay %>
                       –
@@ -343,14 +300,10 @@
 
                 <div class="col-md-6">
                   <div class="border border-dashed rounded p-4 h-100">
-                    <div class="fs-7 text-muted mb-1">
-                      Scheduled duration
-                    </div>
-
+                    <div class="fs-7 text-muted mb-1">Scheduled duration</div>
                     <div class="fs-5 fw-bold text-gray-900">
                       <%= shiftDetailsView.shift.selectedOccurrence.scheduledHoursDisplay %>
                     </div>
-
                     <div class="fs-7 text-muted mt-2">
                       <%= shiftDetailsView.shift.selectedOccurrence.breakDurationDisplay %>
                     </div>
@@ -359,13 +312,8 @@
 
                 <div class="col-md-4">
                   <div class="border border-dashed rounded p-4 h-100">
-                    <div class="fs-7 text-muted mb-1">
-                      Assignment
-                    </div>
-
-                    <span
-                      class="badge <%= shiftDetailsView.shift.selectedOccurrence.assignmentStatusBadgeClass %>"
-                    >
+                    <div class="fs-7 text-muted mb-1">Assignment</div>
+                    <span class="badge <%= shiftDetailsView.shift.selectedOccurrence.assignmentStatusBadgeClass %>">
                       <%= shiftDetailsView.shift.selectedOccurrence.assignmentStatusLabel %>
                     </span>
                   </div>
@@ -373,13 +321,8 @@
 
                 <div class="col-md-4">
                   <div class="border border-dashed rounded p-4 h-100">
-                    <div class="fs-7 text-muted mb-1">
-                      Attendance
-                    </div>
-
-                    <span
-                      class="badge <%= shiftDetailsView.shift.selectedOccurrence.attendanceStatusBadgeClass %>"
-                    >
+                    <div class="fs-7 text-muted mb-1">Attendance</div>
+                    <span class="badge <%= shiftDetailsView.shift.selectedOccurrence.attendanceStatusBadgeClass %>">
                       <%= shiftDetailsView.shift.selectedOccurrence.attendanceStatusLabel %>
                     </span>
                   </div>
@@ -387,13 +330,8 @@
 
                 <div class="col-md-4">
                   <div class="border border-dashed rounded p-4 h-100">
-                    <div class="fs-7 text-muted mb-1">
-                      Settlement
-                    </div>
-
-                    <span
-                      class="badge <%= shiftDetailsView.shift.selectedOccurrence.settlementStatusBadgeClass %>"
-                    >
+                    <div class="fs-7 text-muted mb-1">Settlement</div>
+                    <span class="badge <%= shiftDetailsView.shift.selectedOccurrence.settlementStatusBadgeClass %>">
                       <%= shiftDetailsView.shift.selectedOccurrence.settlementStatusLabel %>
                     </span>
                   </div>
@@ -402,10 +340,7 @@
                 <% if (shiftDetailsView.shift.selectedOccurrence.checkedInAt) { %>
                   <div class="col-md-6">
                     <div class="border border-dashed rounded p-4 h-100">
-                      <div class="fs-7 text-muted mb-1">
-                        Checked in
-                      </div>
-
+                      <div class="fs-7 text-muted mb-1">Checked in</div>
                       <div class="fs-6 fw-semibold text-gray-900">
                         <%= shiftDetailsView.shift.selectedOccurrence.checkedInAtDisplay %>
                       </div>
@@ -416,10 +351,7 @@
                 <% if (shiftDetailsView.shift.selectedOccurrence.checkedOutAt) { %>
                   <div class="col-md-6">
                     <div class="border border-dashed rounded p-4 h-100">
-                      <div class="fs-7 text-muted mb-1">
-                        Checked out
-                      </div>
-
+                      <div class="fs-7 text-muted mb-1">Checked out</div>
                       <div class="fs-6 fw-semibold text-gray-900">
                         <%= shiftDetailsView.shift.selectedOccurrence.checkedOutAtDisplay %>
                       </div>
@@ -432,24 +364,449 @@
         </div>
       <% } %>
 
+      <!-- SELECTED OCCURRENCE: OVERTIME REVIEW -->
+
+      <% if (shiftDetailsView.shift.selectedOccurrence?.overtimeReview?.showReview) { %>
+        <div
+          class="card card-flush mb-6"
+          id="employerOvertimeReview"
+          data-overtime-review
+          data-occurrence-id="<%= shiftDetailsView.shift.selectedOccurrence.id %>"
+        >
+          <div class="card-header">
+            <div class="card-title">
+              <div>
+                <h2 class="fw-bold mb-1">
+                  Overtime Request
+                </h2>
+                <div class="fs-7 text-muted">
+                  <%= shiftDetailsView.shift.selectedOccurrence.sequenceLabel %>
+                  ·
+                  <%= shiftDetailsView.shift.selectedOccurrence.occurrenceDateDisplay %>
+                </div>
+              </div>
+            </div>
+
+            <div class="card-toolbar">
+              <span class="badge <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.statusBadgeClass %>">
+                <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.statusLabel %>
+              </span>
+            </div>
+          </div>
+
+          <div class="card-body pt-0">
+
+            <!-- OVERTIME REQUEST SUMMARY -->
+
+            <div class="row g-4 mb-6">
+              <div class="col-md-4">
+                <div class="border border-dashed rounded p-4 h-100">
+                  <div class="fs-7 text-muted mb-1">
+                    Requested overtime
+                  </div>
+                  <div class="fs-5 fw-bold text-gray-900">
+                    <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.requestedMinutesDisplay %>
+                  </div>
+                </div>
+              </div>
+
+              <div class="col-md-4">
+                <div class="border border-dashed rounded p-4 h-100">
+                  <div class="fs-7 text-muted mb-1">
+                    Submitted
+                  </div>
+                  <div class="fs-6 fw-semibold text-gray-900">
+                    <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.requestedAtDisplay || "Not recorded" %>
+                  </div>
+                </div>
+              </div>
+
+              <div class="col-md-4">
+                <div class="border border-dashed rounded p-4 h-100">
+                  <div class="fs-7 text-muted mb-1">
+                    Employer response deadline
+                  </div>
+                  <div class="fs-6 fw-semibold text-gray-900">
+                    <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.employerResponseDeadlineAtDisplay || "Not available" %>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- PROFESSIONAL STATEMENT AND EVIDENCE -->
+
+            <% if (shiftDetailsView.shift.selectedOccurrence.overtimeReview.canViewOvertimeEvidence) { %>
+
+              <% if (shiftDetailsView.shift.selectedOccurrence.overtimeReview.hasRequestStatement) { %>
+                <div class="mb-6">
+                  <h3 class="fs-6 fw-bold text-gray-900 mb-3">
+                    Professional's Statement
+                  </h3>
+
+                  <div
+                    class="rounded bg-light p-5 text-gray-800"
+                    style="white-space: pre-wrap; overflow-wrap: anywhere;"
+                  ><%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.requestStatement %></div>
+                </div>
+              <% } %>
+
+              <!-- SUPPORTING EVIDENCE -->
+
+              <div class="mb-6">
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+                  <h3 class="fs-6 fw-bold text-gray-900 mb-0">
+                    Supporting Evidence
+                  </h3>
+
+                  <span class="badge badge-light-primary">
+                    <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.requestEvidenceCountLabel %>
+                  </span>
+                </div>
+
+                <% if (shiftDetailsView.shift.selectedOccurrence.overtimeReview.hasRequestEvidence) { %>
+                  <div class="d-flex flex-column gap-3">
+                    <% shiftDetailsView.shift.selectedOccurrence.overtimeReview.requestEvidence.forEach((evidence) => { %>
+                      <div class="border border-dashed rounded p-4">
+                        <div class="d-flex flex-wrap align-items-start justify-content-between gap-4">
+
+                          <div class="d-flex align-items-start gap-3 flex-grow-1">
+                            <span class="symbol symbol-45px flex-shrink-0">
+                              <span class="symbol-label bg-light-primary">
+                                <i class="ki-duotone ki-file fs-2 text-primary">
+                                  <span class="path1"></span>
+                                  <span class="path2"></span>
+                                </i>
+                              </span>
+                            </span>
+
+                            <div class="flex-grow-1" style="min-width: 0;">
+                              <div class="fw-bold text-gray-900">
+                                <%= evidence.label %>
+                              </div>
+
+                              <div class="fs-7 text-muted mt-1">
+                                <%= evidence.typeLabel %>
+                              </div>
+
+                              <% if (evidence.description) { %>
+                                <div
+                                  class="fs-7 text-gray-700 mt-2"
+                                  style="white-space: pre-wrap; overflow-wrap: anywhere;"
+                                ><%= evidence.description %></div>
+                              <% } %>
+
+                              <% if (!evidence.canView && evidence.unavailableMessage) { %>
+                                <div class="fs-8 text-warning mt-2">
+                                  <%= evidence.unavailableMessage %>
+                                </div>
+                              <% } %>
+                            </div>
+                          </div>
+
+                          <% if (evidence.canView) { %>
+                            <a
+                              href="<%= evidence.viewUrl %>"
+                              class="btn btn-sm btn-light-primary flex-shrink-0"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              referrerpolicy="no-referrer"
+                              aria-label="View <%= evidence.label %>"
+                            >
+                              <i class="ki-duotone ki-eye fs-3 me-1">
+                                <span class="path1"></span>
+                                <span class="path2"></span>
+                                <span class="path3"></span>
+                              </i>
+                              View File
+                            </a>
+                          <% } %>
+
+                        </div>
+                      </div>
+                    <% }) %>
+                  </div>
+
+                  <div class="fs-8 text-muted mt-3">
+                    Supporting files are accessed through authenticated and authorised requests.
+                  </div>
+                <% } else { %>
+                  <div class="rounded bg-light p-5 text-center">
+                    <div class="fs-6 fw-semibold text-gray-800">
+                      <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.evidenceEmptyTitle %>
+                    </div>
+                    <div class="fs-7 text-muted mt-2">
+                      <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.evidenceEmptyMessage %>
+                    </div>
+                  </div>
+                <% } %>
+              </div>
+
+            <% } else { %>
+              <div class="notice bg-light-secondary border border-dashed rounded p-5 mb-6">
+                <div class="fs-6 fw-semibold text-gray-900">
+                  Overtime Evidence Restricted
+                </div>
+                <div class="fs-7 text-muted mt-2">
+                  <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.evidenceRestrictedMessage %>
+                </div>
+              </div>
+            <% } %>
+
+            <!-- OVERTIME STATUS NOTICE -->
+
+            <% if (shiftDetailsView.shift.selectedOccurrence.overtimeReview.statusNotice) { %>
+              <div class="notice border border-dashed rounded p-5 mb-6 <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.statusNotice.className %>">
+                <div class="fs-6 fw-bold <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.statusNotice.titleClassName %>">
+                  <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.statusNotice.title %>
+                </div>
+
+                <div class="fs-7 text-gray-700 mt-2">
+                  <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.statusNotice.message %>
+                </div>
+              </div>
+            <% } %>
+
+            <!-- APPROVED OVERTIME SUMMARY -->
+
+            <% if (shiftDetailsView.shift.selectedOccurrence.overtimeReview.status === "approved") { %>
+              <div class="border border-dashed rounded p-4 mb-6">
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+                  <div class="fs-7 text-muted">
+                    Approved overtime duration
+                  </div>
+                  <div class="fs-5 fw-bold text-success">
+                    <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.approvedMinutesDisplay %>
+                  </div>
+                </div>
+
+                <% if (shiftDetailsView.shift.selectedOccurrence.overtimeReview.approvedAt) { %>
+                  <div class="fs-8 text-muted mt-2">
+                    Approved at:
+                    <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.approvedAtDisplay %>
+                  </div>
+                <% } %>
+              </div>
+            <% } %>
+
+            <!-- REJECTED OVERTIME SUMMARY -->
+
+            <% if (shiftDetailsView.shift.selectedOccurrence.overtimeReview.status === "rejected") { %>
+              <div class="border border-dashed rounded p-4 mb-6">
+                <% if (shiftDetailsView.shift.selectedOccurrence.overtimeReview.rejectionBasisLabel) { %>
+                  <div class="fs-7 text-muted mb-2">
+                    Rejection basis
+                  </div>
+                  <div class="fs-6 fw-semibold text-gray-900">
+                    <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.rejectionBasisLabel %>
+                  </div>
+                <% } %>
+
+                <% if (shiftDetailsView.shift.selectedOccurrence.overtimeReview.rejectionReason) { %>
+                  <div class="fs-7 text-muted mt-4 mb-2">
+                    Rejection explanation
+                  </div>
+                  <div
+                    class="fs-7 text-gray-800"
+                    style="white-space: pre-wrap; overflow-wrap: anywhere;"
+                  ><%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.rejectionReason %></div>
+                <% } %>
+
+                <% if (shiftDetailsView.shift.selectedOccurrence.overtimeReview.employerProposedMinutesDisplay) { %>
+                  <div class="fs-7 text-muted mt-4">
+                    Employer's proposed duration:
+                    <strong>
+                      <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.employerProposedMinutesDisplay %>
+                    </strong>
+                  </div>
+                <% } %>
+              </div>
+            <% } %>
+
+            <!-- EMPLOYER OVERTIME DECISION ACTIONS -->
+
+            <% if (shiftDetailsView.shift.selectedOccurrence.overtimeReview.employerCanRespond) { %>
+              <div class="border-top border-dashed pt-6 mb-6">
+                <div class="fs-6 fw-bold text-gray-900 mb-2">
+                  Review This Overtime Request
+                </div>
+
+                <div class="fs-7 text-muted mb-4">
+                  Review the request, attendance details and supporting evidence before making a decision.
+                  Approval confirms the full requested duration.
+                </div>
+
+                <div class="d-flex flex-wrap gap-3">
+                  <% if (shiftDetailsView.shift.selectedOccurrence.overtimeReview.actions.approve.available) { %>
+                    <button
+                      type="button"
+                      class="btn btn-success"
+                      data-overtime-approve
+                      data-url="<%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.actions.approve.url %>"
+                    >
+                      <i class="ki-duotone ki-check-circle fs-2 me-1">
+                        <span class="path1"></span>
+                        <span class="path2"></span>
+                      </i>
+                      <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.actions.approve.label %>
+                    </button>
+                  <% } %>
+
+                  <% if (shiftDetailsView.shift.selectedOccurrence.overtimeReview.actions.reject.available) { %>
+                    <button
+                      type="button"
+                      class="btn btn-light-danger"
+                      data-overtime-reject
+                      data-url="<%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.actions.reject.url %>"
+                      data-requested-minutes="<%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.actions.reject.requestedMinutes %>"
+                    >
+                      <i class="ki-duotone ki-cross-circle fs-2 me-1">
+                        <span class="path1"></span>
+                        <span class="path2"></span>
+                      </i>
+                      <%= shiftDetailsView.shift.selectedOccurrence.overtimeReview.actions.reject.label %>
+                    </button>
+                  <% } %>
+                </div>
+              </div>
+            <% } %>
+
+            <!-- APPROVED OVERTIME TOP-UP -->
+
+            <% if (shiftDetailsView.shift.selectedOccurrence.overtimeTopUpPayment.outstanding) { %>
+              <div class="border border-warning border-dashed rounded p-5">
+                <div class="d-flex flex-wrap justify-content-between align-items-center gap-4 mb-5">
+                  <div>
+                    <div class="fs-6 fw-bold text-gray-900">
+                      Overtime Funding Outstanding
+                    </div>
+                    <div class="fs-7 text-muted mt-1">
+                      Additional funding is required for the approved overtime.
+                    </div>
+                  </div>
+
+                  <div class="fs-4 fw-bold text-warning">
+                    <%= shiftDetailsView.shift.selectedOccurrence.overtimeTopUpPayment.topUpRequiredDisplay %>
+                  </div>
+                </div>
+
+                <% if (shiftDetailsView.shift.selectedOccurrence.overtimeTopUpPayment.topUpDeadlineAt) { %>
+                  <div class="fs-7 text-muted mb-4">
+                    Payment deadline:
+                    <strong>
+                      <%= shiftDetailsView.shift.selectedOccurrence.overtimeTopUpPayment.topUpDeadlineAtDisplay %>
+                    </strong>
+                  </div>
+                <% } %>
+
+                <% if (shiftDetailsView.shift.selectedOccurrence.overtimeTopUpPayment.overdue) { %>
+                  <div class="alert alert-warning py-3 mb-4">
+                    This overtime top-up is overdue.
+                  </div>
+                <% } %>
+
+                <% if (shiftDetailsView.shift.selectedOccurrence.overtimeTopUpPayment.action.available) { %>
+                  <div class="d-flex flex-column gap-3">
+
+                    <!-- EMPLOYER WALLET TOP-UP -->
+
+                    <% if (shiftDetailsView.shift.selectedOccurrence.overtimeTopUpPayment.paymentOptions.wallet.available) { %>
+                      <div class="border border-dashed rounded p-4">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+                          <div>
+                            <div class="fs-6 fw-semibold text-gray-900">
+                              Employer Wallet
+                            </div>
+
+                            <% if (shiftDetailsView.shift.selectedOccurrence.overtimeTopUpPayment.paymentOptions.wallet.availableBalanceDisplay) { %>
+                              <div class="fs-7 text-muted mt-1">
+                                Available balance:
+                                <%= shiftDetailsView.shift.selectedOccurrence.overtimeTopUpPayment.paymentOptions.wallet.availableBalanceDisplay %>
+                              </div>
+                            <% } %>
+
+                            <% if (shiftDetailsView.shift.selectedOccurrence.overtimeTopUpPayment.paymentOptions.wallet.unavailableMessage) { %>
+                              <div class="fs-8 text-danger mt-2">
+                                <%= shiftDetailsView.shift.selectedOccurrence.overtimeTopUpPayment.paymentOptions.wallet.unavailableMessage %>
+                              </div>
+                            <% } %>
+                          </div>
+
+                          <button
+                            type="button"
+                            class="btn btn-sm btn-primary"
+                            data-overtime-topup-wallet
+                            data-url="<%= shiftDetailsView.shift.selectedOccurrence.overtimeTopUpPayment.paymentOptions.wallet.url || '' %>"
+                            <%= shiftDetailsView.shift.selectedOccurrence.overtimeTopUpPayment.paymentOptions.wallet.canUse ? '' : 'disabled' %>
+                          >
+                            <i class="ki-duotone ki-wallet fs-3 me-1">
+                              <span class="path1"></span>
+                              <span class="path2"></span>
+                              <span class="path3"></span>
+                              <span class="path4"></span>
+                            </i>
+                            Pay from Wallet
+                          </button>
+                        </div>
+                      </div>
+                    <% } %>
+
+                    <!-- PAYSTACK OVERTIME TOP-UP -->
+
+                    <% if (shiftDetailsView.shift.selectedOccurrence.overtimeTopUpPayment.paymentOptions.paystackCheckout.available) { %>
+                      <div class="border border-dashed rounded p-4">
+                        <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+                          <div>
+                            <div class="fs-6 fw-semibold text-gray-900">
+                              Paystack Checkout
+                            </div>
+                            <div class="fs-7 text-muted mt-1">
+                              <%= shiftDetailsView.shift.selectedOccurrence.overtimeTopUpPayment.paymentOptions.paystackCheckout.description %>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            class="btn btn-sm btn-light-primary"
+                            data-overtime-topup-checkout
+                            data-url="<%= shiftDetailsView.shift.selectedOccurrence.overtimeTopUpPayment.paymentOptions.paystackCheckout.url || '' %>"
+                            <%= shiftDetailsView.shift.selectedOccurrence.overtimeTopUpPayment.paymentOptions.paystackCheckout.canUse ? '' : 'disabled' %>
+                          >
+                            <i class="ki-duotone ki-credit-cart fs-3 me-1">
+                              <span class="path1"></span>
+                              <span class="path2"></span>
+                            </i>
+                            Pay with Paystack
+                          </button>
+                        </div>
+                      </div>
+                    <% } %>
+
+                  </div>
+                <% } else { %>
+                  <div class="fs-7 text-muted">
+                    You do not currently have permission to fund this overtime obligation.
+                  </div>
+                <% } %>
+              </div>
+            <% } %>
+
+          </div>
+        </div>
+      <% } %>
+
       <!-- ROLE DETAILS -->
 
       <div class="card card-flush mb-6">
         <div class="card-header">
           <div class="card-title">
-            <h2 class="fw-bold mb-0">
-              Role Details
-            </h2>
+            <h2 class="fw-bold mb-0">Role Details</h2>
           </div>
         </div>
 
         <div class="card-body pt-0">
           <div class="row g-5">
             <div class="col-md-6">
-              <div class="fs-7 text-muted mb-1">
-                Role
-              </div>
-
+              <div class="fs-7 text-muted mb-1">Role</div>
               <div class="fs-6 fw-bold text-gray-900">
                 <%= shiftDetailsView.shift.roleTitle %>
               </div>
@@ -459,7 +816,6 @@
               <div class="fs-7 text-muted mb-1">
                 Professional type
               </div>
-
               <div class="fs-6 fw-bold text-gray-900">
                 <%= shiftDetailsView.shift.professionalTypeLabel %>
               </div>
@@ -467,10 +823,7 @@
 
             <% if (shiftDetailsView.shift.department) { %>
               <div class="col-md-6">
-                <div class="fs-7 text-muted mb-1">
-                  Department
-                </div>
-
+                <div class="fs-7 text-muted mb-1">Department</div>
                 <div class="fs-6 fw-semibold text-gray-900">
                   <%= shiftDetailsView.shift.department %>
                 </div>
@@ -479,10 +832,7 @@
 
             <% if (shiftDetailsView.shift.dressCode) { %>
               <div class="col-md-6">
-                <div class="fs-7 text-muted mb-1">
-                  Dress code
-                </div>
-
+                <div class="fs-7 text-muted mb-1">Dress code</div>
                 <div class="fs-6 fw-semibold text-gray-900">
                   <%= shiftDetailsView.shift.dressCode %>
                 </div>
@@ -491,10 +841,7 @@
 
             <% if (shiftDetailsView.shift.requiredSkills.length > 0) { %>
               <div class="col-12">
-                <div class="fs-7 text-muted mb-3">
-                  Required skills
-                </div>
-
+                <div class="fs-7 text-muted mb-3">Required skills</div>
                 <div class="d-flex flex-wrap gap-2">
                   <% shiftDetailsView.shift.requiredSkills.forEach((skill) => { %>
                     <span class="badge badge-light-primary">
@@ -507,10 +854,7 @@
 
             <% if (shiftDetailsView.shift.description) { %>
               <div class="col-12">
-                <div class="fs-7 text-muted mb-1">
-                  Description
-                </div>
-
+                <div class="fs-7 text-muted mb-1">Description</div>
                 <div class="fs-6 text-gray-800">
                   <%= shiftDetailsView.shift.description %>
                 </div>
@@ -525,9 +869,7 @@
       <div class="card card-flush">
         <div class="card-header">
           <div class="card-title">
-            <h2 class="fw-bold mb-0">
-              Pricing
-            </h2>
+            <h2 class="fw-bold mb-0">Pricing</h2>
           </div>
 
           <div class="card-toolbar">
@@ -541,10 +883,7 @@
           <div class="row g-5">
             <div class="col-sm-6 col-lg-3">
               <div class="border border-dashed rounded p-4 h-100">
-                <div class="fs-7 text-muted mb-1">
-                  Hourly rate
-                </div>
-
+                <div class="fs-7 text-muted mb-1">Hourly rate</div>
                 <div class="fs-5 fw-bold text-gray-900">
                   <%= shiftDetailsView.shift.hourlyRateDisplay %>
                 </div>
@@ -556,7 +895,6 @@
                 <div class="fs-7 text-muted mb-1">
                   Professional pay
                 </div>
-
                 <div class="fs-5 fw-bold text-gray-900">
                   <%= shiftDetailsView.shift.estimatedProfessionalPayDisplay %>
                 </div>
@@ -565,14 +903,10 @@
 
             <div class="col-sm-6 col-lg-3">
               <div class="border border-dashed rounded p-4 h-100">
-                <div class="fs-7 text-muted mb-1">
-                  Platform fee
-                </div>
-
+                <div class="fs-7 text-muted mb-1">Platform fee</div>
                 <div class="fs-5 fw-bold text-gray-900">
                   <%= shiftDetailsView.shift.estimatedPlatformFeeDisplay %>
                 </div>
-
                 <div class="fs-8 text-muted mt-1">
                   <%= shiftDetailsView.shift.platformFeePercent %>%
                 </div>
@@ -581,10 +915,7 @@
 
             <div class="col-sm-6 col-lg-3">
               <div class="border border-primary border-dashed bg-light-primary rounded p-4 h-100">
-                <div class="fs-7 text-muted mb-1">
-                  Employer charge
-                </div>
-
+                <div class="fs-7 text-muted mb-1">Employer charge</div>
                 <div class="fs-5 fw-bold text-primary">
                   <%= shiftDetailsView.shift.estimatedEmployerChargeDisplay %>
                 </div>
@@ -600,7 +931,6 @@
                 <div class="fs-7 text-muted mb-1">
                   Professional pay per shift
                 </div>
-
                 <div class="fs-6 fw-semibold text-gray-900">
                   <%= shiftDetailsView.shift.estimatedProfessionalPayPerOccurrenceDisplay %>
                 </div>
@@ -610,7 +940,6 @@
                 <div class="fs-7 text-muted mb-1">
                   Platform fee per shift
                 </div>
-
                 <div class="fs-6 fw-semibold text-gray-900">
                   <%= shiftDetailsView.shift.estimatedPlatformFeePerOccurrenceDisplay %>
                 </div>
@@ -620,7 +949,6 @@
                 <div class="fs-7 text-muted mb-1">
                   Employer charge per shift
                 </div>
-
                 <div class="fs-6 fw-semibold text-gray-900">
                   <%= shiftDetailsView.shift.estimatedEmployerChargePerOccurrenceDisplay %>
                 </div>
@@ -635,17 +963,13 @@
               <div class="fs-7 text-muted mb-1">
                 Pricing locked at
               </div>
-
               <div class="fs-6 fw-semibold text-gray-900">
                 <%= shiftDetailsView.shift.pricingLockedAtDisplay %>
               </div>
             </div>
 
             <div class="col-md-6">
-              <div class="fs-7 text-muted mb-1">
-                Payment status
-              </div>
-
+              <div class="fs-7 text-muted mb-1">Payment status</div>
               <span class="badge <%= shiftDetailsView.shift.paymentStatusBadgeClass %>">
                 <%= shiftDetailsView.shift.paymentStatusLabel %>
               </span>
@@ -658,6 +982,7 @@
     <!-- RIGHT COLUMN -->
 
     <div class="col-xl-4">
+
       <!-- ATTENDANCE PINS -->
 
       <div
@@ -669,10 +994,7 @@
         data-check-in-pin-url="<%= shiftDetailsView.shift.pinPanel.checkInPinUrl || '' %>"
         data-check-out-pin-url="<%= shiftDetailsView.shift.pinPanel.checkOutPinUrl || '' %>"
       >
-        <div
-          class="card-header"
-           <%= shiftDetailsView.shift.pinPanel.brandColor %>;"
-        >
+        <div class="card-header">
           <div class="card-title">
             <div>
               <h2 class="fw-bold mb-1">
@@ -692,17 +1014,15 @@
 
         <div class="card-body pt-2">
           <% if (shiftDetailsView.shift.pinPanel.canViewAttendancePins) { %>
-            <div
-              class="notice d-flex bg-light-primary rounded border-primary border border-dashed p-4 mb-5"
-            >
+            <div class="notice d-flex bg-light-primary rounded border-primary border border-dashed p-4 mb-5">
               <i class="ki-duotone ki-shield-tick fs-2x text-primary me-3">
                 <span class="path1"></span>
                 <span class="path2"></span>
               </i>
 
               <div class="fs-7 text-gray-700">
-                Both PINs are available for this occurrence. The professional
-                must still pass the attendance-state and location checks.
+                Both PINs are available for this occurrence. The professional must still pass
+                the attendance-state and location checks.
               </div>
             </div>
 
@@ -744,7 +1064,6 @@
                         <span class="path1"></span>
                         <span class="path2"></span>
                       </i>
-
                       Copy
                     </button>
                   </div>
@@ -788,7 +1107,6 @@
                         <span class="path1"></span>
                         <span class="path2"></span>
                       </i>
-
                       Copy
                     </button>
                   </div>
@@ -833,9 +1151,7 @@
         <div class="card card-flush mb-6">
           <div class="card-header">
             <div class="card-title">
-              <h2 class="fw-bold mb-0">
-                Branch
-              </h2>
+              <h2 class="fw-bold mb-0">Branch</h2>
             </div>
           </div>
 
@@ -877,48 +1193,34 @@
       <div class="card card-flush mb-6">
         <div class="card-header">
           <div class="card-title">
-            <h2 class="fw-bold mb-0">
-              Funding
-            </h2>
+            <h2 class="fw-bold mb-0">Funding</h2>
           </div>
         </div>
 
         <div class="card-body pt-0">
           <div class="d-flex flex-stack mb-4">
-            <span class="fs-7 text-muted">
-              Employer charge
-            </span>
-
+            <span class="fs-7 text-muted">Employer charge</span>
             <span class="fs-6 fw-bold text-gray-900">
               <%= shiftDetailsView.shift.estimatedEmployerChargeDisplay %>
             </span>
           </div>
 
           <div class="d-flex flex-stack mb-4">
-            <span class="fs-7 text-muted">
-              Funded amount
-            </span>
-
+            <span class="fs-7 text-muted">Funded amount</span>
             <span class="fs-6 fw-bold text-gray-900">
               <%= shiftDetailsView.shift.fundedAmountDisplay %>
             </span>
           </div>
 
           <div class="d-flex flex-stack mb-4">
-            <span class="fs-7 text-muted">
-              Funding method
-            </span>
-
+            <span class="fs-7 text-muted">Funding method</span>
             <span class="fs-6 fw-semibold text-gray-900">
               <%= shiftDetailsView.shift.fundingMethodLabel %>
             </span>
           </div>
 
           <div class="d-flex flex-stack">
-            <span class="fs-7 text-muted">
-              Payment status
-            </span>
-
+            <span class="fs-7 text-muted">Payment status</span>
             <span class="badge <%= shiftDetailsView.shift.paymentStatusBadgeClass %>">
               <%= shiftDetailsView.shift.paymentStatusLabel %>
             </span>
@@ -946,9 +1248,7 @@
         <div class="card card-flush">
           <div class="card-header">
             <div class="card-title">
-              <h2 class="fw-bold mb-0">
-                Shift Actions
-              </h2>
+              <h2 class="fw-bold mb-0">Shift Actions</h2>
             </div>
           </div>
 
@@ -965,7 +1265,6 @@
                   <span class="path1"></span>
                   <span class="path2"></span>
                 </i>
-
                 <%= shiftDetailsView.shift.lifecycleActions.cancellationActionLabel %>
               </button>
             <% } %>
@@ -981,7 +1280,6 @@
                   <span class="path1"></span>
                   <span class="path2"></span>
                 </i>
-
                 <%= shiftDetailsView.shift.lifecycleActions.earlyTerminationActionLabel %>
               </button>
             <% } %>
@@ -1020,34 +1318,23 @@
         </div>
 
         <div class="modal-body py-8 px-lg-10">
-          <div
-            class="rounded border border-dashed border-primary bg-light-primary p-5 mb-7"
-          >
+          <div class="rounded border border-dashed border-primary bg-light-primary p-5 mb-7">
             <div class="d-flex flex-stack mb-3">
-              <span class="fs-7 text-muted">
-                Shift
-              </span>
-
+              <span class="fs-7 text-muted">Shift</span>
               <span class="fs-6 fw-bold text-gray-900">
                 <%= shiftDetailsView.shift.referenceCode %>
               </span>
             </div>
 
             <div class="d-flex flex-stack mb-3">
-              <span class="fs-7 text-muted">
-                Schedule
-              </span>
-
+              <span class="fs-7 text-muted">Schedule</span>
               <span class="fs-6 fw-semibold text-gray-900">
                 <%= shiftDetailsView.shift.occurrenceCountLabel %>
               </span>
             </div>
 
             <div class="d-flex flex-stack">
-              <span class="fs-7 text-muted">
-                Amount due
-              </span>
-
+              <span class="fs-7 text-muted">Amount due</span>
               <span class="fs-4 fw-bold text-primary">
                 <%= shiftDetailsView.shift.paymentReview.employerChargeDisplay %>
               </span>
@@ -1073,9 +1360,7 @@
               </label>
 
               <div class="d-flex flex-column gap-4">
-                <label
-                  class="d-flex flex-stack cursor-pointer rounded border border-dashed p-5"
-                >
+                <label class="d-flex flex-stack cursor-pointer rounded border border-dashed p-5">
                   <div class="d-flex align-items-center gap-4">
                     <span class="symbol symbol-45px">
                       <span class="symbol-label bg-light-primary">
@@ -1098,9 +1383,7 @@
                         <%= shiftDetailsView.shift.paymentReview.paymentOptions.wallet.availableBalanceDisplay %>
                       </div>
 
-                      <% if (
-                        shiftDetailsView.shift.paymentReview.paymentOptions.wallet.unavailableMessage
-                      ) { %>
+                      <% if (shiftDetailsView.shift.paymentReview.paymentOptions.wallet.unavailableMessage) { %>
                         <div class="fs-8 text-danger mt-1">
                           <%= shiftDetailsView.shift.paymentReview.paymentOptions.wallet.unavailableMessage %>
                         </div>
@@ -1117,9 +1400,7 @@
                   />
                 </label>
 
-                <label
-                  class="d-flex flex-stack cursor-pointer rounded border border-dashed p-5"
-                >
+                <label class="d-flex flex-stack cursor-pointer rounded border border-dashed p-5">
                   <div class="d-flex align-items-center gap-4">
                     <span class="symbol symbol-45px">
                       <span class="symbol-label bg-light-success">
@@ -1180,10 +1461,7 @@
 
                 <span class="indicator-progress">
                   Processing...
-
-                  <span
-                    class="spinner-border spinner-border-sm align-middle ms-2"
-                  ></span>
+                  <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
                 </span>
               </button>
             </div>

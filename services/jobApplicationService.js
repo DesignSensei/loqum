@@ -9,6 +9,11 @@ const ProfessionalResume = require("../models/ProfessionalResume");
 const User = require("../models/User");
 
 const JobService = require("./jobService");
+const Branch = require("../models/Branch");
+const EmployerProfile = require("../models/EmployerProfile");
+const EmployerMember = require("../models/EmployerMember");
+const FacilityPermitVerificationService = require("./facilityPermitVerificationService");
+const ProfessionalVerificationService = require("./professionalVerificationService");
 
 const {
   JOB_APPLICATION_STATUSES,
@@ -248,7 +253,9 @@ class JobApplicationService {
       ).select(
         "user type phoneCode phone specialty bio yearsOfExperience state lga " +
           "licenceNumber licenceIssuingBody licenceVerificationStatus licenceExpiryDate " +
-          "identityVerificationStatus certifications professionalApprovalStatus accountStatus"
+          "licenceValidityType licenceLicensingYear licenceVerificationMethod licenceVerificationSource " +
+          "licenceNameOnRecord upcomingLicence " +
+          "certifications professionalApprovalStatus accountStatus"
       ),
       session
     );
@@ -267,7 +274,7 @@ class JobApplicationService {
   static async getUser(userId, session = null) {
     const user = await this.withSession(
       User.findById(this.normalizeObjectId(userId, "user ID")).select(
-        "firstName lastName displayName email photo"
+        "firstName lastName displayName email photo role accountStatus isVerified isOnboarded"
       ),
       session
     );
@@ -557,7 +564,13 @@ class JobApplicationService {
     }
   }
 
-  static assertProfessionalEligible({ professional, user, publication, currentTime }) {
+  static assertProfessionalEligible({
+    professional,
+    user,
+    publication,
+    currentTime,
+    trusted = null,
+  }) {
     if (String(professional.user) !== String(user._id)) {
       throw this.createError({
         message: "Professional profile ownership does not match the submitting user.",
@@ -601,18 +614,28 @@ class JobApplicationService {
       });
     }
 
-    if (professional.licenceExpiryDate && new Date(professional.licenceExpiryDate) <= currentTime) {
+    if (
+      user.role !== "professional" ||
+      user.accountStatus !== "active" ||
+      user.isVerified !== true ||
+      user.isOnboarded !== true
+    ) {
       throw this.createError({
-        message: "Your professional licence has expired.",
-        code: "PROFESSIONAL_LICENCE_EXPIRED",
+        message: "An active verified professional account is required.",
+        code: "JOB_PROFESSIONAL_USER_INELIGIBLE",
         statusCode: 403,
       });
     }
-
-    if (professional.identityVerificationStatus !== "verified") {
+    // The authoritative service evaluates Nigeria calendar dates, all three
+    // validity modes and approved upcoming renewals. Grace is not permission.
+    const readiness = ProfessionalVerificationService.getVerificationReadiness(
+      professional,
+      trusted
+    );
+    if (readiness.verificationReady !== true || readiness.licenceCurrent !== true) {
       throw this.createError({
-        message: "Your identity must be verified before applying for Jobs.",
-        code: "PROFESSIONAL_IDENTITY_NOT_VERIFIED",
+        message: "Current verified professional and NIN evidence is required.",
+        code: "JOB_PROFESSIONAL_VERIFICATION_REQUIRED",
         statusCode: 403,
       });
     }
@@ -621,6 +644,116 @@ class JobApplicationService {
      * Permanent-job applications deliberately do not inherit
      * Shift availabilityStatus rules.
      */
+  }
+
+  static async assertCurrentCandidate({ professional, user, publication, session }) {
+    const trusted = await ProfessionalVerificationService.getTrustedOnboardingNIN({
+      profile: professional,
+      session,
+    });
+    this.assertProfessionalEligible({
+      professional,
+      user,
+      publication,
+      currentTime: new Date(),
+      trusted,
+    });
+  }
+
+  static async assertCurrentMarketplaceBranch({ job, session, actorUserId = null }) {
+    if (!session || typeof session.inTransaction !== "function" || !session.inTransaction()) {
+      throw this.createError({
+        message: "An active transaction is required.",
+        code: "JOB_MARKETPLACE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+    const branch = await Branch.findOneAndUpdate(
+      { _id: job.branch, business: job.business, isActive: true },
+      { $inc: { __v: 1 } },
+      { session, new: true, timestamps: false }
+    );
+    if (!branch) {
+      throw this.createError({
+        message: "The Job branch is not active for this business.",
+        code: "JOB_MARKETPLACE_BRANCH_INELIGIBLE",
+        statusCode: 403,
+      });
+    }
+    const business = await EmployerProfile.findById(job.business).session(session);
+    if (
+      !business ||
+      business.accountStatus !== "active" ||
+      business.cacVerificationStatus !== "verified"
+    ) {
+      throw this.createError({
+        message: "The employer is not eligible for new marketplace activity.",
+        code: "JOB_MARKETPLACE_EMPLOYER_INELIGIBLE",
+        statusCode: 403,
+      });
+    }
+    if (actorUserId != null) {
+      const actor = await User.findOne({
+        _id: actorUserId,
+        role: "employer",
+        accountStatus: "active",
+        isVerified: true,
+      }).session(session);
+      let allowed = Boolean(actor && String(business.user) === String(actorUserId));
+      if (actor && !allowed) {
+        const member = await EmployerMember.findOne({
+          user: actorUserId,
+          business: job.business,
+          accountStatus: "active",
+          isCurrent: true,
+        }).session(session);
+        allowed = Boolean(
+          member &&
+          (member.role === "admin" ||
+            (member.role === "branch_manager" &&
+              Array.isArray(member.branches) &&
+              member.branches.some(
+                (a) => String(a.branch) === String(job.branch) && a.role === "branch_manager"
+              )))
+        );
+      }
+      if (!allowed) {
+        throw this.createError({
+          message: "Current hiring permission for this branch is required.",
+          code: "JOB_BRANCH_HIRING_NOT_ALLOWED",
+          statusCode: 403,
+        });
+      }
+    }
+    // Authorization has passed. Activate due approved renewals inside the SAME
+    // transaction; rollback/retries belong to this marketplace operation.
+    await FacilityPermitVerificationService.activateDuePermits({
+      businessId: job.business,
+      branchId: job.branch,
+      session,
+    });
+    const readiness = await FacilityPermitVerificationService.getBranchReadiness({
+      businessId: job.business,
+      branchId: job.branch,
+      session,
+    });
+    if (
+      readiness?.canPost !== true ||
+      readiness.identityReady !== true ||
+      readiness.branchActive !== true ||
+      !Array.isArray(readiness.missingRequirementKeys) ||
+      readiness.missingRequirementKeys.length !== 0
+    ) {
+      throw this.createError({
+        message: "Current facility permits are required for this Job branch.",
+        code: "JOB_MARKETPLACE_PERMITS_REQUIRED",
+        statusCode: 403,
+        details: {
+          reason: readiness?.reason || "branch_not_ready",
+          missingRequirementKeys: readiness?.missingRequirementKeys || [],
+        },
+      });
+    }
   }
 
   static async getHiringCapacity(job, session = null) {
@@ -708,6 +841,11 @@ class JobApplicationService {
   }
 
   static buildCandidateSnapshot({ professional, user, capturedAt }) {
+    const validity = ProfessionalVerificationService.getLicenceValidityState(professional);
+    const effectiveLicence = validity.usingUpcoming
+      ? professional.upcomingLicence
+      : { expiryDate: professional.licenceExpiryDate };
+
     const firstName = String(user.firstName || "").trim();
 
     const lastName = String(user.lastName || "").trim();
@@ -755,9 +893,8 @@ class JobApplicationService {
 
       licenceVerificationStatus: professional.licenceVerificationStatus || null,
 
-      licenceExpiryDate: professional.licenceExpiryDate || null,
-
-      identityVerificationStatus: professional.identityVerificationStatus || null,
+      // Reflect the same approved effective licence used by eligibility.
+      licenceExpiryDate: effectiveLicence?.expiryDate || null,
 
       certifications: Array.isArray(professional.certifications)
         ? professional.certifications
@@ -1234,7 +1371,10 @@ class JobApplicationService {
       rawAnswer.numberAnswer !== undefined &&
       rawAnswer.numberAnswer !== ""
     ) {
-      const value = Number(rawAnswer.numberAnswer);
+      const rawNumber = rawAnswer.numberAnswer;
+      const validInputType = typeof rawNumber === "number" || typeof rawNumber === "string";
+      const hasContent = typeof rawNumber !== "string" || rawNumber.trim().length > 0;
+      const value = validInputType && hasContent ? Number(rawNumber) : NaN;
 
       if (!Number.isFinite(value)) {
         throw this.createError({
@@ -1607,12 +1747,7 @@ class JobApplicationService {
         });
       }
 
-      this.assertProfessionalEligible({
-        professional,
-        user,
-        publication,
-        currentTime: submittedAt,
-      });
+      await this.assertCurrentCandidate({ professional, user, publication, session });
 
       const existing = await this.withSession(
         JobApplication.findOne({
@@ -1696,6 +1831,59 @@ class JobApplicationService {
         ],
       };
 
+      // Real writes coordinate with publication changes and recruitment closure.
+      const lockedJob = await Job.findOneAndUpdate(
+        {
+          _id: job._id,
+          business: job.business,
+          branch: job.branch,
+          recruitmentStatus: "active",
+          publicationStatus: "live",
+          currentPublication: publication._id,
+        },
+        { $inc: { __v: 1 } },
+        { session, new: true, timestamps: false }
+      );
+      const lockedPublication = await JobPublication.findOneAndUpdate(
+        {
+          _id: publication._id,
+          job: job._id,
+          business: job.business,
+          branch: job.branch,
+          status: "live",
+        },
+        { $inc: { __v: 1 } },
+        { session, new: true, timestamps: false }
+      );
+      if (!lockedJob || !lockedPublication) {
+        throw this.createError({
+          message: "The Job publication changed; reload before applying.",
+          code: "JOB_PUBLICATION_CHANGED",
+          statusCode: 409,
+        });
+      }
+      job.__v = lockedJob.__v;
+      publication.__v = lockedPublication.__v;
+      await this.assertPublicationAcceptsApplications({
+        publication: lockedPublication,
+        job: lockedJob,
+        currentTime: new Date(),
+        session,
+      });
+      await this.assertCurrentMarketplaceBranch({ job, session });
+      const currentProfessional = await this.getProfessional(professional._id, session);
+      const currentUser = await this.getUser(user._id, session);
+      await this.assertCurrentCandidate({
+        professional: currentProfessional,
+        user: currentUser,
+        publication,
+        session,
+      });
+      payload.candidateSnapshot = this.buildCandidateSnapshot({
+        professional: currentProfessional,
+        user: currentUser,
+        capturedAt: submittedAt,
+      });
       let application;
 
       try {
@@ -2331,6 +2519,27 @@ class JobApplicationService {
       application.hiredAt = hiredAt;
       application.hiredBy = hiredBy;
 
+      const candidatePublication = await this.getPublication(application.publication, session);
+      if (
+        String(candidatePublication.job) !== String(job._id) ||
+        String(candidatePublication.business) !== String(job.business) ||
+        String(candidatePublication.branch) !== String(job.branch)
+      ) {
+        throw this.createError({
+          message: "The candidate publication does not match the Job.",
+          code: "JOB_PUBLICATION_OWNERSHIP_MISMATCH",
+          statusCode: 409,
+        });
+      }
+      const candidate = await this.getProfessional(application.professional, session);
+      const candidateUser = await this.getUser(candidate.user, session);
+      await this.assertCurrentCandidate({
+        professional: candidate,
+        user: candidateUser,
+        publication: candidatePublication,
+        session,
+      });
+      await this.assertCurrentMarketplaceBranch({ job, session, actorUserId: hiredBy });
       await application.save({
         session,
       });

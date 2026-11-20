@@ -1,13 +1,11 @@
 // controllers/onboardingController.js
 
 const OnboardingService = require("../services/onboardingService");
-
 const PreOnboardingCACVerificationService = require("../services/preOnboardingCACVerificationService");
 const PreOnboardingNINVerificationService = require("../services/preOnboardingNINVerificationService");
 
 const locations = require("../config/locations");
 const specialtyConfig = require("../config/specialtyConfig");
-
 const logger = require("../utils/logger");
 
 // ───────────────────── RESPONSE HELPERS ─────────────────────
@@ -48,20 +46,19 @@ function sendOnboardingError(res, error, operation) {
 // ───────────────────── VERIFICATION ERROR HANDLING ─────────────────────
 
 /*
- * Shared error handling for the CAC and NIN
+ * Shared error handling for CAC and NIN
  * pre-onboarding verification endpoints.
  *
- * Never return:
+ * Never expose:
  *
- * - Raw NIN;
- * - NIN hash;
- * - Provider credentials;
- * - Raw provider responses;
+ * - Raw NIN or NIN hash;
+ * - Provider credentials or raw responses;
  * - Processing claim IDs;
- * - Internal request references.
+ * - Internal verification data;
+ * - Arbitrary service error details.
  *
- * Only explicitly permitted client-facing
- * errors may expose their detailed messages.
+ * Only explicitly approved client-facing
+ * error messages may be returned.
  */
 
 const PUBLIC_VERIFICATION_ERROR_CODES = new Set([
@@ -70,32 +67,99 @@ const PUBLIC_VERIFICATION_ERROR_CODES = new Set([
   "CAC_PROVIDER_UNSUPPORTED_REGISTRATION_TYPE",
 
   // CAC onboarding authorization and state
-  "CAC_ONBOARDING_INVALID_BUSINESS_NAME",
+  "CAC_ONBOARDING_INVALID_REGISTRATION_NUMBER",
   "CAC_ONBOARDING_EMPLOYER_REQUIRED",
   "CAC_ONBOARDING_ACCOUNT_INELIGIBLE",
   "CAC_ONBOARDING_ALREADY_COMPLETED",
   "CAC_ONBOARDING_ALREADY_PROCESSING",
   "CAC_ONBOARDING_OUTCOME_UNCERTAIN",
   "CAC_ONBOARDING_ALREADY_CONSUMED",
-  "CAC_ONBOARDING_COOLDOWN",
+  "CAC_ONBOARDING_RATE_LIMITED",
   "CAC_ONBOARDING_CONCURRENT_REQUEST",
 
   // NIN input validation and consent
   "NIN_ONBOARDING_INVALID_NIN",
   "IDENTITY_INVALID_IDENTIFIER",
   "NIN_ONBOARDING_CONSENT_REQUIRED",
+  "NIN_ONBOARDING_INVALID_REFERENCE",
 
   // NIN onboarding authorization and state
   "NIN_ONBOARDING_PROFESSIONAL_REQUIRED",
   "NIN_ONBOARDING_ACCOUNT_INELIGIBLE",
-  "NIN_ONBOARDING_ACCOUNT_NAME_REQUIRED",
   "NIN_ONBOARDING_ALREADY_COMPLETED",
   "NIN_ONBOARDING_ALREADY_PROCESSING",
   "NIN_ONBOARDING_OUTCOME_UNCERTAIN",
   "NIN_ONBOARDING_ALREADY_CONSUMED",
-  "NIN_ONBOARDING_COOLDOWN",
   "NIN_ONBOARDING_CONCURRENT_REQUEST",
+
+  // NIN name acknowledgement and correction
+  "NIN_ONBOARDING_PREVIEW_UNAVAILABLE",
+  "NIN_ONBOARDING_CORRECTION_UNAVAILABLE",
+  "NIN_ONBOARDING_NAME_NOT_ACKNOWLEDGED",
 ]);
+
+// ───────────────────── VERIFICATION RATE-LIMIT RESPONSE ─────────────────────
+
+/*
+ * CAC: 8 lookups / 6 distinct registrations per rolling 24 hours.
+ * NIN: 8 lookups / 4 distinct NINs per rolling 24 hours.
+ *
+ * An eligible cached result may be reusable regardless of these limits.
+ * For distinct limits, the server may permit another request against
+ * an identifier already counted in the window.
+ *
+ * Only the two explicitly recognized rate-limit error codes may expose:
+ * - nextEligibleAt: strict ISO 8601 UTC timestamp;
+ * - retryAfterSeconds: positive safe integer;
+ * - limitType: total, distinct, or both.
+ *
+ * Never serialize arbitrary error.details or internal provider data.
+ * Unresolved provider outcomes are not rolling-window rate limits.
+ */
+
+const VERIFICATION_RATE_LIMIT_POLICIES = Object.freeze({
+  NIN_ONBOARDING_RATE_LIMITED: Object.freeze({
+    label: "NIN",
+    total: 8,
+    distinct: 4,
+  }),
+  CAC_ONBOARDING_RATE_LIMITED: Object.freeze({
+    label: "CAC",
+    total: 8,
+    distinct: 6,
+  }),
+});
+
+function getVerificationRateLimitDetails(error, statusCode, code) {
+  if (
+    statusCode !== 429 ||
+    !Object.prototype.hasOwnProperty.call(VERIFICATION_RATE_LIMIT_POLICIES, code)
+  ) {
+    return null;
+  }
+
+  const nextEligibleAt = error?.nextEligibleAt;
+  const retryAfterSeconds = error?.retryAfterSeconds;
+  const limitType = error?.limitType;
+
+  if (
+    typeof nextEligibleAt !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(nextEligibleAt) ||
+    !Number.isFinite(Date.parse(nextEligibleAt)) ||
+    !Number.isSafeInteger(retryAfterSeconds) ||
+    retryAfterSeconds < 1 ||
+    !["total", "distinct", "both"].includes(limitType)
+  ) {
+    return null;
+  }
+
+  return {
+    nextEligibleAt,
+    retryAfterSeconds,
+    limitType,
+    policy: VERIFICATION_RATE_LIMIT_POLICIES[code],
+  };
+}
 
 function sendVerificationError(res, error, operation) {
   const explicitStatus = error?.statusCode || error?.status;
@@ -111,9 +175,38 @@ function sendVerificationError(res, error, operation) {
 
   logger.warn(`${operation}: ${code}`);
 
-  let message = "Verification is currently unavailable. You can still complete onboarding.";
+  // ───────── APPROVED RATE-LIMIT DETAILS ─────────
 
-  if (statusCode === 429) {
+  const rateLimitDetails = getVerificationRateLimitDetails(error, statusCode, code);
+
+  let message = "Verification is currently unavailable. Please try again later.";
+
+  if (rateLimitDetails) {
+    const { label, total, distinct } = rateLimitDetails.policy;
+
+    if (rateLimitDetails.limitType === "total") {
+      message = `You have used all ${total} ${label} verification attempts allowed within a rolling 24-hour period.`;
+
+      message +=
+        " New paid lookups are temporarily unavailable; eligible cached results may still be reusable.";
+    } else if (rateLimitDetails.limitType === "distinct") {
+      message = `You have reached the limit of ${distinct} different ${
+        label === "NIN" ? "NINs" : "CAC registration numbers"
+      } within a rolling 24-hour period.`;
+
+      message +=
+        " An already attempted identifier may still be eligible if the total lookup allowance permits.";
+    } else {
+      message = `You have reached both the total and distinct ${label} verification limits for the submitted identifier.`;
+
+      message +=
+        " An already attempted identifier may become eligible sooner, and eligible cached results may still be reusable.";
+    }
+
+    message += " The next eligible time for the rejected request is provided in nextEligibleAt.";
+
+    res.set("Retry-After", String(rateLimitDetails.retryAfterSeconds));
+  } else if (statusCode === 429) {
     message = "Too many verification requests. Please wait before trying again.";
   } else if (
     statusCode < 500 &&
@@ -123,11 +216,67 @@ function sendVerificationError(res, error, operation) {
     message = error.message;
   }
 
-  return res.status(statusCode).json({
+  const response = {
     success: false,
     code,
     message,
-  });
+  };
+
+  if (rateLimitDetails) {
+    response.nextEligibleAt = rateLimitDetails.nextEligibleAt;
+    response.retryAfterSeconds = rateLimitDetails.retryAfterSeconds;
+    response.limitType = rateLimitDetails.limitType;
+  }
+
+  return res.status(statusCode).json(response);
+}
+
+// ───────────────────── PROFESSIONAL NIN RESPONSE ─────────────────────
+
+/*
+ * The verification service controls permission
+ * to disclose NIN registry-name information.
+ *
+ * This controller returns only the fields required
+ * for the professional's confirmation workflow.
+ *
+ * requestReference is an opaque lookup reference
+ * used to acknowledge or change the current result.
+ *
+ * It is not the raw NIN, NIN hash, processing claim,
+ * provider reference or identity credential.
+ *
+ * All NIN endpoints require authenticated,
+ * authorised professional access and CSRF protection.
+ */
+
+function buildNINPublicResponse(result) {
+  return {
+    status: result.status,
+    matched: result.matched,
+
+    // Registry matching is not identity-holder authentication.
+    verified: false,
+    holderAuthenticated: false,
+    requiresHolderAuthentication: true,
+
+    registryFound: result.registryFound,
+    registryLegalName: result.registryLegalName,
+    requestReference: result.requestReference,
+
+    acknowledged: result.acknowledged,
+    eligibleForOnboarding: result.eligibleForOnboarding,
+
+    stagingOnly: result.stagingOnly,
+    cached: result.cached,
+
+    provider: result.provider,
+    environment: result.environment,
+
+    checkedAt: result.checkedAt,
+    expiresAt: result.expiresAt,
+    message: result.message,
+  };
 }
 
 // ───────────────────── PROFESSIONAL ONBOARDING PAGE ─────────────────────
@@ -191,25 +340,15 @@ exports.getEmployerOnboarding = (req, res) => {
 /*
  * POST /onboarding/employer/verify-cac
  *
- * Verifies an employer's submitted business identity
- * against the configured Ninja or Dojah CAC provider.
+ * Verifies an employer's submitted CAC
+ * registration using the configured provider.
  *
- * The service handles:
+ * Provider selection, lookup safeguards and
+ * temporary evidence persistence are owned
+ * by PreOnboardingCACVerificationService.
  *
- * - Provider selection;
- * - RC/BN validation;
- * - Business-name matching;
- * - Chargeable-request concurrency protection;
- * - Cooldown enforcement;
- * - Temporary evidence persistence.
- *
- * This endpoint does not:
- *
- * - Create an employer profile;
- * - Create a wallet or DVA;
- * - Complete onboarding;
- * - Verify PCN premises;
- * - Grant employer administrative approval.
+ * This endpoint does not create a profile,
+ * wallet, DVA or employer approval.
  */
 
 exports.verifyEmployerCAC = async (req, res) => {
@@ -229,25 +368,20 @@ exports.verifyEmployerCAC = async (req, res) => {
       return res.status(503).json({
         success: false,
         code: "CAC_ONBOARDING_LOOKUPS_DISABLED",
-        message:
-          "Instant CAC verification is currently unavailable. You can still complete onboarding.",
+        message: "CAC verification is currently unavailable. Please try again later.",
       });
     }
 
-    const { businessName, cacRegistrationNumber } = req.body || {};
+    const { cacRegistrationNumber } = req.body || {};
 
     const result = await PreOnboardingCACVerificationService.verifyCAC({
       userId,
-      businessName,
       registrationNumber: cacRegistrationNumber,
     });
 
     /*
-     * Return only information needed to display
-     * the result under the CAC form field.
-     *
-     * Temporary verification IDs and provider
-     * references must remain server-side.
+     * Only return fields required to display
+     * the applicant's CAC verification result.
      */
 
     return res.status(200).json({
@@ -267,7 +401,6 @@ exports.verifyEmployerCAC = async (req, res) => {
         cached: result.cached,
 
         registrationNumber: result.registrationNumber,
-
         registeredBusinessName: result.registeredBusinessName,
 
         entityType: result.entityType,
@@ -291,31 +424,23 @@ exports.verifyEmployerCAC = async (req, res) => {
 /*
  * POST /onboarding/professional/verify-nin
  *
- * NIN ONLY.
- *
- * This endpoint does not support BVN.
+ * NIN only. BVN is not supported.
  *
  * Accepted request fields:
  *
  * - nin: 11-digit National Identification Number;
- * - consentAccepted: explicit verification consent.
+ * - consentAccepted: explicit lookup consent.
  *
- * The professional's first and last names are
- * retrieved by PreOnboardingNINVerificationService
- * directly from the authenticated User record.
+ * The professional's registered legal name
+ * originates from trusted registry evidence,
+ * not registration fields submitted by the browser.
  *
- * The browser cannot supply an alternative identity
- * name or select a verification provider.
+ * This endpoint does not establish identity-holder
+ * authentication, professional licensing approval
+ * or marketplace access.
  *
- * Successful registry matching does not establish
- * that the professional is the legitimate NIN holder.
- *
- * Therefore this endpoint never approves identity,
- * professional credentials or marketplace access.
- *
- * The request must pass application-level CSRF
- * protection and authenticated professional
- * onboarding middleware.
+ * Authentication, role checks, account eligibility
+ * and CSRF protection are enforced by the routes.
  */
 
 exports.verifyProfessionalNIN = async (req, res) => {
@@ -335,17 +460,16 @@ exports.verifyProfessionalNIN = async (req, res) => {
       return res.status(503).json({
         success: false,
         code: "NIN_ONBOARDING_LOOKUPS_DISABLED",
-        message:
-          "Instant NIN verification is currently unavailable. You can still complete onboarding.",
+        message: "NIN verification is currently unavailable. Please try again later.",
       });
     }
 
     /*
-     * FormData submissions may encode a checked
-     * checkbox as "on" or "true".
+     * FormData submissions may encode consent
+     * as "on", "true" or "1".
      *
-     * Explicit consent is required before every
-     * newly initiated verification request.
+     * A new lookup must always be explicitly
+     * initiated by the professional.
      */
 
     const consentValue = req.body?.consentAccepted;
@@ -359,11 +483,8 @@ exports.verifyProfessionalNIN = async (req, res) => {
     const nin = req.body?.nin;
 
     /*
-     * No identity attributes supplied by the browser
-     * are trusted for the registry comparison.
-     *
-     * The service reads the first and last names
-     * from the authenticated User record.
+     * No applicant-supplied first name, surname,
+     * date of birth or provider selection is used.
      */
 
     const result = await PreOnboardingNINVerificationService.verifyNIN({
@@ -372,55 +493,100 @@ exports.verifyProfessionalNIN = async (req, res) => {
       consentAccepted,
     });
 
-    /*
-     * Return only safe, minimal display information.
-     *
-     * Do NOT return:
-     *
-     * - Raw NIN;
-     * - NIN last four digits;
-     * - NIN HMAC;
-     * - Full registered identity name;
-     * - Date of birth;
-     * - Provider request references;
-     * - Provider-issued references;
-     * - Temporary record identifiers.
-     */
-
     return res.status(200).json({
       success: true,
-
-      data: {
-        status: result.status,
-
-        matched: result.matched,
-
-        /*
-         * Registry matching is not holder
-         * authentication.
-         */
-        verified: false,
-        holderAuthenticated: false,
-
-        requiresHolderAuthentication: true,
-
-        stagingOnly: result.stagingOnly,
-        cached: result.cached,
-
-        provider: result.provider,
-        environment: result.environment,
-
-        registryFound: result.registryFound,
-        detailsMatched: result.detailsMatched,
-
-        checkedAt: result.checkedAt,
-        expiresAt: result.expiresAt,
-
-        message: result.message,
-      },
+      data: buildNINPublicResponse(result),
     });
   } catch (error) {
     return sendVerificationError(res, error, "Professional NIN onboarding verification");
+  }
+};
+
+// ───────────────────── NIN NAME ACKNOWLEDGEMENT ─────────────────────
+
+/*
+ * POST /onboarding/professional/nin/acknowledge-name
+ *
+ * The professional explicitly confirms the legal
+ * name returned by their current NIN lookup.
+ *
+ * requestReference identifies the displayed result.
+ *
+ * Name acknowledgement does not prove that the
+ * applicant owns the NIN.
+ *
+ * No external provider lookup occurs here.
+ */
+
+exports.acknowledgeProfessionalNINName = async (req, res) => {
+  setNoStoreHeaders(res);
+
+  try {
+    const userId = getAuthenticatedUserId(req);
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Session expired. Please log in again.",
+      });
+    }
+
+    const result = await PreOnboardingNINVerificationService.acknowledgeRegistryName({
+      userId,
+      requestReference: req.body?.requestReference,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: buildNINPublicResponse(result),
+    });
+  } catch (error) {
+    return sendVerificationError(res, error, "Professional NIN legal-name acknowledgement");
+  }
+};
+
+// ───────────────────── CHANGE PROFESSIONAL NIN ─────────────────────
+
+/*
+ * POST /onboarding/professional/nin/begin-correction
+ *
+ * Invoked when the professional selects:
+ *
+ * "No, enter a different NIN".
+ *
+ * Acknowledgement of the previous result is
+ * invalidated before another NIN can be submitted.
+ *
+ * The backend prevents changes while a paid
+ * provider request remains in progress.
+ *
+ * This endpoint does not initiate another lookup.
+ */
+
+exports.beginProfessionalNINCorrection = async (req, res) => {
+  setNoStoreHeaders(res);
+
+  try {
+    const userId = getAuthenticatedUserId(req);
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Session expired. Please log in again.",
+      });
+    }
+
+    const result = await PreOnboardingNINVerificationService.beginNINCorrection({
+      userId,
+      requestReference: req.body?.requestReference,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: buildNINPublicResponse(result),
+    });
+  } catch (error) {
+    return sendVerificationError(res, error, "Professional NIN correction");
   }
 };
 
@@ -439,6 +605,13 @@ exports.postProfessionalOnboarding = async (req, res, next) => {
       });
     }
 
+    /*
+     * OnboardingService independently requires
+     * current, acknowledged production NIN evidence.
+     *
+     * The frontend cannot bypass these requirements.
+     */
+
     await OnboardingService.completeProfessionalOnboarding(userId, req.body);
 
     if (req.session?.user) {
@@ -452,13 +625,22 @@ exports.postProfessionalOnboarding = async (req, res, next) => {
     if (!req.session || typeof req.session.save !== "function") {
       return res.status(500).json({
         success: false,
-        message: "Unable to finalize the onboarding session.",
+        onboardingCompleted: true,
+        message:
+          "Your profile was saved, but the session could not be updated. Please sign in again.",
       });
     }
 
     return req.session.save((error) => {
       if (error) {
-        return next(error);
+        logger.error("Professional onboarding session update failed.");
+
+        return res.status(500).json({
+          success: false,
+          onboardingCompleted: true,
+          message:
+            "Your profile was saved, but the session could not be updated. Please sign in again.",
+        });
       }
 
       return res.status(200).json({
@@ -500,13 +682,22 @@ exports.postEmployerOnboarding = async (req, res, next) => {
     if (!req.session || typeof req.session.save !== "function") {
       return res.status(500).json({
         success: false,
-        message: "Unable to finalize the onboarding session.",
+        onboardingCompleted: true,
+        message:
+          "Your business profile was saved, but the session could not be updated. Please sign in again.",
       });
     }
 
     return req.session.save((error) => {
       if (error) {
-        return next(error);
+        logger.error("Employer onboarding session update failed.");
+
+        return res.status(500).json({
+          success: false,
+          onboardingCompleted: true,
+          message:
+            "Your business profile was saved, but the session could not be updated. Please sign in again.",
+        });
       }
 
       return res.status(200).json({

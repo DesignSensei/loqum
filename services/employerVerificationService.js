@@ -1,5 +1,3 @@
-// services/employerVerificationService.js
-
 const mongoose = require("mongoose");
 const crypto = require("crypto");
 
@@ -19,6 +17,26 @@ const CAC_LOCK_RENEWAL_MS = 60 * 1000;
 
 const CAC_REGISTRATION_PATTERN = /^(RC|BN)\d{4,10}$/;
 
+// Accept recognised company classifications only.
+// Unknown provider classifications require review.
+const CAC_RC_ENTITY_TYPES = new Set([
+  "COMPANY",
+  "PRIVATE_COMPANY",
+  "PUBLIC_COMPANY",
+  "PRIVATE_COMPANY_LIMITED_BY_SHARES",
+  "PUBLIC_COMPANY_LIMITED_BY_SHARES",
+  "COMPANY_LIMITED_BY_SHARES",
+  "COMPANY_LIMITED_BY_GUARANTEE",
+  "PRIVATE_COMPANY_LIMITED_BY_GUARANTEE",
+  "PUBLIC_COMPANY_LIMITED_BY_GUARANTEE",
+  "UNLIMITED_COMPANY",
+  "PRIVATE_UNLIMITED_COMPANY",
+  "PUBLIC_UNLIMITED_COMPANY",
+  "LIMITED_LIABILITY_COMPANY",
+  "PRIVATE_LIMITED_COMPANY",
+  "PUBLIC_LIMITED_COMPANY",
+]);
+
 const CAC_PREFLIGHT_ERROR_CODES = new Set([
   "CAC_NOT_CONFIGURED",
   "CAC_INVALID_PROVIDER",
@@ -33,17 +51,19 @@ const CAC_PREFLIGHT_ERROR_CODES = new Set([
   "CAC_LEGACY_CLIENT_UNSUPPORTED",
 ]);
 
-const PROTECTED_APPROVAL_STATUSES = new Set(["restricted", "rejected"]);
-
-const APPROVAL_RESET_FIELDS = [
-  "employerApprovalStatus",
-  "employerApprovalStatusUpdatedAt",
-  "employerApprovalStatusUpdatedBy",
-  "approvedToPostShiftsAt",
-  "approvedToPostShiftsBy",
-  "employerApprovalNote",
-  "employerRejectionReason",
-];
+// Only CAC profile fields may be changed by this service.
+// Facility permits and account restrictions are managed elsewhere.
+const CAC_PROFILE_UPDATE_FIELDS = new Set([
+  "cacVerificationStatus",
+  "cacVerificationMethod",
+  "cacVerificationSource",
+  "cacNameOnRecord",
+  "cacVerifiedAt",
+  "cacLastCheckedAt",
+  "cacVerifiedBy",
+  "cacVerificationNote",
+  "cacRejectionReason",
+]);
 
 class EmployerVerificationService {
   // ───────────────────── ERRORS ─────────────────────
@@ -113,7 +133,7 @@ class EmployerVerificationService {
       return null;
     }
 
-    const name = value.trim();
+    const name = value.normalize("NFC").trim().replace(/\s+/g, " ");
 
     if (!name || name.length > 150 || /[\u0000-\u001F\u007F]/.test(name)) {
       return null;
@@ -149,9 +169,14 @@ class EmployerVerificationService {
   static async assertAdmin(adminUserId) {
     this.assertObjectId(adminUserId, "admin user ID");
 
-    const admin = await User.findById(adminUserId).select("role accountStatus");
+    const admin = await User.findById(adminUserId).select("role accountStatus isVerified");
 
-    if (!admin || admin.role !== "admin" || admin.accountStatus !== "active") {
+    if (
+      !admin ||
+      admin.role !== "admin" ||
+      admin.accountStatus !== "active" ||
+      admin.isVerified !== true
+    ) {
       throw this.createError({
         message: "An active administrator is required.",
         code: "EMPLOYER_VERIFICATION_ADMIN_REQUIRED",
@@ -162,7 +187,15 @@ class EmployerVerificationService {
     return admin;
   }
 
-  // ───────────────────── RECHECK CONTROL ─────────────────────
+  // ───────────────────── RECENT ATTEMPT HELPER ─────────────────────
+
+  /*
+   * Retained for compatibility with callers that
+   * inspect recent verification history.
+   *
+   * The post-onboarding verification workflow no
+   * longer uses this to enforce a blanket cooldown.
+   */
 
   static isWithinRecheckInterval(date) {
     if (!date) return false;
@@ -201,7 +234,9 @@ class EmployerVerificationService {
         requestReference,
       });
     } catch (error) {
-      if (error?.code !== 11000) throw error;
+      if (error?.code !== 11000) {
+        throw error;
+      }
 
       const existing = await VerificationRequestLock.findById(lockKey).select("expiresAt").lean();
 
@@ -296,12 +331,15 @@ class EmployerVerificationService {
       },
 
       assertHealthy() {
-        if (renewalError) throw renewalError;
+        if (renewalError) {
+          throw renewalError;
+        }
       },
     };
   }
 
   // Fences verification writes against concurrent lock recovery.
+
   static async fenceCACLock(lock, session) {
     const now = new Date();
 
@@ -344,39 +382,29 @@ class EmployerVerificationService {
     }
   }
 
-  // ───────────────────── APPROVAL AND MARKETPLACE READINESS ─────────────────────
+  // ───────────────────── BUSINESS IDENTITY READINESS ─────────────────────
 
-  static getApprovalResetUpdates(employer) {
-    if (PROTECTED_APPROVAL_STATUSES.has(employer?.employerApprovalStatus)) {
-      return {};
-    }
-
-    return {
-      employerApprovalStatus: "pending",
-      employerApprovalStatusUpdatedAt: null,
-      employerApprovalStatusUpdatedBy: null,
-      approvedToPostShiftsAt: null,
-      approvedToPostShiftsBy: null,
-      employerApprovalNote: null,
-      employerRejectionReason: null,
-    };
-  }
+  /*
+   * Compatibility summary for employer verification dashboards.
+   * This method does NOT determine marketplace eligibility.
+   * Marketplace access is calculated for a specific branch only,
+   * after checking its applicable, current facility permits.
+   *
+   * verificationReady intentionally remains false here so legacy
+   * consumers cannot interpret a business-wide CAC result as
+   * permission to post shifts before branch checks are integrated.
+   */
 
   static getVerificationReadiness(employer) {
     const cacVerified = employer?.cacVerificationStatus === "verified";
-
-    const regulatoryVerified = employer?.regulatoryVerificationStatus === "verified";
-
-    const adminApproved = employer?.employerApprovalStatus === "approved";
-
     const accountActive = employer?.accountStatus === "active";
 
     return {
       cacVerified,
-      regulatoryVerified,
-      adminApproved,
       accountActive,
-      verificationReady: cacVerified && regulatoryVerified && adminApproved && accountActive,
+      businessIdentityReady: cacVerified && accountActive,
+      branchPermitsRequired: true,
+      verificationReady: false,
     };
   }
 
@@ -392,9 +420,8 @@ class EmployerVerificationService {
    * Registration numbers are compared in the
    * normalized RC/BN form returned by the adapter.
    *
-   * Evaluating a CAC registration does NOT establish
-   * the applicant's authority to represent the business,
-   * PCN premises approval or final employer KYB approval.
+   * Evaluating a CAC registration does not establish that
+   * any physical branch has an approved operating permit.
    */
 
   static evaluateCACResult({ registration, result } = {}) {
@@ -423,9 +450,7 @@ class EmployerVerificationService {
     const categoryMatches =
       registration?.prefix === "BN"
         ? entityType === "BUSINESS_NAME" || entityType.startsWith("BUSINESS_NAME_")
-        : registration?.prefix === "RC" &&
-          (entityType === "COMPANY" ||
-            (entityType.includes("COMPANY") && !entityType.startsWith("BUSINESS_NAME")));
+        : registration?.prefix === "RC" && CAC_RC_ENTITY_TYPES.has(entityType);
 
     const registrationActive =
       String(result?.entityStatus || "")
@@ -471,13 +496,14 @@ class EmployerVerificationService {
   // ───────────────────── RECENT CAC ATTEMPTS ─────────────────────
 
   /*
-   * Recent lookup suppression uses the CAC
+   * An optional recent-lookup record can be inspected by
    * registration number, provider and environment.
+   * This helper does not impose a waiting period.
    *
    * A manually submitted legal business name
    * is never part of the lookup identity or cache key.
    *
-   * This post-onboarding check remains distinct
+   * Post-onboarding rechecks remain distinct
    * from the temporary pre-onboarding lookup cache.
    */
 
@@ -497,7 +523,10 @@ class EmployerVerificationService {
       "metadata.submittedRegistrationNumber": registrationNumber,
       lastCheckedAt: { $gte: cutoff },
     })
-      .sort({ lastCheckedAt: -1, createdAt: -1 })
+      .sort({
+        lastCheckedAt: -1,
+        createdAt: -1,
+      })
       .select("status lastCheckedAt")
       .lean();
   }
@@ -584,7 +613,19 @@ class EmployerVerificationService {
     }
   }
 
-  // ───────────────────── AUTHORITATIVE VERIFICATION PERSISTENCE ─────────────────────
+  // ───────────────────── AUTHORITATIVE CAC PERSISTENCE ─────────────────────
+
+  /*
+   * CAC verification history and EmployerProfile CAC summary are updated
+   * together, inside the existing fenced CAC-request transaction.
+   *
+   * Facility regulatory history is not written here. Branch permits are
+   * reviewed independently and must never be globally deactivated by a
+   * business-level CAC recheck.
+   *
+   * An established legal name cannot be changed by a routine recheck.
+   * A provider name difference results in needs_review.
+   */
 
   static async persistVerification({
     employerSnapshot,
@@ -593,57 +634,80 @@ class EmployerVerificationService {
     profileUpdates,
     lock = null,
   }) {
-    if (!["cac", "facility_regulatory"].includes(type)) {
+    if (type !== "cac") {
       throw this.createError({
-        message: "Unsupported employer verification type.",
-        code: "EMPLOYER_VERIFICATION_INVALID_TYPE",
+        message: "This service only persists business-level CAC verification.",
+        code: "EMPLOYER_VERIFICATION_CAC_ONLY",
         statusCode: 400,
       });
     }
 
-    if (type === "cac") {
-      if (
-        !["ninja", "dojah"].includes(kycData?.provider) ||
-        kycData?.providerEnvironment !== "production"
-      ) {
+    if (
+      !["ninja", "dojah"].includes(kycData?.provider) ||
+      kycData?.providerEnvironment !== "production"
+    ) {
+      throw this.createError({
+        message: "Authoritative CAC verification requires a supported production provider.",
+        code: "EMPLOYER_VERIFICATION_NON_PRODUCTION",
+        statusCode: 409,
+      });
+    }
+
+    if (!lock) {
+      throw this.createError({
+        message: "A valid CAC verification lock is required.",
+        code: "EMPLOYER_CAC_LOCK_REQUIRED",
+        statusCode: 409,
+      });
+    }
+
+    if (!employerSnapshot?._id || !employerSnapshot?.user || !employerSnapshot?.updatedAt) {
+      throw this.createError({
+        message: "Current employer CAC verification evidence is required.",
+        code: "EMPLOYER_CAC_SNAPSHOT_REQUIRED",
+        statusCode: 409,
+      });
+    }
+
+    if (!profileUpdates || typeof profileUpdates !== "object" || Array.isArray(profileUpdates)) {
+      throw this.createError({
+        message: "Invalid CAC profile update.",
+        code: "EMPLOYER_CAC_INVALID_UPDATE",
+        statusCode: 400,
+      });
+    }
+
+    for (const field of Object.keys(profileUpdates)) {
+      if (!CAC_PROFILE_UPDATE_FIELDS.has(field)) {
         throw this.createError({
-          message: "Authoritative CAC verification requires a supported production provider.",
-          code: "EMPLOYER_VERIFICATION_NON_PRODUCTION",
+          message: "CAC verification cannot update business identity, account or facility state.",
+          code: "EMPLOYER_CAC_UNAUTHORIZED_PROFILE_UPDATE",
           statusCode: 409,
         });
       }
+    }
 
-      if (!lock) {
-        throw this.createError({
-          message: "A valid CAC verification lock is required.",
-          code: "EMPLOYER_CAC_LOCK_REQUIRED",
-          statusCode: 409,
-        });
-      }
+    if (
+      !["verified", "needs_review"].includes(kycData?.status) ||
+      profileUpdates.cacVerificationStatus !== kycData.status
+    ) {
+      throw this.createError({
+        message: "CAC verification outcome is inconsistent.",
+        code: "EMPLOYER_CAC_STATUS_MISMATCH",
+        statusCode: 409,
+      });
+    }
 
-      /*
-       * The legal business name may only be
-       * changed using trusted verified CAC evidence.
-       *
-       * A failed or review-only CAC lookup must
-       * not silently overwrite the business identity.
-       */
-
-      if (profileUpdates?.businessName !== undefined) {
-        const verifiedName = this.getRegisteredBusinessName(kycData?.nameOnRecord);
-
-        if (
-          kycData?.status !== "verified" ||
-          !verifiedName ||
-          profileUpdates.businessName !== verifiedName
-        ) {
-          throw this.createError({
-            message: "Registered business name updates require verified CAC evidence.",
-            code: "EMPLOYER_CAC_NAME_UPDATE_NOT_AUTHORIZED",
-            statusCode: 409,
-          });
-        }
-      }
+    if (
+      kycData.status === "verified" &&
+      (kycData.nameOnRecord !== employerSnapshot.businessName ||
+        profileUpdates.cacNameOnRecord !== employerSnapshot.businessName)
+    ) {
+      throw this.createError({
+        message: "An established CAC legal name cannot change during an ordinary recheck.",
+        code: "EMPLOYER_CAC_NAME_CORRECTION_REQUIRED",
+        statusCode: 409,
+      });
     }
 
     const session = await mongoose.startSession();
@@ -653,24 +717,14 @@ class EmployerVerificationService {
       let updatedEmployer;
 
       await session.withTransaction(async () => {
-        if (type === "cac") {
-          await this.fenceCACLock(lock, session);
-        }
+        await this.fenceCACLock(lock, session);
 
         const filter = {
           _id: employerSnapshot._id,
           updatedAt: employerSnapshot.updatedAt,
+          businessName: employerSnapshot.businessName,
+          cacRegistrationNumber: employerSnapshot.cacRegistrationNumber,
         };
-
-        if (type === "cac") {
-          filter.businessName = employerSnapshot.businessName;
-          filter.cacRegistrationNumber = employerSnapshot.cacRegistrationNumber;
-        }
-
-        if (type === "facility_regulatory") {
-          filter.regulatoryBody = employerSnapshot.regulatoryBody;
-          filter.regulatoryRegistrationNumber = employerSnapshot.regulatoryRegistrationNumber;
-        }
 
         const currentEmployer = await EmployerProfile.findOne(filter).session(session);
 
@@ -682,25 +736,15 @@ class EmployerVerificationService {
           });
         }
 
-        const safeUpdates = { ...profileUpdates };
+        // Account restrictions and branch permit decisions are untouched.
+        currentEmployer.set(profileUpdates);
 
-        // Verification must not overwrite a separate admin restriction.
-        if (PROTECTED_APPROVAL_STATUSES.has(currentEmployer.employerApprovalStatus)) {
-          for (const field of APPROVAL_RESET_FIELDS) {
-            delete safeUpdates[field];
-          }
-        }
-
-        currentEmployer.set(safeUpdates);
-
-        updatedEmployer = await currentEmployer.save({
-          session,
-        });
+        updatedEmployer = await currentEmployer.save({ session });
 
         await KYCVerification.updateMany(
           {
             employer: employerSnapshot._id,
-            type,
+            type: "cac",
             isActive: true,
           },
           {
@@ -712,11 +756,11 @@ class EmployerVerificationService {
         const records = await KYCVerification.create(
           [
             {
+              ...kycData,
               user: employerSnapshot.user,
               employer: employerSnapshot._id,
               ownerType: "employer",
-              type,
-              ...kycData,
+              type: "cac",
               isActive: true,
             },
           ],
@@ -738,14 +782,14 @@ class EmployerVerificationService {
   // ───────────────────── POST-ONBOARDING CAC VERIFICATION ─────────────────────
 
   /*
-   * Verify CAC registration against the configured
-   * provider only when explicitly requested.
+   * Verify CAC registration against the configured provider
+   * only when explicitly requested.
    *
-   * A verified CAC record is reused unless an
-   * authorised caller explicitly requests a recheck.
+   * A verified CAC record is reused unless an authorised caller
+   * explicitly requests a recheck.
    *
-   * No automatic scheduled re-verification,
-   * provider fallback or duplicate paid request.
+   * No automatic scheduled re-verification, provider fallback
+   * or duplicate paid request.
    */
 
   static async verifyCAC({ employerProfileId, force = false, httpClient, fetchImpl } = {}) {
@@ -804,7 +848,7 @@ class EmployerVerificationService {
     } finally {
       await heartbeat.stop();
 
-      // An uncertain production request remains locked.
+      // Uncertain production requests remain locked.
       if (!state.providerRequested || state.completedSafely) {
         await this.releaseCACLock(lock);
       }
@@ -847,24 +891,7 @@ class EmployerVerificationService {
       employer.cacRegistrationNumber
     );
 
-    const recentAttempt = await this.getRecentCACAttempt({
-      employerProfileId: employer._id,
-      provider,
-      environment,
-      registrationNumber: registration.submitted,
-    });
-
-    if (recentAttempt && this.isWithinRecheckInterval(recentAttempt.lastCheckedAt)) {
-      return {
-        status: employer.cacVerificationStatus,
-        verified: employer.cacVerificationStatus === "verified",
-        skipped: true,
-        provider,
-        environment,
-        reason: "A CAC verification attempt was made recently.",
-      };
-    }
-
+    // Locking replaces the former blanket post-onboarding cooldown.
     await this.assertCACLockOwner(lock);
 
     let lookupResult = null;
@@ -897,11 +924,12 @@ class EmployerVerificationService {
     if (lookupError) {
       const errorCode = lookupError.code || "CAC_LOOKUP_FAILED";
 
-      const reason = this.truncate(
-        lookupError.message || "CAC verification could not be completed."
-      );
+      const reason =
+        errorCode === "CAC_COMPANY_NOT_FOUND"
+          ? "CAC registration was not found."
+          : "CAC verification could not be completed safely.";
 
-      const retryable = lookupError?.details?.retryable === true;
+      const retryable = lookupError?.details?.retryable === true || lookupError?.retryable === true;
 
       if (CAC_PREFLIGHT_ERROR_CODES.has(errorCode)) {
         state.completedSafely = true;
@@ -1002,7 +1030,6 @@ class EmployerVerificationService {
           },
         },
         profileUpdates: {
-          ...this.getApprovalResetUpdates(employer),
           cacVerificationStatus: "needs_review",
           cacVerificationMethod: "api",
           cacVerificationSource: "provider",
@@ -1033,14 +1060,9 @@ class EmployerVerificationService {
     // ───────────────────── RESPONSE VALIDATION ─────────────────────
 
     /*
-     * Before trusting a completed provider response,
-     * confirm it belongs to this lookup request.
-     *
-     * Never persist staging evidence as production
-     * or evaluate a different RC/BN registration.
-     *
-     * An inconsistent provider outcome requires
-     * reconciliation, not an automatic second lookup.
+     * A completed provider result must belong to the same
+     * provider, environment, registration and request.
+     * Mismatches require reconciliation, not automatic retry.
      */
 
     if (
@@ -1080,27 +1102,13 @@ class EmployerVerificationService {
 
     const registeredBusinessName = evaluation.registeredBusinessName;
 
-    /*
-     * Only an already CAC-verified business name
-     * may be used as a previous authoritative name.
-     *
-     * A genuine change in the registry's legal name
-     * during a forced recheck requires review rather
-     * than silently overwriting an approved identity.
-     *
-     * This is not a comparison against a submitted
-     * onboarding or trading name.
-     */
-
-    const previousAuthoritativeName =
-      employer.cacVerificationStatus === "verified"
-        ? this.getRegisteredBusinessName(employer.cacNameOnRecord || employer.businessName)
-        : null;
+    // Preserve the established CAC legal identity during routine rechecks.
+    const previousAuthoritativeName = this.getRegisteredBusinessName(employer.businessName);
 
     const registeredNameChanged = Boolean(
-      previousAuthoritativeName &&
       registeredBusinessName &&
-      !this.namesMatch(previousAuthoritativeName, registeredBusinessName)
+      previousAuthoritativeName &&
+      registeredBusinessName !== previousAuthoritativeName
     );
 
     const resolvedRequestReference = lookupResult.requestReference || requestReference;
@@ -1125,10 +1133,10 @@ class EmployerVerificationService {
         employer,
         provider,
         environment,
-        status: "pending",
+        status: "needs_review",
         reason: evaluation.eligible
           ? "CAC sandbox lookup matched. Production verification is required."
-          : "CAC sandbox lookup requires review and cannot support production approval.",
+          : "CAC sandbox lookup requires review and cannot establish production verification.",
         company,
         requestReference: resolvedRequestReference,
         providerReference,
@@ -1164,9 +1172,7 @@ class EmployerVerificationService {
     const reviewReasons = [...evaluation.reasons];
 
     if (registeredNameChanged) {
-      reviewReasons.push(
-        "Previously verified registered business name differs from current CAC record"
-      );
+      reviewReasons.push("Established registered business name differs from current CAC record");
     }
 
     const note = verified
@@ -1185,20 +1191,7 @@ class EmployerVerificationService {
       cacVerifiedBy: null,
       cacVerificationNote: this.truncate(note),
       cacRejectionReason: null,
-
-      /*
-       * The first successful CAC verification
-       * sets the authoritative legal business name.
-       *
-       * Review-only evidence cannot overwrite it.
-       */
-
-      ...(verified ? { businessName: registeredBusinessName } : {}),
     };
-
-    if (!verified) {
-      Object.assign(profileUpdates, this.getApprovalResetUpdates(employer));
-    }
 
     const saved = await this.persistVerification({
       employerSnapshot: employer,
@@ -1247,7 +1240,7 @@ class EmployerVerificationService {
     const lockKey = this.getCACLockKey(employerProfileId);
 
     const lock = await VerificationRequestLock.findById(lockKey)
-      .select("+requestReference acquiredAt renewedAt expiresAt")
+      .select("+requestReference employer acquiredAt renewedAt expiresAt")
       .lean();
 
     if (!lock) {
@@ -1280,6 +1273,7 @@ class EmployerVerificationService {
     await this.assertAdmin(adminUserId);
 
     const employer = await this.getEmployer(employerProfileId);
+
     const lockKey = this.getCACLockKey(employer._id);
 
     const cleanNote = this.truncate(note);
@@ -1360,115 +1354,6 @@ class EmployerVerificationService {
     } finally {
       await session.endSession();
     }
-  }
-
-  // ───────────────────── PCN PREMISES REVIEW ─────────────────────
-
-  static async recordPCNReview({
-    employerProfileId,
-    adminUserId,
-    decision,
-    nameOnRecord,
-    note,
-  } = {}) {
-    await this.assertAdmin(adminUserId);
-
-    const employer = await this.getEmployer(employerProfileId);
-
-    if (employer.regulatoryBody !== "pcn") {
-      throw this.createError({
-        message: "This employer is not registered under PCN.",
-        code: "EMPLOYER_VERIFICATION_NOT_PCN",
-        statusCode: 400,
-      });
-    }
-
-    const allowedDecisions = ["verified", "rejected", "needs_review"];
-
-    if (!allowedDecisions.includes(decision)) {
-      throw this.createError({
-        message: "Invalid PCN verification decision.",
-        code: "EMPLOYER_VERIFICATION_INVALID_DECISION",
-        statusCode: 400,
-      });
-    }
-
-    const cleanNote = this.truncate(note);
-
-    if (cleanNote.length < 10) {
-      throw this.createError({
-        message: "Provide a meaningful PCN review note.",
-        code: "EMPLOYER_VERIFICATION_INVALID_REVIEW_NOTE",
-        statusCode: 400,
-      });
-    }
-
-    const cleanName = String(nameOnRecord || "")
-      .trim()
-      .slice(0, 150);
-
-    if (decision === "verified" && !cleanName) {
-      throw this.createError({
-        message: "The registered premises name is required.",
-        code: "EMPLOYER_VERIFICATION_MISSING_PREMISES_NAME",
-        statusCode: 400,
-      });
-    }
-
-    const checkedAt = new Date();
-
-    const verified = decision === "verified";
-    const rejected = decision === "rejected";
-
-    const profileUpdates = {
-      regulatoryVerificationStatus: decision,
-      regulatoryVerificationMethod: "manual",
-      regulatoryVerificationSource: "pcn_public_portal",
-      regulatoryNameOnRecord: cleanName || null,
-      regulatoryLastCheckedAt: checkedAt,
-      regulatoryVerifiedAt: verified ? checkedAt : null,
-      regulatoryVerifiedBy: adminUserId,
-      regulatoryVerificationNote: cleanNote,
-      regulatoryRejectionReason: rejected ? cleanNote : null,
-    };
-
-    if (!verified) {
-      Object.assign(profileUpdates, this.getApprovalResetUpdates(employer));
-    }
-
-    const saved = await this.persistVerification({
-      employerSnapshot: employer,
-      type: "facility_regulatory",
-      kycData: {
-        provider: "manual",
-        providerEnvironment: null,
-        status: decision,
-        nameOnRecord: cleanName || null,
-        reviewedBy: adminUserId,
-        submittedAt: checkedAt,
-        lastCheckedAt: checkedAt,
-        verifiedAt: verified ? checkedAt : null,
-        rejectedAt: rejected ? checkedAt : null,
-        rejectionReason: rejected ? cleanNote : null,
-        reviewNote: cleanNote,
-        metadata: {
-          regulatoryBody: "pcn",
-          verificationSource: "pcn_public_portal",
-          regulatoryRegistrationNumber: employer.regulatoryRegistrationNumber,
-        },
-      },
-      profileUpdates,
-    });
-
-    return {
-      status: decision,
-      regulatoryBody: "pcn",
-      verified,
-      verificationId: saved.verification._id,
-      employerProfileId: saved.employer._id,
-      reviewedBy: adminUserId,
-      reviewedAt: checkedAt,
-    };
   }
 }
 

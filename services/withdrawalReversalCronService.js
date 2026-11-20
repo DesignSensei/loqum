@@ -10,6 +10,9 @@ class WithdrawalReversalCronService {
   /* ---------- Normalize current time ---------- */
 
   static normalizeCurrentTime(value = new Date()) {
+    if (!(value instanceof Date) && typeof value !== "string" && typeof value !== "number") {
+      throw new Error("Current time is invalid.");
+    }
     const currentTime = value instanceof Date ? new Date(value.getTime()) : new Date(value);
 
     if (Number.isNaN(currentTime.getTime())) {
@@ -55,7 +58,28 @@ class WithdrawalReversalCronService {
       throw new Error("Withdrawal reconciliation age is too large.");
     }
 
-    return new Date(normalizedCurrentTime.getTime() - offset);
+    const cutoff = new Date(normalizedCurrentTime.getTime() - offset);
+    if (Number.isNaN(cutoff.getTime())) {
+      throw new Error("Withdrawal reconciliation cutoff is outside the supported date range.");
+    }
+    return cutoff;
+  }
+
+  static normalizeCursor(cursor) {
+    if (cursor == null) return null;
+    if (
+      typeof cursor !== "object" ||
+      !/^[a-f0-9]{24}$/i.test(cursor.afterId || "") ||
+      typeof cursor.cutoff !== "string" ||
+      typeof cursor.afterProcessingAt !== "string"
+    ) {
+      throw new Error("Withdrawal reconciliation cursor is invalid.");
+    }
+    const cutoff = this.normalizeCurrentTime(cursor.cutoff);
+    const afterProcessingAt = this.normalizeCurrentTime(cursor.afterProcessingAt);
+    if (afterProcessingAt > cutoff)
+      throw new Error("Withdrawal reconciliation cursor exceeds its cutoff.");
+    return { cutoff, afterProcessingAt, afterId: cursor.afterId };
   }
 
   /* ---------- Find old provider-processing withdrawals ---------- */
@@ -66,17 +90,21 @@ class WithdrawalReversalCronService {
     limit = 50,
 
     currentTime = new Date(),
+    cursor = null,
   } = {}) {
     const normalizedLimit = WithdrawalReversalCronService.normalizePositiveInteger(
       limit,
       "Withdrawal reconciliation limit"
     );
 
-    const cutoffDate = WithdrawalReversalCronService.getProcessingCutoff({
-      currentTime,
+    const normalizedCursor = WithdrawalReversalCronService.normalizeCursor(cursor);
+    const cutoffDate =
+      normalizedCursor?.cutoff ||
+      WithdrawalReversalCronService.getProcessingCutoff({
+        currentTime,
 
-      olderThanMinutes,
-    });
+        olderThanMinutes,
+      });
 
     /*
      * processingStartedAt is the durable provider-boundary clock.
@@ -88,6 +116,17 @@ class WithdrawalReversalCronService {
      * attempt look stale.
      */
     return Transaction.find({
+      ...(normalizedCursor
+        ? {
+            $or: [
+              { processingStartedAt: { $gt: normalizedCursor.afterProcessingAt } },
+              {
+                processingStartedAt: normalizedCursor.afterProcessingAt,
+                _id: { $gt: normalizedCursor.afterId },
+              },
+            ],
+          }
+        : {}),
       type: "withdrawal",
 
       purpose: "withdrawal",
@@ -126,7 +165,7 @@ class WithdrawalReversalCronService {
     }
 
     const currentTime = WithdrawalReversalCronService.normalizeCurrentTime(
-      options.currentTime || new Date()
+      options.currentTime === undefined ? new Date() : options.currentTime
     );
 
     /*
@@ -150,6 +189,18 @@ class WithdrawalReversalCronService {
     });
 
     const transaction = reconciliationResult?.transaction || null;
+
+    if (!transaction?._id || String(transaction._id) !== transactionId) {
+      throw new Error("Withdrawal reconciliation returned no matching transaction.");
+    }
+
+    if (
+      !["pending", "processing", "completed", "failed", "cancelled", "reversed"].includes(
+        transaction.status
+      )
+    ) {
+      throw new Error("Withdrawal reconciliation returned an invalid transaction status.");
+    }
 
     const status = String(transaction?.status || "")
       .trim()
@@ -179,7 +230,7 @@ class WithdrawalReversalCronService {
     }
 
     /*
-     * WalletWithdrawalService now terminates failed/reversed provider
+     * For withdrawals that have not completed, WalletWithdrawalService terminates failed/reversed provider
      * withdrawals on the SAME withdrawal Transaction.
      *
      * "reversed" here is only the cron result classification meaning the
@@ -274,18 +325,43 @@ class WithdrawalReversalCronService {
     limit = 50,
 
     currentTime = new Date(),
+    cursor = null,
   } = {}) {
     const normalizedCurrentTime = WithdrawalReversalCronService.normalizeCurrentTime(currentTime);
 
-    const withdrawals = await WithdrawalReversalCronService.findProcessingWithdrawalsForReview({
+    const normalizedLimit = WithdrawalReversalCronService.normalizePositiveInteger(
+      limit,
+      "Withdrawal reconciliation limit"
+    );
+    if (!Number.isSafeInteger(normalizedLimit + 1))
+      throw new Error("Withdrawal reconciliation limit is too large.");
+    const normalizedCursor = WithdrawalReversalCronService.normalizeCursor(cursor);
+    const cutoff =
+      normalizedCursor?.cutoff ||
+      WithdrawalReversalCronService.getProcessingCutoff({
+        currentTime: normalizedCurrentTime,
+        olderThanMinutes,
+      });
+    const candidates = await WithdrawalReversalCronService.findProcessingWithdrawalsForReview({
       olderThanMinutes,
 
-      limit,
-
+      limit: normalizedLimit + 1,
+      cursor,
       currentTime: normalizedCurrentTime,
     });
 
+    const withdrawals = candidates.slice(0, normalizedLimit);
+    const last = withdrawals[withdrawals.length - 1];
+    const nextCursor =
+      candidates.length > normalizedLimit
+        ? {
+            cutoff: cutoff.toISOString(),
+            afterProcessingAt: new Date(last.processingStartedAt).toISOString(),
+            afterId: String(last._id),
+          }
+        : null;
     const results = {
+      nextCursor,
       checked: withdrawals.length,
 
       reversed: 0,

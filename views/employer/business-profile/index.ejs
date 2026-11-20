@@ -3,39 +3,45 @@
 <input
   type="hidden"
   id="businessProfileCountryCode"
-  value="<%= (employerProfile.countryCode || 'NG').toLowerCase() %>"
+  value="<%= businessProfilePage.countryCode %>"
 />
 
 <div class="d-flex flex-column flex-xl-row align-items-stretch gap-5 gap-xl-8">
-  <!--begin::Sidebar-->
+  <!-- Sidebar -->
   <div class="flex-column flex-lg-row-auto w-100 w-xl-325px flex-shrink-0">
     <%- include("./partials/side-menu") %>
   </div>
-  <!--end::Sidebar-->
 
-  <!--begin::Main content-->
+  <!-- Main content -->
   <div class="flex-grow-1 w-100 min-w-0">
-    <% if (activeTab === "overview") { %> <%- include("./partials/overview") %> <% } %> <% if
-    (activeTab === "business-details") { %> <%- include("./partials/business-details") %> <% } %> <%
-    if (activeTab === "verification") { %> <%- include("./partials/verification") %> <% } %> <% if
-    (activeTab === "branches" && employerPermissions.canViewBranches) { %> <%-
-    include("./partials/branches") %> <% } %> <% if (activeTab === "team" &&
-    employerPermissions.canViewTeamMembers) { %> <%- include("./partials/team-members") %> <% } %>
-    <% if (activeTab === "invites" && employerPermissions.canInviteMembers) { %> <%-
-    include("./partials/invites") %> <% } %>
+    <% if (businessProfilePage.showOverview) { %> <%- include("./partials/overview") %> <% } %> <%
+    if (businessProfilePage.showBusinessDetails) { %> <%- include("./partials/business-details") %>
+    <% } %> <% if (businessProfilePage.showVerification) { %> <%- include("./partials/verification")
+    %> <% } %> <% if (businessProfilePage.showBranches) { %> <%- include("./partials/branches") %>
+    <% } %> <% if (businessProfilePage.showTeamMembers) { %> <%- include("./partials/team-members")
+    %> <% } %> <% if (businessProfilePage.showInvites) { %> <%- include("./partials/invites") %> <%
+    } %>
   </div>
-  <!--end::Main content-->
 </div>
 
-<!--begin::Modals-->
-<% if (activeTab === "branches" && employerPermissions.canViewBranches) { %> <% if
-(employerContext.canManageBranches) { %> <%- include("./partials/add-branch-modal") %> <% } %> <%-
-include("./partials/view-branch-modal") %> <% if (employerContext.canManageBranches) { %> <%-
-include("./partials/edit-branch-modal") %> <% } %> <% } %> <% if (activeTab === "team" &&
-employerPermissions.canViewTeamMembers) { %> <%- include("./partials/team-member-modals") %> <% } %>
-<% if (activeTab === "invites" && employerPermissions.canInviteMembers) { %> <%-
-include("./partials/invite-member-modal") %> <%- include("./partials/edit-invite-modal") %> <% } %>
-<!--end::Modals-->
+<!-- Branch modals -->
+
+<% if (businessProfilePage.showAddBranchModal) { %> <%- include("./partials/add-branch-modal") %> <%
+} %> <% if (businessProfilePage.showViewBranchModal) { %> <%-
+include("./partials/view-branch-modal") %> <% } %> <% if (businessProfilePage.showEditBranchModal) {
+%> <%- include("./partials/edit-branch-modal") %> <% } %>
+
+<!-- Team member modals -->
+
+<% if (businessProfilePage.showTeamMemberModals) { %> <%- include("./partials/team-member-modals")
+%> <% } %>
+
+<!-- Invitation modals -->
+
+<% if (businessProfilePage.showInviteModals) { %> <%- include("./partials/invite-member-modal") %>
+<%- include("./partials/edit-invite-modal") %> <% } %>
+
+<!-- Backend-prepared, safely serialized location configuration -->
 
 <script>
   window.locations = <%- locations %>;

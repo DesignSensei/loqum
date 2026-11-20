@@ -590,6 +590,7 @@ const employerRefundLineSchema = new mongoose.Schema(
         {
           type: mongoose.Schema.Types.ObjectId,
           ref: "Transaction",
+          required: true,
         },
       ],
       default: [],
@@ -1531,6 +1532,17 @@ employerRefundLineSchema.pre("validate", function validateEmployerRefundLine() {
     }
   }
 
+  if (
+    retry.submittingAt &&
+    bankConsent.confirmedAt &&
+    retry.submittingAt < bankConsent.confirmedAt
+  ) {
+    this.invalidate(
+      "retry.submittingAt",
+      "Retry Refund submission cannot begin before bank consent is confirmed."
+    );
+  }
+
   if (retry.submittingAt && retry.queuedAt && retry.submittingAt < retry.queuedAt) {
     this.invalidate(
       "retry.submittingAt",
@@ -1891,6 +1903,54 @@ employerRefundLineSchema.pre("validate", function validateEmployerRefundLine() {
 
 employerRefundBatchSchema.pre("validate", function validateEmployerRefundBatch() {
   const lines = validEntries(this, this.lines, "lines");
+
+  if (
+    this.processingStartedAt &&
+    this.scheduledFor &&
+    this.processingStartedAt < this.scheduledFor
+  ) {
+    this.invalidate("processingStartedAt", "Batch processing cannot begin before scheduledFor.");
+  }
+
+  for (const line of lines) {
+    if (
+      line.processingStartedAt &&
+      this.scheduledFor &&
+      line.processingStartedAt < this.scheduledFor
+    ) {
+      const index = this.lines.indexOf(line);
+      this.invalidate(
+        `lines.${index}.processingStartedAt`,
+        "Refund-line processing cannot begin before the batch scheduledFor."
+      );
+    }
+  }
+
+  // A terminal batch summarizes outcomes that have already occurred on its lines.
+  const batchTerminalFields = {
+    completed: "completedAt",
+    partially_completed: "partiallyCompletedAt",
+    failed: "lastFailedAt",
+    cancelled: "cancelledAt",
+  };
+  const lineTerminalFields = {
+    completed: "completedAt",
+    failed: "failedAt",
+    cancelled: "cancelledAt",
+  };
+  const batchTerminalField = batchTerminalFields[this.status];
+  if (batchTerminalField && this[batchTerminalField]) {
+    for (const line of lines) {
+      const lineTerminalField = lineTerminalFields[line.status];
+      if (
+        lineTerminalField &&
+        line[lineTerminalField] &&
+        this[batchTerminalField] < line[lineTerminalField]
+      ) {
+        this.invalidate(batchTerminalField, "Batch finalization cannot precede its line outcomes.");
+      }
+    }
+  }
 
   const lineReferences = [];
   const lineIdempotencyKeys = [];

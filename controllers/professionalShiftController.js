@@ -8,10 +8,10 @@ const { createServiceError } = require("../services/helpers/serviceErrorHelper")
 const logger = require("../utils/logger");
 
 const PROFESSIONAL_SHIFTS_URL = "/professional/shifts";
-const PROFESSIONAL_MY_SHIFTS_URL = "/professional/shifts/my";
+const PROFESSIONAL_MY_SHIFTS_URL = "/professional/shifts/my-shifts";
 
 const FIND_SHIFTS_VIEW = "professional/shifts/index";
-const MY_SHIFTS_VIEW = "professional/shifts/my";
+const MY_SHIFTS_VIEW = "professional/shifts/my-shifts";
 const SHIFT_DETAILS_VIEW = "professional/shifts/show";
 
 /**

@@ -20,6 +20,8 @@ const {
   canManageWallet,
 } = require("../middleware/employerMiddleware");
 
+const { parseFacilityPermitUpload } = require("../middleware/uploadMiddleware");
+
 const employerController = require("../controllers/employerController");
 const employerVerificationController = require("../controllers/employerVerificationController");
 const branchController = require("../controllers/branchController");
@@ -87,6 +89,39 @@ router.post("/branches/:branchId/edit", branchController.postEditBranch);
 router.post("/branches/:branchId/update", branchController.postEditBranch);
 
 router.post("/business-profile/branches/update", branchController.postEditBranch);
+
+// Administrative branch activation/deactivation. The controller and service
+// enforce business-scoped owner/admin authority; permit readiness stays separate.
+router.post("/branches/:branchId/status", branchController.postSetBranchStatus);
+
+// ───────────────────── BRANCH FACILITY PERMITS ─────────────────────
+
+// Facility permits are submitted after onboarding and belong to an
+// individual branch. These routes deliberately do not use canPostShifts:
+// obtaining regulatory approval must remain possible before a branch
+// becomes eligible to post shifts.
+//
+// The services enforce active business-wide owner/admin authority.
+// Branch managers and ordinary staff cannot manage these permits.
+// The upload middleware validates the authenticated employer/branch
+// context and provides the private upload commit/cleanup lifecycle.
+//
+// Keep these routes after attachEmployerProfile/attachEmployerContext.
+// CSRF protection must be applied by the application's existing
+// global/router-level CSRF middleware before POST requests reach here.
+
+router.get("/branches/:branchId/permits", employerVerificationController.getBranchFacilityPermits);
+
+router.get(
+  "/branches/:branchId/permits/readiness",
+  employerVerificationController.getBranchVerificationReadiness
+);
+
+router.post(
+  "/branches/:branchId/permits",
+  parseFacilityPermitUpload,
+  employerVerificationController.submitFacilityPermit
+);
 
 // ───────────────────── TEAM MEMBERS ─────────────────────
 
@@ -281,6 +316,8 @@ router.post(
   employerShiftAssignmentController.respondToAssignmentCase
 );
 
+// ───────────────────── SHIFT ASSIGNMENTS ─────────────────────
+
 router.post(
   "/shifts/assignments/:assignmentId/cases/:caseId/escalate",
   employerShiftAssignmentController.escalateAssignmentCase
@@ -301,6 +338,24 @@ router.get(
 // ───────────────────── SHIFT OVERTIME ─────────────────────
 
 // Existing obligations must remain manageable during delinquency.
+
+/**
+ * Read-only evidence retrieval.
+ *
+ * The employer overtime controller:
+ * - verifies the occurrence belongs to the requested Shift;
+ * - verifies employer/business/branch permissions;
+ * - loads the evidence reference from the saved occurrence;
+ * - opens the private file using local storage or AWS S3; and
+ * - streams the file without exposing the storage location.
+ *
+ * This route does not require canPostShifts or canFundShifts,
+ * because it concerns an existing Shift obligation.
+ */
+router.get(
+  "/shifts/:shiftId/occurrences/:occurrenceId/overtime/evidence/:evidenceIndex",
+  employerShiftOvertimeController.getOvertimeEvidence
+);
 
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/overtime/approve",

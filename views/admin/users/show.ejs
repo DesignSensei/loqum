@@ -10,7 +10,7 @@
   data-employer-verification-url="<%= userView.employerVerificationDataUrl || '' %>"
   data-csrf-token="<%= csrfToken %>"
 >
-  <!--begin::Page Header-->
+  <!-- Page Header -->
   <div class="d-flex flex-wrap align-items-start justify-content-between gap-4 mb-8">
     <div>
       <a
@@ -47,18 +47,16 @@
       Refresh
     </a>
   </div>
-  <!--end::Page Header-->
 
-  <!--begin::Feedback-->
+  <!-- Feedback -->
   <div
     id="adminUserDetailsFeedback"
     class="alert d-none mb-6"
     role="alert"
     aria-live="polite"
   ></div>
-  <!--end::Feedback-->
 
-  <!--begin::Summary Cards-->
+  <!-- Summary Cards -->
   <div class="row g-5 mb-8">
     <% userView.summaryCards.forEach(function (card) { %>
 
@@ -76,11 +74,10 @@
 
     <% }); %>
   </div>
-  <!--end::Summary Cards-->
 
-  <!--begin::User Details Card-->
+  <!-- User Details Card -->
   <div class="card card-flush">
-    <!--begin::Tabs-->
+    <!-- Tabs -->
     <div class="card-header border-0 pt-5">
       <ul
         class="nav nav-stretch nav-line-tabs nav-line-tabs-2x border-transparent fs-5 fw-bold"
@@ -115,12 +112,11 @@
         <% }); %>
       </ul>
     </div>
-    <!--end::Tabs-->
 
-    <!--begin::Card Body-->
+    <!-- Card Body -->
     <div class="card-body pt-6">
       <div class="tab-content">
-        <!--begin::Overview Tab-->
+        <!-- Overview Tab -->
         <div
           class="tab-pane fade show active"
           id="adminUserPanel-overview"
@@ -136,7 +132,7 @@
 
           <% } %>
 
-          <!--begin::Overview Sections-->
+          <!-- Overview Sections -->
           <% userView.overviewSections.forEach(function (section) { %>
 
           <section class="mb-10" data-section="<%= section.key || '' %>">
@@ -204,9 +200,8 @@
           <div class="separator separator-dashed mb-10"></div>
 
           <% }); %>
-          <!--end::Overview Sections-->
 
-          <!--begin::Profile Account Notes-->
+          <!-- Profile Account Notes -->
           <% if (userView.overviewNotes && userView.overviewNotes.length) { %>
 
           <div class="mb-8">
@@ -222,11 +217,9 @@
           </div>
 
           <% } %>
-          <!--end::Profile Account Notes-->
         </div>
-        <!--end::Overview Tab-->
 
-        <!--begin::Verification Tab-->
+        <!-- Verification Tab -->
         <div
           class="tab-pane fade"
           id="adminUserPanel-verification"
@@ -235,7 +228,10 @@
           tabindex="0"
         >
           <div class="mb-8">
-            <h3 class="fw-bold text-gray-900 mb-2">Verification & Approval</h3>
+            <h3 class="fw-bold text-gray-900 mb-2">
+              <%= userView.role === "professional" ? "Verification & Approval" : "Business
+              Verification" %>
+            </h3>
 
             <p class="text-gray-600 fs-6 mb-0"><%= userView.verificationGuidance %></p>
           </div>
@@ -255,11 +251,11 @@
 
           <% } %>
 
-          <!--begin::Verification Sections-->
+          <!-- Verification Sections -->
           <% userView.verificationSections.forEach(function (section) { %>
 
           <div class="card card-bordered mb-8" data-verification-section="<%= section.key || '' %>">
-            <!--begin::Section Header-->
+            <!-- Section Header -->
             <div class="card-header align-items-center">
               <div class="card-title">
                 <h4 class="fw-bold text-gray-900 mb-0"><%= section.title %></h4>
@@ -278,9 +274,8 @@
 
               <% } %>
             </div>
-            <!--end::Section Header-->
 
-            <!--begin::Section Body-->
+            <!-- Section Body -->
             <div class="card-body">
               <% if (section.description) { %>
 
@@ -288,7 +283,7 @@
 
               <% } %>
 
-              <!--begin::Verification Fields-->
+              <!-- Verification Fields -->
               <div class="row g-6">
                 <% section.fields.forEach(function (field) { %>
 
@@ -308,9 +303,8 @@
 
                 <% }); %>
               </div>
-              <!--end::Verification Fields-->
 
-              <!--begin::Verification Notes-->
+              <!-- Verification Notes -->
               <% if (section.notes && section.notes.length) { %>
 
               <div class="mt-7">
@@ -326,9 +320,8 @@
               </div>
 
               <% } %>
-              <!--end::Verification Notes-->
 
-              <!--begin::External Verification Link-->
+              <!-- External Verification Link -->
               <% if (section.externalLink) { %>
 
               <div class="mt-7">
@@ -348,9 +341,8 @@
               </div>
 
               <% } %>
-              <!--end::External Verification Link-->
 
-              <!--begin::Verification Notice-->
+              <!-- Verification Notice -->
               <% if (section.notice) { %>
 
               <div class="alert alert-light-<%= section.notice.color %> mt-7 mb-0">
@@ -358,9 +350,8 @@
               </div>
 
               <% } %>
-              <!--end::Verification Notice-->
 
-              <!--begin::CAC Action-->
+              <!-- CAC Action -->
               <% if (section.action) { %>
 
               <div class="separator separator-dashed my-7"></div>
@@ -391,128 +382,10 @@
               </button>
 
               <% } %>
-              <!--end::CAC Action-->
-
-              <!--begin::Manual Review Form-->
-              <% if (section.reviewForm) { %>
-
-              <div class="separator separator-dashed my-8"></div>
-
-              <h5 class="fw-bold text-gray-900 mb-5">Manual Regulatory Review</h5>
-
-              <form
-                id="<%= section.reviewForm.id %>"
-                action="<%= section.reviewForm.url %>"
-                method="post"
-                data-review-url="<%= section.reviewForm.url %>"
-                data-review-method="<%= section.reviewForm.method %>"
-              >
-                <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-
-                <div class="row g-5">
-                  <!--begin::Decision-->
-                  <div class="col-12 col-md-6">
-                    <label
-                      for="<%= section.reviewForm.decision.id %>"
-                      class="form-label required fw-semibold"
-                    >
-                      <%= section.reviewForm.decision.label %>
-                    </label>
-
-                    <select
-                      id="<%= section.reviewForm.decision.id %>"
-                      name="<%= section.reviewForm.decision.name %>"
-                      class="form-select form-select-solid"
-                      required
-                    >
-                      <% section.reviewForm.decision.options.forEach(function (option) { %>
-
-                      <option value="<%= option.value %>"><%= option.label %></option>
-
-                      <% }); %>
-                    </select>
-                  </div>
-                  <!--end::Decision-->
-
-                  <!--begin::Registered Name-->
-                  <div class="col-12 col-md-6">
-                    <label
-                      for="<%= section.reviewForm.registeredName.id %>"
-                      class="form-label fw-semibold"
-                    >
-                      <%= section.reviewForm.registeredName.label %>
-                    </label>
-
-                    <input
-                      type="text"
-                      id="<%= section.reviewForm.registeredName.id %>"
-                      name="<%= section.reviewForm.registeredName.name %>"
-                      class="form-control form-control-solid"
-                      value="<%= section.reviewForm.registeredName.value %>"
-                      maxlength="<%= section.reviewForm.registeredName.maxlength %>"
-                      placeholder="<%= section.reviewForm.registeredName.placeholder %>"
-                      autocomplete="off"
-                    />
-
-                    <div class="form-text"><%= section.reviewForm.registeredName.helpText %></div>
-                  </div>
-                  <!--end::Registered Name-->
-
-                  <!--begin::Review Note-->
-                  <div class="col-12">
-                    <label
-                      for="<%= section.reviewForm.note.id %>"
-                      class="form-label required fw-semibold"
-                    >
-                      <%= section.reviewForm.note.label %>
-                    </label>
-
-                    <textarea
-                      id="<%= section.reviewForm.note.id %>"
-                      name="<%= section.reviewForm.note.name %>"
-                      class="form-control form-control-solid"
-                      rows="4"
-                      minlength="<%= section.reviewForm.note.minLength %>"
-                      maxlength="<%= section.reviewForm.note.maxLength %>"
-                      placeholder="<%= section.reviewForm.note.placeholder %>"
-                      required
-                    ></textarea>
-
-                    <div class="form-text"><%= section.reviewForm.note.helpText %></div>
-                  </div>
-                  <!--end::Review Note-->
-
-                  <!--begin::Submit-->
-                  <div class="col-12">
-                    <button
-                      type="submit"
-                      id="<%= section.reviewForm.submit.id %>"
-                      class="btn btn-primary"
-                      disabled
-                    >
-                      <span class="indicator-label"> <%= section.reviewForm.submit.label %> </span>
-
-                      <span class="indicator-progress">
-                        <%= section.reviewForm.submit.loadingLabel %>
-
-                        <span class="spinner-border spinner-border-sm ms-2"></span>
-                      </span>
-                    </button>
-                  </div>
-                  <!--end::Submit-->
-                </div>
-              </form>
-
-              <% } %>
-              <!--end::Manual Review Form-->
             </div>
-            <!--end::Section Body-->
           </div>
 
-          <% }); %>
-          <!--end::Verification Sections-->
-
-          <% if (userView.professionalReadOnlyNotice) { %>
+          <% }); %> <% if (userView.professionalReadOnlyNotice) { %>
 
           <div class="alert alert-light-<%= userView.professionalReadOnlyNotice.color %>">
             <%= userView.professionalReadOnlyNotice.text %>
@@ -520,10 +393,7 @@
 
           <% } %>
         </div>
-        <!--end::Verification Tab-->
       </div>
     </div>
-    <!--end::Card Body-->
   </div>
-  <!--end::User Details Card-->
 </div>

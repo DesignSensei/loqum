@@ -770,13 +770,21 @@ class ShiftAttendanceViewService {
 
         isPast,
 
-        label: isActive ? "In progress" : isUpcoming ? "Upcoming" : "Past",
+        label: isActive
+          ? "In progress"
+          : isUpcoming
+            ? "Upcoming"
+            : isPast
+              ? "Past"
+              : "Within shift window",
 
         badgeClass: isActive
           ? "badge-light-success"
           : isUpcoming
             ? "badge-light-primary"
-            : "badge-light-secondary",
+            : isPast
+              ? "badge-light-secondary"
+              : "badge-light-info",
       },
 
       detailsUrl,
@@ -990,7 +998,6 @@ class ShiftAttendanceViewService {
 
         options: ShiftAttendanceViewService.buildStatusOptions({
           selectedStatus: selectedAttendanceStatus,
-
           shiftId: focusedShiftId,
         }),
 

@@ -4,6 +4,7 @@ const mongoose = require("mongoose");
 
 const ProfessionalProfile = require("../models/ProfessionalProfile");
 const EmployerProfile = require("../models/EmployerProfile");
+const Branch = require("../models/Branch");
 const User = require("../models/User");
 const KYCVerification = require("../models/KYCVerification");
 
@@ -12,6 +13,7 @@ const logger = require("../utils/logger");
 const walletService = require("./walletService");
 const DVAService = require("./dvaService");
 const ProfileInputService = require("./profileInputService");
+const BranchService = require("./branchService");
 
 const ProfessionalVerificationService = require("./professionalVerificationService");
 const EmployerVerificationService = require("./employerVerificationService");
@@ -28,53 +30,38 @@ class OnboardingService {
   /*
    * ONBOARDING POLICY
    *
-   * Normal professional onboarding requires successful,
-   * unexpired, acknowledged production NIN registry evidence.
+   * Professional onboarding requires successful,
+   * unexpired, acknowledged production NIN evidence.
    *
-   * Professional legal names originate exclusively from
-   * trusted NIN registry evidence.
+   * Professional legal names originate exclusively
+   * from trusted structured NIN registry evidence.
    *
-   * A user may correct an incorrect NIN immediately
-   * during pre-onboarding verification.
+   * The applicant may enter a different NIN during
+   * pre-onboarding verification, subject to the
+   * verification service's attempt limits.
    *
-   * Only the currently acknowledged NIN evidence
-   * may be consumed during onboarding.
+   * Employer onboarding requires successful,
+   * unexpired production CAC evidence.
    *
-   * Normal employer onboarding requires successful,
-   * unexpired, production CAC registration evidence.
-   *
-   * Employer registered legal business names originate
+   * Employer registered legal names originate
    * exclusively from trusted CAC registry evidence.
    *
-   * Verification requests occur BEFORE onboarding
-   * through explicit actions in the onboarding forms.
+   * No chargeable provider calls occur here.
    *
-   * No NIN or CAC provider calls occur in this service.
+   * Registry lookup and name acknowledgement do not
+   * establish identity-holder authentication.
    *
-   * Frontend-submitted names are not authoritative
-   * identity or business-registration evidence.
+   * Professional practising-licence and branch facility-permit
+   * verification are separate post-onboarding workflows.
+   * Completing onboarding does not grant marketplace eligibility.
    *
-   * Registry matching and name acknowledgement
-   * are not identity-holder authentication.
+   * Onboarding database changes are transactional.
+   * Wallet creation is part of onboarding.
+   * Employer onboarding creates its initial primary Branch
+   * in that same transaction, using the submitted location.
    *
-   * Registry verification is not final KYC/KYB approval.
-   *
-   * Professional licensing, employer representative
-   * checks, PCN premises verification and administrative
-   * approval remain separate requirements.
-   *
-   * All onboarding database changes occur within
-   * a MongoDB transaction.
-   *
-   * Wallet creation remains part of onboarding.
-   *
-   * Employer DVA provisioning remains a post-commit
-   * operation independent of final KYB approval.
-   *
+   * Employer DVA provisioning occurs after commit.
    * Failed DVA provisioning does not roll back onboarding.
-   *
-   * Account closure and returning-customer DVA handling
-   * belong to the separate account-lifecycle workstream.
    */
 
   // ───────────────────── ERRORS ─────────────────────
@@ -140,6 +127,11 @@ class OnboardingService {
       this.getOnboardingUserFilter(userId, role),
       {
         $set: update,
+
+        // Advance the version used by document saves.
+        $inc: {
+          __v: 1,
+        },
       },
       {
         returnDocument: "after",
@@ -162,17 +154,11 @@ class OnboardingService {
   // ───────────────────── REGISTRY NAME SUPPORT ─────────────────────
 
   /*
-   * Registry names must originate from trusted,
-   * server-persisted verification evidence.
+   * Legal names must originate from server-persisted
+   * provider evidence, not browser-submitted names.
    *
-   * Read-only frontend fields are informational.
-   *
-   * Never trust request-body firstName, middleName,
-   * lastName or businessName as authoritative
-   * verification evidence.
-   *
-   * Preserve legitimate name components without
-   * guessing their order or splitting full names.
+   * Preserve individual name components without
+   * guessing name order or splitting full names.
    */
 
   static normalizeRegistryName(value, maxLength = 150) {
@@ -196,27 +182,22 @@ class OnboardingService {
   // ───────────────────── PROFESSIONAL LEGAL NAME ─────────────────────
 
   /*
-   * Required trusted NIN evidence contract:
+   * The current NIN pre-onboarding service persists:
    *
    * registryLegalName: {
-   *   firstName: String,
-   *   middleName: String,
-   *   lastName: String
+   *   firstName,
+   *   middleName,
+   *   lastName
    * }
    *
-   * Middle name may be empty.
+   * It does not persist a separate nameOnRecord
+   * in the temporary verification record.
    *
-   * The pre-onboarding NIN service obtains
-   * these values from trusted registry responses.
+   * Build the display name from these already
+   * validated structured registry components.
    *
-   * Do not derive individual name fields by
-   * splitting nameOnRecord.
-   *
-   * Compound names and different name ordering
-   * make such splitting unreliable.
-   *
-   * Names cannot originate from the onboarding
-   * request or provisional registration fields.
+   * Never derive individual names by splitting
+   * an unstructured display name.
    */
 
   static getAuthoritativeProfessionalName(evidence) {
@@ -259,6 +240,16 @@ class OnboardingService {
       });
     }
 
+    /*
+     * The pre-onboarding service validated the
+     * structured registry name against the provider
+     * response before persisting temporary evidence.
+     *
+     * Requiring evidence.nameOnRecord here would
+     * reject valid records because that field is
+     * not part of the current temporary contract.
+     */
+
     return {
       firstName,
       middleName,
@@ -270,29 +261,17 @@ class OnboardingService {
   // ───────────────────── PERSIST PROFESSIONAL LEGAL NAME ─────────────────────
 
   /*
-   * Establish the professional's registry-derived
-   * legal name in the User document.
+   * Establish the professional's authoritative
+   * registry-derived legal name in User.
    *
-   * Persist the following fields atomically:
+   * The permanent KYCVerification record provides
+   * the legal-name evidence reference.
    *
-   * - firstName;
-   * - middleName;
-   * - lastName;
-   * - legalNameSource;
-   * - legalNameEvidence.
+   * An already established registry-authoritative
+   * identity cannot be overwritten by onboarding.
    *
-   * legalNameEvidence references the permanent
-   * KYCVerification record created within the
-   * same onboarding transaction.
-   *
-   * Registry-name provenance identifies the
-   * source of the name.
-   *
-   * It does not establish that the applicant
-   * has authenticated ownership of the NIN.
-   *
-   * An existing registry-authoritative identity
-   * must not be silently overwritten.
+   * The User model's identity update middleware
+   * manages the name-assignment version increment.
    */
 
   static async persistAuthoritativeProfessionalName({
@@ -315,11 +294,9 @@ class OnboardingService {
     }
 
     /*
-     * Fail closed if the required User schema
-     * fields are unavailable.
-     *
-     * Otherwise, Mongoose strict mode could
-     * silently discard unknown update fields.
+     * Fail before updating a professional's legal
+     * name if the User schema lacks any required
+     * provenance field.
      */
 
     if (
@@ -337,15 +314,11 @@ class OnboardingService {
     }
 
     /*
-     * The legal-name source must still be unverified
-     * when its first authoritative registry evidence
-     * is being established.
+     * Only the first transition from unverified
+     * to nin_registry is permitted here.
      *
-     * Loqum is greenfield, so this does not include
-     * compatibility handling for historical data.
-     *
-     * Existing trusted provenance cannot be
-     * overwritten through ordinary onboarding.
+     * Existing trusted provenance must not be
+     * silently replaced.
      */
 
     const user = await User.findOneAndUpdate(
@@ -353,19 +326,14 @@ class OnboardingService {
         ...this.getOnboardingUserFilter(userId, "professional"),
 
         legalNameSource: "unverified",
-
         legalNameEvidence: null,
       },
       {
         $set: {
           firstName: legalName.firstName,
-
           middleName: legalName.middleName,
-
           lastName: legalName.lastName,
-
           legalNameSource: "nin_registry",
-
           legalNameEvidence: verificationId,
         },
       },
@@ -390,18 +358,11 @@ class OnboardingService {
   // ───────────────────── EMPLOYER REGISTERED BUSINESS NAME ─────────────────────
 
   /*
-   * EmployerProfile.businessName must be obtained
-   * from trusted CAC registration evidence.
+   * EmployerProfile.businessName must come from
+   * trusted CAC registration evidence.
    *
-   * The applicant supplies their CAC registration
-   * number before onboarding.
-   *
-   * The applicant does not supply an authoritative
-   * registered legal business name.
-   *
-   * A trading name or public display name may
-   * exist separately but cannot replace the
-   * registered legal business name.
+   * The applicant supplies a registration number,
+   * not an authoritative registered business name.
    */
 
   static getAuthoritativeBusinessName(evidence) {
@@ -420,10 +381,11 @@ class OnboardingService {
   // ───────────────────── CAC REGISTRATION SUPPORT ─────────────────────
 
   static supportsAutomatedCACRegistration(registrationNumber) {
-    const normalized = String(registrationNumber || "")
-      .trim()
-      .toUpperCase()
-      .replace(/[\s-]/g, "");
+    if (typeof registrationNumber !== "string") {
+      return false;
+    }
+
+    const normalized = registrationNumber.trim().toUpperCase().replace(/[\s-]/g, "");
 
     return /^(RC|BN)\d{4,10}$/.test(normalized);
   }
@@ -431,34 +393,45 @@ class OnboardingService {
   // ───────────────────── REQUIRED NIN EVIDENCE ─────────────────────
 
   /*
-   * Invoked within the professional onboarding transaction.
+   * Called inside the professional onboarding
+   * transaction.
    *
-   * Normal onboarding requires:
+   * The pre-onboarding service requires:
    *
-   * - Successful production NIN registry lookup;
-   * - Current, unexpired temporary evidence;
+   * - Successful production NIN lookup;
+   * - Current, unexpired evidence;
    * - Explicit lookup consent;
-   * - Complete structured registry legal names;
-   * - Applicant acknowledgement of the current name;
-   * - No outstanding NIN correction;
-   * - Transactional evidence consumption.
+   * - Applicant name acknowledgement;
+   * - No outstanding NIN change;
+   * - Valid structured registry names.
    *
-   * No provider lookup occurs here.
-   *
-   * The pre-onboarding NIN service validates
-   * these requirements before consumption.
-   *
-   * Even after successful NIN registry lookup:
-   *
-   * - Identity-holder authentication remains separate;
-   * - Professional approval is not granted;
-   * - Marketplace access is not granted.
+   * This method creates permanent KYC history,
+   * establishes User legal-name provenance and
+   * leaves identity-holder authentication pending.
    */
 
   static async persistPreOnboardingNINVerification({ userId, profile, session }) {
     if (!session || typeof session.inTransaction !== "function" || !session.inTransaction()) {
       throw new Error("An active onboarding transaction is required to persist NIN evidence.");
     }
+
+    /*
+     * Ensure permanent evidence storage supports
+     * structured NIN legal names.
+     *
+     * Mongoose strict mode must not silently
+     * discard this authoritative information.
+     */
+
+    if (!KYCVerification.schema.path("registryLegalName")) {
+      throw this.createError({
+        message: "Permanent NIN evidence storage is not configured.",
+        code: "ONBOARDING_NIN_KYC_SCHEMA_UNAVAILABLE",
+        statusCode: 500,
+      });
+    }
+
+    // ───────── CONSUME ACKNOWLEDGED NIN EVIDENCE ─────────
 
     const evidence = await PreOnboardingNINVerificationService.consumeForOnboarding({
       userId,
@@ -503,9 +476,7 @@ class OnboardingService {
     }
 
     const checkedAt = new Date(evidence.checkedAt);
-
     const lookupStartedAt = new Date(evidence.lookupStartedAt);
-
     const consentAcceptedAt = new Date(evidence.consentAcceptedAt);
 
     const acknowledgedAt = evidence.nameAcknowledgedAt
@@ -532,14 +503,11 @@ class OnboardingService {
     // ───────── REQUIRE CURRENT NAME ACKNOWLEDGEMENT ─────────
 
     /*
-     * Confirmation must refer to the exact
-     * registry lookup being consumed.
+     * Acknowledgement must belong to the exact
+     * current NIN lookup.
      *
-     * A previous acknowledgement cannot authorise
-     * an updated or corrected NIN.
-     *
-     * The pre-onboarding service also checks
-     * these conditions in its atomic query.
+     * Previous acknowledgements cannot authorize
+     * newly submitted or changed NINs.
      */
 
     if (
@@ -552,19 +520,16 @@ class OnboardingService {
       });
     }
 
-    // ───────── REQUIRE AUTHORITATIVE LEGAL NAME ─────────
+    // ───────── AUTHORITATIVE LEGAL NAME ─────────
 
     const legalName = this.getAuthoritativeProfessionalName(evidence);
 
     /*
-     * Evidence ownership, expiry, provider,
-     * acknowledgement and consumption are checked
-     * by the pre-onboarding service.
+     * The pre-onboarding service already checked
+     * account ownership, expiry and provider context.
      *
-     * All persistence remains transactional.
-     *
-     * A subsequent failure rolls back evidence
-     * consumption, profile updates and wallet creation.
+     * These changes remain in the same transaction.
+     * Any later failure rolls back evidence consumption.
      */
 
     const reviewNote =
@@ -578,11 +543,9 @@ class OnboardingService {
       registryFound: true,
       registryMatched: true,
 
-      // Acknowledgement is not identity-holder authentication.
+      // Acknowledgement is not holder authentication.
       nameAcknowledged: true,
-
       nameAcknowledgedAt: acknowledgedAt,
-
       nameAcknowledgedRequestReference: evidence.requestReference,
 
       legalNameSource: "nin_registry",
@@ -591,24 +554,20 @@ class OnboardingService {
       requiresHolderAuthentication: true,
 
       stagingOnly: false,
-
       consentAcceptedAt,
     };
 
     // ───────── PERMANENT NIN VERIFICATION HISTORY ─────────
 
     /*
-     * Persist structured registry legal-name evidence
-     * alongside the display-oriented nameOnRecord.
+     * Preserve both structured legal-name components
+     * and the derived display name.
      *
-     * No registration-name matching is required.
+     * The record remains needs_review because registry
+     * evidence does not independently authenticate
+     * the person submitting the NIN.
      *
-     * The verification remains needs_review because
-     * the registry lookup and acknowledgement do not
-     * independently establish NIN ownership.
-     *
-     * It must not automatically qualify the
-     * professional for marketplace participation.
+     * Do not grant marketplace access here.
      */
 
     const records = await KYCVerification.create(
@@ -624,11 +583,9 @@ class OnboardingService {
           providerEnvironment: "production",
 
           requestReference: evidence.requestReference,
-
           providerReference: evidence.providerReference || null,
 
           maskedValue: `*******${evidence.ninLast4}`,
-
           valueLast4: evidence.ninLast4,
           valueHash: evidence.ninHash,
 
@@ -643,7 +600,6 @@ class OnboardingService {
           },
 
           submittedAt: lookupStartedAt,
-
           lastCheckedAt: checkedAt,
 
           reviewNote: ProfessionalVerificationService.truncate(reviewNote),
@@ -661,14 +617,11 @@ class OnboardingService {
     // ───────── PERSIST AUTHORITATIVE USER NAME ─────────
 
     /*
-     * Update User legal-name fields and link
-     * their provenance to permanent KYC evidence.
+     * Link the professional's legal-name provenance
+     * to the permanent KYC verification record.
      *
-     * The applicant's registration fields do not
-     * override the registry-derived legal name.
-     *
-     * Registry authority establishes the source
-     * of the name, not final identity approval.
+     * This establishes where the name came from,
+     * not that identity ownership was authenticated.
      */
 
     await this.persistAuthoritativeProfessionalName({
@@ -702,24 +655,13 @@ class OnboardingService {
   // ───────────────────── REQUIRED CAC EVIDENCE ─────────────────────
 
   /*
-   * CAC evidence must be validated before using
-   * its registered business name for the employer
-   * profile.
+   * Validate and consume trusted production CAC
+   * evidence before creating the employer profile.
    *
-   * The preparation stage:
+   * The registered business name comes from the
+   * provider, not the request body.
    *
-   * - Consumes trusted pre-onboarding evidence;
-   * - Requires a successful production result;
-   * - Validates the CAC registration identity;
-   * - Obtains the authoritative registered name;
-   * - Re-evaluates registration eligibility.
-   *
-   * This happens within the onboarding transaction.
-   *
-   * No provider requests occur here.
-   *
-   * The user-submitted businessName is not
-   * required by this verification process.
+   * No provider request is made here.
    */
 
   static async preparePreOnboardingCACVerification({ userId, profileData, session }) {
@@ -737,21 +679,9 @@ class OnboardingService {
 
     // ───────── CONSUME CURRENT CAC EVIDENCE ─────────
 
-    /*
-     * The revised pre-onboarding CAC service
-     * accepts the registration number only.
-     *
-     * businessName is intentionally excluded.
-     *
-     * Evidence is owned by the employer account
-     * and consumed within this transaction.
-     */
-
     const evidence = await PreOnboardingCACVerificationService.consumeForOnboarding({
       userId,
-
       registrationNumber: profileData.cacRegistrationNumber,
-
       session,
     });
 
@@ -785,7 +715,6 @@ class OnboardingService {
     }
 
     const checkedAt = new Date(evidence.checkedAt);
-
     const lookupStartedAt = new Date(evidence.lookupStartedAt);
 
     if (
@@ -830,21 +759,17 @@ class OnboardingService {
 
     /*
      * Verify registration identity, entity category,
-     * active status and the trusted registered name.
+     * active status and the trusted business name.
      *
-     * Do not reintroduce submittedBusinessName
-     * or businessNameMatches.
+     * Do not compare against an applicant-supplied
+     * business name.
      */
 
     const company = {
       registrationNumber: evidence.responseRegistrationNumber,
-
       entityName: registeredBusinessName,
-
       entityType: evidence.entityType,
-
       entityStatus: evidence.entityStatus,
-
       registrationDate: evidence.registrationDate || null,
     };
 
@@ -862,7 +787,6 @@ class OnboardingService {
 
     const evaluation = EmployerVerificationService.evaluateCACResult({
       registration: submittedRegistration,
-
       result: company,
     });
 
@@ -894,21 +818,14 @@ class OnboardingService {
   // ───────────────────── PERSIST CAC VERIFICATION ─────────────────────
 
   /*
-   * This method persists previously validated
-   * CAC evidence to the employer profile and
-   * permanent verification history.
+   * Persist the prepared CAC evidence to the
+   * employer profile and permanent KYC history.
    *
-   * The optional preparedCAC argument allows
-   * completeEmployerOnboarding to validate and
-   * consume evidence BEFORE creating the profile.
+   * When preparedCAC is supplied, evidence has
+   * already been validated and consumed.
    *
-   * Without preparedCAC, this method retains
-   * its existing prepare-and-persist behaviour.
-   *
-   * Evidence must never be consumed twice.
-   *
-   * The preparation context is trusted internal
-   * service data, never a request-body argument.
+   * The preparation context must be internal
+   * service data, never request-body data.
    */
 
   static async persistPreOnboardingCACVerification({
@@ -937,29 +854,21 @@ class OnboardingService {
     const reason = "CAC registration verified through the configured provider.";
 
     /*
-     * Always persist the CAC-registered legal name.
-     *
-     * The employer profile is created using
-     * this same authoritative value.
-     *
-     * A caller supplying an existing profile
-     * is also corrected to the registry name.
+     * Persist the CAC registered legal name.
+     * Employer approval remains separate.
      */
 
     profile.set({
       businessName: registeredBusinessName,
 
       cacVerificationStatus: "verified",
-
       cacVerificationMethod: "api",
       cacVerificationSource: "provider",
 
       cacNameOnRecord: registeredBusinessName,
 
       cacVerifiedAt: checkedAt,
-
       cacLastCheckedAt: checkedAt,
-
       cacVerifiedBy: null,
 
       cacVerificationNote: EmployerVerificationService.truncate(reason),
@@ -968,15 +877,6 @@ class OnboardingService {
     });
 
     await profile.save({ session });
-
-    /*
-     * Only the CAC registration component
-     * is verified.
-     *
-     * Employer approval remains dependent on
-     * representative checks, PCN premises review
-     * and administrator approval.
-     */
 
     // ───────── DEACTIVATE EARLIER ACTIVE CAC HISTORY ─────────
 
@@ -996,18 +896,6 @@ class OnboardingService {
 
     // ───────── PERMANENT CAC EVIDENCE ─────────
 
-    /*
-     * Record the verified registration identity,
-     * registered legal business name and all
-     * required CAC registry checks.
-     *
-     * Do not persist obsolete submitted-name
-     * comparison metadata.
-     *
-     * The registered business name remains
-     * registry-authoritative.
-     */
-
     const metadata = {
       verificationSource: "pre_onboarding",
 
@@ -1016,11 +904,8 @@ class OnboardingService {
       submittedRegistrationNumber: evidence.registrationNumber,
 
       responseRegistrationNumber: company.registrationNumber,
-
       responseEntityType: company.entityType,
-
       responseEntityStatus: company.entityStatus,
-
       responseRegistrationDate: company.registrationDate,
 
       checks: evaluation.checks,
@@ -1043,17 +928,13 @@ class OnboardingService {
           providerEnvironment: "production",
 
           requestReference: evidence.requestReference || null,
-
           providerReference: evidence.providerReference || null,
 
           status: "verified",
-
           nameOnRecord: registeredBusinessName,
 
           submittedAt: evidence.lookupStartedAt || checkedAt,
-
           lastCheckedAt: checkedAt,
-
           verifiedAt: checkedAt,
 
           reviewNote: null,
@@ -1085,29 +966,49 @@ class OnboardingService {
     };
   }
 
+  // ───────────────────── PROFILE FIELD ALLOWLIST ─────────────────────
+
+  /*
+   * Only ordinary profile fields may be persisted.
+   * Verification, ownership, approval and financial
+   * fields remain service-owned.
+   */
+
+  static pickProfileFields(data, fields) {
+    return Object.fromEntries(
+      fields.filter((field) => Object.hasOwn(data, field)).map((field) => [field, data[field]])
+    );
+  }
+
   // ───────────────────── PROFESSIONAL ONBOARDING ─────────────────────
 
   static async completeProfessionalOnboarding(userId, data) {
     /*
-     * ProfileInputService remains responsible
-     * for validating professional profile inputs.
+     * ProfileInputService validates ordinary
+     * professional profile inputs.
      *
-     * Remove user-supplied legal-name fields from
-     * the resulting profile data.
-     *
-     * Registry-derived legal names are persisted
-     * separately to User within the transaction.
+     * Browser-supplied legal-name fields are excluded.
+     * Registry-derived names are persisted separately
+     * to User inside the transaction.
      */
 
-    const profileData = {
-      ...ProfileInputService.buildProfessionalProfileData(data),
-    };
-
-    delete profileData.firstName;
-    delete profileData.middleName;
-    delete profileData.lastName;
-    delete profileData.legalNameSource;
-    delete profileData.legalNameEvidence;
+    const profileData = this.pickProfileFields(
+      ProfileInputService.buildProfessionalProfileData(data),
+      [
+        "type",
+        "licenceNumber",
+        "phoneCode",
+        "phone",
+        "specialty",
+        "address",
+        "googlePlaceId",
+        "location",
+        "state",
+        "lga",
+        "yearsOfExperience",
+        "bio",
+      ]
+    );
 
     const session = await mongoose.startSession();
 
@@ -1127,53 +1028,38 @@ class OnboardingService {
 
         // ───────── CREATE PROFESSIONAL PROFILE ─────────
 
-        profile = await ProfessionalProfile.findOneAndUpdate(
-          {
-            user: userId,
-          },
-          {
-            $set: profileData,
+        profile = await ProfessionalProfile.findOne({
+          user: userId,
+        }).session(session);
 
-            $setOnInsert: {
-              user: userId,
-            },
-          },
-          {
-            returnDocument: "after",
-            upsert: true,
-            runValidators: true,
-            setDefaultsOnInsert: true,
-            context: "query",
-            session,
-          }
-        );
+        if (profile) {
+          profile.set(profileData);
+        } else {
+          profile = new ProfessionalProfile({
+            ...profileData,
+            user: userId,
+          });
+        }
+
+        // Document validation also protects licence changes.
+        await profile.save({ session });
 
         // ───────── CREATE WALLET ─────────
 
         wallet = await walletService.createProfessionalWalletIfMissing(profile, { session });
 
-        // ───────── REQUIRE ACKNOWLEDGED PRODUCTION NIN EVIDENCE ─────────
+        // ───────── REQUIRE ACKNOWLEDGED PRODUCTION NIN ─────────
 
         /*
-         * Consume the current, acknowledged
-         * production NIN registry evidence.
+         * Consume the current acknowledged NIN
+         * evidence and persist:
          *
-         * Persist permanent KYC evidence and
-         * establish the professional's:
+         * - Permanent KYC record;
+         * - User first, middle and last names;
+         * - Legal-name source;
+         * - Permanent legal-name evidence reference.
          *
-         * - firstName;
-         * - middleName;
-         * - lastName;
-         * - legalNameSource;
-         * - legalNameEvidence.
-         *
-         * All changes occur in the same transaction.
-         *
-         * No selfie verification is introduced.
-         *
-         * Identity-holder assurance, PCN licence
-         * verification and final approval remain
-         * separate from this onboarding step.
+         * All operations remain transactional.
          */
 
         preOnboardingNINResult = await this.persistPreOnboardingNINVerification({
@@ -1207,27 +1093,119 @@ class OnboardingService {
     }
   }
 
+  // ───────────────────── INITIAL EMPLOYER BRANCH ─────────────────────
+
+  static async createInitialEmployerBranch({ profile, session }) {
+    if (!session || typeof session.inTransaction !== "function" || !session.inTransaction()) {
+      throw new Error("An active onboarding transaction is required to create the initial branch.");
+    }
+
+    if (!profile?._id) {
+      throw this.createError({
+        message: "The employer profile must exist before creating its initial branch.",
+        code: "ONBOARDING_EMPLOYER_PROFILE_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
+    const currentLocation = profile.location?.coordinates;
+    const longitude = Array.isArray(currentLocation) ? Number(currentLocation[0]) : NaN;
+    const latitude = Array.isArray(currentLocation) ? Number(currentLocation[1]) : NaN;
+
+    if (
+      !profile.address ||
+      !profile.googlePlaceId ||
+      !profile.state ||
+      !profile.lga ||
+      !Number.isFinite(longitude) ||
+      !Number.isFinite(latitude) ||
+      longitude < -180 ||
+      longitude > 180 ||
+      latitude < -90 ||
+      latitude > 90
+    ) {
+      throw this.createError({
+        message: "Please select a valid business location before completing onboarding.",
+        code: "ONBOARDING_INITIAL_BRANCH_INVALID_LOCATION",
+        statusCode: 400,
+      });
+    }
+
+    const existingPrimary = await Branch.findOne({
+      business: profile._id,
+      isPrimary: true,
+    }).session(session);
+
+    if (existingPrimary) {
+      const previousCoordinates = existingPrimary.location?.coordinates;
+      const sameLocation =
+        existingPrimary.googlePlaceId === profile.googlePlaceId &&
+        existingPrimary.address === profile.address &&
+        existingPrimary.state === profile.state &&
+        existingPrimary.lga === profile.lga &&
+        Array.isArray(previousCoordinates) &&
+        previousCoordinates.length === 2 &&
+        Number(previousCoordinates[0]) === longitude &&
+        Number(previousCoordinates[1]) === latitude;
+
+      if (!sameLocation) {
+        throw this.createError({
+          message: "The existing primary branch does not match the onboarding location.",
+          code: "ONBOARDING_PRIMARY_BRANCH_LOCATION_CONFLICT",
+        });
+      }
+
+      return existingPrimary;
+    }
+
+    // The same configured geofence default used when employers add branches.
+    const geofencePolicy = await BranchService.getGeofencePolicy();
+    if (
+      !Number.isSafeInteger(geofencePolicy.defaultRadius) ||
+      geofencePolicy.defaultRadius < geofencePolicy.minimumRadius ||
+      geofencePolicy.defaultRadius > geofencePolicy.maximumRadius
+    ) {
+      throw this.createError({
+        message: "The default branch geofence configuration is invalid.",
+        code: "ONBOARDING_BRANCH_GEOFENCE_CONFIGURATION_INVALID",
+        statusCode: 500,
+      });
+    }
+
+    const branch = new Branch({
+      business: profile._id,
+      isPrimary: true,
+      name: "Main Branch",
+      address: profile.address,
+      state: profile.state,
+      lga: profile.lga,
+      googlePlaceId: profile.googlePlaceId,
+      location: {
+        type: "Point",
+        coordinates: [longitude, latitude],
+      },
+      geofenceRadiusMeters: geofencePolicy.defaultRadius,
+      contactPhoneCode: profile.businessPhoneCode || "",
+      contactPhone: profile.businessPhone || "",
+      isActive: true,
+    });
+
+    await branch.save({ session });
+    return branch;
+  }
+
   // ───────────────────── EMPLOYER ONBOARDING ─────────────────────
 
   static async completeEmployerOnboarding(userId, data) {
     /*
-     * Unlike the previous implementation,
-     * buildEmployerProfileData() must not be
-     * called with an unverified business name.
+     * Consume CAC evidence before building the
+     * employer profile.
      *
-     * First validate and consume CAC evidence.
+     * The provider's registered legal business name
+     * replaces any applicant-supplied business name.
      *
-     * Then build the employer profile using
-     * the trusted registered business name.
-     *
-     * This allows the applicant to complete
-     * onboarding without manually entering
-     * their authoritative legal business name.
-     *
-     * The original registration number comes
-     * from the onboarding request, but its
-     * identity is checked against trusted
-     * pre-onboarding evidence.
+     * CAC verification does not verify a facility permit or
+     * grant clinical marketplace eligibility.
      */
 
     const submittedProfileData =
@@ -1237,11 +1215,13 @@ class OnboardingService {
 
     let profile;
     let wallet;
+    let initialBranch;
     let preOnboardingCACResult = null;
 
     try {
       await session.withTransaction(async () => {
         preOnboardingCACResult = null;
+        initialBranch = null;
 
         await this.assertCanCompleteOnboarding({
           userId,
@@ -1252,15 +1232,9 @@ class OnboardingService {
         // ───────── VALIDATE CAC BEFORE PROFILE CREATION ─────────
 
         /*
-         * Consume trusted production CAC evidence
-         * before building or creating the profile.
+         * Consume verified production CAC evidence.
          *
-         * The authoritative registered business
-         * name comes only from this evidence.
-         *
-         * No second CAC lookup or charge occurs.
-         *
-         * Consumption remains transactional.
+         * This does not trigger another paid lookup.
          */
 
         const preparedCAC = await this.preparePreOnboardingCACVerification({
@@ -1274,21 +1248,21 @@ class OnboardingService {
         // ───────── BUILD REGISTRY-AUTHORITATIVE PROFILE DATA ─────────
 
         /*
-         * Supply the registry name to the existing
-         * ProfileInputService so its validation
-         * works with the authoritative business name.
+         * Pass the trusted registered business name
+         * into ProfileInputService for validation.
          *
-         * This also avoids requiring applicants
-         * to manually enter businessName.
-         *
-         * An applicant-supplied businessName,
-         * if present in the request, is replaced
-         * before the profile builder runs.
+         * Ignore any request-body businessName.
          */
+
+        // Facility permits are submitted after onboarding, against a Branch.
+        // Never accept profile-level regulatory details from this request.
+        const profileInput = { ...submittedProfileData };
+        delete profileInput.regulatoryBody;
+        delete profileInput.regulatoryRegistrationNumber;
 
         const verifiedProfileData = {
           ...ProfileInputService.buildEmployerProfileData({
-            ...submittedProfileData,
+            ...profileInput,
 
             cacRegistrationNumber: preparedCAC.evidence.registrationNumber,
 
@@ -1300,60 +1274,55 @@ class OnboardingService {
           cacRegistrationNumber: preparedCAC.evidence.registrationNumber,
         };
 
-        /*
-         * Registry and approval fields must not be
-         * supplied as ordinary employer profile inputs.
-         *
-         * CAC verification fields are established
-         * through persistPreOnboardingCACVerification.
-         *
-         * PCN, representative and administrator
-         * approval remain separate processes.
-         */
-
-        delete verifiedProfileData.cacNameOnRecord;
-        delete verifiedProfileData.cacVerificationStatus;
-        delete verifiedProfileData.cacVerifiedAt;
-        delete verifiedProfileData.cacVerifiedBy;
-        delete verifiedProfileData.cacLastCheckedAt;
-        delete verifiedProfileData.cacVerificationMethod;
-        delete verifiedProfileData.cacVerificationSource;
-        delete verifiedProfileData.cacVerificationNote;
-        delete verifiedProfileData.cacRejectionReason;
-
-        delete verifiedProfileData.regulatoryVerificationStatus;
-        delete verifiedProfileData.regulatoryVerifiedAt;
-        delete verifiedProfileData.regulatoryVerifiedBy;
-        delete verifiedProfileData.regulatoryNameOnRecord;
-
-        delete verifiedProfileData.employerApprovalStatus;
-        delete verifiedProfileData.employerApprovalStatusUpdatedAt;
-        delete verifiedProfileData.employerApprovalStatusUpdatedBy;
-        delete verifiedProfileData.approvedToPostShiftsAt;
-        delete verifiedProfileData.approvedToPostShiftsBy;
+        const employerProfileData = this.pickProfileFields(verifiedProfileData, [
+          "type",
+          "businessName",
+          "businessEmail",
+          "cacRegistrationNumber",
+          "businessPhoneCode",
+          "businessPhone",
+          "address",
+          "googlePlaceId",
+          "location",
+          "state",
+          "lga",
+          "contactFirstName",
+          "contactLastName",
+          "contactRole",
+          "contactPhoneCode",
+          "contactPhone",
+        ]);
 
         // ───────── CREATE EMPLOYER PROFILE ─────────
 
-        profile = await EmployerProfile.findOneAndUpdate(
-          {
-            user: userId,
-          },
-          {
-            $set: verifiedProfileData,
+        profile = await EmployerProfile.findOne({
+          user: userId,
+        }).session(session);
 
-            $setOnInsert: {
-              user: userId,
-            },
-          },
-          {
-            returnDocument: "after",
-            upsert: true,
-            runValidators: true,
-            setDefaultsOnInsert: true,
-            context: "query",
-            session,
+        if (profile) {
+          if (profile.businessName !== preparedCAC.registeredBusinessName) {
+            throw this.createError({
+              message:
+                "Your registered business name requires a controlled correction. Please contact support.",
+              code: "ONBOARDING_EMPLOYER_NAME_CONFLICT",
+            });
           }
-        );
+
+          profile.set(employerProfileData);
+        } else {
+          profile = new EmployerProfile({
+            ...employerProfileData,
+            user: userId,
+          });
+        }
+
+        await profile.save({ session });
+
+        // ───────── CREATE INITIAL PRIMARY BRANCH ─────────
+
+        // Address and Google location are already present on EmployerProfile.
+        // Do not require a separate Add Branch step or an uploaded permit here.
+        initialBranch = await this.createInitialEmployerBranch({ profile, session });
 
         // ───────── CREATE WALLET ─────────
 
@@ -1362,13 +1331,8 @@ class OnboardingService {
         // ───────── PERSIST CAC VERIFICATION HISTORY ─────────
 
         /*
-         * Reuse the already validated CAC evidence.
-         *
-         * Do not consume it again.
-         *
-         * Persist the registry-authoritative
-         * business name and permanent CAC history
-         * inside this same transaction.
+         * Reuse the prepared CAC result.
+         * Do not consume evidence twice.
          */
 
         preOnboardingCACResult = await this.persistPreOnboardingCACVerification({
@@ -1396,6 +1360,9 @@ class OnboardingService {
       await session.endSession();
     }
 
+    logger.info(
+      `Employer initial branch ready for profile: ${profile._id}, branch: ${initialBranch._id}`
+    );
     logger.info(`Employer wallet ready for profile: ${profile._id}, wallet: ${wallet._id}`);
 
     logger.info(
@@ -1406,17 +1373,12 @@ class OnboardingService {
     // ───────────────────── PAYSTACK DVA PROVISIONING ─────────────────────
 
     /*
-     * Preserve existing post-commit DVA behaviour.
+     * Preserve post-commit DVA provisioning.
      *
-     * Successful production CAC registration
-     * verification is required to reach this stage
-     * through normal onboarding.
+     * CAC verification and DVA provisioning do not establish
+     * facility-permit approval or marketplace eligibility.
      *
-     * DVA provisioning does not mean the employer
-     * has received final KYB approval or marketplace
-     * authorisation.
-     *
-     * Failed DVA provisioning does not reverse
+     * DVA provisioning failure does not reverse
      * completed onboarding.
      */
 
@@ -1433,12 +1395,12 @@ class OnboardingService {
       } else if (dva?.status === "failed") {
         logger.warn(`Employer DVA provisioning failed for profile: ${profile._id}`);
       } else {
-        logger.info(`Employer DVA status for profile ${profile._id}: ${dva?.status || "unknown"}`);
+        logger.info(`Employer DVA status unavailable for profile: ${profile._id}`);
       }
     } catch (error) {
       /*
-       * Do not log raw Paystack errors that might
-       * contain sensitive customer information.
+       * Never log raw Paystack errors containing
+       * potentially sensitive customer information.
        */
 
       const errorCode =

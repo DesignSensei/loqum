@@ -1,7 +1,4 @@
-// routes/adminRoutes.js
-
 const express = require("express");
-
 const router = express.Router();
 
 const {
@@ -12,13 +9,14 @@ const {
 } = require("../middleware/authMiddleware");
 
 const {
+  requireActiveAdmin,
   attachAdminEmployerContext,
   requireAdminEmployerContext,
 } = require("../middleware/adminMiddleware");
 
 const adminController = require("../controllers/adminController");
 const adminShiftClaimController = require("../controllers/adminShiftClaimController");
-const adminPlatformSettingsController = require("../controllers/adminPlatformSettingsController");
+const adminPlatformSettingsController = require("../controllers/adminACPlatformSettingsController");
 
 const adminShiftController = require("../controllers/adminShiftController");
 const adminShiftApplicationController = require("../controllers/adminShiftApplicationController");
@@ -28,117 +26,108 @@ const adminJobApplicationController = require("../controllers/adminJobApplicatio
 const adminJobAppointmentController = require("../controllers/adminJobAppointmentController");
 
 const adminEmployerVerificationController = require("../controllers/adminEmployerVerificationController");
+const adminProfessionalVerificationController = require("../controllers/adminProfessionalVerificationController");
 
 const adminUserController = require("../controllers/adminUserController");
 
-/* ─────────────────────────────── ROUTE PROTECTION ─────────────────────────────── */
+// Mount application CSRF protection before this router for mutations.
+router.use(isAuthenticated, isAccountAllowed, isVerified, hasRole("admin"), requireActiveAdmin);
 
-router.use(isAuthenticated, isAccountAllowed, isVerified, hasRole("admin"));
-
-/* ─────────────────────────────── ADMIN PAGES ─────────────────────────────── */
-
+// Admin pages
 router.get("/dashboard", adminController.getDashboard);
-
 router.get("/cases", adminShiftClaimController.getCases);
 
-/* ─────────────────────────────── USER MANAGEMENT ─────────────────────────────── */
-
-/**
- * Admin user management supports employers and professionals.
- *
- * Both roles share the same management interface.
- *
- * The service prepares:
- * - User records
- * - Verification summaries
- * - Approval statuses
- * - Account statuses
- * - Summary counts
- * - Search and filtering
- * - Pagination
- *
- * Individual user details include the appropriate
- * employer or professional profile.
- *
- * These endpoints are read-only.
- * Verification decisions and account changes
- * are handled by their respective services.
- */
-
-// Employers and Professionals management page
+// User management
 router.get("/users", adminUserController.getUsersPage);
-
-// Filtered users and summary card data
 router.get("/users/data", adminUserController.getUsersData);
 
-// Individual user details and verification summary
 router.get("/users/:userId/data", adminUserController.getUserDetailsData);
-
 router.get("/users/:userId", adminUserController.getUserDetailsPage);
 
-/* ─────────────────────────────── EMPLOYER VERIFICATION ─────────────────────────────── */
-
-/**
- * Employer verification is managed by platform administrators.
- *
- * The page route renders the verification interface.
- * The data route returns the employer verification queue as JSON.
- *
- * Employer-specific endpoints provide verification details,
- * controlled CAC rechecks, and manual PCN review.
- *
- * These operations do not impersonate employers.
- *
- * Actual verification decisions remain service-owned.
- * Final employer approval is handled separately.
- *
- * All mutation routes must remain protected by the
- * application's existing CSRF middleware.
- */
-
-// Employer verification page
+// Employer verification
 router.get("/employer-verifications", adminEmployerVerificationController.getDashboardPage);
-
-// Employer verification queue data
 router.get("/employer-verifications/data", adminEmployerVerificationController.listEmployers);
 
-// Individual employer verification details and history
+router.get(
+  "/employer-verifications/permits",
+  adminEmployerVerificationController.listFacilityPermits
+);
+
 router.get(
   "/employers/:employerProfileId/verification",
   adminEmployerVerificationController.getEmployerVerification
 );
 
-// Controlled CAC verification recheck
 router.post(
   "/employers/:employerProfileId/verification/cac/recheck",
   adminEmployerVerificationController.recheckCAC
 );
 
-// Manual PCN premises review
+router.get(
+  "/employers/:employerProfileId/branches/:branchId/permits/:permitId",
+  adminEmployerVerificationController.getFacilityPermit
+);
+
+router.get(
+  "/employers/:employerProfileId/branches/:branchId/permits/:permitId/document",
+  adminEmployerVerificationController.viewFacilityPermitDocument
+);
+
+router.post(
+  "/employers/:employerProfileId/branches/:branchId/permits/:permitId/review",
+  adminEmployerVerificationController.reviewFacilityPermit
+);
+
+router.post(
+  "/employers/:employerProfileId/branches/:branchId/permits/:permitId/revoke",
+  adminEmployerVerificationController.revokeFacilityPermit
+);
+
 router.post(
   "/employers/:employerProfileId/verification/pcn/review",
   adminEmployerVerificationController.reviewPCN
 );
 
-/* ─────────────────────────────── SHIFT OVERSIGHT ─────────────────────────────── */
+// Professional verification
+router.get("/professional-verifications", adminProfessionalVerificationController.getDashboard);
 
-/**
- * Admin shift reads provide platform oversight without employer impersonation.
- * Keep fixed paths before /shifts/:shiftId so they are not treated as shift IDs.
- *
- * Page handlers require the application's existing CSRF middleware and templates.
- */
+router.get(
+  "/professional-verifications/data",
+  adminProfessionalVerificationController.listProfessionals
+);
 
+router.get(
+  "/professional-verifications/attempts/:verificationId",
+  adminProfessionalVerificationController.getVerificationAttempt
+);
+
+router.get(
+  "/professionals/:professionalProfileId/verification",
+  adminProfessionalVerificationController.getProfessionalVerification
+);
+
+router.get(
+  "/professionals/:professionalProfileId/verification/licence/document",
+  adminProfessionalVerificationController.viewLicenceDocument
+);
+
+router.post(
+  "/professionals/:professionalProfileId/verification/licence/review",
+  adminProfessionalVerificationController.reviewLicence
+);
+
+router.post(
+  "/professionals/:professionalProfileId/verification/approval/review",
+  adminProfessionalVerificationController.reviewProfessionalApproval
+);
+
+// Shift oversight
 router.get("/shifts", adminShiftController.getShifts);
-
 router.get("/shifts/data", adminShiftController.getShiftsData);
-
 router.get("/shifts/attention", adminShiftController.getAttentionQueue);
-
 router.get("/shifts/attention/data", adminShiftController.getAttentionQueueData);
 
-/* ─────────────────────────────── SHIFT CANCELLATION HISTORY ─────────────────────────────── */
-
+// Shift cancellation history
 router.get("/shifts/cancellations", adminShiftController.getCancellationRequests);
 
 router.get("/shifts/cancellations/data", adminShiftController.getCancellationRequestsData);
@@ -153,13 +142,7 @@ router.get(
   adminShiftController.getCancellationRequestDetails
 );
 
-/* ─────────────────────────────── SHIFT APPLICATION OVERSIGHT ─────────────────────────────── */
-
-/**
- * Application oversight is read-only and scoped to one shift.
- * Shortlisting, acceptance and rejection remain employer-owned.
- */
-
+// Shift application oversight
 router.get("/shifts/:shiftId/applications", adminShiftApplicationController.getApplications);
 
 router.get(
@@ -177,27 +160,11 @@ router.get(
   adminShiftApplicationController.getApplicationDetails
 );
 
-/* ─────────────────────────────── SHIFT DETAILS ─────────────────────────────── */
-
+// Shift details
 router.get("/shifts/:shiftId/data", adminShiftController.getShiftDetailsData);
-
 router.get("/shifts/:shiftId", adminShiftController.getShiftDetails);
 
-/* ─────────────────────────────── EMPLOYER-TARGETED SHIFT CANCELLATION ─────────────────────────────── */
-
-/**
- * Preview is read-only. Confirm records the reviewed employer instruction and
- * executes cancellation in one service transaction. There is no separate
- * request-creation endpoint and no platform-initiated cancellation endpoint.
- *
- * Both routes retain the actual admin actor and verify the selected employer.
- * The application's CSRF protection must run before the POST handler, as for
- * the other mutation routes in this router. JSON parsing must also be mounted.
- *
- * For individual occurrence cancellation, supply occurrenceId and scope in the
- * query (preview) or JSON body (confirm); whole-shift cancellation uses scope=shift.
- */
-
+// Employer-targeted shift cancellation
 router.get(
   "/employers/:employerProfileId/shifts/:shiftId/cancellation-preview",
   attachAdminEmployerContext,
@@ -212,20 +179,10 @@ router.post(
   adminShiftController.cancelOnEmployerBehalf
 );
 
-/* ─────────────────────────────── PLATFORM SETTINGS ─────────────────────────────── */
-
-/**
- * Platform settings are admin-owned configuration.
- *
- * The controller exposes JSON read/update endpoints while
- * AdminPlatformSettingsService remains the authority for validation
- * and persistence.
- */
-
+// Platform settings
 router.get("/platform-settings", adminPlatformSettingsController.getPlatformSettings);
 
-/* ─────────────────────────────── COUNTRY SETTINGS ─────────────────────────────── */
-
+// Country settings
 router.post("/platform-settings/countries", adminPlatformSettingsController.addCountrySetting);
 
 router.patch(
@@ -263,8 +220,7 @@ router.post(
   adminPlatformSettingsController.setDefaultCountry
 );
 
-/* ─────────────────────────────── PLATFORM POLICIES ─────────────────────────────── */
-
+// Platform policies
 router.patch(
   "/platform-settings/shift-cancellation",
   adminPlatformSettingsController.updateShiftCancellationPolicy
@@ -293,53 +249,21 @@ router.patch("/platform-settings/job-board", adminPlatformSettingsController.upd
 
 router.patch("/platform-settings/credits", adminPlatformSettingsController.updateCreditsPolicy);
 
-/* ─────────────────────────────── PERMANENT JOB OVERSIGHT ─────────────────────────────── */
-
-/**
- * Platform-admin Job reads are oversight reads.
- *
- * They do not establish employerContext and do not impersonate an employer.
- */
-
+// Permanent Job oversight
 router.get("/jobs", adminJobController.getJobs);
-
 router.get("/jobs/:jobId", adminJobController.getJob);
 
-/* ─────────────────────────────── JOB APPLICATION OVERSIGHT ─────────────────────────────── */
-
-/**
- * Admin application access is read-only platform oversight.
- * Candidate-stage transitions remain employer-owned.
- */
-
+// Job application oversight
 router.get("/job-applications", adminJobApplicationController.getApplications);
 
 router.get("/job-applications/:applicationId", adminJobApplicationController.getApplication);
 
-/* ─────────────────────────────── JOB APPOINTMENT OVERSIGHT ─────────────────────────────── */
-
-/**
- * Admin appointment access is read-only platform oversight.
- *
- * Scheduling and interview lifecycle mutations remain employer/professional-owned.
- */
-
+// Job appointment oversight
 router.get("/job-appointments", adminJobAppointmentController.getAppointments);
 
 router.get("/job-appointments/:appointmentId", adminJobAppointmentController.getAppointment);
 
-/* ─────────────────────────────── EMPLOYER-TARGETED JOB SUPPORT ─────────────────────────────── */
-
-/**
- * Admin Job support must first establish one exact employer context.
- *
- * attachAdminEmployerContext records the real admin actor and selected employer.
- * requireAdminEmployerContext verifies that trusted context before the controller
- * invokes Job services.
- *
- * This does not create employerContext and does not impersonate the employer.
- */
-
+// Employer-targeted Job support
 router.post(
   "/employers/:employerProfileId/jobs",
   attachAdminEmployerContext,
@@ -361,16 +285,7 @@ router.delete(
   adminJobController.deleteDraftJob
 );
 
-/* ─────────────────────────────── EMPLOYER-TARGETED JOB PUBLICATION SUPPORT ─────────────────────────────── */
-
-/**
- * Publish and renew resolve publication authority through
- * JobPublicationEntitlementService inside adminJobController.
- *
- * Admin support obey the same publication eligibility and entitlement policy
- * as the employer path. Admin does not bypass or construct an entitlement grant.
- */
-
+// Employer-targeted Job publication support
 router.post(
   "/employers/:employerProfileId/jobs/:jobId/publish",
   attachAdminEmployerContext,
@@ -413,29 +328,13 @@ router.post(
   adminJobController.endPublication
 );
 
-/* ─────────────────────────────── PROFESSIONAL CLAIM ADJUDICATION ─────────────────────────────── */
-
-/*
- * Admin resolves one issue within a professional claim case.
- *
- * The resolution service owns the final authoritative occurrence facts,
- * settlement continuation, refund reevaluation and case-level completion.
- */
-
+// Professional claim adjudication
 router.post(
   "/shift-claims/:claimId/issues/:issueId/resolve",
   adminShiftClaimController.resolveClaim
 );
 
-/* ─────────────────────────────── EMPLOYER DISPUTE ADJUDICATION ─────────────────────────────── */
-
-/*
- * Admin resolves one issue within an employer standalone dispute case.
- *
- * The resolution service owns the final authoritative occurrence facts,
- * settlement continuation, refund reevaluation and case-level completion.
- */
-
+// Employer dispute adjudication
 router.post(
   "/shift-disputes/:disputeId/issues/:issueId/resolve",
   adminShiftClaimController.resolveDispute

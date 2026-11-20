@@ -1,6 +1,7 @@
 // models/ShiftOccurrenceClaim.js
 
 const mongoose = require("mongoose");
+const { isDeepStrictEqual } = require("node:util");
 
 const { requiredUniqueEnumArrayField } = require("./helpers/schemaFields");
 const occurrenceEvidenceSchema = require("./helpers/occurrenceEvidenceSchema");
@@ -83,8 +84,14 @@ const hasValue = (value) => {
 
 const hasAny = (values) => values.some(hasValue);
 
-const isPlainObject = (value) =>
-  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const isPlainObject = (value) => {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
 
 const normalizeComponents = (components) => {
   if (!Array.isArray(components)) {
@@ -796,6 +803,11 @@ function validateIssueLifecycleDates(claim, issue, pathPrefix) {
 function validateClaimIssue(claim, issue, index) {
   const pathPrefix = `issues.${index}`;
 
+  if (!issue) {
+    claim.invalidate(pathPrefix, "A claim issue must be a non-null issue document.");
+    return;
+  }
+
   validateIssueLifecycleDates(claim, issue, pathPrefix);
 
   const affectedComponents = normalizeComponents(issue.challengedSettlementComponents);
@@ -998,7 +1010,7 @@ function validateClaimIssue(claim, issue, index) {
     claim.invalidate(`${pathPrefix}.adminEvidence`, "Admin evidence requires escalation.");
   }
 
-  if (hasAdminDecision && issue.status !== "resolved") {
+  if (hasAdminDecision && issue?.status !== "resolved") {
     claim.invalidate(
       `${pathPrefix}.adminDecision`,
       "A final admin decision requires resolved issue status."
@@ -1115,9 +1127,73 @@ function validateClaimIssue(claim, issue, index) {
   }
 }
 
+/* ───────────────────── PERSISTED SUBMISSION PROTECTION ───────────────────── */
+
+// Path-level immutable setters do not cover edits inside Mixed values, nested
+// documents, or replacement of items in the mutable issue workflow array.
+// Keep a detached baseline for documents loaded or saved through this model.
+// Query updates and direct database writes still require service-level guards.
+const persistedSubmissions = new WeakMap();
+
+function getProtectedSubmission(claim) {
+  const value = claim.toObject({
+    depopulate: true,
+    getters: false,
+    virtuals: false,
+    transform: false,
+    minimize: false,
+  });
+  const submission = {};
+
+  for (const [path, schemaType] of Object.entries(shiftOccurrenceClaimSchema.paths)) {
+    if (schemaType.options.immutable && path !== "createdAt") {
+      submission[path] = value[path];
+    }
+  }
+
+  const protectedIssueFields = Object.entries(claimIssueSchema.paths)
+    .filter(([, schemaType]) => schemaType.options.immutable)
+    .map(([path]) => path);
+
+  submission.issues = (value.issues || []).map((issue) => {
+    if (!issue) return null;
+    const original = { _id: issue._id };
+    for (const path of protectedIssueFields) original[path] = issue[path];
+    return original;
+  });
+  // Issue order is presentation only; identity and submission content are fixed.
+  submission.issues.sort((left, right) =>
+    String(left?._id || "").localeCompare(String(right?._id || ""))
+  );
+  return submission;
+}
+
+function rememberProtectedSubmission(claim) {
+  persistedSubmissions.set(claim, getProtectedSubmission(claim));
+}
+
+shiftOccurrenceClaimSchema.post("init", rememberProtectedSubmission);
+shiftOccurrenceClaimSchema.post("save", rememberProtectedSubmission);
+
+function validateProtectedSubmission(claim) {
+  if (claim.isNew) return;
+  const original = persistedSubmissions.get(claim);
+  if (!original) return;
+  const current = getProtectedSubmission(claim);
+  for (const path of Object.keys(original)) {
+    if (!isDeepStrictEqual(original[path], current[path])) {
+      claim.invalidate(
+        path,
+        "The original professional submission cannot change after persistence."
+      );
+    }
+  }
+}
+
 /* ───────────────────── CASE VALIDATION ───────────────────── */
 
 shiftOccurrenceClaimSchema.pre("validate", function validateShiftOccurrenceClaim() {
+  validateProtectedSubmission(this);
   validateClaimLifecycleDates(this);
 
   const issues = Array.isArray(this.issues) ? this.issues : [];
@@ -1132,11 +1208,11 @@ shiftOccurrenceClaimSchema.pre("validate", function validateShiftOccurrenceClaim
     this.invalidate("issues", "Issues must match submitted issue types.");
   }
 
-  if (this.status === "active" && !issues.some((issue) => issue.status !== "resolved")) {
+  if (this.status === "active" && !issues.some((issue) => issue?.status !== "resolved")) {
     this.invalidate("status", "Active claim requires unresolved issues.");
   }
 
-  if (this.status === "resolved" && issues.some((issue) => issue.status !== "resolved")) {
+  if (this.status === "resolved" && issues.some((issue) => issue?.status !== "resolved")) {
     this.invalidate("status", "Resolved claim requires all issues resolved.");
   }
 
@@ -1145,7 +1221,7 @@ shiftOccurrenceClaimSchema.pre("validate", function validateShiftOccurrenceClaim
       this.invalidate("resolvedAt", "A resolved claim requires resolvedAt.");
     }
 
-    if (issues.some((issue) => issue.resolvedAt && this.resolvedAt < issue.resolvedAt)) {
+    if (issues.some((issue) => issue?.resolvedAt && this.resolvedAt < issue.resolvedAt)) {
       this.invalidate("resolvedAt", "Claim resolution cannot precede issue resolution.");
     }
   } else if (this.resolvedAt) {
@@ -1163,7 +1239,7 @@ shiftOccurrenceClaimSchema.pre("validate", function validateShiftOccurrenceClaim
 
     // Withdrawal preserves untouched submissions; it does not erase responses.
 
-    if (issues.some((issue) => issue.status !== "awaiting_employer_review")) {
+    if (issues.some((issue) => issue?.status !== "awaiting_employer_review")) {
       this.invalidate(
         "status",
         "A claim cannot be withdrawn after its issues progress beyond employer review."

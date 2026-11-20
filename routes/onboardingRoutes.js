@@ -13,30 +13,9 @@ const {
 
 const onboardingController = require("../controllers/onboardingController");
 
-/*
- * ONBOARDING ROUTES
- *
- * Both employer and professional onboarding require:
- *
- * - An authenticated account;
- * - An account permitted to use the platform;
- * - Verified email;
- * - The appropriate account role;
- * - Onboarding not yet completed.
- *
- * CAC and NIN verification are separate workflows.
- *
- * The corresponding controller also checks the
- * environment feature switch before initiating
- * potentially chargeable provider lookups.
- *
- * CSRF protection must be applied by the
- * application's existing CSRF middleware.
- */
-
 // ───────────────────── PROFESSIONAL ONBOARDING ─────────────────────
 
-// Display professional onboarding form
+// Render professional onboarding
 router.get(
   "/professional",
   isAuthenticated,
@@ -47,7 +26,7 @@ router.get(
   onboardingController.getProfessionalOnboarding
 );
 
-// Verify NIN before completing professional onboarding
+// Verify NIN
 router.post(
   "/professional/verify-nin",
   isAuthenticated,
@@ -56,6 +35,28 @@ router.post(
   hasRole("professional"),
   isNotOnboarded,
   onboardingController.verifyProfessionalNIN
+);
+
+// Acknowledge registry legal name
+router.post(
+  "/professional/nin/acknowledge-name",
+  isAuthenticated,
+  isAccountAllowed,
+  isVerified,
+  hasRole("professional"),
+  isNotOnboarded,
+  onboardingController.acknowledgeProfessionalNINName
+);
+
+// Begin NIN correction
+router.post(
+  "/professional/nin/begin-correction",
+  isAuthenticated,
+  isAccountAllowed,
+  isVerified,
+  hasRole("professional"),
+  isNotOnboarded,
+  onboardingController.beginProfessionalNINCorrection
 );
 
 // Complete professional onboarding
@@ -71,7 +72,7 @@ router.post(
 
 // ───────────────────── EMPLOYER ONBOARDING ─────────────────────
 
-// Display employer onboarding form
+// Render employer onboarding
 router.get(
   "/employer",
   isAuthenticated,
@@ -82,7 +83,7 @@ router.get(
   onboardingController.getEmployerOnboarding
 );
 
-// Verify CAC before completing employer onboarding
+// Verify CAC
 router.post(
   "/employer/verify-cac",
   isAuthenticated,

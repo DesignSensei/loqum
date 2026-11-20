@@ -96,7 +96,7 @@
 
                   <% if (branch.contactPhone) { %>
                     <div class="text-muted fs-7 mt-1">
-                      <%= branch.contactPhoneCode || "+234" %>
+                      <%= branch.contactPhoneCode || "" %>
                       <%= branch.contactPhone %>
                     </div>
                   <% } %>
@@ -153,14 +153,14 @@
                         data-branch-state="<%= branch.state || '-' %>"
                         data-branch-lga="<%= branch.lga || '-' %>"
                         data-branch-manager="<%= branch.managerName || 'Not assigned' %>"
-                        data-branch-phone-code="<%= branch.contactPhoneCode || '+234' %>"
+                        data-branch-phone-code="<%= branch.contactPhoneCode || '' %>"
                         data-branch-phone="<%= branch.contactPhone || '' %>"
-                        data-branch-geofence-radius="<%= branch.geofenceRadiusMeters || 100 %>"
+                        data-branch-geofence-radius="<%= branch.geofenceRadiusMeters != null ? branch.geofenceRadiusMeters : '' %>"
                         data-branch-status="<%= branch.isActive ? 'active' : 'inactive' %>"
                         <% if (employerContext.canManageBranches) { %>
                           data-branch-manager-id="<%= branch.managerMemberId || '' %>"
-                          data-branch-latitude="<%= branch.latitude || '' %>"
-                          data-branch-longitude="<%= branch.longitude || '' %>"
+                          data-branch-latitude="<%= branch.latitude != null ? branch.latitude : '' %>"
+                          data-branch-longitude="<%= branch.longitude != null ? branch.longitude : '' %>"
                           data-branch-google-place-id="<%= branch.googlePlaceId || '' %>"
                         <% } %>
                       >
@@ -182,11 +182,11 @@
                           data-branch-lga="<%= branch.lga || '' %>"
                           data-branch-manager="<%= branch.managerName || 'Not assigned' %>"
                           data-branch-manager-id="<%= branch.managerMemberId || '' %>"
-                          data-branch-phone-code="<%= branch.contactPhoneCode || '+234' %>"
+                          data-branch-phone-code="<%= branch.contactPhoneCode || '' %>"
                           data-branch-phone="<%= branch.contactPhone || '' %>"
-                          data-branch-geofence-radius="<%= branch.geofenceRadiusMeters || 100 %>"
-                          data-branch-latitude="<%= branch.latitude || '' %>"
-                          data-branch-longitude="<%= branch.longitude || '' %>"
+                          data-branch-geofence-radius="<%= branch.geofenceRadiusMeters != null ? branch.geofenceRadiusMeters : '' %>"
+                          data-branch-latitude="<%= branch.latitude != null ? branch.latitude : '' %>"
+                          data-branch-longitude="<%= branch.longitude != null ? branch.longitude : '' %>"
                           data-branch-google-place-id="<%= branch.googlePlaceId || '' %>"
                         >
                           Edit

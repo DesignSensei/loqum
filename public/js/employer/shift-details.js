@@ -3,86 +3,58 @@
 "use strict";
 
 var EmployerShiftDetails = (function () {
-  var shiftDetailsPage;
+  var shiftDetailsPage = null;
+  var attendancePinPanel = null;
+  var pinErrorAlert = null;
+  var pinValues = { check_in: null, check_out: null };
 
-  var attendancePinPanel;
-  var pinErrorAlert;
-  var checkInPinValue;
-  var checkOutPinValue;
-  var checkInPinStatus;
-  var checkOutPinStatus;
-  var checkInCopyButton;
-  var checkOutCopyButton;
-
-  var fundingForm;
-  var fundingSubmitButton;
-  var fundingErrorAlert;
+  var fundingForm = null;
+  var fundingSubmitButton = null;
+  var fundingErrorAlert = null;
   var fundingMethodInputs = [];
-
   var fundingRequestInProgress = false;
 
-  var pinValues = {
-    check_in: null,
-    check_out: null,
-  };
+  var overtimeRequestInProgress = false;
 
-  /* ─────────────────────────────── GENERAL HELPERS ─────────────────────────────── */
+  /* ───────────────────────────── GENERAL HELPERS ───────────────────────────── */
 
-  function getErrorMessage(error, fallbackMessage) {
+  function getErrorMessage(error, fallback) {
     return (
       error?.response?.data?.message ||
       error?.response?.data?.error?.message ||
       error?.message ||
-      fallbackMessage
+      fallback
     );
   }
 
   function getResponsePayload(response) {
-    var responseData = response?.data || {};
-
-    if (responseData.data && typeof responseData.data === "object") {
-      return responseData.data;
-    }
-
-    return responseData;
+    var data = response?.data || {};
+    return data.data && typeof data.data === "object" ? data.data : data;
   }
 
   function getNestedValue(source, path) {
-    if (!source || !path) {
-      return null;
-    }
+    if (!source || !path) return null;
 
-    return path.split(".").reduce(function (currentValue, key) {
-      if (currentValue === null || currentValue === undefined) {
-        return null;
-      }
-
-      return currentValue[key];
+    return path.split(".").reduce(function (value, key) {
+      return value === null || value === undefined ? null : value[key];
     }, source);
   }
 
-  function hasUsableValue(value) {
-    return value !== null && value !== undefined && value !== "";
-  }
+  function getFirstValue(source, paths, fallback) {
+    for (var i = 0; i < paths.length; i += 1) {
+      var value = getNestedValue(source, paths[i]);
 
-  function getFirstValue(source, paths, fallbackValue) {
-    for (var index = 0; index < paths.length; index += 1) {
-      var value = getNestedValue(source, paths[index]);
-
-      if (hasUsableValue(value)) {
+      if (value !== null && value !== undefined && value !== "") {
         return value;
       }
     }
 
-    return fallbackValue === undefined ? null : fallbackValue;
+    return fallback === undefined ? null : fallback;
   }
 
   function parseBoolean(value) {
-    if (typeof value === "boolean") {
-      return value;
-    }
-
     return (
+      value === true ||
       String(value || "")
         .trim()
         .toLowerCase() === "true"
@@ -97,40 +69,36 @@ var EmployerShiftDetails = (function () {
     );
   }
 
-  function setButtonLoading(button, isLoading, disabledWhenIdle) {
-    if (!button) return;
+  function postProtectedJson(url, payload) {
+    var csrfToken = getCsrfToken();
 
-    if (isLoading) {
-      button.setAttribute("data-kt-indicator", "on");
-      button.disabled = true;
-      return;
-    }
-
-    button.removeAttribute("data-kt-indicator");
-    button.disabled = Boolean(disabledWhenIdle);
+    return axios.post(url, Object.assign({ _csrf: csrfToken }, payload || {}), {
+      headers: {
+        "CSRF-Token": csrfToken,
+        Accept: "application/json",
+      },
+    });
   }
 
-  function setFundingOptionsDisabled(disabled) {
-    fundingMethodInputs.forEach(function (input) {
-      if (disabled) {
-        input.dataset.wasDisabled = input.disabled ? "true" : "false";
-        input.disabled = true;
-        return;
-      }
+  function setButtonLoading(button, loading, disabledWhenIdle) {
+    if (!button) return;
 
-      input.disabled = input.dataset.wasDisabled === "true";
-      delete input.dataset.wasDisabled;
-    });
+    if (loading) {
+      button.setAttribute("data-kt-indicator", "on");
+      button.disabled = true;
+    } else {
+      button.removeAttribute("data-kt-indicator");
+      button.disabled = Boolean(disabledWhenIdle);
+    }
   }
 
   function showSuccess(title, message) {
     return Swal.fire({
-      title,
+      title: title,
       text: message,
       icon: "success",
       buttonsStyling: false,
       confirmButtonText: "Ok, got it!",
-
       customClass: {
         confirmButton: "btn btn-primary",
       },
@@ -143,25 +111,23 @@ var EmployerShiftDetails = (function () {
       icon: "error",
       buttonsStyling: false,
       confirmButtonText: "Ok, got it!",
-
       customClass: {
         confirmButton: "btn btn-primary",
       },
     });
   }
 
-  function showConfirmation({ title, text, confirmButtonText, confirmButtonClass }) {
+  function showConfirmation(options) {
     return Swal.fire({
-      title,
-      text,
+      title: options.title,
+      text: options.text,
       icon: "warning",
       showCancelButton: true,
       buttonsStyling: false,
-      confirmButtonText,
+      confirmButtonText: options.confirmButtonText,
       cancelButtonText: "Cancel",
-
       customClass: {
-        confirmButton: confirmButtonClass || "btn btn-danger",
+        confirmButton: options.confirmButtonClass || "btn btn-danger",
         cancelButton: "btn btn-light",
       },
     }).then(function (result) {
@@ -172,30 +138,21 @@ var EmployerShiftDetails = (function () {
   function redirectAfterRequest(response) {
     var payload = getResponsePayload(response);
 
-    var redirectUrl =
-      getFirstValue(payload, ["shiftDetailsUrl", "redirectUrl", "manageShiftsUrl"], null) ||
-      getFirstValue(response?.data, ["shiftDetailsUrl", "redirectUrl", "manageShiftsUrl"], null);
+    var url =
+      getFirstValue(response?.data, ["shiftDetailsUrl", "redirectUrl", "manageShiftsUrl"], null) ||
+      getFirstValue(payload, ["shiftDetailsUrl", "redirectUrl", "manageShiftsUrl"], null);
 
-    if (redirectUrl) {
-      window.location.href = redirectUrl;
-      return;
+    if (url && typeof url === "string" && url.startsWith("/") && !url.startsWith("//")) {
+      window.location.assign(url);
+    } else {
+      window.location.reload();
     }
-
-    window.location.reload();
   }
 
-  /* ─────────────────────────────── ATTENDANCE PIN HELPERS ─────────────────────────────── */
+  /* ─────────────────────────── ATTENDANCE PINS ─────────────────────────── */
 
-  function getPinValueElement(type) {
-    return type === "check_in" ? checkInPinValue : checkOutPinValue;
-  }
-
-  function getPinStatusElement(type) {
-    return type === "check_in" ? checkInPinStatus : checkOutPinStatus;
-  }
-
-  function getPinCopyButton(type) {
-    return type === "check_in" ? checkInCopyButton : checkOutCopyButton;
+  function getPinElement(type, attribute) {
+    return attendancePinPanel?.querySelector("[" + attribute + '="' + type + '"]') || null;
   }
 
   function hidePinError() {
@@ -212,85 +169,29 @@ var EmployerShiftDetails = (function () {
     pinErrorAlert.classList.remove("d-none");
   }
 
-  function setPinLoading(type) {
-    var valueElement = getPinValueElement(type);
-    var statusElement = getPinStatusElement(type);
-    var copyButton = getPinCopyButton(type);
-
-    pinValues[type] = null;
-
-    if (valueElement) {
-      valueElement.textContent = "••••";
-    }
-
-    if (statusElement) {
-      statusElement.textContent = "Loading PIN...";
-    }
-
-    if (copyButton) {
-      copyButton.disabled = true;
-    }
-  }
-
-  function setPinReady(type, pin) {
-    var valueElement = getPinValueElement(type);
-    var statusElement = getPinStatusElement(type);
-    var copyButton = getPinCopyButton(type);
+  function setPinState(type, pin, status) {
+    var valueElement = getPinElement(type, "data-pin-value");
+    var statusElement = getPinElement(type, "data-pin-status");
+    var copyButton = getPinElement(type, "data-copy-pin");
 
     pinValues[type] = pin;
 
     if (valueElement) {
-      valueElement.textContent = pin;
+      valueElement.textContent = pin || "••••";
     }
 
     if (statusElement) {
-      statusElement.textContent = "Ready";
+      statusElement.textContent = status;
     }
 
     if (copyButton) {
-      copyButton.disabled = false;
-    }
-  }
-
-  function setPinFailed(type, message) {
-    var valueElement = getPinValueElement(type);
-    var statusElement = getPinStatusElement(type);
-    var copyButton = getPinCopyButton(type);
-
-    pinValues[type] = null;
-
-    if (valueElement) {
-      valueElement.textContent = "••••";
-    }
-
-    if (statusElement) {
-      statusElement.textContent = message || "PIN unavailable";
-    }
-
-    if (copyButton) {
-      copyButton.disabled = true;
+      copyButton.disabled = !pin;
     }
   }
 
   function clearPinValues() {
     ["check_in", "check_out"].forEach(function (type) {
-      pinValues[type] = null;
-
-      var valueElement = getPinValueElement(type);
-      var statusElement = getPinStatusElement(type);
-      var copyButton = getPinCopyButton(type);
-
-      if (valueElement) {
-        valueElement.textContent = "••••";
-      }
-
-      if (statusElement) {
-        statusElement.textContent = "PIN cleared";
-      }
-
-      if (copyButton) {
-        copyButton.disabled = true;
-      }
+      setPinState(type, null, "PIN cleared");
     });
   }
 
@@ -313,10 +214,10 @@ var EmployerShiftDetails = (function () {
   }
 
   function loadPin(type, url) {
-    setPinLoading(type);
+    setPinState(type, null, "Loading PIN...");
 
     if (!url) {
-      setPinFailed(type, "PIN endpoint unavailable");
+      setPinState(type, null, "PIN endpoint unavailable");
 
       return Promise.reject(new Error("The attendance PIN endpoint is unavailable."));
     }
@@ -326,7 +227,6 @@ var EmployerShiftDetails = (function () {
         params: {
           _: Date.now(),
         },
-
         headers: {
           Accept: "application/json",
           "Cache-Control": "no-store",
@@ -336,152 +236,177 @@ var EmployerShiftDetails = (function () {
       .then(function (response) {
         var pin = extractPin(response, type);
 
-        setPinReady(type, pin);
-
+        setPinState(type, pin, "Ready");
         return pin;
       })
       .catch(function (error) {
-        var fallbackMessage =
-          type === "check_in"
-            ? "Unable to load the check-in PIN."
-            : "Unable to load the check-out PIN.";
-
-        var message = getErrorMessage(error, fallbackMessage);
-
-        setPinFailed(type, message);
+        setPinState(type, null, getErrorMessage(error, "PIN unavailable"));
 
         throw error;
       });
   }
 
   function loadAttendancePins() {
-    if (!attendancePinPanel) return;
-
-    if (!parseBoolean(attendancePinPanel.dataset.canViewPins)) {
+    if (!attendancePinPanel || !parseBoolean(attendancePinPanel.dataset.canViewPins)) {
       return;
     }
 
     hidePinError();
 
-    var checkInPinUrl = attendancePinPanel.dataset.checkInPinUrl || "";
-    var checkOutPinUrl = attendancePinPanel.dataset.checkOutPinUrl || "";
-
     Promise.allSettled([
-      loadPin("check_in", checkInPinUrl),
-      loadPin("check_out", checkOutPinUrl),
+      loadPin("check_in", attendancePinPanel.dataset.checkInPinUrl || ""),
+      loadPin("check_out", attendancePinPanel.dataset.checkOutPinUrl || ""),
     ]).then(function (results) {
-      var failedResults = results.filter(function (result) {
+      var failed = results.filter(function (result) {
         return result.status === "rejected";
       });
 
-      if (failedResults.length === 0) {
-        return;
-      }
-
-      if (failedResults.length === 2) {
+      if (failed.length === 2) {
         showPinError("The attendance PINs could not be loaded. Refresh the page and try again.");
-        return;
+      } else if (failed.length === 1) {
+        showPinError("One attendance PIN could not be loaded. The available PIN is still shown.");
       }
-
-      showPinError("One attendance PIN could not be loaded. The available PIN is still shown.");
     });
   }
 
-  function copyTextToClipboard(text) {
+  function copyTextToClipboard(value) {
     if (navigator.clipboard && window.isSecureContext) {
-      return navigator.clipboard.writeText(text);
+      return navigator.clipboard.writeText(value);
     }
 
     return new Promise(function (resolve, reject) {
-      var textArea = document.createElement("textarea");
+      var area = document.createElement("textarea");
 
-      textArea.value = text;
-      textArea.setAttribute("readonly", "");
-      textArea.style.position = "fixed";
-      textArea.style.opacity = "0";
+      area.value = value;
+      area.readOnly = true;
+      area.style.position = "fixed";
+      area.style.opacity = "0";
 
-      document.body.appendChild(textArea);
-
-      textArea.select();
+      document.body.appendChild(area);
+      area.select();
 
       try {
         var copied = document.execCommand("copy");
 
-        document.body.removeChild(textArea);
-
-        if (!copied) {
+        if (copied) {
+          resolve();
+        } else {
           reject(new Error("Copy command failed."));
-          return;
         }
-
-        resolve();
       } catch (error) {
-        document.body.removeChild(textArea);
         reject(error);
+      } finally {
+        area.remove();
       }
-    });
-  }
-
-  function handlePinCopyButtons() {
-    [checkInCopyButton, checkOutCopyButton].filter(Boolean).forEach(function (button) {
-      button.addEventListener("click", function () {
-        var type = button.dataset.copyPin;
-        var pin = pinValues[type];
-
-        if (!pin) return;
-
-        var statusElement = getPinStatusElement(type);
-
-        copyTextToClipboard(pin)
-          .then(function () {
-            if (statusElement) {
-              statusElement.textContent = "Copied to clipboard";
-            }
-
-            window.setTimeout(function () {
-              if (statusElement && pinValues[type]) {
-                statusElement.textContent = "Ready";
-              }
-            }, 2000);
-          })
-          .catch(function () {
-            if (statusElement) {
-              statusElement.textContent = "Unable to copy PIN";
-            }
-          });
-      });
     });
   }
 
   function initializeAttendancePins() {
     attendancePinPanel = document.querySelector("[data-attendance-pin-panel]");
 
-    if (!attendancePinPanel) {
-      return;
-    }
+    if (!attendancePinPanel) return;
 
     pinErrorAlert = attendancePinPanel.querySelector("[data-pin-error]");
 
-    checkInPinValue = attendancePinPanel.querySelector('[data-pin-value="check_in"]');
+    ["check_in", "check_out"].forEach(function (type) {
+      var button = getPinElement(type, "data-copy-pin");
 
-    checkOutPinValue = attendancePinPanel.querySelector('[data-pin-value="check_out"]');
+      if (!button) return;
 
-    checkInPinStatus = attendancePinPanel.querySelector('[data-pin-status="check_in"]');
+      button.addEventListener("click", function () {
+        var pin = pinValues[type];
 
-    checkOutPinStatus = attendancePinPanel.querySelector('[data-pin-status="check_out"]');
+        if (!pin) return;
 
-    checkInCopyButton = attendancePinPanel.querySelector('[data-copy-pin="check_in"]');
+        var status = getPinElement(type, "data-pin-status");
 
-    checkOutCopyButton = attendancePinPanel.querySelector('[data-copy-pin="check_out"]');
+        copyTextToClipboard(pin)
+          .then(function () {
+            if (status) {
+              status.textContent = "Copied to clipboard";
+            }
 
-    handlePinCopyButtons();
+            window.setTimeout(function () {
+              if (status && pinValues[type] === pin) {
+                status.textContent = "Ready";
+              }
+            }, 2000);
+          })
+          .catch(function () {
+            if (status) {
+              status.textContent = "Unable to copy PIN";
+            }
+          });
+      });
+    });
 
     loadAttendancePins();
 
     window.addEventListener("pagehide", clearPinValues);
   }
 
-  /* ─────────────────────────────── FUNDING FORM ─────────────────────────────── */
+  /* ───────────────────────────── PAYSTACK HELPERS ───────────────────────────── */
+
+  function openCheckoutWindow() {
+    // Opening must occur directly inside the user's click handler.
+    var checkoutWindow = window.open("about:blank", "_blank");
+
+    if (!checkoutWindow) {
+      throw new Error(
+        "Your browser blocked Paystack Checkout. Allow popups for Loqum and try again."
+      );
+    }
+
+    checkoutWindow.opener = null;
+    checkoutWindow.document.title = "Preparing Paystack Checkout";
+    checkoutWindow.document.body.textContent = "Preparing your secure Paystack payment page...";
+
+    return checkoutWindow;
+  }
+
+  function getCheckoutAuthorizationUrl(response) {
+    var payload = getResponsePayload(response);
+
+    var paths = [
+      "checkout.authorizationUrl",
+      "checkout.authorization_url",
+      "authorizationUrl",
+      "authorization_url",
+      "checkoutUrl",
+      "data.authorizationUrl",
+      "data.authorization_url",
+      "data.checkout.authorizationUrl",
+      "data.checkout.authorization_url",
+    ];
+
+    var raw = getFirstValue(payload, paths, null) || getFirstValue(response?.data, paths, null);
+
+    if (!raw || typeof raw !== "string") {
+      throw new Error("Paystack did not return a Checkout authorization URL.");
+    }
+
+    var parsed;
+
+    try {
+      parsed = new URL(raw);
+    } catch (error) {
+      throw new Error("Paystack returned an invalid Checkout authorization URL.");
+    }
+
+    if (parsed.protocol !== "https:") {
+      throw new Error("Paystack returned an insecure Checkout authorization URL.");
+    }
+
+    return parsed.toString();
+  }
+
+  function closeCheckoutWindow(checkoutWindow) {
+    if (checkoutWindow && !checkoutWindow.closed) {
+      checkoutWindow.close();
+    }
+  }
+
+  /* ───────────────────────── INITIAL SHIFT FUNDING ───────────────────────── */
 
   function showFundingError(message) {
     if (!fundingErrorAlert) return;
@@ -502,8 +427,18 @@ var EmployerShiftDetails = (function () {
     fundingErrorAlert.classList.add("d-none");
   }
 
-  function getSelectedFundingMethod() {
-    return fundingForm?.querySelector('input[name="fundingMethod"]:checked')?.value || null;
+  function setFundingOptionsDisabled(disabled) {
+    fundingMethodInputs.forEach(function (input) {
+      if (disabled) {
+        input.dataset.wasDisabled = input.disabled ? "true" : "false";
+
+        input.disabled = true;
+      } else {
+        input.disabled = input.dataset.wasDisabled === "true";
+
+        delete input.dataset.wasDisabled;
+      }
+    });
   }
 
   function resetFundingRequestState() {
@@ -514,115 +449,19 @@ var EmployerShiftDetails = (function () {
     setFundingOptionsDisabled(false);
   }
 
-  function handleWalletFundingSuccess(response) {
-    var payload = getResponsePayload(response);
-
-    var message =
-      response?.data?.message ||
-      payload.message ||
-      "The Shift was funded and published successfully.";
-
-    return showSuccess("Shift Published", message).then(function () {
-      redirectAfterRequest(response);
-    });
-  }
-
-  function handleCheckoutInitializationSuccess(response, checkoutWindow) {
-    var payload = getResponsePayload(response);
-
-    if (payload.alreadyFunded === true || response?.data?.alreadyFunded === true) {
-      if (checkoutWindow && !checkoutWindow.closed) {
-        checkoutWindow.close();
-      }
-
-      var alreadyFundedMessage =
-        response?.data?.message ||
-        payload.message ||
-        "The Shift has already been funded and published.";
-
-      return showSuccess("Shift Published", alreadyFundedMessage).then(function () {
-        redirectAfterRequest(response);
-      });
-    }
-
-    var authorizationUrl =
-      getFirstValue(
-        payload,
-        [
-          "checkout.authorizationUrl",
-          "checkout.authorization_url",
-          "authorizationUrl",
-          "authorization_url",
-          "checkoutUrl",
-          "data.authorizationUrl",
-          "data.authorization_url",
-          "data.checkout.authorizationUrl",
-          "data.checkout.authorization_url",
-        ],
-        null
-      ) ||
-      getFirstValue(
-        response?.data,
-        [
-          "checkout.authorizationUrl",
-          "checkout.authorization_url",
-          "authorizationUrl",
-          "authorization_url",
-          "checkoutUrl",
-        ],
-        null
-      );
-
-    if (!authorizationUrl) {
-      throw new Error("Paystack did not return a Checkout authorization URL.");
-    }
-
-    var parsedAuthorizationUrl;
-
-    try {
-      parsedAuthorizationUrl = new URL(authorizationUrl, window.location.origin);
-    } catch (error) {
-      throw new Error("Paystack returned an invalid Checkout authorization URL.");
-    }
-
-    if (parsedAuthorizationUrl.protocol !== "https:") {
-      throw new Error("Paystack returned an insecure Checkout authorization URL.");
-    }
-
-    checkoutWindow.location.replace(parsedAuthorizationUrl.toString());
-
-    resetFundingRequestState();
-
-    return null;
-  }
-
-  function submitFundingRequest(method, requestUrl) {
-    hideFundingError();
-
+  function submitFundingRequest(method, url) {
     var checkoutWindow = null;
 
+    hideFundingError();
+
     if (method === "paystack_checkout") {
-      checkoutWindow = window.open("about:blank", "_blank");
-
-      if (!checkoutWindow) {
-        var popupMessage =
-          "Your browser blocked the Paystack Checkout page. Allow popups for Loqum and try again.";
-
-        showFundingError(popupMessage);
-
-        showError(popupMessage);
-
+      try {
+        checkoutWindow = openCheckoutWindow();
+      } catch (error) {
+        showFundingError(error.message);
+        showError(error.message);
         return;
       }
-
-      checkoutWindow.opener = null;
-
-      checkoutWindow.document.title = "Preparing Paystack Checkout";
-
-      checkoutWindow.document.body.innerHTML =
-        '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:Arial,sans-serif;background:#f5f5f5;color:#333">' +
-        '<div style="text-align:center"><h2 style="margin-bottom:12px">Preparing Paystack Checkout</h2>' +
-        '<p style="margin:0">Please wait while your secure payment page is created.</p></div></div>';
     }
 
     fundingRequestInProgress = true;
@@ -631,43 +470,55 @@ var EmployerShiftDetails = (function () {
 
     setFundingOptionsDisabled(true);
 
-    axios
-      .post(requestUrl, {
-        _csrf: getCsrfToken(),
-      })
+    postProtectedJson(url)
       .then(function (response) {
-        if (method === "wallet") {
-          return handleWalletFundingSuccess(response);
+        var payload = getResponsePayload(response);
+
+        if (
+          method === "wallet" ||
+          payload.alreadyFunded === true ||
+          response?.data?.alreadyFunded === true
+        ) {
+          closeCheckoutWindow(checkoutWindow);
+
+          var message =
+            response?.data?.message ||
+            payload.message ||
+            "The Shift was funded and published successfully.";
+
+          return showSuccess("Shift Published", message).then(function () {
+            redirectAfterRequest(response);
+          });
         }
 
-        return handleCheckoutInitializationSuccess(response, checkoutWindow);
-      })
-      .catch(function (error) {
-        if (checkoutWindow && !checkoutWindow.closed) {
-          checkoutWindow.close();
-        }
+        var checkoutUrl = getCheckoutAuthorizationUrl(response);
+
+        checkoutWindow.location.replace(checkoutUrl);
 
         resetFundingRequestState();
 
-        var fallbackMessage =
+        return null;
+      })
+      .catch(function (error) {
+        closeCheckoutWindow(checkoutWindow);
+        resetFundingRequestState();
+
+        var message = getErrorMessage(
+          error,
           method === "wallet"
             ? "The Shift could not be funded from your wallet."
-            : "Paystack Checkout could not be initialized.";
+            : "Paystack Checkout could not be initialized."
+        );
 
-        var errorMessage = getErrorMessage(error, fallbackMessage);
-
-        showFundingError(errorMessage);
-
-        showError(errorMessage);
+        showFundingError(message);
+        showError(message);
       });
   }
 
   function initializeFundingForm() {
     fundingForm = document.querySelector("#shiftFundingForm");
 
-    if (!fundingForm) {
-      return;
-    }
+    if (!fundingForm) return;
 
     fundingSubmitButton = fundingForm.querySelector("[data-funding-submit]");
 
@@ -678,45 +529,397 @@ var EmployerShiftDetails = (function () {
     fundingForm.addEventListener("submit", function (event) {
       event.preventDefault();
 
-      if (fundingRequestInProgress) {
-        return;
-      }
+      if (fundingRequestInProgress) return;
 
       hideFundingError();
 
-      var method = getSelectedFundingMethod();
+      var selected = fundingForm.querySelector('input[name="fundingMethod"]:checked');
 
-      if (!method) {
+      if (!selected) {
         showFundingError("Select a payment method.");
-
         return;
       }
 
-      var requestUrl =
+      var method = selected.value;
+
+      if (method !== "wallet" && method !== "paystack_checkout") {
+        showFundingError("Select a valid payment method.");
+        return;
+      }
+
+      var url =
         method === "wallet"
           ? fundingSubmitButton?.dataset.walletUrl
           : fundingSubmitButton?.dataset.checkoutUrl;
 
-      if (!requestUrl) {
+      if (!url) {
         showFundingError("The selected payment endpoint is unavailable.");
-
         return;
       }
 
-      submitFundingRequest(method, requestUrl);
+      submitFundingRequest(method, url);
     });
   }
 
-  /* ─────────────────────────────── SHIFT CANCELLATION ─────────────────────────────── */
+  /* ───────────────────────── OVERTIME DECISIONS ───────────────────────── */
+
+  function setOvertimeBusy(busy) {
+    overtimeRequestInProgress = busy;
+
+    document
+      .querySelectorAll(
+        "[data-overtime-approve], [data-overtime-reject], " +
+          "[data-overtime-topup-wallet], [data-overtime-topup-checkout]"
+      )
+      .forEach(function (button) {
+        if (busy) {
+          button.dataset.overtimeWasDisabled = button.disabled ? "true" : "false";
+
+          button.disabled = true;
+        } else {
+          button.disabled = button.dataset.overtimeWasDisabled === "true";
+
+          delete button.dataset.overtimeWasDisabled;
+        }
+      });
+  }
+
+  function getOvertimeActionUrl(button) {
+    return button?.dataset.url || "";
+  }
+
+  function confirmOvertimeApproval() {
+    return showConfirmation({
+      title: "Approve overtime?",
+      text:
+        "This approves the professional's requested overtime duration in full. " +
+        "It may create an additional employer funding obligation.",
+      confirmButtonText: "Yes, Approve Overtime",
+      confirmButtonClass: "btn btn-success",
+    });
+  }
+
+  function requestOvertimeRejectionDetails(requestedMinutes) {
+    var basisOptions = [
+      ["", "Choose a rejection basis"],
+      ["overtime_not_worked", "Overtime was not worked"],
+      ["minutes_incorrect", "Requested minutes are incorrect"],
+      ["remained_on_site_not_working", "Stayed on site but was not working"],
+      ["worked_without_authorization", "Work was not authorised"],
+      ["attendance_record_incorrect", "Attendance record is incorrect"],
+      ["other", "Other reason"],
+    ];
+
+    var optionsHtml = basisOptions
+      .map(function (item) {
+        return '<option value="' + item[0] + '">' + item[1] + "</option>";
+      })
+      .join("");
+
+    var formHtml =
+      '<div class="text-start">' +
+      '<label for="otRejectionBasis" class="form-label fw-bold">Rejection basis</label>' +
+      '<select id="otRejectionBasis" class="form-select form-select-solid mb-4">' +
+      optionsHtml +
+      "</select>" +
+      '<div id="otProposedMinutesWrap" class="d-none mb-4">' +
+      '<label for="otProposedMinutes" class="form-label fw-bold">Minutes actually worked</label>' +
+      '<input id="otProposedMinutes" class="form-control form-control-solid" type="number" min="1" step="1" inputmode="numeric" />' +
+      '<div class="form-text">Must be less than the minutes requested by the professional.</div>' +
+      "</div>" +
+      '<label for="otRejectionReason" class="form-label fw-bold">Explanation</label>' +
+      '<textarea id="otRejectionReason" class="form-control form-control-solid mb-4" rows="4" maxlength="500" placeholder="Explain the basis for rejecting this overtime request"></textarea>' +
+      '<label class="form-check form-check-custom form-check-solid mb-2">' +
+      '<input id="otNoSupportingEvidence" class="form-check-input" type="checkbox" />' +
+      '<span class="form-check-label text-start">I confirm that no supporting documentary evidence is being submitted with this rejection.</span>' +
+      "</label>" +
+      '<div class="form-text">This declaration is recorded with the overtime decision. Do not select it if you intend to supply evidence.</div>' +
+      "</div>";
+
+    return Swal.fire({
+      title: "Reject overtime request",
+      html: formHtml,
+      width: 600,
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "Reject Overtime",
+      cancelButtonText: "Cancel",
+      focusConfirm: false,
+      buttonsStyling: false,
+
+      customClass: {
+        confirmButton: "btn btn-danger",
+        cancelButton: "btn btn-light",
+      },
+
+      didOpen: function () {
+        var basis = document.getElementById("otRejectionBasis");
+
+        var minutesWrap = document.getElementById("otProposedMinutesWrap");
+
+        basis.addEventListener("change", function () {
+          minutesWrap.classList.toggle("d-none", basis.value !== "minutes_incorrect");
+        });
+      },
+
+      preConfirm: function () {
+        var basis = document.getElementById("otRejectionBasis").value;
+
+        var reason = document.getElementById("otRejectionReason").value.trim();
+
+        var noEvidence = document.getElementById("otNoSupportingEvidence").checked;
+
+        var minutesText = document.getElementById("otProposedMinutes").value.trim();
+
+        var allowed = basisOptions.slice(1).some(function (option) {
+          return option[0] === basis;
+        });
+
+        if (!allowed) {
+          Swal.showValidationMessage("Select a rejection basis.");
+          return false;
+        }
+
+        if (!reason || reason.length > 500) {
+          Swal.showValidationMessage("Enter an explanation of no more than 500 characters.");
+          return false;
+        }
+
+        if (!noEvidence) {
+          Swal.showValidationMessage(
+            "Confirm that you are submitting no supporting evidence. Evidence upload is not available in this dialog."
+          );
+          return false;
+        }
+
+        var data = {
+          rejectionBasis: basis,
+          rejectionReason: reason,
+          rejectionNoSupportingEvidence: true,
+        };
+
+        if (basis === "minutes_incorrect") {
+          var minutes = Number(minutesText);
+
+          if (
+            !/^\d+$/.test(minutesText) ||
+            !Number.isSafeInteger(minutes) ||
+            minutes <= 0 ||
+            !Number.isSafeInteger(requestedMinutes) ||
+            minutes >= requestedMinutes
+          ) {
+            Swal.showValidationMessage(
+              "Enter whole minutes greater than zero and less than the professional's requested minutes."
+            );
+            return false;
+          }
+
+          data.employerProposedMinutes = minutes;
+        }
+
+        return data;
+      },
+    }).then(function (result) {
+      return result.isConfirmed === true ? result.value : null;
+    });
+  }
+
+  function handleOvertimeDecisionSuccess(response, title) {
+    var payload = getResponsePayload(response);
+
+    var message = response?.data?.message || payload.message || "Overtime decision recorded.";
+
+    return showSuccess(title, message).then(function () {
+      redirectAfterRequest(response);
+    });
+  }
+
+  function initializeOvertimeDecisions() {
+    document.querySelectorAll("[data-overtime-approve]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        if (overtimeRequestInProgress || button.disabled) {
+          return;
+        }
+
+        var url = getOvertimeActionUrl(button);
+
+        if (!url) {
+          showError("The overtime approval endpoint is unavailable.");
+          return;
+        }
+
+        confirmOvertimeApproval().then(function (confirmed) {
+          if (!confirmed || overtimeRequestInProgress) {
+            return;
+          }
+
+          setOvertimeBusy(true);
+
+          postProtectedJson(url)
+            .then(function (response) {
+              return handleOvertimeDecisionSuccess(response, "Overtime Approved");
+            })
+            .catch(function (error) {
+              showError(getErrorMessage(error, "Unable to approve overtime."));
+            })
+            .finally(function () {
+              setOvertimeBusy(false);
+            });
+        });
+      });
+    });
+
+    document.querySelectorAll("[data-overtime-reject]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        if (overtimeRequestInProgress || button.disabled) {
+          return;
+        }
+
+        var url = getOvertimeActionUrl(button);
+
+        if (!url) {
+          showError("The overtime rejection endpoint is unavailable.");
+          return;
+        }
+
+        var requestedMinutes = Number(button.dataset.requestedMinutes || "");
+
+        requestOvertimeRejectionDetails(requestedMinutes).then(function (details) {
+          if (!details || overtimeRequestInProgress) {
+            return;
+          }
+
+          setOvertimeBusy(true);
+
+          postProtectedJson(url, details)
+            .then(function (response) {
+              return handleOvertimeDecisionSuccess(response, "Overtime Rejected");
+            })
+            .catch(function (error) {
+              showError(getErrorMessage(error, "Unable to reject overtime."));
+            })
+            .finally(function () {
+              setOvertimeBusy(false);
+            });
+        });
+      });
+    });
+  }
+
+  /* ─────────────────────── OVERTIME TOP-UP FUNDING ─────────────────────── */
+
+  function initializeOvertimeTopUpFunding() {
+    document.querySelectorAll("[data-overtime-topup-wallet]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        if (overtimeRequestInProgress || button.disabled) {
+          return;
+        }
+
+        var url = getOvertimeActionUrl(button);
+
+        if (!url) {
+          showError("The overtime wallet top-up endpoint is unavailable.");
+          return;
+        }
+
+        showConfirmation({
+          title: "Pay overtime top-up?",
+          text: "The approved overtime top-up will be deducted from your employer wallet.",
+          confirmButtonText: "Pay from Wallet",
+          confirmButtonClass: "btn btn-primary",
+        }).then(function (confirmed) {
+          if (!confirmed || overtimeRequestInProgress) {
+            return;
+          }
+
+          setOvertimeBusy(true);
+
+          postProtectedJson(url)
+            .then(function (response) {
+              var payload = getResponsePayload(response);
+
+              return showSuccess(
+                "Overtime Top-up Paid",
+                response?.data?.message || payload.message || "Overtime funding was recorded."
+              ).then(function () {
+                redirectAfterRequest(response);
+              });
+            })
+            .catch(function (error) {
+              showError(
+                getErrorMessage(error, "Unable to fund the overtime top-up from your wallet.")
+              );
+            })
+            .finally(function () {
+              setOvertimeBusy(false);
+            });
+        });
+      });
+    });
+
+    document.querySelectorAll("[data-overtime-topup-checkout]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        if (overtimeRequestInProgress || button.disabled) {
+          return;
+        }
+
+        var url = getOvertimeActionUrl(button);
+
+        if (!url) {
+          showError("The overtime Paystack endpoint is unavailable.");
+          return;
+        }
+
+        var checkoutWindow;
+
+        try {
+          checkoutWindow = openCheckoutWindow();
+        } catch (error) {
+          showError(error.message);
+          return;
+        }
+
+        setOvertimeBusy(true);
+
+        postProtectedJson(url)
+          .then(function (response) {
+            var payload = getResponsePayload(response);
+
+            if (payload.alreadyFunded === true || response?.data?.alreadyFunded === true) {
+              closeCheckoutWindow(checkoutWindow);
+
+              return showSuccess(
+                "Overtime Top-up Paid",
+                response?.data?.message || payload.message || "Overtime has already been funded."
+              ).then(function () {
+                redirectAfterRequest(response);
+              });
+            }
+
+            checkoutWindow.location.replace(getCheckoutAuthorizationUrl(response));
+
+            return null;
+          })
+          .catch(function (error) {
+            closeCheckoutWindow(checkoutWindow);
+
+            showError(getErrorMessage(error, "Unable to initialize the overtime Paystack top-up."));
+          })
+          .finally(function () {
+            setOvertimeBusy(false);
+          });
+      });
+    });
+  }
+
+  /* ────────────────────────── SHIFT CANCELLATION ────────────────────────── */
 
   function buildCancellationPreviewMessage(payload) {
     var message = getFirstValue(payload, ["message", "summary.message", "preview.message"], null);
 
-    if (message) {
-      return message;
-    }
+    if (message) return message;
 
-    var professionalCompensation = getFirstValue(
+    var compensation = getFirstValue(
       payload,
       [
         "professionalCompensationDisplay",
@@ -726,7 +929,7 @@ var EmployerShiftDetails = (function () {
       null
     );
 
-    var refundAmount = getFirstValue(
+    var refund = getFirstValue(
       payload,
       ["refundAmountDisplay", "refund.refundAmountDisplay", "preview.refundAmountDisplay"],
       null
@@ -734,12 +937,12 @@ var EmployerShiftDetails = (function () {
 
     var parts = ["This action will cancel the applicable Shift occurrence or engagement."];
 
-    if (professionalCompensation) {
-      parts.push("Professional compensation: " + professionalCompensation + ".");
+    if (compensation) {
+      parts.push("Professional compensation: " + compensation + ".");
     }
 
-    if (refundAmount) {
-      parts.push("Expected refund: " + refundAmount + ".");
+    if (refund) {
+      parts.push("Expected refund: " + refund + ".");
     }
 
     return parts.join(" ");
@@ -755,18 +958,16 @@ var EmployerShiftDetails = (function () {
 
         if (!cancelUrl) {
           showError("The Shift cancellation endpoint is unavailable.");
-
           return;
         }
 
         setButtonLoading(button, true, false);
 
-        var previewRequest = previewUrl
+        var preview = previewUrl
           ? axios.get(previewUrl, {
               params: {
                 _: Date.now(),
               },
-
               headers: {
                 Accept: "application/json",
                 "Cache-Control": "no-store",
@@ -777,36 +978,31 @@ var EmployerShiftDetails = (function () {
               data: {},
             });
 
-        previewRequest
+        preview
           .then(function (response) {
-            var payload = getResponsePayload(response);
-
             return showConfirmation({
               title: "Cancel Shift?",
-              text: buildCancellationPreviewMessage(payload),
+              text: buildCancellationPreviewMessage(getResponsePayload(response)),
               confirmButtonText: "Yes, Cancel Shift",
             });
           })
           .then(function (confirmed) {
             if (!confirmed) {
               setButtonLoading(button, false, false);
-
               return null;
             }
 
-            return axios.post(cancelUrl, {
-              _csrf: getCsrfToken(),
-            });
+            return postProtectedJson(cancelUrl);
           })
           .then(function (response) {
             if (!response) return;
 
             var payload = getResponsePayload(response);
 
-            var message =
-              response?.data?.message || payload.message || "The Shift was cancelled successfully.";
-
-            return showSuccess("Shift Cancelled", message).then(function () {
+            return showSuccess(
+              "Shift Cancelled",
+              response?.data?.message || payload.message || "The Shift was cancelled successfully."
+            ).then(function () {
               redirectAfterRequest(response);
             });
           })
@@ -819,41 +1015,39 @@ var EmployerShiftDetails = (function () {
     });
   }
 
-  /* ─────────────────────────────── EARLY TERMINATION ─────────────────────────────── */
+  /* ────────────────────────── EARLY TERMINATION ────────────────────────── */
 
   function handleEndShiftEarlyButtons() {
     document.querySelectorAll("[data-end-shift-early]").forEach(function (button) {
       button.addEventListener("click", function () {
         if (button.disabled) return;
 
-        var requestUrl = button.dataset.endEarlyUrl;
+        var url = button.dataset.endEarlyUrl;
 
-        if (!requestUrl) {
+        if (!url) {
           showError("The early-termination endpoint is unavailable.");
-
           return;
         }
 
         showConfirmation({
           title: "End Shift Early?",
-          text: "The professional will be paid according to the applicable early-termination rules. This action cannot be undone.",
+          text:
+            "The professional will be paid according to the applicable early-termination rules. " +
+            "This action cannot be undone.",
           confirmButtonText: "Yes, End Shift",
         }).then(function (confirmed) {
           if (!confirmed) return;
 
           setButtonLoading(button, true, false);
 
-          axios
-            .post(requestUrl, {
-              _csrf: getCsrfToken(),
-            })
+          postProtectedJson(url)
             .then(function (response) {
               var payload = getResponsePayload(response);
 
-              var message =
-                response?.data?.message || payload.message || "The Shift was ended successfully.";
-
-              return showSuccess("Shift Ended", message).then(function () {
+              return showSuccess(
+                "Shift Ended",
+                response?.data?.message || payload.message || "The Shift was ended successfully."
+              ).then(function () {
                 redirectAfterRequest(response);
               });
             })
@@ -867,9 +1061,9 @@ var EmployerShiftDetails = (function () {
     });
   }
 
-  /* ─────────────────────────────── PAYSTACK CALLBACK MESSAGE ─────────────────────────────── */
+  /* ────────────────────────── PAYSTACK CALLBACK MESSAGE ────────────────────────── */
 
-  function getPaymentFailureMessage(errorCode) {
+  function getPaymentFailureMessage(code) {
     var messages = {
       PAYSTACK_REFERENCE_REQUIRED:
         "Paystack returned without a transaction reference, so the payment could not be verified.",
@@ -902,68 +1096,59 @@ var EmployerShiftDetails = (function () {
     };
 
     return (
-      messages[errorCode] ||
-      "The Shift payment could not be verified. The Shift remains unpublished."
+      messages[code] || "The Shift payment could not be verified. The Shift remains unpublished."
     );
   }
 
   function cleanPaymentQueryParameters() {
     var url = new URL(window.location.href);
 
-    ["payment", "shift", "paymentCode", "alreadyFunded"].forEach(function (parameterName) {
-      url.searchParams.delete(parameterName);
+    ["payment", "shift", "paymentCode", "alreadyFunded"].forEach(function (key) {
+      url.searchParams.delete(key);
     });
 
     window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
   }
 
   function handlePaymentReturnMessage() {
-    var parameters = new URLSearchParams(window.location.search);
+    var params = new URLSearchParams(window.location.search);
 
-    var paymentStatus = parameters.get("payment");
+    var status = params.get("payment");
 
-    if (!paymentStatus) {
-      return;
-    }
+    if (!status) return;
 
-    var shiftReference = parameters.get("shift");
+    var shiftReference = params.get("shift");
+    var code = params.get("paymentCode");
 
-    var paymentCode = parameters.get("paymentCode");
-
-    var alreadyFunded = parameters.get("alreadyFunded") === "true";
+    var alreadyFunded = params.get("alreadyFunded") === "true";
 
     cleanPaymentQueryParameters();
 
-    if (paymentStatus === "success") {
-      var successMessage = shiftReference
+    if (status === "success") {
+      var message = shiftReference
         ? "Shift " + shiftReference + " was funded and published successfully."
         : "The Shift was funded and published successfully.";
 
       if (alreadyFunded) {
-        successMessage = shiftReference
+        message = shiftReference
           ? "Shift " + shiftReference + " had already been funded and published."
           : "The Shift had already been funded and published.";
       }
 
-      showSuccess("Payment Confirmed", successMessage);
+      showSuccess("Payment Confirmed", message);
 
       return;
     }
 
-    if (paymentStatus === "pending") {
+    if (status === "pending") {
       Swal.fire({
         title: "Payment Processing",
-
         text:
           "Paystack has not confirmed the payment yet. " +
           "The Shift will remain in Pending Funding until verification succeeds.",
-
         icon: "info",
-
         buttonsStyling: false,
-
         confirmButtonText: "Ok, got it!",
-
         customClass: {
           confirmButton: "btn btn-primary",
         },
@@ -972,27 +1157,25 @@ var EmployerShiftDetails = (function () {
       return;
     }
 
-    showError(getPaymentFailureMessage(paymentCode));
+    showError(getPaymentFailureMessage(code));
   }
 
-  /* ─────────────────────────────── INITIALIZATION ─────────────────────────────── */
+  /* ───────────────────────────── INITIALIZATION ───────────────────────────── */
 
   return {
     init: function () {
       shiftDetailsPage = document.querySelector("#shiftDetailsPage");
 
-      if (!shiftDetailsPage) {
-        return;
-      }
+      if (!shiftDetailsPage) return;
 
       initializeAttendancePins();
-
       initializeFundingForm();
 
+      initializeOvertimeDecisions();
+      initializeOvertimeTopUpFunding();
+
       handleCancelShiftButtons();
-
       handleEndShiftEarlyButtons();
-
       handlePaymentReturnMessage();
     },
   };

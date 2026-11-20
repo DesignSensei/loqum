@@ -84,8 +84,8 @@
           </div>
         </div>
 
-        <span class="badge <%= dashboardView.fundingAccountBadgeClass %>">
-          <%= dashboardView.fundingAccountBadgeLabel %>
+        <span class="badge <%= dashboardView.fundingBadgeClass %>">
+          <%= dashboardView.fundingBadgeLabel %>
         </span>
       </div>
     </div>
@@ -101,13 +101,13 @@
           </i>
 
           <div>
-            <div class="fw-bold text-gray-900 fs-6">Admin Approval</div>
-            <div class="text-gray-500 fs-7"><%= dashboardView.approvalStatusLabel %></div>
+            <div class="fw-bold text-gray-900 fs-6">CAC Verification</div>
+            <div class="text-gray-500 fs-7"><%= dashboardView.cacStatusLabel %></div>
           </div>
         </div>
 
-        <span class="badge <%= dashboardView.approvalBadgeClass %>">
-          <%= dashboardView.approvalBadgeLabel %>
+        <span class="badge <%= dashboardView.cacBadgeClass %>">
+          <%= dashboardView.cacStatusLabel %>
         </span>
       </div>
     </div>
@@ -367,7 +367,7 @@
 
             <div>
               <div class="fw-bold text-gray-700 fs-6">Post a Shift</div>
-              <div class="text-gray-500 fs-7">Locked until business verification is complete</div>
+              <div class="text-gray-500 fs-7"><%= dashboardView.postShiftLockedMessage %></div>
             </div>
           </div>
           <% } %>
@@ -392,7 +392,7 @@
           </a>
 
           <a
-            href="/employer/profile"
+            href="/employer/business-profile"
             class="d-flex align-items-center bg-light-info rounded p-3 text-decoration-none"
           >
             <i class="ki-duotone ki-shop fs-2x text-info me-4">

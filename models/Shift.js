@@ -888,6 +888,17 @@ function validateSchedule(document) {
       }
     }
 
+    if (
+      document.firstOccurrenceDate &&
+      document.lastOccurrenceDate &&
+      document.lastOccurrenceDate === document.firstOccurrenceDate
+    ) {
+      document.invalidate(
+        "lastOccurrenceDate",
+        "A repeated schedule must span more than one work date."
+      );
+    }
+
     minutes = calculatePatternScheduledMinutes({
       dailyStartTimeMinutes: document.dailyStartTimeMinutes,
       dailyEndTimeMinutes: document.dailyEndTimeMinutes,
@@ -1805,6 +1816,14 @@ function validateCancellation(document, total) {
     if (!document[field]) {
       document.invalidate(field, `${field} is required for a cancelled engagement.`);
     }
+  }
+
+  if (document.cancelledAt && document.createdAt && document.cancelledAt < document.createdAt) {
+    document.invalidate("cancelledAt", "cancelledAt cannot precede Shift creation.");
+  }
+
+  if (document.cancelledAt && document.publishedAt && document.cancelledAt < document.publishedAt) {
+    document.invalidate("cancelledAt", "cancelledAt cannot precede publication.");
   }
 
   if (document.cancelledBy === "employer") {

@@ -12,8 +12,16 @@ const {
   isOnboarded,
 } = require("../middleware/authMiddleware");
 
-const { attachProfessionalProfile } = require("../middleware/professionalMiddleware");
-const { parseJobApplicationResumeUpload } = require("../middleware/uploadMiddleware");
+const {
+  attachProfessionalProfile,
+  canApplyForShifts,
+} = require("../middleware/professionalMiddleware");
+
+const {
+  parseJobApplicationResumeUpload,
+  parseProfessionalOvertimeEvidenceUpload,
+  parseProfessionalLicenceUpload,
+} = require("../middleware/uploadMiddleware");
 
 const professionalController = require("../controllers/professionalController");
 const professionalVerificationController = require("../controllers/professionalVerificationController");
@@ -40,26 +48,12 @@ router.use(
 
 // ───────────────────── PROFESSIONAL VERIFICATION ─────────────────────
 
-/**
- * Professional verification is available to authenticated,
- * onboarded professionals.
- *
- * Initial pre-onboarding NIN verification remains in
- * onboardingRoutes.js.
- *
- * Identity provider operations must enforce ownership,
- * approved verification methods and one-time verification
- * safeguards in their controllers and services.
- *
- * Submitted NIN and professional licence numbers cannot
- * be changed directly through professional-facing routes.
- *
- * Corrections require Loqum Support and an authorised
- * administrative verification process.
- *
- * All mutations remain subject to application-level
- * CSRF protection.
- */
+// Post-onboarding licence submission reuses trusted NIN evidence from onboarding.
+// Uploads remain private and require independent admin review.
+// Pending renewals preserve a current approved licence; expired licences never
+// authorize work, including during the 30-day renewal grace period.
+// Controllers/services enforce ownership and state transitions.
+// Mount the application's CSRF protection before this router.
 
 // Read the professional's verification status.
 router.get(
@@ -67,22 +61,18 @@ router.get(
   professionalVerificationController.getVerificationStatus
 );
 
-// Look up identity registry evidence.
+// Upload licenceDocument through the private upload middleware, then persist
+// the submission before committing the file. Do not require shift eligibility.
 router.post(
-  "/verification/:professionalProfileId/identity/lookup",
-  professionalVerificationController.lookupIdentityEvidence
+  "/verification/:professionalProfileId/licence-document",
+  parseProfessionalLicenceUpload,
+  professionalVerificationController.submitLicenceDocument
 );
 
-// Start hosted identity verification.
+// Submit a corrected or replacement licence number.
 router.post(
-  "/verification/:professionalProfileId/identity/hosted",
-  professionalVerificationController.startHostedIdentityVerification
-);
-
-// Synchronise a previously started hosted verification.
-router.post(
-  "/verification/:professionalProfileId/identity/hosted/:verificationId/sync",
-  professionalVerificationController.syncHostedIdentityResult
+  "/verification/:professionalProfileId/licence-number",
+  professionalVerificationController.changeLicenceNumber
 );
 
 // ───────────────────── PROFESSIONAL PAGES ─────────────────────
@@ -93,7 +83,7 @@ router.get("/cases", professionalShiftClaimController.getCases);
 
 // ───────────────────── PROFESSIONAL PROFILE ─────────────────────
 
-// View Professional Profile and its tabs.
+// View professional profile and its tabs.
 router.get("/profile", professionalController.getProfile);
 
 // Update weekly or specific-date availability.
@@ -113,14 +103,8 @@ router.get("/job-applications", professionalJobApplicationController.getApplicat
 
 router.get("/job-applications/:applicationId", professionalJobApplicationController.getApplication);
 
-/**
- * Applications belong to a specific JobPublication cycle.
- *
- * Upload middleware validates a fresh CV and provides
- * trusted metadata through req.jobApplicationResumeUpload.
- *
- * The controller must not trust resume metadata from req.body.
- */
+// Applications belong to a publication cycle. Resume metadata must come
+// from the upload middleware, not client-supplied request fields.
 router.post(
   "/job-publications/:publicationId/apply",
   parseJobApplicationResumeUpload,
@@ -150,10 +134,11 @@ router.post(
 
 // ───────────────────── SHIFT PAGES ─────────────────────
 
-// Fixed shift paths must precede dynamic shift detail routes.
+// Keep fixed shift paths before dynamic shift detail routes.
+
 router.get("/shifts", professionalShiftController.getShifts);
 
-router.get("/shifts/my", professionalShiftController.getMyShifts);
+router.get("/shifts/my-shifts", professionalShiftController.getMyShifts);
 
 router.get("/shifts/:shiftId/occurrences", professionalShiftController.getShiftOccurrences);
 
@@ -161,22 +146,25 @@ router.get("/shifts/:shiftId", professionalShiftController.getShiftDetails);
 
 // ───────────────────── SHIFT APPLICATIONS ─────────────────────
 
-/**
- * The authenticated user determines the professional profile.
- *
- * Application eligibility, capacity and replacement rules
- * remain service-owned.
- *
- * Withdrawing an application must not cancel an accepted
- * shift assignment.
- */
-router.post("/shifts/:shiftId/apply", professionalShiftApplicationController.createApplication);
+// Middleware checks current professional eligibility before application.
+// Services recheck licence evidence, approval and eligibility in transactions.
+// Withdrawal must not cancel an accepted assignment.
 
+// Apply for a shift.
 router.post(
-  "/shifts/:shiftId/occurrences/:occurrenceId/apply",
+  "/shifts/:shiftId/apply",
+  canApplyForShifts,
   professionalShiftApplicationController.createApplication
 );
 
+// Apply for a specific shift occurrence.
+router.post(
+  "/shifts/:shiftId/occurrences/:occurrenceId/apply",
+  canApplyForShifts,
+  professionalShiftApplicationController.createApplication
+);
+
+// Withdraw a pending shift application.
 router.post(
   "/shifts/:shiftId/applications/:applicationId/withdraw",
   professionalShiftApplicationController.withdrawApplication
@@ -184,27 +172,28 @@ router.post(
 
 // ───────────────────── SHIFT ATTENDANCE ─────────────────────
 
+// Check-in verifies the occurrence PIN and the professional's location.
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/check-in",
   professionalShiftAttendanceController.checkIn
 );
 
+// Checkout may include privately stored overtime evidence.
+// Attendance and overtime rules remain service-owned.
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/check-out",
+  parseProfessionalOvertimeEvidenceUpload,
   professionalShiftAttendanceController.checkOut
 );
 
+// Checkout fallback requires attendance review.
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/checkout-fallback",
   professionalShiftAttendanceController.requestCheckoutFallback
 );
 
-/**
- * Absence explanations are handled by attendance.
- *
- * Worked-but-recorded-absent cases must use an
- * attendance_correction claim.
- */
+// Attendance handles absence explanations; worked-but-recorded-absent
+// cases use an attendance_correction claim.
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/absence-explanation",
   professionalShiftAttendanceController.submitAbsenceExplanation
@@ -212,12 +201,8 @@ router.post(
 
 // ───────────────────── SHIFT CLAIMS ─────────────────────
 
-/**
- * A claim case can contain multiple ordinary BASE-side issues.
- *
- * Settlement-component scope is determined by the claim service.
- * Employer rejection sends unresolved issues for admin review.
- */
+// Claim scope and settlement rules remain service-owned.
+// Rejected claims proceed to admin review.
 router.post(
   "/shifts/:shiftId/occurrences/:occurrenceId/claims",
   professionalShiftClaimController.submitClaim
@@ -228,11 +213,7 @@ router.post("/claims/:claimId/withdraw", professionalShiftClaimController.withdr
 
 // ───────────────────── EMPLOYER DISPUTE RESPONSES ─────────────────────
 
-/**
- * Respond to employer-originated disputes.
- *
- * This workflow remains separate from professional claims.
- */
+// Employer dispute responses are separate from professional claims.
 router.post(
   "/disputes/:disputeId/issues/:issueId/respond",
   professionalShiftClaimController.respondToDispute

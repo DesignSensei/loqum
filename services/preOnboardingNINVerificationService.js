@@ -5,9 +5,10 @@ const crypto = require("crypto");
 
 const User = require("../models/User");
 const PreOnboardingNINVerification = require("../models/PreOnboardingNINVerification");
+const NINLookupAttempt = require("../models/NINLookupAttempt");
 
+const { runWithOptionalTransaction } = require("./helpers/transactionHelper");
 const IdentityVerificationService = require("./identityVerificationService");
-
 const { createServiceError } = require("./helpers/serviceErrorHelper");
 
 const SERVICE_ERROR_NAME = "PreOnboardingNINVerificationServiceError";
@@ -71,8 +72,11 @@ class PreOnboardingNINVerificationService {
    *
    * Ordinary corrections have no blanket cooldown.
    *
-   * Starting a correction immediately invalidates
-   * the existing name acknowledgement.
+   * Changing NIN is unavailable while a provider
+   * request is processing or unresolved.
+   *
+   * Starting a correction invalidates the existing
+   * name acknowledgement.
    *
    * A replacement lookup atomically supersedes the
    * previous temporary evidence.
@@ -89,8 +93,8 @@ class PreOnboardingNINVerificationService {
    * - No automatic provider retries;
    * - No automatic provider fallback.
    *
-   * Identity-holder authentication is NOT established
-   * by registry lookup or name acknowledgement.
+   * Registry lookup and name acknowledgement do NOT
+   * establish identity-holder authentication.
    *
    * PCN licence verification and administrative
    * approval remain independent.
@@ -113,14 +117,11 @@ class PreOnboardingNINVerificationService {
   // ───────────────────── MODEL CONTRACT ─────────────────────
 
   /*
-   * These fields must exist in the updated
-   * PreOnboardingNINVerification schema.
+   * Required evidence fields must exist before
+   * any potentially chargeable provider lookup.
    *
-   * Fail before making a chargeable provider call
-   * if the schema is not ready.
-   *
-   * Mongoose strict mode must never silently
-   * discard acknowledgement or correction fields.
+   * Fail closed if acknowledgement, correction
+   * or attempt-budget fields are unavailable.
    */
 
   static assertSchemaReady() {
@@ -128,7 +129,14 @@ class PreOnboardingNINVerificationService {
       (field) => !PreOnboardingNINVerification.schema.path(field)
     );
 
-    if (missing.length > 0) {
+    const statusPath = PreOnboardingNINVerification.schema.path("status");
+
+    if (
+      missing.length > 0 ||
+      !statusPath ||
+      !Array.isArray(statusPath.enumValues) ||
+      !statusPath.enumValues.includes("cancelled")
+    ) {
       throw this.createError({
         message: "NIN verification storage is not fully configured.",
         code: "NIN_ONBOARDING_SCHEMA_INCOMPLETE",
@@ -160,7 +168,17 @@ class PreOnboardingNINVerificationService {
       });
     }
 
-    return IdentityVerificationService.normalizeIdentifier(nin);
+    const normalized = IdentityVerificationService.normalizeIdentifier(nin);
+
+    if (typeof normalized !== "string" || !/^\d{11}$/.test(normalized)) {
+      throw this.createError({
+        message: "Enter a valid 11-digit NIN.",
+        code: "NIN_ONBOARDING_INVALID_NIN",
+        statusCode: 400,
+      });
+    }
+
+    return normalized;
   }
 
   static getNINHash(nin) {
@@ -175,11 +193,8 @@ class PreOnboardingNINVerificationService {
     }
 
     /*
-     * HMAC-SHA256 protects the identifier against
-     * offline enumeration more effectively than
-     * an ordinary unkeyed hash.
-     *
-     * Use a dedicated, protected secret.
+     * A dedicated HMAC-SHA256 secret protects the
+     * NIN more effectively than an unkeyed hash.
      */
 
     return crypto.createHmac("sha256", secret).update(`nin:${nin}`, "utf8").digest("hex");
@@ -235,11 +250,11 @@ class PreOnboardingNINVerificationService {
     }
 
     /*
-     * No first-name, surname or date-of-birth
-     * comparison against registration data.
+     * Registration names and date of birth
+     * are not used for NIN registry matching.
      *
-     * Official legal names will originate
-     * from NIN registry evidence.
+     * Official names originate from trusted
+     * NIN registry evidence.
      */
 
     return user;
@@ -251,9 +266,7 @@ class PreOnboardingNINVerificationService {
     IdentityVerificationService.assertVerificationEnabled();
 
     const provider = IdentityVerificationService.getProvider();
-
     const environment = IdentityVerificationService.getEnvironment(provider);
-
     const adapter = IdentityVerificationService.getAdapter(provider);
 
     try {
@@ -271,20 +284,13 @@ class PreOnboardingNINVerificationService {
   // ───────────────────── FULL-NAME PREVIEW PERMISSION ─────────────────────
 
   /*
-   * Full-name preview is enabled only after
-   * Loqum confirms the selected provider's
-   * applicable permissions and completes the
-   * necessary privacy assessment.
+   * Full-name preview requires approved provider
+   * permissions and a completed privacy assessment.
    *
-   * Separate provider configuration prevents
-   * one provider's permission being assumed
-   * to apply to another provider.
+   * Provider-specific flags default to disabled.
    *
-   * These flags default to disabled.
-   *
-   * This gate is checked BEFORE a lookup so
-   * the applicant is not charged for a result
-   * the selected workflow cannot display.
+   * Check permission before initiating a lookup
+   * that may incur a charge.
    */
 
   static assertNamePreviewAllowed(provider) {
@@ -354,22 +360,26 @@ class PreOnboardingNINVerificationService {
   // ───────────────────── EVIDENCE EXPIRY ─────────────────────
 
   /*
-   * resultExpiresAt controls whether a registry
-   * result may be reused and consumed.
+   * resultExpiresAt determines whether completed
+   * registry evidence can be reused or consumed.
    *
-   * expiresAt controls MongoDB TTL cleanup.
+   * expiresAt controls temporary document retention.
    *
-   * The document is retained longer than the
-   * result's validity to preserve the account's
-   * short-term lookup-attempt budget.
-   *
-   * TTL expiry is not a correction cooldown.
+   * TTL cleanup does not impose a correction cooldown
+   * or reset the persistent attempt history.
    */
 
   static hasNotExpired(record, now = new Date()) {
     const expiry = record?.resultExpiresAt ? new Date(record.resultExpiresAt).getTime() : NaN;
 
-    return Number.isFinite(expiry) && expiry > now.getTime();
+    const retention = record?.expiresAt ? new Date(record.expiresAt).getTime() : NaN;
+
+    return (
+      Number.isFinite(expiry) &&
+      Number.isFinite(retention) &&
+      expiry > now.getTime() &&
+      retention > now.getTime()
+    );
   }
 
   static matchesLookupIdentity(record, input, context) {
@@ -392,80 +402,223 @@ class PreOnboardingNINVerificationService {
   // ───────────────────── ATTEMPT BUDGET ─────────────────────
 
   /*
-   * Replace the blanket cooldown with a bounded
-   * number of database-tracked lookups.
+   * Maximum 8 lookup attempts across up to
+   * 4 distinct NINs in a rolling 24-hour window.
    *
-   * Ordinary first corrections happen immediately.
+   * NINLookupAttempt is the durable source.
    *
-   * Excessive distinct-NIN lookups or excessive
-   * paid requests trigger targeted review.
+   * There is no blanket correction cooldown.
    *
-   * These counters remain in the user-scoped
-   * temporary document for at least 24 hours,
-   * including across application restarts.
+   * Pending and uncertain provider outcomes block
+   * additional paid lookups until resolved.
    *
-   * Longer-lived security audit records and
-   * account/IP/device rate limiting are separate
-   * integration responsibilities.
+   * The next eligible time is based on actual
+   * lookup timestamps, not the latest attempt
+   * plus an arbitrary waiting period.
    */
 
-  static getAttemptBudget(existing, ninHash, now) {
-    const windowStartedAt = existing?.attemptWindowStartedAt
-      ? new Date(existing.attemptWindowStartedAt).getTime()
-      : NaN;
+  static async getAttemptBudget(existing, ninHash, now, userId, session) {
+    // ───────── BLOCK UNRESOLVED PROVIDER ATTEMPTS ─────────
 
-    const withinWindow =
-      Number.isFinite(windowStartedAt) &&
-      windowStartedAt <= now.getTime() &&
-      now.getTime() - windowStartedAt < ATTEMPT_WINDOW_MS;
+    /*
+     * A different NIN must not bypass an unresolved
+     * provider request belonging to the same account.
+     *
+     * This also protects the account if temporary
+     * evidence is replaced or removed by TTL cleanup.
+     */
 
-    const previousHashes = withinWindow
-      ? Array.isArray(existing?.attemptDistinctNINHashes)
-        ? existing.attemptDistinctNINHashes
-        : []
-      : [];
+    const unresolved = await NINLookupAttempt.findOne({
+      user: userId,
+      status: {
+        $in: ["pending", "uncertain"],
+      },
+    })
+      .select("status")
+      .session(session);
 
-    const previousCount = withinWindow ? Number(existing?.attemptCount || 0) : 0;
-
-    const distinctHashes = [...new Set([...previousHashes, ninHash])];
-
-    if (
-      distinctHashes.length > MAX_DISTINCT_NINS_PER_WINDOW ||
-      previousCount >= MAX_LOOKUPS_PER_WINDOW
-    ) {
+    if (unresolved) {
       throw this.createError({
         message:
-          "We need to review further NIN verification attempts on this account. Please contact support.",
-        code: "NIN_ONBOARDING_REVIEW_REQUIRED",
-        statusCode: 429,
+          "A previous NIN lookup is unresolved. Please contact support before requesting another lookup.",
+        code: "NIN_ONBOARDING_OUTCOME_UNCERTAIN",
+        statusCode: 409,
       });
     }
 
+    // ───────── LOAD ROLLING 24-HOUR ATTEMPTS ─────────
+
+    /*
+     * Read the current window from durable records.
+     *
+     * Do not cap the query at eight results because
+     * the precise retry time should remain correct
+     * if historical records exceed the normal limit.
+     */
+
+    const attempts = await NINLookupAttempt.find({
+      user: userId,
+      startedAt: {
+        $gt: new Date(now.getTime() - ATTEMPT_WINDOW_MS),
+        $lte: now,
+      },
+    })
+      .select("+ninHash startedAt")
+      .sort({ startedAt: 1 })
+      .session(session)
+      .lean();
+
+    const distinctHashes = new Set(attempts.map((attempt) => attempt.ninHash));
+
+    const totalLimitReached = attempts.length >= MAX_LOOKUPS_PER_WINDOW;
+
+    const distinctLimitReached =
+      !distinctHashes.has(ninHash) && distinctHashes.size >= MAX_DISTINCT_NINS_PER_WINDOW;
+
+    // ───────── CALCULATE NEXT ELIGIBLE TIME ─────────
+
+    if (totalLimitReached || distinctLimitReached) {
+      let nextEligibleAtMs = 0;
+
+      if (totalLimitReached) {
+        /*
+         * Enough old attempts must leave the window
+         * to reduce the active count below eight.
+         *
+         * With exactly eight attempts, the oldest
+         * timestamp is the one that matters.
+         */
+
+        const index = attempts.length - MAX_LOOKUPS_PER_WINDOW;
+
+        const totalEligibleAt = new Date(attempts[index].startedAt).getTime() + ATTEMPT_WINDOW_MS;
+
+        nextEligibleAtMs = Math.max(nextEligibleAtMs, totalEligibleAt);
+      }
+
+      if (distinctLimitReached) {
+        /*
+         * A distinct NIN remains counted until its
+         * most recent lookup leaves the window.
+         *
+         * For a fifth NIN, at least one existing
+         * identifier must stop counting.
+         *
+         * This also handles an abnormal history
+         * containing more than four identifiers.
+         */
+
+        const lastLookupByHash = new Map();
+
+        for (const attempt of attempts) {
+          const startedAtMs = new Date(attempt.startedAt).getTime();
+
+          const previous = lastLookupByHash.get(attempt.ninHash) || 0;
+
+          lastLookupByHash.set(attempt.ninHash, Math.max(previous, startedAtMs));
+        }
+
+        const expiryTimes = [...lastLookupByHash.values()]
+          .map((startedAtMs) => startedAtMs + ATTEMPT_WINDOW_MS)
+          .sort((first, second) => first - second);
+
+        const index = expiryTimes.length - MAX_DISTINCT_NINS_PER_WINDOW;
+
+        nextEligibleAtMs = Math.max(nextEligibleAtMs, expiryTimes[index]);
+      }
+
+      /*
+       * If both limits apply, the later expiry wins.
+       * Both restrictions must be satisfied before
+       * another chargeable lookup is allowed.
+       */
+
+      const nextEligibleAt = new Date(nextEligibleAtMs).toISOString();
+
+      const retryAfterSeconds = Math.max(1, Math.ceil((nextEligibleAtMs - now.getTime()) / 1000));
+
+      const limitType =
+        totalLimitReached && distinctLimitReached
+          ? "both"
+          : totalLimitReached
+            ? "total"
+            : "distinct";
+
+      const message = totalLimitReached
+        ? "You have reached the limit of 8 NIN lookups in 24 hours. Please try again when your allowance becomes available."
+        : "You have reached the limit of 4 different NINs in 24 hours. Please try again when your allowance becomes available.";
+
+      const error = this.createError({
+        message,
+        code: "NIN_ONBOARDING_RATE_LIMITED",
+        statusCode: 429,
+        details: {
+          limitType,
+          nextEligibleAt,
+          retryAfterSeconds,
+        },
+      });
+
+      /*
+       * These explicit properties allow the
+       * controller to expose approved retry fields
+       * without returning arbitrary error details.
+       */
+
+      error.nextEligibleAt = nextEligibleAt;
+      error.retryAfterSeconds = retryAfterSeconds;
+      error.limitType = limitType;
+
+      throw error;
+    }
+
+    // ───────── LOOKUP IS WITHIN ALLOWANCE ─────────
+
     return {
-      attemptWindowStartedAt: withinWindow ? new Date(windowStartedAt) : now,
+      attemptWindowStartedAt: attempts[0]?.startedAt || now,
 
-      attemptCount: previousCount + 1,
+      attemptCount: attempts.length + 1,
 
-      attemptDistinctNINHashes: distinctHashes,
+      attemptDistinctNINHashes: [...new Set([...distinctHashes, ninHash])],
     };
+  }
+
+  static async recordAttempt({ userId, input, context, claimId, requestReference, now, session }) {
+    await NINLookupAttempt.create(
+      [
+        {
+          user: userId,
+          ninHash: input.ninHash,
+
+          provider: context.provider,
+          providerEnvironment: context.environment,
+
+          processingClaimId: claimId,
+          requestReference,
+
+          startedAt: now,
+          status: "pending",
+        },
+      ],
+      { session }
+    );
   }
 
   // ───────────────────── PUBLIC RESPONSE ─────────────────────
 
   /*
-   * Only authenticated and authorised callers
-   * may expose this result to the account owner.
+   * Only authenticated authorised callers may
+   * receive registry-name preview information.
    *
-   * A corrected or superseded preview must never
-   * be presented as the current identity.
+   * Corrected or superseded evidence must not be
+   * displayed as the current identity.
    *
    * Acknowledgement does not authenticate
-   * NIN ownership.
+   * ownership of the NIN.
    */
 
   static getPublicResult(record, { cached = false } = {}) {
     const matched = record.status === "matched";
-
     const stagingOnly = record.providerEnvironment !== "production";
 
     const correctionPending = Boolean(record.correctionRequestedAt);
@@ -532,9 +685,8 @@ class PreOnboardingNINVerificationService {
       verificationId: String(record._id),
 
       /*
-       * The internal request reference binds
-       * acknowledgement and correction to the
-       * exact currently displayed lookup result.
+       * This reference pins name acknowledgement
+       * and correction to the displayed result.
        */
 
       requestReference: record.requestReference || null,
@@ -562,6 +714,7 @@ class PreOnboardingNINVerificationService {
       registryLegalName,
 
       checkedAt: record.checkedAt || null,
+
       expiresAt: record.resultExpiresAt || null,
 
       message,
@@ -617,10 +770,21 @@ class PreOnboardingNINVerificationService {
 
   // ───────────────────── ATOMIC LOOKUP CLAIM ─────────────────────
 
-  static async acquireLookupClaim({ userId, input, context, claimId, requestReference, now }) {
+  static async acquireLookupClaim(args) {
+    return runWithOptionalTransaction({}, (session) =>
+      this.acquireLookupClaimInTransaction(args, session)
+    );
+  }
+
+  static async acquireLookupClaimInTransaction(
+    { userId, input, context, claimId, requestReference, now },
+    session
+  ) {
     const existing = await PreOnboardingNINVerification.findOne({
       user: userId,
-    }).select(EVIDENCE_SELECTION);
+    })
+      .select(EVIDENCE_SELECTION)
+      .session(session);
 
     if (existing) {
       // ───────── IN-FLIGHT LOOKUP ─────────
@@ -664,10 +828,10 @@ class PreOnboardingNINVerificationService {
 
         /*
          * The applicant returned to the same NIN
-         * during correction.
+         * after beginning a correction.
          *
-         * Restore its preview without a second
-         * chargeable provider lookup.
+         * Restore its valid cached preview without
+         * another potentially chargeable lookup.
          *
          * The old acknowledgement remains cleared.
          */
@@ -676,9 +840,14 @@ class PreOnboardingNINVerificationService {
           {
             _id: existing._id,
             user: userId,
+
             status: existing.status,
             requestReference: existing.requestReference,
             __v: existing.__v,
+
+            expiresAt: {
+              $gt: now,
+            },
 
             resultExpiresAt: {
               $gt: now,
@@ -686,11 +855,13 @@ class PreOnboardingNINVerificationService {
           },
           {
             $set: {
+              requestReference,
               correctionRequestedAt: null,
 
               nameAcknowledgedAt: null,
               nameAcknowledgedRequestReference: null,
             },
+
             $inc: {
               __v: 1,
             },
@@ -699,7 +870,9 @@ class PreOnboardingNINVerificationService {
             new: true,
             runValidators: true,
           }
-        ).select(EVIDENCE_SELECTION);
+        )
+          .select(EVIDENCE_SELECTION)
+          .session(session);
 
         if (!restored) {
           throw this.createError({
@@ -718,16 +891,12 @@ class PreOnboardingNINVerificationService {
       // ───────── UNCERTAIN PREVIOUS OUTCOME ─────────
 
       /*
-       * A failed lookup whose provider outcome
-       * is uncertain must not automatically
-       * repeat the same NIN request.
+       * A previous uncertain provider result must
+       * not trigger another paid request.
        *
-       * This protects against duplicate charges
-       * after an ambiguous timeout.
-       *
-       * A genuinely different NIN may still be
-       * submitted as a correction, subject to
-       * account-level attempt limits.
+       * The durable attempt-budget check also
+       * blocks a different NIN while an unresolved
+       * provider attempt exists.
        */
 
       if (
@@ -743,20 +912,17 @@ class PreOnboardingNINVerificationService {
         });
       }
 
-      // ───────── IMMEDIATE CORRECTION ─────────
+      // ───────── REPLACEMENT LOOKUP ─────────
 
       /*
-       * There is intentionally no blanket
-       * time-based cooldown here.
+       * No blanket correction cooldown applies.
        *
-       * The new NIN replaces the old result
-       * immediately after a successful atomic claim.
-       *
-       * Previous name acknowledgement and
-       * legal-name evidence are cleared.
+       * A new NIN replaces the earlier temporary
+       * evidence after the previous request has
+       * safely completed and attempt limits pass.
        */
 
-      const budget = this.getAttemptBudget(existing, input.ninHash, now);
+      const budget = await this.getAttemptBudget(existing, input.ninHash, now, userId, session);
 
       const processingData = this.buildProcessingData({
         input,
@@ -786,7 +952,9 @@ class PreOnboardingNINVerificationService {
           new: true,
           runValidators: true,
         }
-      ).select(EVIDENCE_SELECTION);
+      )
+        .select(EVIDENCE_SELECTION)
+        .session(session);
 
       if (!claimed) {
         throw this.createError({
@@ -796,6 +964,16 @@ class PreOnboardingNINVerificationService {
         });
       }
 
+      await this.recordAttempt({
+        userId,
+        input,
+        context,
+        claimId,
+        requestReference,
+        now,
+        session,
+      });
+
       return {
         record: claimed,
         cached: false,
@@ -804,7 +982,7 @@ class PreOnboardingNINVerificationService {
 
     // ───────── FIRST LOOKUP ─────────
 
-    const budget = this.getAttemptBudget(null, input.ninHash, now);
+    const budget = await this.getAttemptBudget(null, input.ninHash, now, userId, session);
 
     const processingData = this.buildProcessingData({
       input,
@@ -816,9 +994,24 @@ class PreOnboardingNINVerificationService {
     });
 
     try {
-      const created = await PreOnboardingNINVerification.create({
-        user: userId,
-        ...processingData,
+      const [created] = await PreOnboardingNINVerification.create(
+        [
+          {
+            user: userId,
+            ...processingData,
+          },
+        ],
+        { session }
+      );
+
+      await this.recordAttempt({
+        userId,
+        input,
+        context,
+        claimId,
+        requestReference,
+        now,
+        session,
       });
 
       return {
@@ -840,7 +1033,16 @@ class PreOnboardingNINVerificationService {
 
   // ───────────────────── COMPLETE LOOKUP CLAIM ─────────────────────
 
-  static async completeClaim({ recordId, userId, claimId, updates }) {
+  static async completeClaim(args) {
+    return runWithOptionalTransaction({}, (session) =>
+      this.completeClaimInTransaction(args, session)
+    );
+  }
+
+  static async completeClaimInTransaction(
+    { recordId, userId, claimId, requestReference, context, updates },
+    session
+  ) {
     if (!updates || !["matched", "not_found", "failed", "needs_review"].includes(updates.status)) {
       throw this.createError({
         message: "Invalid NIN lookup completion status.",
@@ -849,9 +1051,15 @@ class PreOnboardingNINVerificationService {
       });
     }
 
-    const checkedAt = new Date(updates.checkedAt);
+    const checkedAt =
+      updates.checkedAt instanceof Date ? new Date(updates.checkedAt) : new Date(NaN);
 
-    if (Number.isNaN(checkedAt.getTime())) {
+    if (
+      Number.isNaN(checkedAt.getTime()) ||
+      checkedAt > new Date() ||
+      !context ||
+      !requestReference
+    ) {
       throw this.createError({
         message: "Invalid NIN lookup completion timestamp.",
         code: "NIN_ONBOARDING_INVALID_COMPLETION",
@@ -887,6 +1095,28 @@ class PreOnboardingNINVerificationService {
       });
     }
 
+    if (updates.status === "failed" && updates.registryFound != null) {
+      throw this.createError({
+        message: "Failed lookup cannot confirm a registry outcome.",
+        code: "NIN_ONBOARDING_INVALID_COMPLETION",
+        statusCode: 500,
+      });
+    }
+
+    const resultExpiresAt = new Date(checkedAt.getTime() + RESULT_TTL_MS);
+
+    /*
+     * The claim ID and request reference fence the
+     * provider response to the original lookup.
+     *
+     * Do not require correctionRequestedAt to be
+     * null here or overwrite that flag.
+     *
+     * If a correction was marked concurrently,
+     * the provider result can still be recorded
+     * without making it eligible for onboarding.
+     */
+
     const record = await PreOnboardingNINVerification.findOneAndUpdate(
       {
         _id: recordId,
@@ -894,15 +1124,22 @@ class PreOnboardingNINVerificationService {
 
         status: "processing",
         processingClaimId: claimId,
+        requestReference,
+
+        provider: context.provider,
+        providerEnvironment: context.environment,
+
+        lookupStartedAt: {
+          $lte: checkedAt,
+        },
 
         expiresAt: {
-          $gt: new Date(),
+          $gte: resultExpiresAt,
         },
       },
       {
         $set: {
           status: updates.status,
-
           checkedAt,
 
           registryFound: updates.registryFound ?? null,
@@ -922,20 +1159,17 @@ class PreOnboardingNINVerificationService {
           errorCode: updates.errorCode || null,
 
           processingClaimId: null,
-
           processingLeaseExpiresAt: null,
 
           /*
-           * Validity of lookup evidence is
-           * separate from the TTL retention
-           * of the attempt-budget record.
+           * Result validity is separate from
+           * the retention period of audit history.
            */
 
-          resultExpiresAt: new Date(checkedAt.getTime() + RESULT_TTL_MS),
+          resultExpiresAt,
 
           nameAcknowledgedAt: null,
           nameAcknowledgedRequestReference: null,
-          correctionRequestedAt: null,
         },
 
         $inc: {
@@ -945,12 +1179,46 @@ class PreOnboardingNINVerificationService {
       {
         new: true,
         runValidators: true,
+        session,
       }
     ).select(EVIDENCE_SELECTION);
 
     if (!record) {
       throw this.createError({
         message: "The NIN lookup result could not be recorded safely.",
+        code: "NIN_ONBOARDING_CLAIM_LOST",
+        statusCode: 409,
+      });
+    }
+
+    const attempt = await NINLookupAttempt.findOneAndUpdate(
+      {
+        user: userId,
+        processingClaimId: claimId,
+        requestReference,
+
+        status: "pending",
+
+        provider: context.provider,
+        providerEnvironment: context.environment,
+      },
+      {
+        $set: {
+          status: updates.status === "failed" ? "uncertain" : updates.status,
+
+          completedAt: checkedAt,
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+        session,
+      }
+    );
+
+    if (!attempt) {
+      throw this.createError({
+        message: "NIN lookup audit claim is unavailable.",
         code: "NIN_ONBOARDING_CLAIM_LOST",
         statusCode: 409,
       });
@@ -985,11 +1253,8 @@ class PreOnboardingNINVerificationService {
 
       return {
         status: "not_found",
-
         registryFound: false,
-
         registryLegalName: null,
-
         reason: "NIN registry record not confirmed.",
       };
     }
@@ -1006,7 +1271,6 @@ class PreOnboardingNINVerificationService {
 
     return {
       status: "matched",
-
       registryFound: true,
 
       registryLegalName: {
@@ -1035,20 +1299,17 @@ class PreOnboardingNINVerificationService {
     }
 
     const normalizedNIN = this.normalizeNIN(nin);
-
     const context = this.getProviderContext();
 
     /*
-     * Prevent chargeable lookups when the
-     * current provider cannot legally support
-     * the agreed full-name preview UX.
+     * Prevent chargeable requests when full-name
+     * preview permission is unavailable.
      */
 
     this.assertNamePreviewAllowed(context.provider);
 
     const input = {
       ninHash: this.getNINHash(normalizedNIN),
-
       ninLast4: normalizedNIN.slice(-4),
     };
 
@@ -1078,20 +1339,17 @@ class PreOnboardingNINVerificationService {
     /*
      * Exactly one provider request per claim.
      *
-     * No provider request occurs inside a
-     * MongoDB onboarding transaction.
-     *
-     * Do not send account registration names.
+     * No provider request runs inside the MongoDB
+     * onboarding transaction.
      *
      * Raw NIN stays in memory only.
+     * No registration names are sent.
      */
 
     try {
       lookup = await IdentityVerificationService.lookupIdentityRecord({
         method: "nin",
-
         identifier: normalizedNIN,
-
         reference: requestReference,
       });
 
@@ -1118,17 +1376,19 @@ class PreOnboardingNINVerificationService {
 
     if (lookupError) {
       /*
-       * A failed provider call may have been
-       * accepted or charged remotely.
+       * A failed provider call may have been accepted
+       * or charged remotely.
        *
-       * Mark its outcome uncertain rather than
-       * silently retrying the same identifier.
+       * Record its uncertain outcome. Never
+       * automatically retry the request.
        */
 
       const record = await this.completeClaim({
         recordId: claim.record._id,
         userId,
         claimId,
+        requestReference,
+        context,
 
         updates: {
           status: "failed",
@@ -1146,17 +1406,19 @@ class PreOnboardingNINVerificationService {
       return this.getPublicResult(record);
     }
 
-    // ───────── ASSESS RESPONSE ─────────
+    // ───────── ASSESS PROVIDER RESPONSE ─────────
 
     let evaluation;
 
     try {
       evaluation = this.evaluateLookup({ lookup });
-    } catch (_) {
+    } catch {
       const record = await this.completeClaim({
         recordId: claim.record._id,
         userId,
         claimId,
+        requestReference,
+        context,
 
         updates: {
           status: "failed",
@@ -1174,16 +1436,17 @@ class PreOnboardingNINVerificationService {
       return this.getPublicResult(record);
     }
 
-    // ───────── SAVE RESULT ─────────
+    // ───────── PERSIST PROVIDER RESULT ─────────
 
     const record = await this.completeClaim({
       recordId: claim.record._id,
       userId,
       claimId,
+      requestReference,
+      context,
 
       updates: {
         status: evaluation.status,
-
         checkedAt,
 
         providerReference: lookup.providerReference || null,
@@ -1205,16 +1468,13 @@ class PreOnboardingNINVerificationService {
 
   /*
    * The applicant acknowledges the legal name
-   * returned by the currently displayed lookup.
+   * displayed for the current registry lookup.
    *
-   * The requestReference pins the action to
-   * the exact lookup attempt being confirmed.
+   * requestReference prevents an old browser tab
+   * from confirming superseded evidence.
    *
-   * An old browser tab cannot confirm a
-   * superseded verification result.
-   *
-   * Acknowledgement is not identity-holder
-   * authentication.
+   * Acknowledgement does not authenticate
+   * ownership of the NIN.
    */
 
   static async acknowledgeRegistryName({ userId, requestReference } = {}) {
@@ -1226,24 +1486,58 @@ class PreOnboardingNINVerificationService {
 
     const now = new Date();
 
+    const evidence = await PreOnboardingNINVerification.findOne({
+      user: userId,
+      requestReference: reference,
+    }).select(EVIDENCE_SELECTION);
+
+    if (
+      !evidence ||
+      evidence.status !== "matched" ||
+      evidence.registryFound !== true ||
+      evidence.correctionRequestedAt ||
+      evidence.consumedAt ||
+      !this.hasNotExpired(evidence, now) ||
+      !evidence.checkedAt ||
+      evidence.checkedAt > now ||
+      evidence.checkedAt < evidence.lookupStartedAt
+    ) {
+      throw this.createError({
+        message: "This NIN preview is no longer current. Please verify your NIN again.",
+        code: "NIN_ONBOARDING_PREVIEW_UNAVAILABLE",
+        statusCode: 409,
+      });
+    }
+
+    // Confirm disclosure permission before acknowledgement.
+    this.assertNamePreviewAllowed(evidence.provider);
+
+    this.normalizeRegistryLegalName(evidence.registryLegalName);
+
     const record = await PreOnboardingNINVerification.findOneAndUpdate(
       {
+        _id: evidence._id,
         user: userId,
+        __v: evidence.__v,
 
         status: "matched",
         requestReference: reference,
 
         registryFound: true,
         correctionRequestedAt: null,
+        consumedAt: null,
 
         resultExpiresAt: {
+          $gt: now,
+        },
+
+        expiresAt: {
           $gt: now,
         },
       },
       {
         $set: {
           nameAcknowledgedAt: now,
-
           nameAcknowledgedRequestReference: reference,
         },
 
@@ -1259,7 +1553,7 @@ class PreOnboardingNINVerificationService {
 
     if (!record) {
       throw this.createError({
-        message: "This NIN preview is no longer current. Please verify your NIN again.",
+        message: "This NIN preview has changed. Please refresh and try again.",
         code: "NIN_ONBOARDING_PREVIEW_UNAVAILABLE",
         statusCode: 409,
       });
@@ -1268,27 +1562,23 @@ class PreOnboardingNINVerificationService {
     return this.getPublicResult(record);
   }
 
-  // ───────────────────── BEGIN IMMEDIATE CORRECTION ─────────────────────
+  // ───────────────────── CHANGE NIN ─────────────────────
 
   /*
    * Called when the applicant selects:
    *
-   * "No, correct my NIN".
+   * "No, enter a different NIN".
    *
-   * This immediately clears the current
-   * name acknowledgement.
+   * A processing claim must never be cancelled
+   * or released while its provider request is active.
    *
-   * No blanket cooldown is applied.
+   * For a completed result, correction clears
+   * any existing name acknowledgement.
    *
-   * The old provider evidence remains cached
-   * temporarily so re-entering the exact same
-   * NIN need not trigger another paid request.
+   * Matched evidence can remain cached temporarily,
+   * but cannot be consumed during correction.
    *
-   * The old result is not consumable while
-   * correctionRequestedAt is present.
-   *
-   * A different NIN may replace the evidence
-   * atomically through verifyNIN.
+   * No blanket correction cooldown applies.
    */
 
   static async beginNINCorrection({ userId, requestReference } = {}) {
@@ -1300,26 +1590,106 @@ class PreOnboardingNINVerificationService {
 
     const now = new Date();
 
-    const record = await PreOnboardingNINVerification.findOneAndUpdate(
-      {
-        user: userId,
+    const existing = await PreOnboardingNINVerification.findOne({
+      user: userId,
+      requestReference: reference,
+    }).select(EVIDENCE_SELECTION);
 
-        status: "matched",
-        requestReference: reference,
+    if (
+      !existing ||
+      existing.consumedAt ||
+      !["processing", "matched", "needs_review", "not_found", "failed", "cancelled"].includes(
+        existing.status
+      )
+    ) {
+      throw this.createError({
+        message: "This NIN lookup has changed or has already been used.",
+        code: "NIN_ONBOARDING_CORRECTION_UNAVAILABLE",
+        statusCode: 409,
+      });
+    }
+
+    // ───────── PROTECT ACTIVE PROCESSING CLAIM ─────────
+
+    /*
+     * The UI disables Change NIN during processing,
+     * but the backend must enforce that independently.
+     *
+     * A processing claim retains its lease until the
+     * provider outcome has been safely recorded.
+     */
+
+    if (existing.status === "processing") {
+      const leaseExpired =
+        existing.processingLeaseExpiresAt && existing.processingLeaseExpiresAt <= now;
+
+      throw this.createError({
+        message: leaseExpired
+          ? "Your previous NIN lookup has an uncertain outcome. Please contact support."
+          : "Please wait for the current NIN lookup to finish before changing your NIN.",
+
+        code: leaseExpired
+          ? "NIN_ONBOARDING_OUTCOME_UNCERTAIN"
+          : "NIN_ONBOARDING_ALREADY_PROCESSING",
+
+        statusCode: 409,
+      });
+    }
+
+    if (existing.correctionRequestedAt) {
+      return this.getPublicResult(existing);
+    }
+
+    // ───────── INVALIDATE PREVIOUS ACKNOWLEDGEMENT ─────────
+
+    const changes = {
+      correctionRequestedAt: now,
+
+      nameAcknowledgedAt: null,
+      nameAcknowledgedRequestReference: null,
+    };
+
+    /*
+     * Completed unmatched results may be cancelled.
+     * Matched results remain temporarily cached so
+     * re-entering the same NIN does not require
+     * another provider call.
+     */
+
+    if (existing.status !== "matched") {
+      Object.assign(changes, {
+        status: "cancelled",
+
+        processingClaimId: null,
+        processingLeaseExpiresAt: null,
+
+        registryFound: null,
+        registryLegalName: null,
+
+        checkedAt: null,
+        resultExpiresAt: null,
 
         consumedAt: null,
+        providerReference: null,
 
-        resultExpiresAt: {
-          $gt: now,
-        },
+        errorCode: null,
+        reason: null,
+      });
+    }
+
+    const record = await PreOnboardingNINVerification.findOneAndUpdate(
+      {
+        _id: existing._id,
+        user: userId,
+
+        requestReference: reference,
+        status: existing.status,
+        __v: existing.__v,
+
+        consumedAt: null,
       },
       {
-        $set: {
-          correctionRequestedAt: now,
-
-          nameAcknowledgedAt: null,
-          nameAcknowledgedRequestReference: null,
-        },
+        $set: changes,
 
         $inc: {
           __v: 1,
@@ -1333,7 +1703,7 @@ class PreOnboardingNINVerificationService {
 
     if (!record) {
       throw this.createError({
-        message: "This NIN preview has changed. Please start verification again.",
+        message: "This NIN lookup changed. Please refresh and try again.",
         code: "NIN_ONBOARDING_CORRECTION_UNAVAILABLE",
         statusCode: 409,
       });
@@ -1345,23 +1715,20 @@ class PreOnboardingNINVerificationService {
   // ───────────────────── ONBOARDING EVIDENCE ─────────────────────
 
   /*
-   * Trusted internal method.
+   * The trusted onboarding service requires:
    *
-   * Normal professional onboarding requires:
-   *
-   * - Eligible professional account;
-   * - Successful production NIN lookup;
+   * - An eligible professional account;
+   * - A successful production NIN lookup;
    * - Valid, unexpired evidence;
-   * - Explicit user name acknowledgement;
-   * - Acknowledgement of the current lookup;
+   * - Explicit lookup consent;
+   * - Current name acknowledgement;
    * - No pending NIN correction;
-   * - Complete structured registryLegalName;
-   * - Valid HMAC-protected identifier evidence.
+   * - Structured registry legal names.
    *
-   * Registry lookup and acknowledgement do not
-   * establish identity-holder authentication.
+   * A registry lookup does not authenticate
+   * the identity holder.
    *
-   * No external provider call occurs here.
+   * No external provider request occurs here.
    */
 
   static async getEvidenceForOnboarding({ userId, session = null } = {}) {
@@ -1405,7 +1772,7 @@ class PreOnboardingNINVerificationService {
       });
     }
 
-    // ───────── REQUIRED RESULT ─────────
+    // ───────── REQUIRE MATCHED REGISTRY EVIDENCE ─────────
 
     if (evidence.status !== CONSUMABLE_STATUS || evidence.registryFound !== true) {
       throw this.createError({
@@ -1425,7 +1792,7 @@ class PreOnboardingNINVerificationService {
       });
     }
 
-    // ───────── RESULT VALIDITY ─────────
+    // ───────── VALID RESULT ─────────
 
     if (!this.hasNotExpired(evidence, now) || evidence.consumedAt) {
       throw this.createError({
@@ -1435,7 +1802,7 @@ class PreOnboardingNINVerificationService {
       });
     }
 
-    // ───────── NO CORRECTION IN PROGRESS ─────────
+    // ───────── NO PENDING CORRECTION ─────────
 
     if (evidence.correctionRequestedAt) {
       throw this.createError({
@@ -1496,7 +1863,7 @@ class PreOnboardingNINVerificationService {
       });
     }
 
-    // ───────── REGISTRY LEGAL NAME ─────────
+    // ───────── STRUCTURED REGISTRY LEGAL NAME ─────────
 
     this.normalizeRegistryLegalName(evidence.registryLegalName);
 
@@ -1506,15 +1873,13 @@ class PreOnboardingNINVerificationService {
   // ───────────────────── TRANSACTIONAL CONSUMPTION ─────────────────────
 
   /*
-   * Only trusted onboarding services should
-   * invoke this method.
+   * Only trusted onboarding services invoke this.
    *
-   * The permanent NIN KYC record, User legal
-   * names and legal-name provenance must be
-   * persisted in the same transaction.
+   * Permanent KYC evidence, User legal names and
+   * provenance must be persisted in the same
+   * MongoDB transaction.
    *
-   * If onboarding fails, evidence consumption
-   * is rolled back.
+   * An onboarding failure rolls back consumption.
    */
 
   static async consumeForOnboarding({ userId, session } = {}) {
@@ -1538,17 +1903,18 @@ class PreOnboardingNINVerificationService {
     const consumedAt = new Date();
 
     /*
-     * The acknowledgement, reference and correction
-     * state are checked again in the atomic update.
+     * Pin consumption to the current lookup,
+     * acknowledgement and correction state.
      *
-     * A superseded or newly corrected lookup
-     * cannot be consumed using stale evidence.
+     * Superseded or corrected evidence cannot
+     * be consumed using a stale request reference.
      */
 
     const consumed = await PreOnboardingNINVerification.findOneAndUpdate(
       {
         _id: evidence._id,
         user: userId,
+        __v: evidence.__v,
 
         status: CONSUMABLE_STATUS,
         consumedAt: null,
@@ -1598,15 +1964,14 @@ class PreOnboardingNINVerificationService {
     }
 
     /*
-     * Return the already validated matched
-     * evidence, including registryLegalName.
+     * Return the previously validated evidence
+     * including the structured registry name.
      *
      * OnboardingService creates permanent KYC
-     * evidence and saves User legal names in
-     * the same transaction.
+     * history and establishes legal-name provenance
+     * in the same transaction.
      *
-     * This does not independently authenticate
-     * the NIN holder or approve the professional.
+     * This does not approve the professional.
      */
 
     return evidence;

@@ -154,7 +154,14 @@ class ShiftPinAccessService {
     return ShiftPinAccessService.selectRelevantOccurrence(occurrences, null, currentTime);
   }
 
-  /* ─────────────────────────────── FUNDING / ASSIGNMENT AUTHORIZATION ─────────────────────────────── */
+  /* ─────────────────────────────── FUNDING / ASSIGNMENT STATE ─────────────────────────────── */
+
+  /*
+   * These helpers describe operational readiness.
+   *
+   * They must not be used to restrict employer visibility
+   * of PINs that were generated at occurrence creation.
+   */
 
   static isShiftFundedForAttendance(shift) {
     if (!shift) {
@@ -189,38 +196,74 @@ class ShiftPinAccessService {
       !ShiftPinAccessService.isOccurrenceTerminal(occurrence) &&
       PIN_ELIGIBLE_OCCURRENCE_STATUSES.includes(occurrence.status) &&
       PIN_ELIGIBLE_ATTENDANCE_STATUSES.includes(occurrence.attendanceStatus) &&
-      !occurrence.checkedOutAt
+      !occurrence.checkedOutAt &&
+      !occurrence.earlyTermination?.occurred
     );
   }
 
+  /* ─────────────────────────────── PIN VISIBILITY ─────────────────────────────── */
+
+  /**
+   * PIN VISIBILITY POLICY
+   *
+   * Every ShiftOccurrence must receive its check-in and
+   * checkout PINs when the occurrence is created.
+   *
+   * Both PINs are visible to authorized employer users
+   * throughout the occurrence lifecycle.
+   *
+   * Visibility is independent of:
+   *
+   * - professional assignment;
+   * - protected funding status;
+   * - the scheduled attendance window;
+   * - check-in or checkout status;
+   * - settlement;
+   * - cancellation; and
+   * - occurrence completion.
+   *
+   * This service determines UI visibility only.
+   *
+   * Employer identity, business ownership and branch
+   * permissions are enforced by the PIN retrieval service.
+   *
+   * The professional's ability to use either PIN remains
+   * subject to ShiftAttendanceService's attendance rules.
+   */
   static buildOccurrencePinAuthorization({ shift, occurrence }) {
     const hasAssignment = ShiftPinAccessService.hasValidOccurrenceAssignment(occurrence);
 
     const shiftIsFunded = ShiftPinAccessService.isShiftFundedForAttendance(shift);
 
+    /*
+     * Retained as operational-state information.
+     * Neither value controls PIN visibility.
+     */
     const parentStateAllowsPinAccess = ShiftPinAccessService.parentStateAllowsPinAccess(shift);
 
     const occurrenceStateAllowsPinAccess =
       ShiftPinAccessService.occurrenceStateAllowsPinAccess(occurrence);
 
-    const canViewAttendancePins = Boolean(
-      shiftIsFunded && parentStateAllowsPinAccess && hasAssignment && occurrenceStateAllowsPinAccess
-    );
+    /*
+     * An occurrence and its parent Shift are required to
+     * construct valid occurrence-specific retrieval actions.
+     *
+     * Employer permission is combined with these flags by
+     * the caller. The backend independently authorizes access.
+     */
+    const occurrenceAvailable = Boolean(shift?._id && occurrence?._id);
 
-    let unavailableMessage = null;
+    const canViewAttendancePins = occurrenceAvailable;
 
-    if (!shiftIsFunded) {
-      unavailableMessage = "Protected Shift funding is not active for attendance PIN access.";
-    } else if (!parentStateAllowsPinAccess) {
-      unavailableMessage = "Attendance PINs are not available in the current Shift state.";
-    } else if (!hasAssignment) {
-      unavailableMessage =
-        "An assigned professional is required before attendance PINs are available.";
-    } else if (ShiftPinAccessService.isOccurrenceTerminal(occurrence) || occurrence?.checkedOutAt) {
-      unavailableMessage = "Attendance PINs are no longer available for this occurrence.";
-    } else if (!occurrenceStateAllowsPinAccess) {
-      unavailableMessage = "Attendance PINs are not available in the current occurrence state.";
-    }
+    const canRevealCheckInPin = occurrenceAvailable;
+
+    const canRevealCheckOutPin = occurrenceAvailable;
+
+    const hasAvailablePin = occurrenceAvailable;
+
+    const unavailableMessage = occurrenceAvailable
+      ? null
+      : "Attendance PINs are unavailable because the Shift occurrence could not be identified.";
 
     return {
       hasAssignment,
@@ -233,11 +276,11 @@ class ShiftPinAccessService {
 
       canViewAttendancePins,
 
-      canRevealCheckInPin: canViewAttendancePins,
+      canRevealCheckInPin,
 
-      canRevealCheckOutPin: canViewAttendancePins,
+      canRevealCheckOutPin,
 
-      hasAvailablePin: canViewAttendancePins,
+      hasAvailablePin,
 
       unavailableMessage,
     };

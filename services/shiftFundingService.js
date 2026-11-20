@@ -6,6 +6,11 @@ const Shift = require("../models/Shift");
 const ShiftOccurrence = require("../models/ShiftOccurrence");
 const Transaction = require("../models/Transaction");
 const EmployerProfile = require("../models/EmployerProfile");
+const Branch = require("../models/Branch");
+const EmployerMember = require("../models/EmployerMember");
+const User = require("../models/User");
+const FacilityPermitVerificationService = require("./facilityPermitVerificationService");
+const EmployerDelinquencyService = require("./employerDelinquencyService");
 
 const WalletService = require("./walletService");
 const PaystackService = require("./paystackService");
@@ -160,6 +165,137 @@ class ShiftFundingService {
     }
 
     return profile;
+  }
+
+  // Only initial funding/publication uses this gate. Existing payments,
+  // duplicate-payment returns and overtime obligations keep their own paths.
+  static async assertInitialFundingEligibility({ shift, userId = null, session = null }) {
+    if (session && (typeof session.inTransaction !== "function" || !session.inTransaction())) {
+      throw ShiftFundingService.createFundingError({
+        message: "Funding eligibility requires an active transaction.",
+        code: "SHIFT_FUNDING_ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+    const businessId = ShiftFundingService.validateObjectId(shift.business, "business ID");
+    const branchId = ShiftFundingService.validateObjectId(shift.branch, "branch ID");
+    const filter = { _id: branchId, business: businessId, isActive: true };
+    // An actual write coordinates with permit lifecycle writes on this branch.
+    // Do not rely on snapshot reads alone to serialize permit revocation.
+    const branch = session
+      ? await Branch.findOneAndUpdate(
+          filter,
+          { $inc: { __v: 1 } },
+          { new: true, session, timestamps: false }
+        )
+      : await Branch.findOne(filter);
+    if (!branch) {
+      throw ShiftFundingService.createFundingError({
+        message: "The Shift branch is no longer active or does not belong to this business.",
+        code: "SHIFT_FUNDING_BRANCH_INELIGIBLE",
+        statusCode: 403,
+      });
+    }
+    const business = await EmployerProfile.findById(businessId).session(session);
+    if (
+      !business ||
+      business.cacVerificationStatus !== "verified" ||
+      business.accountStatus !== "active"
+    ) {
+      throw ShiftFundingService.createFundingError({
+        message: "The business is not eligible to publish new Shifts.",
+        code: "SHIFT_FUNDING_BUSINESS_INELIGIBLE",
+        statusCode: 403,
+      });
+    }
+    if (userId != null) {
+      const actor = await User.findOne({
+        _id: userId,
+        role: "employer",
+        accountStatus: "active",
+        isVerified: true,
+      }).session(session);
+      let allowed = Boolean(actor && String(business.user) === String(userId));
+      if (actor && !allowed) {
+        const member = await EmployerMember.findOne({
+          user: userId,
+          business: businessId,
+          accountStatus: "active",
+          isCurrent: true,
+        }).session(session);
+        allowed = Boolean(
+          member &&
+          (member.role === "admin" ||
+            (member.role === "branch_manager" &&
+              Array.isArray(member.branches) &&
+              member.branches.some(
+                (assignment) =>
+                  String(assignment.branch) === String(branchId) &&
+                  assignment.role === "branch_manager"
+              )))
+        );
+      }
+      if (!allowed) {
+        throw ShiftFundingService.createFundingError({
+          message: "You do not have current permission to fund this Shift branch.",
+          code: "SHIFT_FUNDING_BRANCH_ACCESS_DENIED",
+          statusCode: 403,
+        });
+      }
+    }
+    // The updated permit service joins the funding transaction when supplied.
+    // On confirmation, this runs only after received money is recorded, and
+    // after terminal/idempotent/return handling has selected new publication.
+    await FacilityPermitVerificationService.activateDuePermits({
+      businessId,
+      branchId,
+      session,
+    });
+    const readiness = await FacilityPermitVerificationService.getBranchReadiness({
+      businessId,
+      branchId,
+      session,
+    });
+    if (
+      readiness?.canPost !== true ||
+      readiness.identityReady !== true ||
+      readiness.branchActive !== true ||
+      !Array.isArray(readiness.missingRequirementKeys) ||
+      readiness.missingRequirementKeys.length !== 0
+    ) {
+      throw ShiftFundingService.createFundingError({
+        message: "The Shift branch does not meet current facility permit requirements.",
+        code: "SHIFT_FUNDING_PERMITS_REQUIRED",
+        statusCode: 403,
+        details: {
+          reason: readiness?.reason || "branch_not_ready",
+          missingRequirementKeys: readiness?.missingRequirementKeys || [],
+        },
+      });
+    }
+    // Session is the SECOND argument in the supplied delinquency contract.
+    await EmployerDelinquencyService.assertCanPostShifts(
+      { businessId, currentTime: new Date() },
+      { session }
+    );
+  }
+
+  static async prepareInitialFundingEligibility({
+    shiftId,
+    employerProfileId,
+    employerContext,
+    userId,
+  }) {
+    const shift = await ShiftFundingService.getEmployerShiftForFunding({
+      shiftId,
+      employerProfileId,
+      employerContext,
+    });
+    // Preserve existing terminal-state and idempotent handling in each caller.
+    if (shift.status !== "pending_funding" || shift.paymentStatus !== "unpaid") return;
+    // Preliminary activation uses its own transaction. All final funding gates
+    // repeat activation and readiness inside their funding transaction.
+    await ShiftFundingService.assertInitialFundingEligibility({ shift, userId });
   }
 
   static assertCanFundShifts(employerContext) {
@@ -1896,6 +2032,13 @@ class ShiftFundingService {
       employerProfile
     );
 
+    await ShiftFundingService.prepareInitialFundingEligibility({
+      shiftId: normalizedShiftId,
+      employerProfileId: profile._id,
+      employerContext,
+      userId: normalizedUserId,
+    });
+
     const currency = ShiftFundingService.normalizeCurrency(
       profile.currency,
       "employer funding currency"
@@ -1937,6 +2080,12 @@ class ShiftFundingService {
           currency,
         });
       }
+
+      await ShiftFundingService.assertInitialFundingEligibility({
+        shift,
+        userId: normalizedUserId,
+        session,
+      });
 
       const unresolvedPaystackAttempt = await ShiftFundingService.getOpenPaystackAttempt({
         shiftId: shift._id,
@@ -2048,6 +2197,12 @@ class ShiftFundingService {
 
       shift.paymentStatus = "funded";
       shift.status = "open";
+
+      await ShiftFundingService.assertInitialFundingEligibility({
+        shift,
+        userId: normalizedUserId,
+        session,
+      });
 
       await shift.save({
         session,
@@ -2345,6 +2500,13 @@ class ShiftFundingService {
       employerProfile
     );
 
+    await ShiftFundingService.prepareInitialFundingEligibility({
+      shiftId: normalizedShiftId,
+      employerProfileId: profile._id,
+      employerContext,
+      userId: normalizedUserId,
+    });
+
     const currency = ShiftFundingService.normalizeCurrency(
       profile.currency,
       "employer checkout currency"
@@ -2398,6 +2560,12 @@ class ShiftFundingService {
           shift,
         };
       }
+
+      await ShiftFundingService.assertInitialFundingEligibility({
+        shift,
+        userId: normalizedUserId,
+        session,
+      });
 
       const openAttempt = await ShiftFundingService.getOpenPaystackAttempt({
         shiftId: shift._id,
@@ -2545,6 +2713,12 @@ class ShiftFundingService {
 
       shift.fundingMethod = "paystack_checkout";
       shift.fundingInitiatedAt = fundingInitiatedAt;
+
+      await ShiftFundingService.assertInitialFundingEligibility({
+        shift,
+        userId: normalizedUserId,
+        session,
+      });
 
       await shift.save({
         session,
@@ -3686,6 +3860,8 @@ class ShiftFundingService {
 
       shift.paymentStatus = "funded";
       shift.status = "open";
+
+      await ShiftFundingService.assertInitialFundingEligibility({ shift, session });
 
       await shift.save({
         session,

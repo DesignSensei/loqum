@@ -6,6 +6,8 @@ var SignUp = (function () {
   var googleSignupButton;
   var passwordMeter;
   var validator;
+  var isSubmitting = false;
+  var initialized = false;
 
   /* ---------- Get invitation token ---------- */
 
@@ -164,6 +166,7 @@ var SignUp = (function () {
 
     googleSignupButton.addEventListener("click", function (e) {
       e.preventDefault();
+      if (isSubmitting) return;
 
       if (isInviteSignup()) {
         var inviteGoogleUrl = googleSignupButton.dataset.googleSignupUrl;
@@ -182,7 +185,9 @@ var SignUp = (function () {
           return;
         }
 
-        window.location.href = inviteGoogleUrl;
+        var safeGoogleUrl = getLocalRedirect(inviteGoogleUrl, null);
+        if (!safeGoogleUrl) return;
+        window.location.href = safeGoogleUrl;
         return;
       }
 
@@ -255,6 +260,7 @@ var SignUp = (function () {
 
       firstName: {
         validators: {
+          stringLength: { max: 100, message: "Name must be 100 characters or fewer." },
           notEmpty: {
             message: "First Name is required.",
           },
@@ -263,6 +269,7 @@ var SignUp = (function () {
 
       lastName: {
         validators: {
+          stringLength: { max: 100, message: "Name must be 100 characters or fewer." },
           notEmpty: {
             message: "Last Name is required.",
           },
@@ -291,7 +298,7 @@ var SignUp = (function () {
             callback: function (input) {
               var value = String(input.value || "");
 
-              if (!value) {
+              if (value.length < 8) {
                 return false;
               }
 
@@ -383,131 +390,134 @@ var SignUp = (function () {
     });
   }
 
+  /* ---------- Validate fallback and redirect destinations ---------- */
+
+  function getLocalRedirect(value, fallback) {
+    if (typeof value !== "string" || value.charAt(0) !== "/" || value.slice(0, 2) === "//")
+      return fallback;
+    try {
+      var target = new URL(value, window.location.origin);
+      return target.origin === window.location.origin
+        ? target.pathname + target.search + target.hash
+        : fallback;
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  function validateWithoutPlugin() {
+    // novalidate disables automatic browser checks, not checkValidity().
+    if (!form.checkValidity()) return false;
+    var data = buildSignupSubmissionData();
+    if (typeof data.email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email.trim()))
+      return false;
+    if (
+      typeof data.password !== "string" ||
+      data.password.length < 8 ||
+      data.password !== data.confirmPassword
+    )
+      return false;
+    if (data.toc !== "1") return false;
+    if (isInviteSignup() || getSelectedRole() === "employer") {
+      return [data.firstName, data.lastName].every(function (name) {
+        return typeof name === "string" && name.trim().length > 0 && name.trim().length <= 100;
+      });
+    }
+    return getSelectedRole() === "professional";
+  }
+
   /* ---------- Handle submit loading ---------- */
 
   function setSubmitLoading(isLoading) {
+    isSubmitting = isLoading;
+    if (googleSignupButton) googleSignupButton.disabled = isLoading;
     if (!submitButton) return;
+    if (isLoading) submitButton.setAttribute("data-kt-indicator", "on");
+    else submitButton.removeAttribute("data-kt-indicator");
+    submitButton.disabled = isLoading;
+  }
 
-    if (isLoading) {
-      submitButton.setAttribute("data-kt-indicator", "on");
-      submitButton.disabled = true;
-      return;
-    }
-
-    submitButton.removeAttribute("data-kt-indicator");
-    submitButton.disabled = false;
+  function showMessage(text, icon) {
+    return Swal.fire({
+      text: text,
+      icon: icon,
+      buttonsStyling: false,
+      confirmButtonText: "Ok, got it!",
+      customClass: { confirmButton: "btn btn-primary" },
+    });
   }
 
   /* ---------- Submit signup form ---------- */
 
-  function submitForm() {
-    if (submitButton.disabled) return;
-
-    /*
-     * Keep the visible fields and the final
-     * submission consistent with the selected
-     * account type.
-     */
-
-    syncRegistrationNameFields();
-
-    if (!isInviteSignup()) {
-      var selectedRole = getSelectedRole();
-
-      if (!["professional", "employer"].includes(selectedRole)) {
-        Swal.fire({
-          text: "Please select an account type before continuing.",
-          icon: "error",
-          buttonsStyling: false,
-          confirmButtonText: "Ok, got it!",
-          customClass: {
-            confirmButton: "btn btn-primary",
-          },
-        });
-
-        return;
+  async function submitForm(data) {
+    try {
+      var response = await axios.post(form.action, data);
+      if (!response.data || response.data.success !== true) {
+        throw { response: response };
       }
+      await showMessage(response.data.message || "Account created successfully.", "success");
+      // Keep submissions locked while the success message is open and while navigating.
+      window.location.href = getLocalRedirect(response.data.redirectUrl, "/login");
+    } catch (error) {
+      var responseData = error.response && error.response.data;
+      var recoveryUrl = responseData && getLocalRedirect(responseData.redirectUrl, null);
+      var recoverOTP = recoveryUrl === "/two-factor" && [429, 503].includes(error.response.status);
+      if (!recoverOTP) setSubmitLoading(false);
+      await showMessage(
+        (responseData && responseData.message) || "An error occurred. Please try again.",
+        "error"
+      );
+      if (recoverOTP) window.location.href = recoveryUrl;
     }
-
-    setSubmitLoading(true);
-
-    var data = buildSignupSubmissionData();
-
-    axios
-      .post(form.action, data)
-      .then(function (response) {
-        setSubmitLoading(false);
-
-        Swal.fire({
-          text: response.data.message || "Account created successfully.",
-          icon: "success",
-          buttonsStyling: false,
-          confirmButtonText: "Ok, got it!",
-          customClass: {
-            confirmButton: "btn btn-primary",
-          },
-        }).then(function () {
-          window.location.href = response.data.redirectUrl || "/login";
-        });
-      })
-      .catch(function (error) {
-        setSubmitLoading(false);
-
-        Swal.fire({
-          text: error.response?.data?.message || "An error occurred. Please try again.",
-          icon: "error",
-          buttonsStyling: false,
-          confirmButtonText: "Ok, got it!",
-          customClass: {
-            confirmButton: "btn btn-primary",
-          },
-        });
-      });
   }
 
   /* ---------- Handle signup submission ---------- */
 
   function handleSignupSubmission() {
     if (!form || !submitButton) return;
-
-    form.addEventListener("submit", function (e) {
+    form.addEventListener("submit", async function (e) {
       e.preventDefault();
-
-      if (submitButton.disabled) return;
-
-      /*
-       * Synchronise the legal-name fields
-       * before invoking form validation.
-       *
-       * This ensures professional registration
-       * does not require firstName or lastName.
-       */
-
+      if (isSubmitting || submitButton.disabled) return;
       syncRegistrationNameFields();
-
-      if (!validator) {
-        submitForm();
+      if (!isInviteSignup() && !["professional", "employer"].includes(getSelectedRole())) {
+        await showMessage("Please select an account type before continuing.", "error");
         return;
       }
 
-      validator.revalidateField("password");
-
-      validator.validate().then(function (status) {
-        if (status === "Valid") {
-          submitForm();
+      // Lock before asynchronous validation, not just before the network request.
+      setSubmitLoading(true);
+      try {
+        var data = buildSignupSubmissionData();
+        var snapshot = JSON.stringify(data);
+        var valid;
+        if (validator) {
+          await validator.revalidateField("password");
+          valid = (await validator.validate()) === "Valid";
+        } else {
+          valid = validateWithoutPlugin();
+        }
+        // The role or other inputs may have changed while validation was pending.
+        if (JSON.stringify(buildSignupSubmissionData()) !== snapshot) {
+          setSubmitLoading(false);
+          await showMessage(
+            "Your signup details changed. Please review them and submit again.",
+            "error"
+          );
           return;
         }
-
-        Swal.fire({
-          text: "Please make sure all required fields are correctly filled out.",
-          icon: "error",
-          buttonsStyling: false,
-          confirmButtonText: "Ok, got it!",
-          customClass: {
-            confirmButton: "btn btn-primary",
-          },
-        });
-      });
+        if (!valid) {
+          setSubmitLoading(false);
+          await showMessage(
+            "Please make sure all required fields are correctly filled out.",
+            "error"
+          );
+          return;
+        }
+        await submitForm(data);
+      } catch (_) {
+        setSubmitLoading(false);
+        await showMessage("Signup could not be completed. Please refresh and try again.", "error");
+      }
     });
   }
 
@@ -560,7 +570,8 @@ var SignUp = (function () {
       submitButton = document.querySelector("#kt_sign_up_submit");
       googleSignupButton = document.querySelector("#googleSignupBtn");
 
-      if (!form || !submitButton) return;
+      if (!form || !submitButton || initialized) return;
+      initialized = true;
 
       /*
        * Configure the initially selected

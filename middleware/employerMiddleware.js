@@ -1,10 +1,9 @@
-// middleware/employerMiddleware.js
-
 const EmployerProfile = require("../models/EmployerProfile");
 const EmployerMember = require("../models/EmployerMember");
+
 const EmployerDelinquencyService = require("../services/employerDelinquencyService");
 
-// ───────────────────── GENERAL HELPERS ─────────────────────
+const ALLOWED_MEMBER_ROLES = new Set(["admin", "branch_manager", "branch_staff"]);
 
 function getId(value) {
   return value ? String(value._id || value) : "";
@@ -18,30 +17,12 @@ function expectsJSON(req) {
   );
 }
 
-/**
- * Business eligibility is independent of the user's team role.
- * Every verification and approval condition must pass.
- */
 function isBusinessEligibleToOperate(profile) {
   return Boolean(
-    profile &&
-    profile.cacVerificationStatus === "verified" &&
-    profile.regulatoryVerificationStatus === "verified" &&
-    profile.employerApprovalStatus === "approved" &&
-    profile.accountStatus === "active"
+    profile && profile.cacVerificationStatus === "verified" && profile.accountStatus === "active"
   );
 }
 
-// ───────────────────── ACTIVE EMPLOYER MEMBERSHIP ─────────────────────
-
-/**
- * Employer team access requires an active, current membership.
- *
- * EmployerMember.role "admin" is a business administrator,
- * not a Loqum platform administrator.
- *
- * Historical or removed memberships must not grant access.
- */
 async function loadEmployerMember({ userId, businessId }) {
   if (!userId || !businessId) {
     return null;
@@ -55,14 +36,6 @@ async function loadEmployerMember({ userId, businessId }) {
   }).lean();
 }
 
-// ───────────────────── RESOLVE EMPLOYER BUSINESS ─────────────────────
-
-/**
- * Resolve the employer's business using verified account
- * ownership or an active, current team membership.
- *
- * A stored business reference alone does not grant access.
- */
 async function resolveEmployerProfileAndMember(user) {
   if (
     !user ||
@@ -76,8 +49,6 @@ async function resolveEmployerProfileAndMember(user) {
       employerMember: null,
     };
   }
-
-  // ───────── PRIMARY BUSINESS OWNER ─────────
 
   const ownedProfile = await EmployerProfile.findOne({
     user: user._id,
@@ -94,13 +65,6 @@ async function resolveEmployerProfileAndMember(user) {
     };
   }
 
-  // ───────── LINKED EMPLOYER MEMBER ─────────
-
-  /**
-   * Invited members must have a current membership for
-   * their linked business. A stale User.employerProfile
-   * reference must not silently grant another business.
-   */
   if (user.employerProfile) {
     const businessId = getId(user.employerProfile);
 
@@ -131,51 +95,20 @@ async function resolveEmployerProfileAndMember(user) {
     };
   }
 
-  // ───────── LEGACY MEMBERSHIP COMPATIBILITY ─────────
-
-  /**
-   * Support older invited accounts whose User record
-   * lacks an employerProfile reference.
-   *
-   * The membership itself must still be active and current.
-   */
-  const member = await EmployerMember.findOne({
-    user: user._id,
-    accountStatus: "active",
-    isCurrent: true,
-  }).lean();
-
-  if (!member?.business) {
-    return {
-      profile: null,
-      employerMember: null,
-    };
-  }
-
-  const profile = await EmployerProfile.findById(member.business);
-
   return {
-    profile,
-    employerMember: profile ? member : null,
+    profile: null,
+    employerMember: null,
   };
 }
 
-// ───────────────────── BUILD EMPLOYER PERMISSIONS ─────────────────────
-
-/**
- * Calculate permissions from current ownership, membership,
- * account eligibility and delinquency restrictions.
- *
- * Membership is rechecked against MongoDB rather than
- * trusting a previously attached request context.
- */
-async function buildEmployerContext({
-  user,
-  profile,
-  employerMember = null,
-  currentTime = new Date(),
-}) {
-  if (!user || !profile) {
+async function buildEmployerContext({ user, profile, currentTime = new Date() }) {
+  if (
+    !user?._id ||
+    !profile?._id ||
+    user.role !== "employer" ||
+    user.accountStatus !== "active" ||
+    user.isVerified !== true
+  ) {
     return {
       employerMember: null,
       employerContext: null,
@@ -185,9 +118,6 @@ async function buildEmployerContext({
   const userId = getId(user._id);
   const businessId = getId(profile._id);
 
-  // ───────── CURRENT BUSINESS MEMBERSHIP ─────────
-
-  // Retain the employerMember argument for caller compatibility.
   const resolvedEmployerMember = await loadEmployerMember({
     userId,
     businessId,
@@ -195,14 +125,15 @@ async function buildEmployerContext({
 
   const isPrimaryEmployer = getId(profile.user) === userId;
 
-  if (!isPrimaryEmployer && !resolvedEmployerMember) {
+  if (
+    !isPrimaryEmployer &&
+    (!resolvedEmployerMember || !ALLOWED_MEMBER_ROLES.has(resolvedEmployerMember.role))
+  ) {
     return {
       employerMember: null,
       employerContext: null,
     };
   }
-
-  // ───────── BUSINESS ROLES ─────────
 
   const employerMemberRole = resolvedEmployerMember?.role || null;
 
@@ -212,49 +143,47 @@ async function buildEmployerContext({
 
   const isBranchStaff = employerMemberRole === "branch_staff";
 
-  const assignedBranchIds =
-    resolvedEmployerMember?.branches
-      ?.map((assignment) => getId(assignment.branch))
-      .filter(Boolean) || [];
+  const isBusinessWide = isPrimaryEmployer || isBusinessAdmin;
 
-  // ───────── SHIFT PERMISSIONS ─────────
+  const assignedBranchIds = isBusinessWide
+    ? []
+    : [
+        ...new Set(
+          (resolvedEmployerMember?.branches || [])
+            .map((assignment) => getId(assignment?.branch))
+            .filter(Boolean)
+        ),
+      ];
 
-  const canManageAllShifts = isPrimaryEmployer || isBusinessAdmin;
+  const canManageAllShifts = isBusinessWide;
 
   const canManageAssignedBranchShifts = isBranchManager;
 
-  const canViewShifts = isPrimaryEmployer || isBusinessAdmin || isBranchManager || isBranchStaff;
+  const canViewShifts = isBusinessWide || isBranchManager || isBranchStaff;
 
-  const roleCanPostShifts = isPrimaryEmployer || isBusinessAdmin || isBranchManager;
+  const roleCanPostShifts = isBusinessWide || isBranchManager;
 
-  // ───────── EXISTING WORK AND DISPUTES ─────────
-
-  // Delinquency must not automatically block existing obligations.
   const canViewClaims = canViewShifts;
 
-  const canManageClaims = isPrimaryEmployer || isBusinessAdmin || isBranchManager;
+  const canManageClaims = isBusinessWide || isBranchManager;
 
   const canViewDisputes = canViewShifts;
 
-  const canManageDisputes = isPrimaryEmployer || isBusinessAdmin || isBranchManager;
+  const canManageDisputes = isBusinessWide || isBranchManager;
 
-  const canManagePostShiftWorkflows = isPrimaryEmployer || isBusinessAdmin || isBranchManager;
+  const canManagePostShiftWorkflows = isBusinessWide || isBranchManager;
 
-  // ───────── WALLET AND FUNDING ─────────
+  const canViewWallet = isBusinessWide || isBranchManager;
 
-  const canViewWallet = isPrimaryEmployer || isBusinessAdmin || isBranchManager;
+  const canManageWallet = isBusinessWide;
 
-  const canManageWallet = isPrimaryEmployer || isBusinessAdmin;
+  const canManageFinancialObligations = isBusinessWide;
 
-  const canManageFinancialObligations = isPrimaryEmployer || isBusinessAdmin;
+  const canFundShifts = isBusinessWide || isBranchManager;
 
-  const canFundShifts = isPrimaryEmployer || isBusinessAdmin || isBranchManager;
+  const canViewRefunds = isBusinessWide;
 
-  const canViewRefunds = isPrimaryEmployer || isBusinessAdmin;
-
-  const canManageRefundActions = isPrimaryEmployer || isBusinessAdmin;
-
-  // ───────── BUSINESS RESTRICTIONS ─────────
+  const canManageRefundActions = isBusinessWide;
 
   const delinquency = await EmployerDelinquencyService.getRestrictionState({
     businessId: profile._id,
@@ -263,21 +192,17 @@ async function buildEmployerContext({
 
   const businessEligible = isBusinessEligibleToOperate(profile);
 
-  const canPostShifts = roleCanPostShifts && businessEligible && delinquency.canPostShifts;
+  const canPostShifts = Boolean(roleCanPostShifts && businessEligible && delinquency.canPostShifts);
 
-  // ───────── INVITATION MANAGEMENT ─────────
+  const canManageBusinessProfile = Boolean(isBusinessWide && profile.accountStatus === "active");
 
-  /**
-   * Only owners and business administrators may manage
-   * invitations, and the business account must be active.
-   *
-   * The invitation controller independently checks permission
-   * before performing mutations.
-   */
-  const canManageInvites =
-    (isPrimaryEmployer || isBusinessAdmin) && profile.accountStatus === "active";
+  const canManageBranches = Boolean(isBusinessWide && profile.accountStatus === "active");
 
-  // ───────── EMPLOYER CONTEXT ─────────
+  const canManageInvites = Boolean(isBusinessWide && profile.accountStatus === "active");
+
+  const canCreateNewObligations = Boolean(
+    roleCanPostShifts && businessEligible && delinquency.canCreateNewObligations
+  );
 
   const employerContext = {
     employerMemberRole,
@@ -289,26 +214,21 @@ async function buildEmployerContext({
 
     assignedBranchIds,
 
-    // Business profile
     canViewBusinessProfile: true,
-    canManageBusinessProfile: isPrimaryEmployer || isBusinessAdmin,
+    canManageBusinessProfile,
 
-    // Branches
     canViewBranches: true,
-    canManageBranches: isPrimaryEmployer || isBusinessAdmin,
+    canManageBranches,
 
-    // Team
-    canViewTeamMembers: isPrimaryEmployer || isBusinessAdmin,
+    canViewTeamMembers: isBusinessWide,
 
     canInviteMembers: canManageInvites,
 
-    // Wallet and funding
     canViewWallet,
     canManageWallet,
     canManageFinancialObligations,
     canFundShifts,
 
-    // Shifts
     canViewShifts,
     roleCanPostShifts,
     canPostShifts,
@@ -316,21 +236,16 @@ async function buildEmployerContext({
     canManageAssignedBranchShifts,
     canManagePostShiftWorkflows,
 
-    // Claims
     canViewClaims,
     canManageClaims,
 
-    // Disputes
     canViewDisputes,
     canManageDisputes,
 
-    // Refunds
     canViewRefunds,
     canManageRefundActions,
 
-    // Business restrictions
-    canCreateNewObligations:
-      roleCanPostShifts && businessEligible && delinquency.canCreateNewObligations,
+    canCreateNewObligations,
 
     newObligationsRestricted: delinquency.restricted,
 
@@ -345,18 +260,16 @@ async function buildEmployerContext({
   };
 }
 
-// ───────────────────── ACCESS FAILURE ─────────────────────
-
 function noEmployerAccess(req, res) {
-  if (!req.user?.isOnboarded) {
-    return res.redirect("/onboarding/employer");
-  }
-
   if (expectsJSON(req)) {
     return res.status(403).json({
       success: false,
       message: "You do not have access to an active employer business.",
     });
+  }
+
+  if (!req.user?.isOnboarded) {
+    return res.redirect("/onboarding/employer");
   }
 
   return res.status(403).render("auth/not-found", {
@@ -365,15 +278,27 @@ function noEmployerAccess(req, res) {
   });
 }
 
-// ───────────────────── ATTACH EMPLOYER PROFILE ─────────────────────
-
 exports.attachEmployerProfile = async (req, res, next) => {
   try {
     if (!req.user) {
+      if (expectsJSON(req)) {
+        return res.status(401).json({
+          success: false,
+          message: "Please sign in.",
+        });
+      }
+
       return res.redirect("/login");
     }
 
     if (req.user.role !== "employer") {
+      if (expectsJSON(req)) {
+        return res.status(403).json({
+          success: false,
+          message: "Employer access is required.",
+        });
+      }
+
       return res.status(403).render("auth/not-found", {
         layout: "layouts/auth-layout-no-index",
         title: "Forbidden",
@@ -398,8 +323,6 @@ exports.attachEmployerProfile = async (req, res, next) => {
   }
 };
 
-// ───────────────────── ATTACH EMPLOYER CONTEXT ─────────────────────
-
 exports.attachEmployerContext = async (req, res, next) => {
   try {
     req.employerContext = null;
@@ -412,16 +335,17 @@ exports.attachEmployerContext = async (req, res, next) => {
     const { employerMember, employerContext } = await buildEmployerContext({
       user: req.user,
       profile: req.employerProfile,
-      employerMember: req.employerMember,
       currentTime: new Date(),
     });
 
     if (!employerContext) {
       req.employerProfile = null;
       req.employerMember = null;
+      req.employerContext = null;
 
       res.locals.employerProfile = null;
       res.locals.employerMember = null;
+      res.locals.employerContext = null;
 
       return noEmployerAccess(req, res);
     }
@@ -438,14 +362,6 @@ exports.attachEmployerContext = async (req, res, next) => {
   }
 };
 
-// ───────────────────── OPTIONAL EMPLOYER CONTEXT ─────────────────────
-
-/**
- * Optional context must resolve access independently from
- * current database records, not previously attached objects.
- *
- * Clear existing request and template values before resolution.
- */
 exports.attachOptionalEmployerContext = async (req, res, next) => {
   try {
     req.employerProfile = null;
@@ -463,7 +379,6 @@ exports.attachOptionalEmployerContext = async (req, res, next) => {
     const resolved = await resolveEmployerProfileAndMember(req.user);
 
     const profile = resolved.profile;
-    const employerMember = resolved.employerMember;
 
     if (!profile) {
       return next();
@@ -472,7 +387,6 @@ exports.attachOptionalEmployerContext = async (req, res, next) => {
     const contextResult = await buildEmployerContext({
       user: req.user,
       profile,
-      employerMember,
       currentTime: new Date(),
     });
 
@@ -482,12 +396,10 @@ exports.attachOptionalEmployerContext = async (req, res, next) => {
 
     req.employerProfile = profile;
     req.employerMember = contextResult.employerMember;
-
     req.employerContext = contextResult.employerContext;
 
     res.locals.employerProfile = profile;
     res.locals.employerMember = contextResult.employerMember;
-
     res.locals.employerContext = contextResult.employerContext;
 
     return next();
@@ -495,8 +407,6 @@ exports.attachOptionalEmployerContext = async (req, res, next) => {
     return next(error);
   }
 };
-
-// ───────────────────── BUSINESS ELIGIBILITY ─────────────────────
 
 function assertBusinessEligible(profile, res) {
   if (isBusinessEligibleToOperate(profile)) {
@@ -507,14 +417,10 @@ function assertBusinessEligible(profile, res) {
     success: false,
 
     message:
-      "Your business profile must be verified and approved before you can perform this action.",
+      "Your CAC registration must be verified and your business account active before you can perform this action.",
 
     requirements: {
       cacVerificationStatus: profile?.cacVerificationStatus,
-
-      regulatoryVerificationStatus: profile?.regulatoryVerificationStatus,
-
-      employerApprovalStatus: profile?.employerApprovalStatus,
 
       accountStatus: profile?.accountStatus,
     },
@@ -523,15 +429,9 @@ function assertBusinessEligible(profile, res) {
   return false;
 }
 
-/**
- * Re-read the authoritative employer verification state
- * before permitting new marketplace obligations.
- */
 async function assertCurrentBusinessEligible(profile, res) {
   const current = await EmployerProfile.findById(profile._id)
-    .select(
-      "cacVerificationStatus regulatoryVerificationStatus employerApprovalStatus accountStatus"
-    )
+    .select("cacVerificationStatus accountStatus")
     .lean();
 
   if (!current) {
@@ -546,14 +446,6 @@ async function assertCurrentBusinessEligible(profile, res) {
   return assertBusinessEligible(current, res);
 }
 
-// ───────────────────── NEW OBLIGATION GUARD ─────────────────────
-
-/**
- * Control creation of new marketplace obligations.
- *
- * Existing claims, disputes, overtime top-ups and active work
- * remain governed by their respective workflow policies.
- */
 exports.canCreateNewObligations = async (req, res, next) => {
   try {
     const profile = req.employerProfile;
@@ -602,8 +494,6 @@ exports.canCreateNewObligations = async (req, res, next) => {
   }
 };
 
-// ───────────────────── SHIFT POSTING GUARD ─────────────────────
-
 exports.canPostShifts = async (req, res, next) => {
   try {
     const profile = req.employerProfile;
@@ -616,7 +506,6 @@ exports.canPostShifts = async (req, res, next) => {
       });
     }
 
-    // User-level permission is checked independently.
     if (!employerContext?.roleCanPostShifts) {
       return res.status(403).json({
         success: false,
@@ -624,7 +513,6 @@ exports.canPostShifts = async (req, res, next) => {
       });
     }
 
-    // Re-read verification state to avoid relying on stale context.
     if (!(await assertCurrentBusinessEligible(profile, res))) {
       return;
     }
@@ -655,13 +543,6 @@ exports.canPostShifts = async (req, res, next) => {
   }
 };
 
-// ───────────────────── SHIFT FUNDING GUARD ─────────────────────
-
-/**
- * Funding permission remains separate from eligibility
- * to post new shifts, allowing existing obligations to
- * be settled according to their normal workflow.
- */
 exports.canFundShifts = (req, res, next) => {
   try {
     if (req.employerContext?.canFundShifts !== true) {
@@ -677,8 +558,6 @@ exports.canFundShifts = (req, res, next) => {
   }
 };
 
-// ───────────────────── WALLET VIEW GUARD ─────────────────────
-
 exports.canViewWallet = (req, res, next) => {
   try {
     if (req.employerContext?.canViewWallet !== true) {
@@ -693,8 +572,6 @@ exports.canViewWallet = (req, res, next) => {
     return next(error);
   }
 };
-
-// ───────────────────── WALLET MANAGEMENT GUARD ─────────────────────
 
 exports.canManageWallet = (req, res, next) => {
   try {

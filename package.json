@@ -21,6 +21,7 @@
     "prettier-plugin-ejs": "^1.0.3"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1156.0",
     "@dr.pogodin/csurf": "^1.16.9",
     "@paystack/inline-js": "^2.23.1",
     "axios": "^1.17.0",
@@ -36,7 +37,7 @@
     "method-override": "^3.0.0",
     "mongoose": "^9.4.1",
     "multer": "^2.2.0",
-    "nodemailer": "^9.0.3",
+    "nodemailer": "^10.2.1",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "passport-local": "^1.0.0",

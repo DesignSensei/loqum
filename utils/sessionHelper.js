@@ -45,6 +45,7 @@ exports.getSessionUser = (user) => {
     firstName: user.firstName,
     lastName: user.lastName,
     displayName: user.displayName,
+    legalNameSource: user.legalNameSource,
     email: user.email,
     photo: user.photo,
     role: user.role,
@@ -71,6 +72,7 @@ exports.refreshSessionUser = async (req, user) => {
     req.user.firstName = user.firstName;
     req.user.lastName = user.lastName;
     req.user.displayName = user.displayName;
+    req.user.legalNameSource = user.legalNameSource;
     req.user.email = user.email;
     req.user.photo = user.photo;
     req.user.authProvider = user.authProvider;

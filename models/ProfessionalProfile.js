@@ -2,70 +2,7 @@
 
 const mongoose = require("mongoose");
 
-/**
- * PROFESSIONAL PROFILE ARCHITECTURE
- *
- * Stores the professional's profile, verification summaries,
- * location, availability, reputation, marketplace visibility,
- * approval status, and operational activity.
- *
- * VERIFICATION RESPONSIBILITIES
- *
- * ProfessionalProfile stores verification summaries.
- * KYCVerification stores individual verification records.
- * ProfessionalVerificationService owns verification transitions.
- *
- * Identity, professional licence, payout KYC, platform approval,
- * and marketplace visibility remain separate states.
- *
- * ONE-TIME VERIFICATION POLICY
- *
- * Identity and professional licence verification are one-time.
- *
- * A verified identity does not require periodic re-verification.
- *
- * A verified professional licence does not require annual,
- * periodic, or expiry-driven re-verification.
- *
- * A change to the professional's licence number requires:
- *
- * - Resetting existing licence verification;
- * - Fresh verification of the new licence number;
- * - Resetting professional platform approval; and
- * - Subsequent administrative approval.
- *
- * A licence number change does not invalidate identity verification.
- *
- * licenceExpiryDate remains available as informational metadata.
- * It must not trigger automatic verification expiry or renewal.
- *
- * MARKETPLACE ELIGIBILITY
- *
- * Marketplace visibility requires:
- *
- * - Verified identity;
- * - Verified professional licence;
- * - Approved professional account; and
- * - Active account status.
- *
- * Meeting these requirements does not automatically set
- * marketplaceStatus to visible.
- *
- * Hidden and paused preferences must be preserved.
- *
- * FINANCIAL POLICY
- *
- * Loqum's platform fees are paid by employers.
- * Professionals receive their agreed or approved pay.
- *
- * Payout accounts are managed by BankAccount.
- * Wallet balances are managed by Wallet.
- *
- * DATA PROTECTION
- *
- * Never store raw NIN/BVN values in this profile.
- * Detailed verification evidence belongs in KYCVerification.
- */
+// ───────────────────────── CONSTANTS ─────────────────────────
 
 const PROFESSIONAL_TYPES = [
   "pharmacist",
@@ -79,6 +16,98 @@ const PROFESSIONAL_TYPES = [
 
 const VERIFICATION_STATUSES = ["pending", "verified", "rejected", "needs_review"];
 
+const LICENCE_VALIDITY_TYPES = ["expiry_date", "licensing_year", "life"];
+
+const AVAILABILITY_STATUSES = ["available", "unavailable", "busy", "paused"];
+
+const AVAILABILITY_MODES = ["weekly", "dates"];
+const MAX_AVAILABLE_DATES = 90;
+
+const PROTECTED_QUERY_PATHS = new Set([
+  "user",
+  "type",
+  "licenceNumber",
+  "licenceIssuingBody",
+  "licenceVerificationStatus",
+  "licenceVerificationMethod",
+  "licenceVerificationSource",
+  "licenceNameOnRecord",
+  "licenceDocumentUrl",
+  "licencePendingDocumentUrl",
+  "licencePendingDocumentSubmittedAt",
+  "licenceValidityType",
+  "licenceLicensingYear",
+  "licenceExpiryDate",
+  "upcomingLicence",
+  "licenceVerifiedAt",
+  "licenceLastCheckedAt",
+  "licenceVerifiedBy",
+  "licenceVerificationNote",
+
+  "bvnVerification",
+
+  "professionalApprovalStatus",
+  "approvedForShiftsAt",
+  "approvedForShiftsBy",
+  "approvalNote",
+  "rejectionReason",
+
+  "accountStatus",
+  "accountStatusReason",
+  "accountStatusUpdatedAt",
+  "accountStatusUpdatedBy",
+
+  "marketplaceStatus",
+
+  "availabilityStatus",
+  "availabilityMode",
+  "availableWeekdays",
+  "availableDates",
+  "availabilityNote",
+
+  "certifications",
+]);
+
+// ───────────────────────── DATE HELPERS ─────────────────────────
+
+function getTodayISODate() {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Africa/Lagos",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const values = {};
+
+  for (const part of parts) {
+    if (part.type === "year" || part.type === "month" || part.type === "day") {
+      values[part.type] = part.value;
+    }
+  }
+
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function isValidDate(value) {
+  return value instanceof Date && Number.isFinite(value.getTime());
+}
+
+function isValidCalendarDate(value) {
+  if (!isValidDate(value)) {
+    return false;
+  }
+
+  return (
+    value.getUTCHours() === 0 &&
+    value.getUTCMinutes() === 0 &&
+    value.getUTCSeconds() === 0 &&
+    value.getUTCMilliseconds() === 0
+  );
+}
+
+// ───────────────────────── SCHEMA ─────────────────────────
+
 const professionalProfileSchema = new mongoose.Schema(
   {
     // ───────────────────────── IDENTITY ─────────────────────────
@@ -87,6 +116,7 @@ const professionalProfileSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
+      immutable: true,
     },
 
     type: {
@@ -152,26 +182,25 @@ const professionalProfileSchema = new mongoose.Schema(
         type: [Number],
         required: true,
 
-        // Coordinates use [longitude, latitude].
         validate: {
-          validator: function (value) {
+          validator(value) {
             if (!Array.isArray(value) || value.length !== 2) {
               return false;
             }
 
-            const [lng, lat] = value;
+            const [longitude, latitude] = value;
 
             return (
-              Number.isFinite(lng) &&
-              Number.isFinite(lat) &&
-              lng >= -180 &&
-              lng <= 180 &&
-              lat >= -90 &&
-              lat <= 90
+              Number.isFinite(longitude) &&
+              Number.isFinite(latitude) &&
+              longitude >= -180 &&
+              longitude <= 180 &&
+              latitude >= -90 &&
+              latitude <= 90
             );
           },
 
-          message: "Coordinates must be [longitude, latitude] with valid ranges.",
+          message: "Coordinates must contain valid longitude and latitude.",
         },
       },
     },
@@ -200,20 +229,20 @@ const professionalProfileSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: null,
-
-      // Examples: PCN, NMCN, MDCN, MLSCN, RRBN.
     },
 
     licenceVerificationStatus: {
       type: String,
       enum: VERIFICATION_STATUSES,
       default: "pending",
+      required: true,
     },
 
     licenceVerificationMethod: {
       type: String,
       enum: ["manual", "api", "provider", "not_checked"],
       default: "not_checked",
+      required: true,
     },
 
     licenceVerificationSource: {
@@ -227,6 +256,7 @@ const professionalProfileSchema = new mongoose.Schema(
         "not_checked",
       ],
       default: "internal_review",
+      required: true,
     },
 
     licenceNameOnRecord: {
@@ -242,15 +272,121 @@ const professionalProfileSchema = new mongoose.Schema(
       select: false,
     },
 
-    /*
-     * Informational field only.
-     *
-     * Its date must not automatically invalidate
-     * a previously verified licence.
-     */
+    // Unreviewed uploads remain separate from an approved licence.
+    // A renewal upload must not overwrite the current verified licence.
+    licencePendingDocumentUrl: {
+      type: String,
+      trim: true,
+      default: null,
+      select: false,
+    },
 
+    licencePendingDocumentSubmittedAt: {
+      type: Date,
+      default: null,
+    },
+
+    // The administrator selects exactly one validity mode.
+    // Licensing-year expiry is automatically 31 December.
+    licenceValidityType: {
+      type: String,
+      enum: [...LICENCE_VALIDITY_TYPES, null],
+      default: null,
+    },
+
+    licenceLicensingYear: {
+      type: Number,
+      min: 1900,
+      max: 2199,
+      default: null,
+    },
+
+    // Calendar date stored at UTC midnight.
+    // Null for a verified life licence.
     licenceExpiryDate: {
       type: Date,
+      default: null,
+    },
+
+    // One independently approved future renewal may be stored.
+    // Its supporting audit evidence is held in KYCVerification.
+    upcomingLicence: {
+      type: new mongoose.Schema(
+        {
+          reviewId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "KYCVerification",
+            required: true,
+          },
+
+          documentUrl: {
+            type: String,
+            trim: true,
+            default: null,
+            select: false,
+          },
+
+          nameOnRecord: {
+            type: String,
+            trim: true,
+            required: true,
+          },
+
+          validFrom: {
+            type: Date,
+            required: true,
+          },
+
+          evidenceValidFrom: {
+            type: Date,
+            required: true,
+          },
+
+          validityType: {
+            type: String,
+            enum: LICENCE_VALIDITY_TYPES,
+            required: true,
+          },
+
+          licensingYear: {
+            type: Number,
+            min: 1900,
+            max: 2199,
+            default: null,
+          },
+
+          expiryDate: {
+            type: Date,
+            default: null,
+          },
+
+          verifiedAt: {
+            type: Date,
+            required: true,
+          },
+
+          lastCheckedAt: {
+            type: Date,
+            required: true,
+          },
+
+          verifiedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            required: true,
+          },
+
+          reviewNote: {
+            type: String,
+            trim: true,
+            maxlength: 500,
+            default: null,
+          },
+        },
+        {
+          _id: false,
+        }
+      ),
       default: null,
     },
 
@@ -278,15 +414,6 @@ const professionalProfileSchema = new mongoose.Schema(
     },
 
     // ───────────────────────── CERTIFICATIONS ─────────────────────────
-
-    /*
-     * Certification validity is separate from
-     * Loqum's one-time professional licence
-     * verification policy.
-     *
-     * Certification expiry dates remain available
-     * for their respective certification records.
-     */
 
     certifications: [
       {
@@ -335,89 +462,11 @@ const professionalProfileSchema = new mongoose.Schema(
       },
     ],
 
-    // ───────────────────────── IDENTITY VERIFICATION ─────────────────────────
+    // ───────────────────────── BVN / PAYOUT KYC ─────────────────────────
 
-    identityVerificationStatus: {
-      type: String,
-      enum: VERIFICATION_STATUSES,
-      default: "pending",
-    },
-
-    identityVerificationMethod: {
-      type: String,
-      enum: ["manual", "provider", "not_checked"],
-      default: "not_checked",
-    },
-
-    identityVerificationSource: {
-      type: String,
-      enum: ["government_id", "nin", "bvn", "selfie_match", "internal_review"],
-      default: "internal_review",
-    },
-
-    identityNameOnDocument: {
-      type: String,
-      trim: true,
-      default: null,
-    },
-
-    identityDocumentType: {
-      type: String,
-      enum: [
-        "nin_slip",
-        "national_id",
-        "passport",
-        "drivers_license",
-        "voters_card",
-        "other",
-        null,
-      ],
-      default: null,
-    },
-
-    identityDocumentUrl: {
-      type: String,
-      trim: true,
-      default: null,
-      select: false,
-    },
-
-    identityVerifiedAt: {
-      type: Date,
-      default: null,
-    },
-
-    identityLastCheckedAt: {
-      type: Date,
-      default: null,
-    },
-
-    identityVerifiedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
-
-    identityVerificationNote: {
-      type: String,
-      trim: true,
-      maxlength: 500,
-      default: null,
-    },
-
-    // ───────────────────────── BVN / KYC SUMMARY ─────────────────────────
-
-    /*
-     * Full verification records belong in KYCVerification.
-     *
-     * This object is a profile-level summary for
-     * payout readiness and identity-related workflows.
-     *
-     * Registry matching alone must not set status
-     * to verified unless the domain's requirements
-     * for that particular verification are satisfied.
-     */
-
+    // BVN verification is separate from NIN onboarding and
+    // practising-licence approval. It does not itself authorise
+    // professional participation in clinical shifts.
     bvnVerification: {
       status: {
         type: String,
@@ -430,13 +479,6 @@ const professionalProfileSchema = new mongoose.Schema(
         enum: ["ninja", "dojah", "paystack", "smile_identity", "manual", null],
         default: null,
       },
-
-      /*
-       * Only use a genuine provider-issued ID.
-       *
-       * Internal request references must not
-       * be copied into this field.
-       */
 
       providerReference: {
         type: String,
@@ -481,48 +523,17 @@ const professionalProfileSchema = new mongoose.Schema(
 
     availabilityStatus: {
       type: String,
-      enum: ["available", "unavailable", "busy", "paused"],
-      default: "available",
+      enum: AVAILABILITY_STATUSES,
+      default: "unavailable",
+      required: true,
     },
-
-    /*
-     * NEW: AVAILABILITY MODE
-     *
-     * weekly: Regularly available days of the week.
-     * dates: Specific selected calendar dates.
-     *
-     * Default null preserves compatibility with existing
-     * professional profiles until a mode is selected.
-     *
-     * The profile service will determine the appropriate
-     * initial display mode.
-     */
 
     availabilityMode: {
       type: String,
-      enum: ["weekly", "dates"],
-      default: null,
+      enum: AVAILABILITY_MODES,
+      default: "weekly",
+      required: true,
     },
-
-    /*
-     * NEW: RECURRING WEEKDAY PREFERENCES
-     *
-     * ISO weekday numbering:
-     *
-     * Monday    = 1
-     * Tuesday   = 2
-     * Wednesday = 3
-     * Thursday  = 4
-     * Friday    = 5
-     * Saturday  = 6
-     * Sunday    = 7
-     *
-     * These are availability preferences, not guaranteed
-     * shift assignments or automatic booking rules.
-     *
-     * The profile service will validate and normalise
-     * submitted selections before saving them.
-     */
 
     availableWeekdays: {
       type: [
@@ -534,18 +545,10 @@ const professionalProfileSchema = new mongoose.Schema(
       default: [],
     },
 
-    /*
-     * Existing specific-date preferences.
-     *
-     * Retained for professionals who prefer selecting
-     * individual dates instead of weekly weekdays.
-     */
-
-    availableDates: [
-      {
-        type: Date,
-      },
-    ],
+    availableDates: {
+      type: [Date],
+      default: [],
+    },
 
     availabilityNote: {
       type: String,
@@ -556,14 +559,6 @@ const professionalProfileSchema = new mongoose.Schema(
 
     // ───────────────────────── FINANCIAL SUMMARY ─────────────────────────
 
-    /*
-     * Payout account: BankAccount.
-     * Wallet balance: Wallet.
-     *
-     * Professionals do not pay Loqum's
-     * platform commission at launch.
-     */
-
     totalEarnings: {
       type: Number,
       default: 0,
@@ -571,17 +566,6 @@ const professionalProfileSchema = new mongoose.Schema(
     },
 
     // ───────────────────────── TIER ─────────────────────────
-
-    /*
-     * Tier is periodically evaluated using
-     * professional performance metrics.
-     *
-     * Tier influences trust, visibility and
-     * active shift limits.
-     *
-     * It does not determine a pharmacist-side
-     * platform commission.
-     */
 
     tier: {
       type: String,
@@ -627,6 +611,7 @@ const professionalProfileSchema = new mongoose.Schema(
       type: String,
       enum: ["active", "restricted", "suspended"],
       default: "active",
+      required: true,
     },
 
     accountStatusReason: {
@@ -653,6 +638,7 @@ const professionalProfileSchema = new mongoose.Schema(
       type: String,
       enum: ["hidden", "visible", "paused"],
       default: "hidden",
+      required: true,
     },
 
     // ───────────────────────── STRIKES ─────────────────────────
@@ -739,19 +725,11 @@ const professionalProfileSchema = new mongoose.Schema(
 
     // ───────────────────────── PROFESSIONAL APPROVAL ─────────────────────────
 
-    /*
-     * Final approval is performed through the
-     * professional verification/administration
-     * service after required checks are satisfied.
-     *
-     * Approval alone does not make the professional
-     * visible in the marketplace.
-     */
-
     professionalApprovalStatus: {
       type: String,
       enum: ["pending", "approved", "rejected", "restricted", "needs_review"],
       default: "pending",
+      required: true,
     },
 
     approvedForShiftsAt: {
@@ -781,6 +759,7 @@ const professionalProfileSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    optimisticConcurrency: true,
   }
 );
 
@@ -788,46 +767,16 @@ const professionalProfileSchema = new mongoose.Schema(
 
 professionalProfileSchema.index({ user: 1 }, { unique: true });
 
-professionalProfileSchema.index({
-  type: 1,
-});
-
-professionalProfileSchema.index({
-  specialty: 1,
-});
-
-professionalProfileSchema.index({
-  tier: 1,
-});
-
-professionalProfileSchema.index({
-  accountStatus: 1,
-});
-
-professionalProfileSchema.index({
-  marketplaceStatus: 1,
-});
-
-professionalProfileSchema.index({
-  availabilityStatus: 1,
-});
-
-professionalProfileSchema.index({
-  averageRating: -1,
-});
-
-professionalProfileSchema.index({
-  reliabilityScore: -1,
-});
-
-professionalProfileSchema.index({
-  state: 1,
-  lga: 1,
-});
-
-professionalProfileSchema.index({
-  location: "2dsphere",
-});
+professionalProfileSchema.index({ type: 1 });
+professionalProfileSchema.index({ specialty: 1 });
+professionalProfileSchema.index({ tier: 1 });
+professionalProfileSchema.index({ accountStatus: 1 });
+professionalProfileSchema.index({ marketplaceStatus: 1 });
+professionalProfileSchema.index({ availabilityStatus: 1 });
+professionalProfileSchema.index({ averageRating: -1 });
+professionalProfileSchema.index({ reliabilityScore: -1 });
+professionalProfileSchema.index({ state: 1, lga: 1 });
+professionalProfileSchema.index({ location: "2dsphere" });
 
 professionalProfileSchema.index(
   {
@@ -843,8 +792,13 @@ professionalProfileSchema.index({
   licenceVerificationStatus: 1,
 });
 
+// Individual licence-expiry reminders and approved renewal transitions.
 professionalProfileSchema.index({
-  identityVerificationStatus: 1,
+  licenceExpiryDate: 1,
+});
+
+professionalProfileSchema.index({
+  "upcomingLicence.validFrom": 1,
 });
 
 professionalProfileSchema.index({
@@ -864,127 +818,564 @@ professionalProfileSchema.index({
   marketplaceStatus: 1,
 });
 
-// ───────────────────────── VALIDATION / AUTO-CLEANUP ─────────────────────────
+// ───────────────────────── LICENCE VERIFICATION VALIDATION ─────────────────────────
 
-professionalProfileSchema.pre("validate", function () {
-  /*
-   * STRIKE TOTAL
-   *
-   * Maintain the total strike count from
-   * its component values.
-   */
+function validateVerificationSummary(profile) {
+  const status = profile.licenceVerificationStatus;
+  const method = profile.licenceVerificationMethod;
+  const source = profile.licenceVerificationSource;
+  const verifiedAt = profile.licenceVerifiedAt;
+  const checkedAt = profile.licenceLastCheckedAt;
+  const reviewedBy = profile.licenceVerifiedBy;
+  const name = profile.licenceNameOnRecord;
 
-  if (this.strikes) {
-    const noShows = Number(this.strikes.noShows || 0);
-    const lateArrivals = Number(this.strikes.lateArrivals || 0);
-    const earlyDepartures = Number(this.strikes.earlyDepartures || 0);
+  if (status === "verified") {
+    if (method !== "manual" || source !== "uploaded_document") {
+      profile.invalidate(
+        "licenceVerificationMethod",
+        "Verified licences require an independent manual uploaded-document review."
+      );
+    }
 
-    this.strikes.total = noShows + lateArrivals + earlyDepartures;
+    if (!isValidDate(verifiedAt) || !isValidDate(checkedAt)) {
+      profile.invalidate("licenceVerifiedAt", "Verified licences require review timestamps.");
+    }
+
+    if (!reviewedBy || String(reviewedBy) === String(profile.user)) {
+      profile.invalidate("licenceVerifiedBy", "Independent admin review is required.");
+    }
+
+    if (typeof name !== "string" || !name.trim() || /[\u0000-\u001f\u007f]/.test(name)) {
+      profile.invalidate("licenceNameOnRecord", "Verified licences require a legal name.");
+    }
+  } else if (verifiedAt) {
+    profile.invalidate(
+      "licenceVerifiedAt",
+      "Only verified licences may retain a verification timestamp."
+    );
   }
 
+  if (isValidDate(verifiedAt) && isValidDate(checkedAt) && verifiedAt > checkedAt) {
+    profile.invalidate("licenceLastCheckedAt", "Last check cannot precede verification.");
+  }
+
+  if (reviewedBy && String(reviewedBy) === String(profile.user)) {
+    profile.invalidate("licenceVerifiedBy", "A professional cannot verify their own licence.");
+  }
+}
+
+// ───────────────────────── LICENCE VALIDITY VALIDATION ─────────────────────────
+
+// Keep the history of an approved licence even after its expiry.
+// Operational eligibility is enforced by the service.
+// Expiry does not erase the 30-day LOQUM renewal grace.
+function validateLicenceValidity(profile) {
+  const verified = profile.licenceVerificationStatus === "verified";
+
+  const mode = profile.licenceValidityType;
+  const expiry = profile.licenceExpiryDate;
+  const year = profile.licenceLicensingYear;
+
+  if (verified) {
+    if (!LICENCE_VALIDITY_TYPES.includes(mode)) {
+      profile.invalidate("licenceValidityType", "Approved licences require a validity type.");
+    } else if (mode === "life") {
+      if (expiry != null || year != null) {
+        profile.invalidate(
+          "licenceValidityType",
+          "Life licences must not have an expiry date or licensing year."
+        );
+      }
+    } else if (!isValidCalendarDate(expiry)) {
+      profile.invalidate(
+        "licenceExpiryDate",
+        "Approved licences require a UTC calendar-date expiry."
+      );
+    } else if (mode === "expiry_date") {
+      if (year != null) {
+        profile.invalidate(
+          "licenceLicensingYear",
+          "Expiry-date licences must not include a licensing year."
+        );
+      }
+    } else if (
+      !Number.isInteger(year) ||
+      year < 1900 ||
+      year > 2199 ||
+      expiry.toISOString().slice(0, 10) !== `${year}-12-31`
+    ) {
+      profile.invalidate(
+        "licenceLicensingYear",
+        "Licensing years must expire on 31 December of the selected year."
+      );
+    }
+  } else if (mode != null || expiry != null || year != null) {
+    profile.invalidate(
+      "licenceValidityType",
+      "Only verified licences may retain approved validity details."
+    );
+  }
+
+  const future = profile.upcomingLicence;
+
+  if (!future) {
+    return;
+  }
+
+  if (!verified) {
+    profile.invalidate(
+      "upcomingLicence",
+      "An upcoming licence requires a verified existing licence."
+    );
+    return;
+  }
+
+  // Sensitive nested document URLs are select:false.
+  // Check the full future record when it is created or modified.
+  if (!profile.isNew && !profile.isModified("upcomingLicence")) {
+    return;
+  }
+
+  if (!future.documentUrl || !String(future.documentUrl).trim()) {
+    profile.invalidate(
+      "upcomingLicence.documentUrl",
+      "Upcoming licences require a reviewed document reference."
+    );
+  }
+
+  if (!future.reviewId) {
+    profile.invalidate(
+      "upcomingLicence.reviewId",
+      "Upcoming licences require their verification review record."
+    );
+  }
+
+  if (typeof future.nameOnRecord !== "string" || !future.nameOnRecord.trim()) {
+    profile.invalidate(
+      "upcomingLicence.nameOnRecord",
+      "An approved future licence needs a legal name."
+    );
+  }
+
+  if (!isValidCalendarDate(future.validFrom) || !isValidCalendarDate(future.evidenceValidFrom)) {
+    profile.invalidate(
+      "upcomingLicence.validFrom",
+      "Upcoming licence commencement dates must be valid calendar dates."
+    );
+  } else if (future.validFrom < future.evidenceValidFrom) {
+    profile.invalidate(
+      "upcomingLicence.validFrom",
+      "The licence cannot activate before its own validity period."
+    );
+  }
+
+  if (
+    !isValidDate(future.verifiedAt) ||
+    !isValidDate(future.lastCheckedAt) ||
+    future.verifiedAt > future.lastCheckedAt
+  ) {
+    profile.invalidate(
+      "upcomingLicence.verifiedAt",
+      "Upcoming licences require consistent administrative review timestamps."
+    );
+  }
+
+  if (!future.verifiedBy || String(future.verifiedBy) === String(profile.user)) {
+    profile.invalidate(
+      "upcomingLicence.verifiedBy",
+      "An independent administrator must approve upcoming licences."
+    );
+  }
+
+  if (future.validityType === "life") {
+    if (future.expiryDate != null || future.licensingYear != null) {
+      profile.invalidate(
+        "upcomingLicence.validityType",
+        "A future life licence has no expiry or licensing year."
+      );
+    }
+  } else if (!isValidCalendarDate(future.expiryDate)) {
+    profile.invalidate(
+      "upcomingLicence.expiryDate",
+      "The future licence must have a valid expiry date."
+    );
+  } else if (isValidCalendarDate(future.validFrom) && future.expiryDate < future.validFrom) {
+    profile.invalidate(
+      "upcomingLicence.expiryDate",
+      "A future licence cannot expire before activation."
+    );
+  } else if (future.validityType === "expiry_date") {
+    if (future.licensingYear != null) {
+      profile.invalidate(
+        "upcomingLicence.licensingYear",
+        "Expiry-date licences must not include a licensing year."
+      );
+    }
+  } else if (future.validityType === "licensing_year") {
+    if (
+      !Number.isInteger(future.licensingYear) ||
+      future.expiryDate.toISOString().slice(0, 10) !== `${future.licensingYear}-12-31`
+    ) {
+      profile.invalidate(
+        "upcomingLicence.licensingYear",
+        "The future licensing-year expiry must be 31 December."
+      );
+    }
+  } else {
+    profile.invalidate("upcomingLicence.validityType", "Unsupported future licence validity type.");
+  }
+}
+
+// ───────────────────────── AVAILABILITY VALIDATION ─────────────────────────
+
+function validateAvailability(profile) {
+  const weekdays = profile.availableWeekdays || [];
+  const dates = profile.availableDates || [];
+
+  if (weekdays.length > 7) {
+    profile.invalidate("availableWeekdays", "A maximum of seven weekdays may be selected.");
+  }
+
+  if (new Set(weekdays).size !== weekdays.length) {
+    profile.invalidate("availableWeekdays", "Duplicate available weekdays are not permitted.");
+  }
+
+  if (dates.length > MAX_AVAILABLE_DATES) {
+    profile.invalidate(
+      "availableDates",
+      `A maximum of ${MAX_AVAILABLE_DATES} availability dates may be stored.`
+    );
+  }
+
+  const storedDates = new Set();
+
+  for (const date of dates) {
+    if (!isValidCalendarDate(date)) {
+      profile.invalidate("availableDates", "Availability dates must be valid UTC calendar dates.");
+      continue;
+    }
+
+    const isoDate = date.toISOString().slice(0, 10);
+
+    if (storedDates.has(isoDate)) {
+      profile.invalidate("availableDates", "Duplicate availability dates are not permitted.");
+    }
+
+    storedDates.add(isoDate);
+  }
+
+  if (profile.availabilityStatus === "available") {
+    if (profile.availabilityMode === "weekly" && weekdays.length === 0) {
+      profile.invalidate(
+        "availableWeekdays",
+        "Select at least one weekday before becoming available."
+      );
+    }
+
+    if (profile.availabilityMode === "dates") {
+      const today = getTodayISODate();
+
+      const upcoming = [...storedDates].filter((date) => date >= today);
+
+      if (upcoming.length === 0) {
+        profile.invalidate(
+          "availableDates",
+          "Select at least one upcoming date before becoming available."
+        );
+      }
+    }
+  }
+}
+
+// ───────────────────────── DOCUMENT VALIDATION ─────────────────────────
+
+professionalProfileSchema.pre("validate", function () {
+  // ───────────────────────── STRIKES ─────────────────────────
+
+  if (this.strikes) {
+    this.strikes.total =
+      Number(this.strikes.noShows || 0) +
+      Number(this.strikes.lateArrivals || 0) +
+      Number(this.strikes.earlyDepartures || 0);
+  }
+
+  // ───────────────────────── LICENCE CHANGE RESET ─────────────────────────
+
   /*
-   * LICENCE NUMBER CHANGE
+   * A licence-number or profession change invalidates the
+   * existing licence review and final professional approval.
    *
-   * A change to licenceNumber invalidates
-   * the previous licence verification.
+   * The production onboarding NIN evidence remains intact.
+   * No separate admin NIN review exists.
    *
-   * It also invalidates the previous platform
-   * approval and hides the professional.
-   *
-   * Identity verification remains unchanged.
-   *
-   * This is a defensive document-save safeguard.
-   * ProfessionalVerificationService remains
-   * responsible for the authoritative transition
-   * and corresponding KYC audit records.
+   * The verification service must deactivate the
+   * corresponding licence-review evidence records.
    */
 
-  if (!this.isNew && this.isModified("licenceNumber")) {
+  if (!this.isNew && (this.isModified("licenceNumber") || this.isModified("type"))) {
     this.licenceVerificationStatus = "pending";
-
     this.licenceVerificationMethod = "not_checked";
     this.licenceVerificationSource = "not_checked";
 
     this.licenceNameOnRecord = null;
     this.licenceDocumentUrl = null;
-
+    this.licencePendingDocumentUrl = null;
+    this.licencePendingDocumentSubmittedAt = null;
+    this.licenceValidityType = null;
+    this.licenceLicensingYear = null;
     this.licenceExpiryDate = null;
+    this.upcomingLicence = null;
     this.licenceVerifiedAt = null;
-
     this.licenceLastCheckedAt = null;
     this.licenceVerifiedBy = null;
-
     this.licenceVerificationNote = null;
 
     this.professionalApprovalStatus = "pending";
-
     this.approvedForShiftsAt = null;
     this.approvedForShiftsBy = null;
-
     this.approvalNote = null;
     this.rejectionReason = null;
 
     this.marketplaceStatus = "hidden";
   }
 
-  /*
-   * ONE-TIME VERIFICATION POLICY
-   *
-   * Licence verification is determined by its
-   * recorded verification status.
-   *
-   * licenceExpiryDate does not automatically
-   * invalidate a completed verification.
-   */
+  // ───────────────────────── VERIFICATION SUMMARY ─────────────────────────
 
-  const hasVerifiedLicence = this.licenceVerificationStatus === "verified";
+  validateVerificationSummary(this);
+  validateLicenceValidity(this);
 
-  const hasVerifiedIdentity = this.identityVerificationStatus === "verified";
+  // There is no admin identity-verification summary on this profile.
+  // Production NIN evidence is checked by the verification service
+  // against User.legalNameEvidence and KYCVerification.
+  const licenceVerified =
+    this.licenceVerificationStatus === "verified" &&
+    this.licenceVerificationMethod === "manual" &&
+    this.licenceVerificationSource === "uploaded_document";
 
-  const hasCoreVerification = hasVerifiedLicence && hasVerifiedIdentity;
+  // ───────────────────────── FINAL APPROVAL ─────────────────────────
 
-  const isApproved = this.professionalApprovalStatus === "approved";
+  const approved = this.professionalApprovalStatus === "approved";
 
-  const accountActive = this.accountStatus === "active";
+  const hasApprovalTimestamp = isValidDate(this.approvedForShiftsAt);
 
-  /*
-   * Preserve existing approval timestamp behavior.
-   *
-   * This is not an authorization decision.
-   * Administrative approval must be granted
-   * through the appropriate service.
-   */
+  const hasApprovalActor = Boolean(this.approvedForShiftsBy);
 
-  if (isApproved && !this.approvedForShiftsAt) {
-    this.approvedForShiftsAt = new Date();
+  if (hasApprovalTimestamp !== hasApprovalActor) {
+    this.invalidate(
+      "approvedForShiftsAt",
+      "Approval timestamp and approver must be recorded together."
+    );
   }
 
+  if (
+    this.approvedForShiftsBy &&
+    this.user &&
+    String(this.approvedForShiftsBy) === String(this.user)
+  ) {
+    this.invalidate("approvedForShiftsBy", "Professionals cannot approve themselves.");
+  }
+
+  if (approved && (!licenceVerified || !hasApprovalTimestamp || !hasApprovalActor)) {
+    this.invalidate(
+      "professionalApprovalStatus",
+      "Approval requires an independently verified uploaded licence and a final administrative decision; NIN evidence is checked in the service."
+    );
+  }
+
+  if (
+    !["approved", "restricted"].includes(this.professionalApprovalStatus) &&
+    (this.approvedForShiftsAt || this.approvedForShiftsBy)
+  ) {
+    this.invalidate(
+      "approvedForShiftsAt",
+      "This approval status cannot retain shift approval details."
+    );
+  }
+
+  if (this.professionalApprovalStatus === "rejected") {
+    if (!this.rejectionReason || !this.rejectionReason.trim()) {
+      this.invalidate("rejectionReason", "Rejected approval requires a reason.");
+    }
+  } else if (this.rejectionReason) {
+    this.invalidate("rejectionReason", "Only rejected approval may retain a rejection reason.");
+  }
+
+  // ───────────────────────── MARKETPLACE READINESS ─────────────────────────
+
   /*
-   * MARKETPLACE SAFETY
+   * Documentary approval does not automatically make
+   * a professional visible in the marketplace.
    *
-   * Marketplace eligibility requires:
-   *
-   * - Verified identity;
-   * - Verified licence;
-   * - Approved professional status;
-   * - Active account.
-   *
-   * Do not require an unexpired licenceExpiryDate
-   * because licence verification is one-time.
-   *
-   * Do not automatically activate visibility.
-   *
-   * Preserve hidden/paused preferences when
-   * the professional is eligible.
+   * Hidden and paused preferences remain unchanged.
+   * A professional who loses eligibility cannot stay visible.
    */
 
-  const canRemainMarketplaceEligible = isApproved && accountActive && hasCoreVerification;
+  const today = getTodayISODate();
 
-  if (!canRemainMarketplaceEligible) {
+  const upcoming = this.upcomingLicence;
+
+  const upcomingDate = isValidCalendarDate(upcoming?.validFrom)
+    ? upcoming.validFrom.toISOString().slice(0, 10)
+    : null;
+
+  const activeValidity =
+    upcomingDate && upcomingDate <= today && upcoming?.verifiedAt && upcoming?.verifiedBy
+      ? upcoming
+      : this;
+
+  const effectiveMode = activeValidity === this ? this.licenceValidityType : upcoming.validityType;
+
+  const effectiveExpiry = activeValidity === this ? this.licenceExpiryDate : upcoming.expiryDate;
+
+  const licenceCurrent =
+    effectiveMode === "life" ||
+    (isValidCalendarDate(effectiveExpiry) && effectiveExpiry.toISOString().slice(0, 10) >= today);
+
+  const marketplaceEligible =
+    licenceVerified && approved && this.accountStatus === "active" && licenceCurrent;
+
+  if (!marketplaceEligible && this.marketplaceStatus === "visible") {
     this.marketplaceStatus = "hidden";
   }
+
+  // ───────────────────────── AVAILABILITY ─────────────────────────
+
+  validateAvailability(this);
+});
+
+// ───────────────────────── QUERY UPDATE PROTECTION ─────────────────────────
+
+/*
+ * Trusted services must use document save() for
+ * verification, approval, account and availability changes.
+ *
+ * Operational query updates remain available for permitted
+ * counters, reputation summaries and other ordinary fields.
+ *
+ * Schema middleware is not a substitute for authorisation.
+ */
+
+function assertSafeProfileUpdate(update, options = {}, operation) {
+  if (
+    !update ||
+    typeof update !== "object" ||
+    Array.isArray(update) ||
+    options.overwrite === true ||
+    options.upsert === true ||
+    ["replaceOne", "findOneAndReplace"].includes(operation)
+  ) {
+    throw new Error(
+      "Professional profile replacement and upsert operations are unsupported; use document save()."
+    );
+  }
+
+  const allowedOperators = new Set([
+    "$set",
+    "$unset",
+    "$inc",
+    "$min",
+    "$max",
+    "$currentDate",
+    "$setOnInsert",
+    "$addToSet",
+    "$pull",
+    "$push",
+  ]);
+
+  for (const [operator, values] of Object.entries(update)) {
+    if (!allowedOperators.has(operator)) {
+      throw new Error("Only explicitly supported atomic profile updates are allowed.");
+    }
+
+    if (!values || typeof values !== "object" || Array.isArray(values)) {
+      throw new Error("Invalid professional profile update structure.");
+    }
+
+    for (const [path, value] of Object.entries(values)) {
+      const root = String(path).split(".")[0];
+
+      if (root === "__v") {
+        if (path !== "__v" || operator !== "$inc" || value !== 1) {
+          throw new Error(
+            "Only an atomic increment of one is permitted for profile version locks."
+          );
+        }
+
+        continue;
+      }
+
+      if (PROTECTED_QUERY_PATHS.has(root)) {
+        throw new Error(
+          "Protected professional verification, approval, availability and account fields require document save()."
+        );
+      }
+    }
+  }
+}
+
+function assertSafeProfileBulkWrite(operations) {
+  if (!Array.isArray(operations)) {
+    throw new TypeError("Professional profile bulk operations must be an array.");
+  }
+
+  for (const operation of operations) {
+    if (!operation || typeof operation !== "object" || Array.isArray(operation)) {
+      throw new Error("Invalid professional profile bulk operation.");
+    }
+
+    if (operation.updateOne) {
+      assertSafeProfileUpdate(operation.updateOne.update, operation.updateOne, "updateOne");
+    } else if (operation.updateMany) {
+      assertSafeProfileUpdate(operation.updateMany.update, operation.updateMany, "updateMany");
+    } else {
+      throw new Error(
+        "Only validated updateOne and updateMany profile bulk operations are allowed."
+      );
+    }
+  }
+}
+
+professionalProfileSchema.pre(
+  ["updateOne", "updateMany", "findOneAndUpdate", "replaceOne", "findOneAndReplace"],
+  function () {
+    assertSafeProfileUpdate(this.getUpdate(), this.getOptions(), this.op);
+  }
+);
+
+// ───────────────────────── SAFE SERIALISATION ─────────────────────────
+
+professionalProfileSchema.set("toJSON", {
+  transform(_document, result) {
+    delete result.licenceDocumentUrl;
+    delete result.licencePendingDocumentUrl;
+    delete result.licenceNameOnRecord;
+    delete result.upcomingLicence;
+
+    if (result.bvnVerification) {
+      delete result.bvnVerification.providerReference;
+      delete result.bvnVerification.last4;
+    }
+
+    for (const certification of result.certifications || []) {
+      delete certification.documentUrl;
+    }
+
+    return result;
+  },
 });
 
 // ───────────────────────── EXPORT ─────────────────────────
 
-module.exports = mongoose.model("ProfessionalProfile", professionalProfileSchema);
+const ProfessionalProfile = mongoose.model("ProfessionalProfile", professionalProfileSchema);
+
+// Some Mongoose versions do not execute bulkWrite middleware.
+// Guard the model API directly to prevent bulk-write bypasses.
+const originalBulkWrite = ProfessionalProfile.bulkWrite;
+
+ProfessionalProfile.bulkWrite = function guardedBulkWrite(operations, ...args) {
+  assertSafeProfileBulkWrite(operations);
+
+  return originalBulkWrite.call(this, operations, ...args);
+};
+
+module.exports = ProfessionalProfile;

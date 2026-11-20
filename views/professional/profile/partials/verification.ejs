@@ -1,6 +1,6 @@
 <!-- views/professional/profile/partials/verification.ejs -->
 
-<!-- ───────────────────── VERIFICATION HEADER ───────────────────── -->
+<!-- ───────────────────── VERIFICATION STATUS ───────────────────── -->
 
 <div class="card mb-5 mb-xl-8">
   <div class="card-header">
@@ -17,9 +17,8 @@
 
         <div class="min-w-0">
           <h3 class="fw-bold text-gray-900 fs-5 mb-1">Professional Verification</h3>
-
           <div class="fs-7 text-muted">
-            Your identity, credentials, approval and marketplace status
+            Your professional credentials, approval and marketplace status
           </div>
         </div>
       </div>
@@ -27,10 +26,9 @@
   </div>
 
   <div class="card-body p-5 p-lg-8">
-    <!-- ───────────────────── MARKETPLACE READINESS ───────────────────── -->
-
     <div
       class="d-flex flex-column flex-sm-row align-items-start align-items-sm-center justify-content-between gap-4 border border-dashed rounded p-4 p-lg-5 <%= verificationView.readinessNoticeClass %>"
+      role="status"
     >
       <div class="d-flex align-items-start gap-4 min-w-0">
         <div class="symbol symbol-45px flex-shrink-0">
@@ -61,7 +59,7 @@
   </div>
 </div>
 
-<!-- ───────────────────── VERIFICATION STATUS CARDS ───────────────────── -->
+<!-- ───────────────────── VERIFICATION CARDS ───────────────────── -->
 
 <div class="row g-5 g-xl-8 mb-5 mb-xl-8">
   <% verificationView.items.forEach(function (item) { %>
@@ -69,8 +67,6 @@
   <div class="col-12 col-lg-6">
     <div class="card card-flush h-100">
       <div class="card-body p-5 p-lg-7">
-        <!-- ───────────────────── STATUS HEADER ───────────────────── -->
-
         <div
           class="d-flex flex-column flex-sm-row align-items-start justify-content-between gap-3 mb-5"
         >
@@ -96,9 +92,7 @@
           </span>
         </div>
 
-        <!-- ───────────────────── VERIFICATION DETAILS ───────────────────── -->
-
-        <% if (item.details.length > 0) { %>
+        <% if (item.details && item.details.length > 0) { %>
 
         <div class="separator separator-dashed my-5"></div>
 
@@ -134,11 +128,7 @@
           <% }) %>
         </div>
 
-        <% } %>
-
-        <!-- ───────────────────── RECORDED DATE ───────────────────── -->
-
-        <% if (item.dateLabel) { %>
+        <% } %> <% if (item.dateLabel) { %>
 
         <div class="separator separator-dashed my-5"></div>
 
@@ -162,7 +152,192 @@
   <% }) %>
 </div>
 
-<!-- ───────────────────── IDENTITY AND LICENCE PROTECTION ───────────────────── -->
+<!-- ───────────────────── LICENCE MANAGEMENT ───────────────────── -->
+
+<% const licence = verificationView.licence; %>
+
+<div class="card mb-5 mb-xl-8">
+  <div class="card-header">
+    <div class="card-title">
+      <div class="d-flex align-items-center gap-3">
+        <div class="symbol symbol-45px flex-shrink-0">
+          <span class="symbol-label bg-light-primary">
+            <i class="ki-duotone ki-document fs-2x text-primary">
+              <span class="path1"></span>
+              <span class="path2"></span>
+            </i>
+          </span>
+        </div>
+
+        <div class="min-w-0">
+          <h3 class="fw-bold text-gray-900 fs-5 mb-1">Practising Licence</h3>
+
+          <div class="fs-7 text-muted">
+            Submit your licence or renewal for administrative review
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card-body p-5 p-lg-8">
+    <!-- ───────────────────── CURRENT LICENCE STATUS ───────────────────── -->
+
+    <div class="d-flex flex-wrap align-items-center gap-3 mb-5">
+      <span class="fw-semibold text-gray-600 fs-7"> Current licence: </span>
+
+      <span class="badge <%= licence.statusBadgeClass %> fw-bold">
+        <%= licence.statusLabel %>
+      </span>
+
+      <% if (licence.current && licence.expiryLabel) { %>
+      <span class="text-gray-600 fs-7">
+        <%= licence.expiryLabel === 'Lifetime' ? 'Lifetime validity' : 'Valid until ' +
+        licence.expiryLabel %>
+      </span>
+      <% } %>
+    </div>
+
+    <!-- ───────────────────── PENDING SUBMISSION ───────────────────── -->
+
+    <% if (licence.hasPendingSubmission) { %>
+
+    <div
+      class="notice d-flex align-items-start bg-light-info border border-info border-dashed rounded p-4 mb-5"
+    >
+      <i class="ki-duotone ki-time fs-2 text-info me-3 flex-shrink-0">
+        <span class="path1"></span>
+        <span class="path2"></span>
+      </i>
+
+      <div class="min-w-0">
+        <div class="fw-bold text-gray-900 fs-7 mb-1">Licence submission awaiting review</div>
+
+        <div class="fw-semibold text-gray-600 fs-7">
+          Submitted: <%= licence.pendingDateLabel || 'Recently' %>. <% if (licence.current) { %>
+          Your existing approved licence remains current until its expiry. <% } else { %> Submission
+          does not authorise you to take on new work. <% } %>
+        </div>
+      </div>
+    </div>
+
+    <% } %>
+
+    <!-- ───────────────────── UPCOMING APPROVED RENEWAL ───────────────────── -->
+
+    <% if (licence.hasApprovedUpcoming && licence.upcoming) { %>
+
+    <div
+      class="notice d-flex align-items-start bg-light-success border border-success border-dashed rounded p-4 mb-5"
+    >
+      <i class="ki-duotone ki-calendar-tick fs-2 text-success me-3 flex-shrink-0">
+        <span class="path1"></span>
+        <span class="path2"></span>
+      </i>
+
+      <div class="min-w-0">
+        <div class="fw-bold text-gray-900 fs-7 mb-1">Approved renewal scheduled</div>
+
+        <div class="fw-semibold text-gray-600 fs-7">
+          Effective from <%= licence.upcoming.startsOnLabel %>. The renewal does not authorise work
+          before its effective date.
+        </div>
+      </div>
+    </div>
+
+    <% } %>
+
+    <!-- ───────────────────── LICENCE UPLOAD FEEDBACK ───────────────────── -->
+
+    <div
+      id="professionalLicenceUploadFeedback"
+      class="alert mb-5 d-none"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    ></div>
+
+    <!-- ───────────────────── LICENCE UPLOAD FORM ───────────────────── -->
+
+    <% if (licence.canSubmitDocument && licence.uploadAction) { %>
+
+    <form
+      id="professionalLicenceUploadForm"
+      action="<%= licence.uploadAction %>"
+      method="POST"
+      enctype="multipart/form-data"
+      data-max-bytes="<%= licence.uploadMaxBytes %>"
+    >
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+      <div class="mb-5">
+        <label for="professionalLicenceDocument" class="form-label fw-bold text-gray-900 fs-6 mb-3">
+          Choose licence document
+        </label>
+
+        <input
+          id="professionalLicenceDocument"
+          type="file"
+          class="form-control form-control-solid"
+          name="<%= licence.uploadFieldName %>"
+          accept="<%= licence.uploadAccept %>"
+          aria-describedby="professionalLicenceUploadHelp"
+          required
+        />
+
+        <div id="professionalLicenceUploadHelp" class="text-muted fw-semibold fs-7 mt-3">
+          <%= licence.uploadHelpMessage %>
+        </div>
+      </div>
+
+      <button type="submit" id="professionalLicenceUploadButton" class="btn btn-primary">
+        <span id="professionalLicenceUploadButtonLabel"> <%= licence.uploadButtonLabel %> </span>
+      </button>
+    </form>
+
+    <% } else { %>
+
+    <div class="text-gray-600 fw-semibold fs-7"><%= licence.uploadHelpMessage %></div>
+
+    <% } %>
+  </div>
+</div>
+
+<!-- ───────────────────── LICENCE VALIDITY AND RENEWAL ───────────────────── -->
+
+<div class="card mb-5 mb-xl-8">
+  <div class="card-body p-5 p-lg-7">
+    <div class="d-flex align-items-start gap-4">
+      <div class="symbol symbol-45px flex-shrink-0">
+        <span class="symbol-label bg-light-primary">
+          <i class="ki-duotone ki-information-5 fs-2x text-primary">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+          </i>
+        </span>
+      </div>
+
+      <div class="flex-grow-1 min-w-0">
+        <div class="fw-bold text-gray-900 fs-6 mb-2">Licence Validity and Renewal</div>
+
+        <div class="fw-semibold text-gray-600 fs-7">
+          <%= verificationView.licenceExpiryMessage %>
+        </div>
+
+        <% if (licence.expired && licence.withinGrace) { %>
+
+        <div class="fw-bold text-danger fs-7 mt-3">
+          The renewal grace period does not permit work with an expired licence.
+        </div>
+
+        <% } %>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ───────────────────── PROTECTED DETAILS ───────────────────── -->
 
 <div class="card mb-5 mb-xl-8">
   <div class="card-body p-5 p-lg-7">
@@ -179,32 +354,6 @@
         <div class="fw-bold text-gray-900 fs-6 mb-2">Protected Identity and Licence Details</div>
 
         <div class="fw-semibold text-gray-600 fs-7"><%= verificationView.supportMessage %></div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ───────────────────── LICENCE VERIFICATION POLICY ───────────────────── -->
-
-<div class="card mb-5 mb-xl-8">
-  <div class="card-body p-5 p-lg-7">
-    <div class="d-flex align-items-start gap-4">
-      <div class="symbol symbol-45px flex-shrink-0">
-        <span class="symbol-label bg-light-primary">
-          <i class="ki-duotone ki-information-5 fs-2x text-primary">
-            <span class="path1"></span>
-            <span class="path2"></span>
-            <span class="path3"></span>
-          </i>
-        </span>
-      </div>
-
-      <div class="flex-grow-1 min-w-0">
-        <div class="fw-bold text-gray-900 fs-6 mb-2">Professional Licence Verification Policy</div>
-
-        <div class="fw-semibold text-gray-600 fs-7">
-          <%= verificationView.licenceExpiryMessage %>
-        </div>
       </div>
     </div>
   </div>

@@ -1,9 +1,12 @@
+// jobs/index.js
+
 const ShiftLifecycleScheduler = require("./shiftLifecycleScheduler");
 const ShiftSettlementScheduler = require("./shiftSettlementScheduler");
 const WithdrawalReversalScheduler = require("./withdrawalReversalScheduler");
 const EmployerRefundBatchScheduler = require("./employerRefundBatchScheduler");
 const ProviderEventRetryScheduler = require("./providerEventRetryScheduler");
 const SubscriptionLifecycleScheduler = require("./subscriptionLifecycleScheduler");
+const FacilityPermitActivationScheduler = require("./facilityPermitActivationScheduler");
 
 const logger = require("../utils/logger");
 
@@ -39,6 +42,7 @@ const backgroundSchedulers = [
   EmployerRefundBatchScheduler,
   ProviderEventRetryScheduler,
   SubscriptionLifecycleScheduler,
+  FacilityPermitActivationScheduler,
 ];
 
 /* ─────────────────────────────── START BACKGROUND JOBS ─────────────────────────────── */
@@ -98,6 +102,29 @@ exports.startBackgroundJobs = function startBackgroundJobs() {
       runImmediately: false,
     });
 
+    /* ───────────────────── FACILITY PERMIT ACTIVATION ───────────────────── */
+
+    /*
+     * Discover verified, future-approved facility permits whose
+     * effective dates have arrived.
+     *
+     * The scheduler owns discovery coordination, processing limits,
+     * overlap prevention and distributed lease management.
+     *
+     * FacilityPermitVerificationService remains authoritative
+     * for transactional activation, regulatory requirements,
+     * permit validity and premises verification.
+     *
+     * runImmediately is disabled so the first scheduled pass
+     * runs after the configured interval.
+     */
+    FacilityPermitActivationScheduler.start({
+      intervalMinutes: 5,
+      limit: 100,
+      leaseTtlMs: 15 * 60 * 1000,
+      runImmediately: false,
+    });
+
     logger.info("Background jobs started.");
   } catch (error) {
     logger.error("Background job startup failed:", error);
@@ -107,8 +134,8 @@ exports.startBackgroundJobs = function startBackgroundJobs() {
      * successfully created their interval timers.
      *
      * Attempt cleanup for every registered scheduler.
-     * Scheduler.stop() should safely handle the case
-     * where its timer was never started.
+     * Scheduler.stop() must safely handle the case where
+     * its timer was never started.
      *
      * Keep cleanup errors separate so the original
      * startup failure is not lost.
@@ -128,12 +155,13 @@ exports.startBackgroundJobs = function startBackgroundJobs() {
 /* ─────────────────────────────── STOP BACKGROUND JOBS ─────────────────────────────── */
 
 exports.stopBackgroundJobs = function stopBackgroundJobs() {
-  ShiftLifecycleScheduler.stop();
-  ShiftSettlementScheduler.stop();
-  WithdrawalReversalScheduler.stop();
-  EmployerRefundBatchScheduler.stop();
-  ProviderEventRetryScheduler.stop();
-  SubscriptionLifecycleScheduler.stop();
+  for (const scheduler of backgroundSchedulers) {
+    try {
+      scheduler.stop();
+    } catch (error) {
+      logger.error("Background scheduler shutdown failed:", error);
+    }
+  }
 
   logger.info("Background jobs stopped.");
 };

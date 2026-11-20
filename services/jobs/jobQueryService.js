@@ -16,10 +16,9 @@ const { createServiceError } = require("../helpers/serviceErrorHelper");
 const { normalizeObjectId } = require("../helpers/serviceValidationHelpers");
 
 const JOB_QUERY_SERVICE_ERROR_NAME = "JobQueryServiceError";
-
 const JOBS_PER_PAGE = 20;
 
-/* ─────────────────────────────── ERROR CONTRACT ─────────────────────────────── */
+// ───────── Error Contract ─────────
 
 function createJobQueryError(options) {
   return createServiceError({
@@ -28,7 +27,7 @@ function createJobQueryError(options) {
   });
 }
 
-/* ─────────────────────────────── HELPERS ─────────────────────────────── */
+// ───────── Helpers ─────────
 
 function escapeRegex(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -56,9 +55,7 @@ function normalizeOptionalText(value) {
 
 function buildPagination({ page, totalItems, perPage, itemCount }) {
   const totalPages = Math.max(Math.ceil(totalItems / perPage), 1);
-
   const currentPage = Math.min(page, totalPages);
-
   const skip = (currentPage - 1) * perPage;
 
   return {
@@ -90,7 +87,7 @@ function buildGroupedCountMap(results = [], total = 0) {
   return counts;
 }
 
-/* ─────────────────────────────── PUBLIC SNAPSHOT HELPERS ─────────────────────────────── */
+// ───────── Public Snapshot Helpers ─────────
 
 function sanitizePublicScreeningQuestion(question) {
   if (!question || typeof question !== "object") {
@@ -113,50 +110,32 @@ function sanitizePublicListingSnapshot(snapshot) {
 
   return {
     snapshotVersion: snapshot.snapshotVersion || null,
-
     roleTitle: snapshot.roleTitle || null,
-
     professionalType: snapshot.professionalType || null,
-
     specialty: snapshot.specialty || null,
-
     department: snapshot.department || null,
-
     employmentType: snapshot.employmentType || null,
-
     workplaceType: snapshot.workplaceType || null,
-
     minimumYearsOfExperience: snapshot.minimumYearsOfExperience ?? 0,
-
     educationRequirement: snapshot.educationRequirement || null,
-
     countryCode: snapshot.countryCode || null,
-
     state: snapshot.state || null,
-
     lga: snapshot.lga || null,
-
     address: snapshot.address || null,
-
     currency: snapshot.currency || null,
 
     compensation:
       snapshot.compensation && typeof snapshot.compensation === "object"
         ? {
             type: snapshot.compensation.type || null,
-
             minimumAmount: snapshot.compensation.minimumAmount ?? null,
-
             maximumAmount: snapshot.compensation.maximumAmount ?? null,
-
             period: snapshot.compensation.period || null,
-
             negotiable: snapshot.compensation.negotiable === true,
           }
         : null,
 
     summary: snapshot.summary || null,
-
     description: snapshot.description || null,
 
     responsibilities: Array.isArray(snapshot.responsibilities)
@@ -170,11 +149,8 @@ function sanitizePublicListingSnapshot(snapshot) {
       : [],
 
     skills: Array.isArray(snapshot.skills) ? [...snapshot.skills] : [],
-
     benefits: Array.isArray(snapshot.benefits) ? [...snapshot.benefits] : [],
-
     vacancyCount: snapshot.vacancyCount ?? null,
-
     employmentStartDate: snapshot.employmentStartDate || null,
 
     screeningQuestions: (Array.isArray(snapshot.screeningQuestions)
@@ -195,27 +171,18 @@ function sanitizePublicEmployerSnapshot(snapshot) {
 
   return {
     snapshotVersion: snapshot.snapshotVersion || null,
-
     businessName: snapshot.businessName || null,
-
     type: snapshot.type || null,
-
     logoUrl: snapshot.logoUrl || null,
-
     publicDescription: snapshot.publicDescription || null,
-
     websiteUrl: snapshot.websiteUrl || null,
 
+    // Business CAC verification remains separate from branch permits.
     cacVerified: snapshot.cacVerified === true,
 
-    regulatoryVerified: snapshot.regulatoryVerified === true,
-
     branchName: snapshot.branchName || null,
-
     branchAddress: snapshot.branchAddress || null,
-
     branchState: snapshot.branchState || null,
-
     branchLga: snapshot.branchLga || null,
   };
 }
@@ -227,31 +194,22 @@ function sanitizePublicPublication(publication) {
 
   return {
     _id: publication._id,
-
     job: publication.job,
-
     status: publication.status,
-
     employerSnapshot: sanitizePublicEmployerSnapshot(publication.employerSnapshot),
-
     listingSnapshot: sanitizePublicListingSnapshot(publication.listingSnapshot),
-
     applicationDeadline: publication.applicationDeadline || null,
-
     publishedAt: publication.publishedAt || null,
-
     expiresAt: publication.expiresAt || null,
-
     createdAt: publication.createdAt || null,
-
     updatedAt: publication.updatedAt || null,
   };
 }
 
-/* ─────────────────────────────── QUERY SERVICE ─────────────────────────────── */
+// ───────── Query Service ─────────
 
 class JobQueryService {
-  /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
+  // ───────── Normalization ─────────
 
   static normalizeCurrentTime(value = new Date()) {
     const currentTime = new Date(value);
@@ -259,9 +217,7 @@ class JobQueryService {
     if (Number.isNaN(currentTime.getTime())) {
       throw createJobQueryError({
         message: "Current time is invalid.",
-
         code: "INVALID_CURRENT_TIME",
-
         statusCode: 500,
       });
     }
@@ -282,16 +238,13 @@ class JobQueryService {
 
     return normalizeObjectId({
       value,
-
       fieldName,
-
       createError: createJobQueryError,
     });
   }
 
   static normalizeRecruitmentStatusFilter(value) {
     const status = normalizeStringFilter(value);
-
     const allowedStatuses = getEnumValues(Job, "recruitmentStatus");
 
     return status === "all" || allowedStatuses.includes(status) ? status : "all";
@@ -299,7 +252,6 @@ class JobQueryService {
 
   static normalizePublicationStatusFilter(value) {
     const status = normalizeStringFilter(value);
-
     const allowedStatuses = getEnumValues(Job, "publicationStatus");
 
     return status === "all" || allowedStatuses.includes(status) ? status : "all";
@@ -313,13 +265,12 @@ class JobQueryService {
     }
 
     const jobField = snapshotField.replace(/^listingSnapshot\./, "");
-
     const allowedValues = getEnumValues(Job, jobField);
 
     return !allowedValues.length || allowedValues.includes(normalized) ? normalized : "all";
   }
 
-  /* ─────────────────────────────── EMPLOYER READ ACCESS ─────────────────────────────── */
+  // ───────── Employer Read Access ─────────
 
   static canViewAllBranches(employerContext = null) {
     return Boolean(
@@ -362,36 +313,28 @@ class JobQueryService {
     if (!JobQueryService.canViewJobs(employerContext)) {
       throw createJobQueryError({
         message: "You do not have permission to view permanent Jobs.",
-
         code: "JOB_VIEW_NOT_ALLOWED",
-
         statusCode: 403,
       });
     }
 
     const normalizedUserId = normalizeObjectId({
       value: userId,
-
       fieldName: "user ID",
-
       createError: createJobQueryError,
     });
 
     if (!employerProfile?._id) {
       throw createJobQueryError({
         message: "Employer profile context is unavailable.",
-
         code: "EMPLOYER_PROFILE_CONTEXT_REQUIRED",
-
         statusCode: 500,
       });
     }
 
     const normalizedEmployerProfileId = normalizeObjectId({
       value: employerProfile._id,
-
       fieldName: "employer profile ID",
-
       createError: createJobQueryError,
     });
 
@@ -402,9 +345,7 @@ class JobQueryService {
     if (!profile) {
       throw createJobQueryError({
         message: "Employer profile not found.",
-
         code: "EMPLOYER_PROFILE_NOT_FOUND",
-
         statusCode: 404,
       });
     }
@@ -415,9 +356,7 @@ class JobQueryService {
       if (employerContext?.isPrimaryEmployer !== true) {
         throw createJobQueryError({
           message: "Your employer access context is invalid.",
-
           code: "EMPLOYER_ACCESS_CONTEXT_INVALID",
-
           statusCode: 403,
         });
       }
@@ -427,11 +366,8 @@ class JobQueryService {
 
     const member = await EmployerMember.findOne({
       business: normalizedEmployerProfileId,
-
       user: normalizedUserId,
-
       accountStatus: "active",
-
       isCurrent: {
         $ne: false,
       },
@@ -442,9 +378,7 @@ class JobQueryService {
     if (!member) {
       throw createJobQueryError({
         message: "You are not authorized for this employer business.",
-
         code: "EMPLOYER_PROFILE_ACCESS_NOT_ALLOWED",
-
         statusCode: 403,
       });
     }
@@ -458,9 +392,7 @@ class JobQueryService {
     if (!roleMatchesContext) {
       throw createJobQueryError({
         message: "Your employer access context is invalid.",
-
         code: "EMPLOYER_ACCESS_CONTEXT_INVALID",
-
         statusCode: 403,
       });
     }
@@ -484,9 +416,7 @@ class JobQueryService {
       if (contextContainsUnassignedBranch) {
         throw createJobQueryError({
           message: "Your employer branch access context is invalid.",
-
           code: "EMPLOYER_BRANCH_ACCESS_CONTEXT_INVALID",
-
           statusCode: 403,
         });
       }
@@ -503,9 +433,7 @@ class JobQueryService {
   }) {
     const normalizedEmployerProfileId = normalizeObjectId({
       value: employerProfileId,
-
       fieldName: "employer profile ID",
-
       createError: createJobQueryError,
     });
 
@@ -516,9 +444,7 @@ class JobQueryService {
     if (jobId) {
       filter._id = normalizeObjectId({
         value: jobId,
-
         fieldName: "Job ID",
-
         createError: createJobQueryError,
       });
     }
@@ -543,9 +469,7 @@ class JobQueryService {
       if (!hasBranchAccess) {
         throw createJobQueryError({
           message: "You do not have access to this branch.",
-
           code: "JOB_BRANCH_ACCESS_NOT_ALLOWED",
-
           statusCode: 403,
         });
       }
@@ -566,12 +490,9 @@ class JobQueryService {
     const filter = {
       business: normalizeObjectId({
         value: employerProfileId,
-
         fieldName: "employer profile ID",
-
         createError: createJobQueryError,
       }),
-
       isActive: true,
     };
 
@@ -585,13 +506,12 @@ class JobQueryService {
       .select("name address state lga isActive")
       .sort({
         name: 1,
-
         _id: 1,
       })
       .lean();
   }
 
-  /* ─────────────────────────────── EMPLOYER JOB CREATION ─────────────────────────────── */
+  // ───────── Employer Job Creation ─────────
 
   static async getEmployerJobCreatePageData({
     userId,
@@ -600,47 +520,36 @@ class JobQueryService {
   }) {
     const profile = await JobQueryService.getEmployerProfileForRead({
       userId,
-
       employerProfile,
-
       employerContext,
     });
 
     if (!JobQueryService.canManageJobs(employerContext)) {
       throw createJobQueryError({
         message: "You do not have permission to create permanent Jobs.",
-
         code: "JOB_CREATE_NOT_ALLOWED",
-
         statusCode: 403,
       });
     }
 
     const branches = await JobQueryService.getAccessibleBranches({
       employerProfileId: profile._id,
-
       employerContext,
     });
 
-    // Match JobService.createDraft: branch managers must select a branch,
-    // while other authorized employers may begin an unassigned draft.
+    // Branch managers must select a branch when creating a draft.
     const branchRequired = employerContext?.isBranchManager === true;
 
     return {
       employer: {
         id: String(profile._id),
-
         businessName: profile.businessName || null,
-
         countryCode: profile.countryCode || null,
-
         currency: profile.currency || null,
       },
 
       branches,
-
       branchRequired,
-
       canManageJobs: true,
 
       canManageAllBranches: JobQueryService.canManageAllBranches(employerContext),
@@ -649,7 +558,7 @@ class JobQueryService {
     };
   }
 
-  /* ─────────────────────────────── EMPLOYER JOB EDITING ─────────────────────────────── */
+  // ───────── Employer Job Editing ─────────
 
   static async getEmployerJobEditPageData({
     userId,
@@ -659,35 +568,27 @@ class JobQueryService {
   }) {
     const normalizedJobId = normalizeObjectId({
       value: jobId,
-
       fieldName: "Job ID",
-
       createError: createJobQueryError,
     });
 
     const profile = await JobQueryService.getEmployerProfileForRead({
       userId,
-
       employerProfile,
-
       employerContext,
     });
 
     if (!JobQueryService.canManageJobs(employerContext)) {
       throw createJobQueryError({
         message: "You do not have permission to edit permanent Jobs.",
-
         code: "JOB_EDIT_NOT_ALLOWED",
-
         statusCode: 403,
       });
     }
 
     const filter = JobQueryService.buildAccessibleJobFilter({
       employerProfileId: profile._id,
-
       employerContext,
-
       jobId: normalizedJobId,
     });
 
@@ -696,15 +597,12 @@ class JobQueryService {
     if (!job) {
       throw createJobQueryError({
         message: "Job was not found or is not available to you.",
-
         code: "JOB_NOT_FOUND",
-
         statusCode: 404,
       });
     }
 
-    // Mirrors JobService.assertJobContentEditable for form access.
-    // The update service must still recheck state when the employer saves.
+    // The update service rechecks editability when saving.
     const editable =
       (job.recruitmentStatus === "draft" && job.publicationStatus === "unpublished") ||
       (job.recruitmentStatus === "active" && ["expired", "ended"].includes(job.publicationStatus));
@@ -712,16 +610,13 @@ class JobQueryService {
     if (!editable) {
       throw createJobQueryError({
         message: "This Job is not currently open for content editing.",
-
         code: "JOB_EDIT_STATE_INVALID",
-
         statusCode: 409,
       });
     }
 
     const branches = await JobQueryService.getAccessibleBranches({
       employerProfileId: profile._id,
-
       employerContext,
     });
 
@@ -730,25 +625,19 @@ class JobQueryService {
     const hasPublicationHistory =
       Number(job.publicationCount || 0) > 0 || Boolean(job.currentPublication);
 
-    // updateJob refreshes currency from EmployerProfile. Do not silently display
-    // old salary amounts as a different currency when preparing this form.
+    // Prevent displaying old compensation amounts in a new currency.
     const currencyChanged = Boolean(job.compensation && job.currency !== profile.currency);
 
     return {
       employer: {
         id: String(profile._id),
-
         businessName: profile.businessName || null,
-
         countryCode: profile.countryCode || null,
-
         currency: profile.currency || null,
       },
 
       job,
-
       branches,
-
       currentBranchId,
 
       currentBranchIsSelectable: Boolean(
@@ -758,9 +647,7 @@ class JobQueryService {
       branchRequired: employerContext?.isBranchManager === true || hasPublicationHistory,
 
       hasPublicationHistory,
-
       currencyChanged,
-
       canManageJobs: true,
 
       canManageAllBranches: JobQueryService.canManageAllBranches(employerContext),
@@ -769,32 +656,26 @@ class JobQueryService {
     };
   }
 
-  /* ─────────────────────────────── PROFESSIONAL READ ACCESS ─────────────────────────────── */
+  // ───────── Professional Read Access ─────────
 
   static async getProfessionalProfileForRead({ userId, professionalProfile = null }) {
     const normalizedUserId = normalizeObjectId({
       value: userId,
-
       fieldName: "user ID",
-
       createError: createJobQueryError,
     });
 
     if (!professionalProfile?._id) {
       throw createJobQueryError({
         message: "Professional profile context is unavailable.",
-
         code: "PROFESSIONAL_PROFILE_CONTEXT_REQUIRED",
-
         statusCode: 500,
       });
     }
 
     const normalizedProfessionalProfileId = normalizeObjectId({
       value: professionalProfile._id,
-
       fieldName: "professional profile ID",
-
       createError: createJobQueryError,
     });
 
@@ -805,9 +686,7 @@ class JobQueryService {
     if (!profile) {
       throw createJobQueryError({
         message: "Professional profile not found.",
-
         code: "PROFESSIONAL_PROFILE_NOT_FOUND",
-
         statusCode: 404,
       });
     }
@@ -815,9 +694,7 @@ class JobQueryService {
     if (!profile.user || String(profile.user) !== String(normalizedUserId)) {
       throw createJobQueryError({
         message: "You are not authorized for this professional profile.",
-
         code: "PROFESSIONAL_PROFILE_ACCESS_NOT_ALLOWED",
-
         statusCode: 403,
       });
     }
@@ -836,21 +713,18 @@ class JobQueryService {
     if (!userId || !professionalProfile) {
       throw createJobQueryError({
         message: "Professional authentication context is incomplete.",
-
         code: "PROFESSIONAL_CONTEXT_INCOMPLETE",
-
         statusCode: 500,
       });
     }
 
     return JobQueryService.getProfessionalProfileForRead({
       userId,
-
       professionalProfile,
     });
   }
 
-  /* ─────────────────────────────── EMPLOYER JOBS ─────────────────────────────── */
+  // ───────── Employer Jobs ─────────
 
   static applyJobFilters(
     baseFilter,
@@ -874,29 +748,12 @@ class JobQueryService {
       const searchRegex = new RegExp(escapeRegex(normalizedSearch), "i");
 
       filter.$or = [
-        {
-          roleTitle: searchRegex,
-        },
-
-        {
-          professionalType: searchRegex,
-        },
-
-        {
-          specialty: searchRegex,
-        },
-
-        {
-          department: searchRegex,
-        },
-
-        {
-          state: searchRegex,
-        },
-
-        {
-          lga: searchRegex,
-        },
+        { roleTitle: searchRegex },
+        { professionalType: searchRegex },
+        { specialty: searchRegex },
+        { department: searchRegex },
+        { state: searchRegex },
+        { lga: searchRegex },
       ];
     }
 
@@ -934,56 +791,42 @@ class JobQueryService {
     const selectedBranchId = JobQueryService.normalizeOptionalObjectId(branchId, "branch ID");
 
     const selectedSearch = normalizeOptionalText(search);
-
     const requestedPage = JobQueryService.normalizePageNumber(page);
 
     const profile = await JobQueryService.getEmployerProfileForRead({
       userId,
-
       employerProfile,
-
       employerContext,
     });
 
     const scopeFilter = JobQueryService.buildAccessibleJobFilter({
       employerProfileId: profile._id,
-
       employerContext,
-
       branchId: selectedBranchId,
     });
 
     const recruitmentCountMatch = JobQueryService.applyJobFilters(scopeFilter, {
       publicationStatus: selectedPublicationStatus,
-
       search: selectedSearch,
     });
 
     const publicationCountMatch = JobQueryService.applyJobFilters(scopeFilter, {
       recruitmentStatus: selectedRecruitmentStatus,
-
       search: selectedSearch,
     });
 
     const filteredJobFilter = JobQueryService.applyJobFilters(scopeFilter, {
       recruitmentStatus: selectedRecruitmentStatus,
-
       publicationStatus: selectedPublicationStatus,
-
       search: selectedSearch,
     });
 
     const [
       totalFilteredJobs,
-
       totalForRecruitmentTabs,
-
       recruitmentCountResults,
-
       totalForPublicationTabs,
-
       publicationCountResults,
-
       branches,
     ] = await Promise.all([
       Job.countDocuments(filteredJobFilter),
@@ -994,11 +837,9 @@ class JobQueryService {
         {
           $match: recruitmentCountMatch,
         },
-
         {
           $group: {
             _id: "$recruitmentStatus",
-
             count: {
               $sum: 1,
             },
@@ -1012,11 +853,9 @@ class JobQueryService {
         {
           $match: publicationCountMatch,
         },
-
         {
           $group: {
             _id: "$publicationStatus",
-
             count: {
               $sum: 1,
             },
@@ -1026,7 +865,6 @@ class JobQueryService {
 
       JobQueryService.getAccessibleBranches({
         employerProfileId: profile._id,
-
         employerContext,
       }),
     ]);
@@ -1034,7 +872,6 @@ class JobQueryService {
     const totalPages = Math.max(Math.ceil(totalFilteredJobs / JOBS_PER_PAGE), 1);
 
     const currentPage = Math.min(requestedPage, totalPages);
-
     const skip = (currentPage - 1) * JOBS_PER_PAGE;
 
     const jobs =
@@ -1042,9 +879,7 @@ class JobQueryService {
         ? await JobQueryService.buildEmployerJobQuery(filteredJobFilter)
             .sort({
               updatedAt: -1,
-
               createdAt: -1,
-
               _id: -1,
             })
             .skip(skip)
@@ -1055,24 +890,16 @@ class JobQueryService {
     return {
       employer: {
         id: String(profile._id),
-
         businessName: profile.businessName || "Employer",
-
         countryCode: profile.countryCode || null,
-
         currency: profile.currency || null,
       },
 
       jobs,
-
       branches,
-
       selectedRecruitmentStatus,
-
       selectedPublicationStatus,
-
       selectedBranchId: selectedBranchId ? String(selectedBranchId) : null,
-
       selectedSearch,
 
       recruitmentStatusCounts: buildGroupedCountMap(
@@ -1086,22 +913,15 @@ class JobQueryService {
       ),
 
       canViewJobs: JobQueryService.canViewJobs(employerContext),
-
       canManageJobs: JobQueryService.canManageJobs(employerContext),
-
       canViewAllBranches: JobQueryService.canViewAllBranches(employerContext),
-
       canManageAllBranches: JobQueryService.canManageAllBranches(employerContext),
-
       currentTime: normalizedCurrentTime,
 
       pagination: buildPagination({
         page: currentPage,
-
         totalItems: totalFilteredJobs,
-
         perPage: JOBS_PER_PAGE,
-
         itemCount: jobs.length,
       }),
     };
@@ -1118,17 +938,13 @@ class JobQueryService {
 
     const profile = await JobQueryService.getEmployerProfileForRead({
       userId,
-
       employerProfile,
-
       employerContext,
     });
 
     const filter = JobQueryService.buildAccessibleJobFilter({
       employerProfileId: profile._id,
-
       employerContext,
-
       jobId,
     });
 
@@ -1137,9 +953,7 @@ class JobQueryService {
     if (!job) {
       throw createJobQueryError({
         message: "Job was not found or is not available to you.",
-
         code: "JOB_NOT_FOUND",
-
         statusCode: 404,
       });
     }
@@ -1152,9 +966,7 @@ class JobQueryService {
       )
       .sort({
         publishedAt: -1,
-
         createdAt: -1,
-
         _id: -1,
       })
       .lean();
@@ -1162,39 +974,26 @@ class JobQueryService {
     return {
       employer: {
         id: String(profile._id),
-
         businessName: profile.businessName || "Employer",
-
         countryCode: profile.countryCode || null,
-
         currency: profile.currency || null,
       },
 
       job,
-
       publications,
-
       canViewJobs: JobQueryService.canViewJobs(employerContext),
-
       canManageJobs: JobQueryService.canManageJobs(employerContext),
-
       canViewAllBranches: JobQueryService.canViewAllBranches(employerContext),
-
       canManageAllBranches: JobQueryService.canManageAllBranches(employerContext),
-
       currentTime: normalizedCurrentTime,
     };
   }
 
-  /* ─────────────────────────────── ADMIN JOB OVERSIGHT ─────────────────────────────── */
+  // ───────── Admin Job Oversight ─────────
 
-  /**
-   * These methods expose platform-admin read access only.
-   *
-   * Authentication / platform-admin authorization belongs to the admin route
-   * middleware and controller layer. These queries do not manufacture employer
-   * context and do not grant employer mutation authority.
-   */
+  // Read-only admin queries; route middleware enforces administrator access.
+  // No employer context or mutation authority is granted here.
+
   static buildAdminJobScopeFilter({ employerProfileId = null, branchId = null } = {}) {
     const filter = {};
 
@@ -1215,19 +1014,14 @@ class JobQueryService {
 
     return {
       filter,
-
       employerProfileId: normalizedEmployerProfileId,
-
       branchId: normalizedBranchId,
     };
   }
 
   static buildAdminJobQuery(filter) {
     return Job.find(filter)
-      .populate(
-        "business",
-        "businessName type countryCode currency accountStatus employerApprovalStatus logoUrl"
-      )
+      .populate("business", "businessName type countryCode currency accountStatus logoUrl")
       .populate("branch", "name address state lga isActive")
       .populate(
         "currentPublication",
@@ -1253,40 +1047,32 @@ class JobQueryService {
       JobQueryService.normalizePublicationStatusFilter(publicationStatus);
 
     const selectedSearch = normalizeOptionalText(search);
-
     const requestedPage = JobQueryService.normalizePageNumber(page);
 
     const adminScope = JobQueryService.buildAdminJobScopeFilter({
       employerProfileId,
-
       branchId,
     });
 
     const recruitmentCountMatch = JobQueryService.applyJobFilters(adminScope.filter, {
       publicationStatus: selectedPublicationStatus,
-
       search: selectedSearch,
     });
 
     const publicationCountMatch = JobQueryService.applyJobFilters(adminScope.filter, {
       recruitmentStatus: selectedRecruitmentStatus,
-
       search: selectedSearch,
     });
 
     const filteredJobFilter = JobQueryService.applyJobFilters(adminScope.filter, {
       recruitmentStatus: selectedRecruitmentStatus,
-
       publicationStatus: selectedPublicationStatus,
-
       search: selectedSearch,
     });
 
     const selectedEmployerQuery = adminScope.employerProfileId
       ? EmployerProfile.findById(adminScope.employerProfileId)
-          .select(
-            "businessName type countryCode currency accountStatus employerApprovalStatus logoUrl"
-          )
+          .select("businessName type countryCode currency accountStatus logoUrl")
           .lean()
       : Promise.resolve(null);
 
@@ -1297,7 +1083,6 @@ class JobQueryService {
           .select("name address state lga isActive")
           .sort({
             name: 1,
-
             _id: 1,
           })
           .lean()
@@ -1305,17 +1090,11 @@ class JobQueryService {
 
     const [
       totalFilteredJobs,
-
       totalForRecruitmentTabs,
-
       recruitmentCountResults,
-
       totalForPublicationTabs,
-
       publicationCountResults,
-
       selectedEmployer,
-
       branches,
     ] = await Promise.all([
       Job.countDocuments(filteredJobFilter),
@@ -1326,11 +1105,9 @@ class JobQueryService {
         {
           $match: recruitmentCountMatch,
         },
-
         {
           $group: {
             _id: "$recruitmentStatus",
-
             count: {
               $sum: 1,
             },
@@ -1344,11 +1121,9 @@ class JobQueryService {
         {
           $match: publicationCountMatch,
         },
-
         {
           $group: {
             _id: "$publicationStatus",
-
             count: {
               $sum: 1,
             },
@@ -1357,16 +1132,13 @@ class JobQueryService {
       ]),
 
       selectedEmployerQuery,
-
       branchesQuery,
     ]);
 
     if (adminScope.employerProfileId && !selectedEmployer) {
       throw createJobQueryError({
         message: "Employer profile not found.",
-
         code: "EMPLOYER_PROFILE_NOT_FOUND",
-
         statusCode: 404,
       });
     }
@@ -1374,7 +1146,6 @@ class JobQueryService {
     const totalPages = Math.max(Math.ceil(totalFilteredJobs / JOBS_PER_PAGE), 1);
 
     const currentPage = Math.min(requestedPage, totalPages);
-
     const skip = (currentPage - 1) * JOBS_PER_PAGE;
 
     const jobs =
@@ -1382,9 +1153,7 @@ class JobQueryService {
         ? await JobQueryService.buildAdminJobQuery(filteredJobFilter)
             .sort({
               updatedAt: -1,
-
               createdAt: -1,
-
               _id: -1,
             })
             .skip(skip)
@@ -1398,19 +1167,11 @@ class JobQueryService {
       selectedEmployer: selectedEmployer
         ? {
             id: String(selectedEmployer._id),
-
             businessName: selectedEmployer.businessName || "Employer",
-
             type: selectedEmployer.type || null,
-
             countryCode: selectedEmployer.countryCode || null,
-
             currency: selectedEmployer.currency || null,
-
             accountStatus: selectedEmployer.accountStatus || null,
-
-            employerApprovalStatus: selectedEmployer.employerApprovalStatus || null,
-
             logoUrl: selectedEmployer.logoUrl || null,
           }
         : null,
@@ -1422,7 +1183,6 @@ class JobQueryService {
         : null,
 
       selectedRecruitmentStatus,
-
       selectedPublicationStatus,
 
       selectedBranchId: adminScope.branchId ? String(adminScope.branchId) : null,
@@ -1443,11 +1203,8 @@ class JobQueryService {
 
       pagination: buildPagination({
         page: currentPage,
-
         totalItems: totalFilteredJobs,
-
         perPage: JOBS_PER_PAGE,
-
         itemCount: jobs.length,
       }),
     };
@@ -1458,9 +1215,7 @@ class JobQueryService {
 
     const normalizedJobId = normalizeObjectId({
       value: jobId,
-
       fieldName: "Job ID",
-
       createError: createJobQueryError,
     });
 
@@ -1471,9 +1226,7 @@ class JobQueryService {
     if (!job) {
       throw createJobQueryError({
         message: "Job not found.",
-
         code: "JOB_NOT_FOUND",
-
         statusCode: 404,
       });
     }
@@ -1483,39 +1236,42 @@ class JobQueryService {
     })
       .sort({
         cycleNumber: -1,
-
         publishedAt: -1,
-
         _id: -1,
       })
       .lean();
 
     return {
       job,
-
       publications,
-
       currentTime: normalizedCurrentTime,
     };
   }
 
-  /* ─────────────────────────────── MARKETPLACE ─────────────────────────────── */
+  // ───────── Marketplace ─────────
 
   static buildMarketplaceBaseFilter(currentTime) {
     return {
       status: "live",
 
-      // Keep authority alternatives separate from the text-search $or.
+      // Authority alternatives must remain separate from search $or.
       $and: [
         {
           $or: [
             {
-              "entitlementSnapshot.source": { $in: ["free", "paid_single_post"] },
-              expiresAt: { $type: "date", $gt: currentTime },
+              "entitlementSnapshot.source": {
+                $in: ["free", "paid_single_post"],
+              },
+              expiresAt: {
+                $type: "date",
+                $gt: currentTime,
+              },
             },
             {
               "entitlementSnapshot.source": "subscription_slot",
-              expiresAt: { $type: "null" },
+              expiresAt: {
+                $type: "null",
+              },
             },
           ],
         },
@@ -1523,8 +1279,7 @@ class JobQueryService {
     };
   }
 
-  // Apply these stages before the final count and pagination of public listings.
-  // The original entitlement period is historical; renewals use the live Subscription.
+  // Subscription slots use the current active subscription period.
   static buildMarketplaceAuthorityStages(currentTime) {
     return [
       {
@@ -1539,8 +1294,14 @@ class JobQueryService {
             {
               $match: {
                 status: "active",
-                currentPeriodStart: { $type: "date", $lte: currentTime },
-                currentPeriodEnd: { $type: "date", $gt: currentTime },
+                currentPeriodStart: {
+                  $type: "date",
+                  $lte: currentTime,
+                },
+                currentPeriodEnd: {
+                  $type: "date",
+                  $gt: currentTime,
+                },
                 $expr: {
                   $and: [
                     { $eq: ["$$source", "subscription_slot"] },
@@ -1550,7 +1311,11 @@ class JobQueryService {
                 },
               },
             },
-            { $project: { _id: 1 } },
+            {
+              $project: {
+                _id: 1,
+              },
+            },
           ],
           as: "marketplaceAuthority",
         },
@@ -1558,15 +1323,25 @@ class JobQueryService {
       {
         $match: {
           $or: [
-            { "entitlementSnapshot.source": { $in: ["free", "paid_single_post"] } },
+            {
+              "entitlementSnapshot.source": {
+                $in: ["free", "paid_single_post"],
+              },
+            },
             {
               "entitlementSnapshot.source": "subscription_slot",
-              "marketplaceAuthority.0": { $exists: true },
+              "marketplaceAuthority.0": {
+                $exists: true,
+              },
             },
           ],
         },
       },
-      { $project: { marketplaceAuthority: 0 } },
+      {
+        $project: {
+          marketplaceAuthority: 0,
+        },
+      },
     ];
   }
 
@@ -1578,12 +1353,18 @@ class JobQueryService {
     const publications = await JobPublication.aggregate([
       {
         $match: {
-          _id: { $in: publicationIds },
+          _id: {
+            $in: publicationIds,
+          },
           ...JobQueryService.buildMarketplaceBaseFilter(currentTime),
         },
       },
       ...JobQueryService.buildMarketplaceAuthorityStages(currentTime),
-      { $project: { _id: 1 } },
+      {
+        $project: {
+          _id: 1,
+        },
+      },
     ]);
 
     return new Set(publications.map((publication) => String(publication._id)));
@@ -1617,7 +1398,6 @@ class JobQueryService {
     }
 
     const normalizedState = normalizeOptionalText(state);
-
     const normalizedLga = normalizeOptionalText(lga);
 
     if (normalizedState) {
@@ -1634,37 +1414,14 @@ class JobQueryService {
       const searchRegex = new RegExp(escapeRegex(normalizedSearch), "i");
 
       filter.$or = [
-        {
-          "listingSnapshot.roleTitle": searchRegex,
-        },
-
-        {
-          "listingSnapshot.professionalType": searchRegex,
-        },
-
-        {
-          "listingSnapshot.specialty": searchRegex,
-        },
-
-        {
-          "listingSnapshot.department": searchRegex,
-        },
-
-        {
-          "listingSnapshot.state": searchRegex,
-        },
-
-        {
-          "listingSnapshot.lga": searchRegex,
-        },
-
-        {
-          "employerSnapshot.businessName": searchRegex,
-        },
-
-        {
-          "employerSnapshot.branchName": searchRegex,
-        },
+        { "listingSnapshot.roleTitle": searchRegex },
+        { "listingSnapshot.professionalType": searchRegex },
+        { "listingSnapshot.specialty": searchRegex },
+        { "listingSnapshot.department": searchRegex },
+        { "listingSnapshot.state": searchRegex },
+        { "listingSnapshot.lga": searchRegex },
+        { "employerSnapshot.businessName": searchRegex },
+        { "employerSnapshot.branchName": searchRegex },
       ];
     }
 
@@ -1684,7 +1441,6 @@ class JobQueryService {
 
     const savedJobs = await SavedJob.find({
       professional: professionalProfileId,
-
       job: {
         $in: jobIds,
       },
@@ -1702,7 +1458,6 @@ class JobQueryService {
 
     const applications = await JobApplication.find({
       professional: professionalProfileId,
-
       job: {
         $in: jobIds,
       },
@@ -1715,6 +1470,7 @@ class JobQueryService {
 
   static async getMarketplacePublicationPage({ filter, page, currentTime = new Date() }) {
     const normalizedCurrentTime = JobQueryService.normalizeCurrentTime(currentTime);
+
     const requestedPage = JobQueryService.normalizePageNumber(page);
 
     const preliminaryTotal = await JobPublication.countDocuments(filter);
@@ -1737,11 +1493,8 @@ class JobQueryService {
       {
         $lookup: {
           from: Job.collection.name,
-
           localField: "job",
-
           foreignField: "_id",
-
           as: "jobRecord",
         },
       },
@@ -1753,9 +1506,7 @@ class JobQueryService {
       {
         $match: {
           "jobRecord.recruitmentStatus": "active",
-
           "jobRecord.publicationStatus": "live",
-
           $expr: {
             $eq: ["$jobRecord.currentPublication", "$_id"],
           },
@@ -1765,7 +1516,6 @@ class JobQueryService {
       {
         $sort: {
           publishedAt: -1,
-
           _id: -1,
         },
       },
@@ -1776,29 +1526,19 @@ class JobQueryService {
             {
               $skip: preliminarySkip,
             },
-
             {
               $limit: JOBS_PER_PAGE,
             },
-
             {
               $project: {
                 jobRecord: 0,
-
                 entitlementSnapshot: 0,
-
                 deadlineHistory: 0,
-
                 pauseHistory: 0,
-
                 publishedBy: 0,
-
                 endedBy: 0,
-
                 endReason: 0,
-
                 applicationCount: 0,
-
                 applicationCountLastReconciledAt: 0,
               },
             },
@@ -1822,9 +1562,7 @@ class JobQueryService {
     if (currentPage !== preliminaryPage && totalItems > 0) {
       return JobQueryService.getMarketplacePublicationPage({
         filter,
-
         page: currentPage,
-
         currentTime: normalizedCurrentTime,
       });
     }
@@ -1838,11 +1576,8 @@ class JobQueryService {
 
       pagination: buildPagination({
         page: currentPage,
-
         totalItems,
-
         perPage: JOBS_PER_PAGE,
-
         itemCount: publications.length,
       }),
     };
@@ -1880,12 +1615,10 @@ class JobQueryService {
     );
 
     const selectedState = normalizeOptionalText(state);
-
     const selectedLga = normalizeOptionalText(lga);
 
     const professional = await JobQueryService.getOptionalProfessionalProfileForRead({
       userId,
-
       professionalProfile,
     });
 
@@ -1893,24 +1626,17 @@ class JobQueryService {
       JobQueryService.buildMarketplaceBaseFilter(normalizedCurrentTime),
       {
         search: selectedSearch,
-
         professionalType: selectedProfessionalType,
-
         employmentType: selectedEmploymentType,
-
         workplaceType: selectedWorkplaceType,
-
         state: selectedState,
-
         lga: selectedLga,
       }
     );
 
     const { publications, pagination } = await JobQueryService.getMarketplacePublicationPage({
       filter,
-
       page,
-
       currentTime: normalizedCurrentTime,
     });
 
@@ -1920,13 +1646,11 @@ class JobQueryService {
       ? await Promise.all([
           JobQueryService.getSavedJobIdSet({
             professionalProfileId: professional._id,
-
             jobIds,
           }),
 
           JobQueryService.getAppliedJobIdSet({
             professionalProfileId: professional._id,
-
             jobIds,
           }),
         ])
@@ -1937,34 +1661,24 @@ class JobQueryService {
 
       return {
         publication,
-
         isSaved: jobId ? savedJobIds.has(jobId) : false,
-
         hasApplied: jobId ? appliedJobIds.has(jobId) : false,
       };
     });
 
     return {
       items,
-
       selectedSearch,
-
       selectedProfessionalType,
-
       selectedEmploymentType,
-
       selectedWorkplaceType,
-
       selectedState,
-
       selectedLga,
 
       professional: professional
         ? {
             id: String(professional._id),
-
             type: professional.type || null,
-
             specialty: professional.specialty || null,
           }
         : null,
@@ -1973,7 +1687,6 @@ class JobQueryService {
 
       pagination: {
         ...pagination,
-
         itemCount: items.length,
       },
     };
@@ -1989,15 +1702,12 @@ class JobQueryService {
 
     const normalizedPublicationId = normalizeObjectId({
       value: publicationId,
-
       fieldName: "Job publication ID",
-
       createError: createJobQueryError,
     });
 
     const professional = await JobQueryService.getOptionalProfessionalProfileForRead({
       userId,
-
       professionalProfile,
     });
 
@@ -2017,20 +1727,15 @@ class JobQueryService {
     if (!rawPublication || !authorizedPublicationIds.has(String(rawPublication._id))) {
       throw createJobQueryError({
         message: "Job listing not found.",
-
         code: "JOB_PUBLICATION_NOT_FOUND",
-
         statusCode: 404,
       });
     }
 
     const currentJob = await Job.findOne({
       _id: rawPublication.job,
-
       recruitmentStatus: "active",
-
       publicationStatus: "live",
-
       currentPublication: rawPublication._id,
     })
       .select("_id")
@@ -2039,9 +1744,7 @@ class JobQueryService {
     if (!currentJob) {
       throw createJobQueryError({
         message: "Job listing not found.",
-
         code: "JOB_PUBLICATION_NOT_FOUND",
-
         statusCode: 404,
       });
     }
@@ -2049,42 +1752,34 @@ class JobQueryService {
     const publication = sanitizePublicPublication(rawPublication);
 
     let isSaved = false;
-
     let hasApplied = false;
 
     if (professional && publication?.job) {
       const [saved, applied] = await Promise.all([
         SavedJob.exists({
           professional: professional._id,
-
           job: publication.job,
         }),
 
         JobApplication.exists({
           professional: professional._id,
-
           job: publication.job,
         }),
       ]);
 
       isSaved = Boolean(saved);
-
       hasApplied = Boolean(applied);
     }
 
     return {
       publication,
-
       isSaved,
-
       hasApplied,
 
       professional: professional
         ? {
             id: String(professional._id),
-
             type: professional.type || null,
-
             specialty: professional.specialty || null,
           }
         : null,
@@ -2093,7 +1788,7 @@ class JobQueryService {
     };
   }
 
-  /* ─────────────────────────────── SAVED JOBS ─────────────────────────────── */
+  // ───────── Saved Jobs ─────────
 
   static async getProfessionalSavedJobsPageData({
     userId,
@@ -2107,7 +1802,6 @@ class JobQueryService {
 
     const professional = await JobQueryService.getProfessionalProfileForRead({
       userId,
-
       professionalProfile,
     });
 
@@ -2128,7 +1822,6 @@ class JobQueryService {
         ? await SavedJob.find(savedFilter)
             .sort({
               savedAt: -1,
-
               _id: -1,
             })
             .skip(skip)
@@ -2149,9 +1842,7 @@ class JobQueryService {
           )
             .sort({
               publishedAt: -1,
-
               createdAt: -1,
-
               _id: -1,
             })
             .lean(),
@@ -2166,7 +1857,6 @@ class JobQueryService {
 
           JobQueryService.getAppliedJobIdSet({
             professionalProfileId: professional._id,
-
             jobIds,
           }),
         ])
@@ -2187,11 +1877,7 @@ class JobQueryService {
       const jobId = String(rawPublication.job);
 
       if (!latestPublicationByJobId.has(jobId)) {
-        latestPublicationByJobId.set(
-          jobId,
-
-          sanitizePublicPublication(rawPublication)
-        );
+        latestPublicationByJobId.set(jobId, sanitizePublicPublication(rawPublication));
       }
     }
 
@@ -2199,7 +1885,6 @@ class JobQueryService {
 
     const items = savedJobs.map((savedJob) => {
       const jobId = String(savedJob.job);
-
       const publication = latestPublicationByJobId.get(jobId) || null;
 
       const currentJob = currentJobById.get(jobId) || null;
@@ -2217,11 +1902,8 @@ class JobQueryService {
 
       return {
         savedJob,
-
         publication,
-
         isCurrentlyPublic,
-
         hasApplied: appliedJobIds.has(jobId),
       };
     });
@@ -2229,29 +1911,23 @@ class JobQueryService {
     return {
       professional: {
         id: String(professional._id),
-
         type: professional.type || null,
-
         specialty: professional.specialty || null,
       },
 
       items,
-
       currentTime: normalizedCurrentTime,
 
       pagination: buildPagination({
         page: currentPage,
-
         totalItems: totalSavedJobs,
-
         perPage: JOBS_PER_PAGE,
-
         itemCount: items.length,
       }),
     };
   }
 
-  /* ─────────────────────────────── SHARED ERROR CONTRACT ─────────────────────────────── */
+  // ───────── Shared Error Contract ─────────
 
   static createJobQueryError(options) {
     return createJobQueryError(options);

@@ -35,13 +35,7 @@ const EMPLOYER_CLOSE_REASONS = Object.freeze(
   JOB_CLOSE_REASONS.filter((reason) => reason !== "filled")
 );
 
-/**
- * Fields owned by the employer-editable Job master record.
- *
- * Publication lifecycle fields, application summaries, ownership and audit
- * fields are intentionally absent. Those are service-owned and must never be
- * accepted as client authority through this service.
- */
+// Client-editable Job fields; ownership, publication and audit data are excluded.
 const EMPLOYER_EDITABLE_JOB_FIELDS = Object.freeze([
   "roleTitle",
   "professionalType",
@@ -65,41 +59,11 @@ const EMPLOYER_EDITABLE_JOB_FIELDS = Object.freeze([
   "screeningQuestions",
 ]);
 
-/**
- * JOB SERVICE ARCHITECTURE
- *
- * JobService owns the permanent-recruitment master record:
- *
- * - employer draft creation and controlled editing;
- * - employer business / branch authorization;
- * - trusted admin-on-behalf-of-employer posting support;
- * - branch-derived location snapshots;
- * - employer-only recruitment closure and archive boundaries;
- * - draft deletion; and
- * - employer-scoped Job queries retained by this service.
- *
- * Admin employer support is intentionally limited to posting preparation and
- * publication support. It never impersonates an employer user and never
- * manufactures employerContext. A trusted adminEmployerContext identifies the
- * actual admin actor and the exact EmployerProfile being assisted.
- *
- * It does NOT:
- *
- * - publish or renew a Job;
- * - consume a posting entitlement;
- * - create or mutate JobPublication snapshots;
- * - pause / resume / expire / end a publication;
- * - adjust a live publication application deadline;
- * - close or archive recruitment on behalf of an employer;
- * - accept, reject, shortlist, hire or otherwise transition JobApplications;
- * - schedule appointments; or
- * - serve the public marketplace from mutable Job fields.
- *
- * The public marketplace must ultimately read the authoritative current
- * JobPublication snapshot, not the mutable Job master record.
- */
+// Manages Job drafts, edits, location snapshots, closure, archive and queries.
+// Publication lifecycle and application decisions belong to separate services.
+// Admin support uses trusted context; public listings use JobPublication snapshots.
 class JobService {
-  /* ─────────────────────────────── ERRORS / TRANSACTIONS ─────────────────────────────── */
+  // ───────── Errors / Transactions ─────────
 
   static createError({ message, code, statusCode = 400, details = null }) {
     return createServiceError({
@@ -126,7 +90,7 @@ class JobService {
     return runWithOptionalTransaction(options, callback);
   }
 
-  /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
+  // ───────── Normalization ─────────
 
   static normalizeObjectId(value, fieldName, required = true) {
     return normalizeObjectId({
@@ -321,7 +285,7 @@ class JobService {
     };
   }
 
-  /* ─────────────────────────────── MANAGEMENT AUTHORITY ─────────────────────────────── */
+  // ───────── Management Authority ─────────
 
   static canManageAllBranches(employerContext) {
     return Boolean(
@@ -500,7 +464,7 @@ class JobService {
     return filter;
   }
 
-  /* ─────────────────────────────── LOADERS ─────────────────────────────── */
+  // ───────── Loaders ─────────
 
   static async getEmployerProfile(employerProfileId, session = null) {
     const normalizedEmployerProfileId = JobService.normalizeObjectId(
@@ -509,7 +473,7 @@ class JobService {
     );
 
     const query = EmployerProfile.findById(normalizedEmployerProfileId).select(
-      "user businessName countryCode currency accountStatus employerApprovalStatus"
+      "user businessName countryCode currency accountStatus"
     );
 
     if (session) {
@@ -628,7 +592,7 @@ class JobService {
     return job;
   }
 
-  /* ─────────────────────────────── BRANCH SNAPSHOT ─────────────────────────────── */
+  // ───────── Branch Snapshot ─────────
 
   static cloneLocation(location) {
     if (
@@ -693,7 +657,7 @@ class JobService {
     return job;
   }
 
-  /* ─────────────────────────────── EDITABLE PAYLOAD ─────────────────────────────── */
+  // ───────── Editable Payload ─────────
 
   static buildEditablePayload(data = {}) {
     if (!data || typeof data !== "object" || Array.isArray(data)) {
@@ -768,7 +732,7 @@ class JobService {
     return true;
   }
 
-  /* ─────────────────────────────── CREATE / UPDATE ─────────────────────────────── */
+  // ───────── Create / Update ─────────
 
   static async createDraft(
     {
@@ -913,10 +877,7 @@ class JobService {
         job.set(field, value);
       }
 
-      /*
-       * EmployerProfile remains authoritative for these business-level values.
-       * They are refreshed only while the Job master is in an editable state.
-       */
+      // Refresh editable Job business settings from EmployerProfile.
       job.countryCode = businessSnapshot.countryCode;
       job.currency = businessSnapshot.currency;
 
@@ -933,7 +894,7 @@ class JobService {
     });
   }
 
-  /* ─────────────────────────────── RECRUITMENT CLOSURE ─────────────────────────────── */
+  // ───────── Recruitment Closure ─────────
 
   static assertPublicationAllowsRecruitmentClosure(job) {
     if (LIVE_PUBLICATION_STATUSES.includes(job.publicationStatus)) {
@@ -1031,16 +992,8 @@ class JobService {
     });
   }
 
-  /**
-   * Internal closure boundary used after hiring reaches vacancyCount.
-   *
-   * JobApplicationService remains responsible for transactionally preventing
-   * over-hiring. This method independently verifies the persisted hired count
-   * before recording the terminal recruitment state.
-   *
-   * If a publication is still live/paused, the owning orchestration must end
-   * that JobPublication first inside the same transaction.
-   */
+  // Auto-close only when persisted hires equal vacancies.
+  // The orchestrator must first end any live publication in the same transaction.
   static async closeFilledJob({ jobId, closedByUserId, currentTime = new Date() }, options = {}) {
     const closedAt = JobService.normalizeCurrentTime(currentTime);
 
@@ -1136,7 +1089,7 @@ class JobService {
     });
   }
 
-  /* ─────────────────────────────── ARCHIVE / DELETE DRAFT ─────────────────────────────── */
+  // ───────── Archive / Delete Draft ─────────
 
   static async archiveJob(
     {
@@ -1276,7 +1229,7 @@ class JobService {
     });
   }
 
-  /* ─────────────────────────────── EMPLOYER QUERIES ─────────────────────────────── */
+  // ───────── Employer Queries ─────────
 
   static async getAvailableBranches({
     employerProfileId,

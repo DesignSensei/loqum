@@ -23,9 +23,8 @@ const {
   ACTIVE_OCCURRENCE_STATUSES,
   REPLACEMENT_APPLICATION_PARENT_STATUSES,
   REPLACEMENT_APPLICATION_BLOCKED_PAYMENT_STATUSES,
-} = require("../../constants/shiftApplication");
+  PROFESSIONAL_UNAVAILABLE_STATUSES,
 
-const {
   APPLICATION_STATUSES: ADMIN_APPLICATION_STATUSES,
   APPLICATION_TYPES: ADMIN_APPLICATION_TYPES,
   MAX_APPLICATION_ROUNDS: ADMIN_MAX_APPLICATION_ROUNDS,
@@ -45,7 +44,6 @@ const PROFESSIONAL_PROFILE_FIELDS = [
   "accountStatus",
   "marketplaceStatus",
   "licenceVerificationStatus",
-  "licenceExpiryDate",
   "identityVerificationStatus",
   "professionalApprovalStatus",
 ];
@@ -76,6 +74,8 @@ const PROFESSIONAL_APPLICATION_FIELDS = [
 const PlatformSettingsService = require("../platformSettingsService");
 const WalletService = require("../walletService");
 const ShiftLifecycleService = require("../shiftLifecycleService");
+
+const FacilityPermitVerificationService = require("../facilityPermitVerificationService");
 
 const ShiftScheduleService = require("./shiftScheduleService");
 const ShiftPricingService = require("./shiftPricingService");
@@ -785,10 +785,52 @@ class ShiftQueryService {
     return Boolean(
       profile?._id &&
       profile.cacVerificationStatus === "verified" &&
-      profile.regulatoryVerificationStatus === "verified" &&
-      profile.employerApprovalStatus === "approved" &&
       profile.accountStatus === "active"
     );
+  }
+
+  // ───────────────────── BATCHED BRANCH POSTING ELIGIBILITY ─────────────────────
+
+  // Evaluate branch-specific permits alongside business CAC and account readiness.
+  // Permit activation is handled by the background scheduler and write workflows.
+  static async buildPostableBranchOptions({ businessId, branches = [] }) {
+    if (!branches.length) {
+      return [];
+    }
+
+    const branchIds = branches.map((branch) => branch._id);
+
+    // Shared employer, owner, branch and current-permit reads.
+    const readinessByBranchId = await FacilityPermitVerificationService.getBranchesReadiness({
+      businessId,
+      branchIds,
+    });
+
+    return branches.map((branch) => {
+      const option = ShiftViewService.buildBranchOption(branch);
+      const readiness = readinessByBranchId.get(String(branch._id));
+
+      const permitsReady = Boolean(
+        readiness?.canPost === true &&
+        readiness.identityReady === true &&
+        readiness.branchActive === true &&
+        Array.isArray(readiness.requirements) &&
+        readiness.requirements.every((requirement) => requirement.satisfied === true) &&
+        Array.isArray(readiness.missingRequirementKeys) &&
+        readiness.missingRequirementKeys.length === 0 &&
+        !readiness.reason
+      );
+
+      return {
+        ...option,
+        isSelectable: option.isSelectable === true && permitsReady,
+        disabledReason: !option.isSelectable
+          ? option.disabledReason
+          : permitsReady
+            ? null
+            : "This branch needs current, approved facility permits before posting Shifts.",
+      };
+    });
   }
 
   static roleCanManageShiftLifecycle(employerContext = null) {
@@ -1139,13 +1181,13 @@ class ShiftQueryService {
 
     const businessCanPostShifts = ShiftQueryService.businessCanPostShifts(profile);
 
-    const canOpenPostShiftModal = Boolean(canPostShifts && businessCanPostShifts);
+    const hasPostingAuthority = Boolean(canPostShifts && businessCanPostShifts);
 
+    let canOpenPostShiftModal = false;
     let branchOptions = [];
-
     let pricingView = null;
 
-    if (canOpenPostShiftModal) {
+    if (hasPostingAuthority) {
       const [branches, shiftPostingSettings] = await Promise.all([
         ShiftQueryService.getActiveBranches({
           employerProfileId: profile._id,
@@ -1200,7 +1242,12 @@ class ShiftQueryService {
         });
       }
 
-      branchOptions = branches.map((branch) => ShiftViewService.buildBranchOption(branch));
+      branchOptions = await ShiftQueryService.buildPostableBranchOptions({
+        businessId: profile._id,
+        branches,
+      });
+
+      canOpenPostShiftModal = branchOptions.some((branch) => branch.isSelectable === true);
 
       pricingView = {
         countryCode: pricing.countryCode,
@@ -1458,8 +1505,10 @@ class ShiftQueryService {
         unavailableMessage: !canPostShifts
           ? "You do not have permission to post Shifts."
           : !businessCanPostShifts
-            ? "The business must be verified and approved before Shifts can be posted."
-            : null,
+            ? "The employer account must be active and CAC-verified before posting Shifts."
+            : !canOpenPostShiftModal
+              ? "No branch currently meets the facility permit and location requirements for posting Shifts."
+              : null,
 
         branchOptions,
 
@@ -2403,6 +2452,59 @@ class ShiftQueryService {
     return contexts;
   }
 
+  static getProfessionalOpportunityAdvisoryDenial({ professional, shift }) {
+    if (professional.type !== shift.professionalType) {
+      return {
+        code: "SHIFT_PROFESSIONAL_TYPE_MISMATCH",
+        message: "Your professional type does not match this shift.",
+      };
+    }
+
+    if (professional.professionalApprovalStatus !== "approved") {
+      return {
+        code: "PROFESSIONAL_NOT_APPROVED_FOR_SHIFTS",
+        message: "Your professional profile must be approved before applying for shifts.",
+      };
+    }
+
+    if (professional.accountStatus !== "active") {
+      return {
+        code: "PROFESSIONAL_ACCOUNT_NOT_ACTIVE",
+        message: "Your professional account is not active.",
+      };
+    }
+
+    if (professional.marketplaceStatus !== "visible") {
+      return {
+        code: "PROFESSIONAL_MARKETPLACE_ACCESS_NOT_AVAILABLE",
+        message: "Your professional profile is not currently visible in the marketplace.",
+      };
+    }
+
+    if (PROFESSIONAL_UNAVAILABLE_STATUSES.includes(professional.availabilityStatus)) {
+      return {
+        code: "PROFESSIONAL_NOT_AVAILABLE",
+        message: "Update your availability before applying for this shift.",
+      };
+    }
+
+    if (professional.licenceVerificationStatus !== "verified") {
+      return {
+        code: "PROFESSIONAL_LICENCE_NOT_VERIFIED",
+        message: "Your professional licence must be verified before applying for shifts.",
+      };
+    }
+
+    if (professional.identityVerificationStatus !== "verified") {
+      return {
+        code: "PROFESSIONAL_IDENTITY_NOT_VERIFIED",
+        message: "Your identity documentary review is not yet verified.",
+      };
+    }
+
+    return null;
+  }
+
   static async buildProfessionalOpportunityViews({
     shift,
     contexts,
@@ -2434,23 +2536,25 @@ class ShiftQueryService {
         : null;
 
       if (!unavailableReason) {
-        try {
-          ShiftApplicationService.assertProfessionalEligible({
-            professional,
-            shift,
-            now: currentTime,
-          });
+        unavailableReason = this.getProfessionalOpportunityAdvisoryDenial({
+          professional,
+          shift,
+        });
+      }
 
+      if (!unavailableReason) {
+        try {
           await ShiftApplicationService.assertNoConfirmedScheduleConflict({
             shift,
             roundContext,
-
             professionalProfileId: professional._id,
             now: currentTime,
             session: null,
           });
         } catch (error) {
-          if (!this.isProfessionalOpportunityDenial(error)) throw error;
+          if (!this.isProfessionalOpportunityDenial(error)) {
+            throw error;
+          }
 
           unavailableReason = {
             code: error.code,
@@ -2458,7 +2562,6 @@ class ShiftQueryService {
           };
         }
       }
-
       views.push({
         applicationType: roundContext.applicationType,
         applicationRound: roundContext.applicationRound,
@@ -2971,7 +3074,13 @@ class ShiftQueryService {
   // manufacture employerContext or invoke lifecycle mutations on page load.
   static async assertAdminQueryAccess(adminUserId) {
     const id = this.adminQueryId(adminUserId, "admin user ID");
-    const admin = await User.findOne({ _id: id, role: "admin" }).select("_id").lean();
+    const admin = await User.findOne({
+      _id: id,
+      role: "admin",
+      accountStatus: "active",
+    })
+      .select("_id")
+      .lean();
 
     if (!admin) {
       throw createShiftError({

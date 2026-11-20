@@ -3,29 +3,12 @@
 const mongoose = require("mongoose");
 
 const geoPointSchema = require("./helpers/geoPointSchema");
-
 const { minorUnitAmountField, nonNegativeIntegerField } = require("./helpers/schemaFields");
-
 const { hasAnyValue, validateVerificationState } = require("./helpers/employerProfileHelpers");
 
-/**
- * EMPLOYER PROFILE
- *
- * Stores business identity, contact information, location,
- * verification status, financial summaries and approval.
- *
- * Registered business names originate from trusted CAC evidence.
- * Verification and approval remain separate processes.
- *
- * Services must independently enforce authorisation because
- * schema validation does not protect query-based updates.
- */
-
-// ───────────────────── REGISTRY VALIDATION ─────────────────────
-
+// CAC verifies business identity; permits are branch-specific.
 const CAC_REGISTRATION_PATTERN = /^(RC|BN)\d{4,10}$/;
 
-// Reject invalid CAC names without modifying authoritative evidence.
 function isValidRegisteredBusinessName(value) {
   return (
     typeof value === "string" &&
@@ -35,22 +18,22 @@ function isValidRegisteredBusinessName(value) {
   );
 }
 
-// ───────────────────── SCHEMA ─────────────────────
-
 const employerProfileSchema = new mongoose.Schema(
   {
-    // ───────────────────── BUSINESS IDENTITY ─────────────────────
+    // ───────── Business identity ─────────
 
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
+      immutable: true,
     },
 
     type: {
       type: String,
       enum: ["pharmacy", "clinic", "hospital", "laboratory"],
       required: true,
+      immutable: true,
     },
 
     countryCode: {
@@ -71,11 +54,7 @@ const employerProfileSchema = new mongoose.Schema(
       match: [/^[A-Z]{3}$/, "currency must be a valid three-letter currency code."],
     },
 
-    /**
-     * Authoritative registered business name.
-     * Obtained from successful production CAC verification.
-     * Ordinary profile editing must not modify this field.
-     */
+    // Registered legal name from trusted CAC evidence.
     businessName: {
       type: String,
       required: true,
@@ -88,7 +67,7 @@ const employerProfileSchema = new mongoose.Schema(
       },
     },
 
-    // ───────────────────── BUSINESS BRANDING ─────────────────────
+    // ───────── Business branding ─────────
 
     logoUrl: {
       type: String,
@@ -112,7 +91,7 @@ const employerProfileSchema = new mongoose.Schema(
       match: [/^https?:\/\/\S+$/i, "websiteUrl must be a valid HTTP or HTTPS URL."],
     },
 
-    // ───────────────────── BUSINESS CONTACT ─────────────────────
+    // ───────── Business contact ─────────
 
     businessEmail: {
       type: String,
@@ -136,9 +115,10 @@ const employerProfileSchema = new mongoose.Schema(
       maxlength: 30,
     },
 
-    // ───────────────────── BUSINESS LOCATION ─────────────────────
+    // ───────── Onboarding location ─────────
+    // Branch records govern facility premises and permits.
+    // GeoJSON coordinates: [longitude, latitude].
 
-    // Coordinates use GeoJSON order: [longitude, latitude].
     address: {
       type: String,
       trim: true,
@@ -172,18 +152,8 @@ const employerProfileSchema = new mongoose.Schema(
       maxlength: 100,
     },
 
-    // ───────────────────── CAC VERIFICATION ─────────────────────
-
-    /**
-     * CAC registration is verified through the configured provider.
-     * RC and BN support depends on provider capabilities.
-     *
-     * No automatic provider fallback or duplicate paid lookup.
-     * Staging evidence cannot establish production verification.
-     *
-     * CAC verification does not prove representative authority
-     * or grant final employer approval.
-     */
+    // ───────── CAC verification ─────────
+    // Production provider evidence is required for verification.
 
     cacRegistrationNumber: {
       type: String,
@@ -219,11 +189,7 @@ const employerProfileSchema = new mongoose.Schema(
       required: true,
     },
 
-    /**
-     * Registered legal name returned by CAC.
-     * Must match businessName when CAC status is verified.
-     * A changed registry name requires controlled review.
-     */
+    // Must match businessName when CAC is verified.
     cacNameOnRecord: {
       type: String,
       trim: true,
@@ -234,7 +200,6 @@ const employerProfileSchema = new mongoose.Schema(
         validator(value) {
           return value == null || isValidRegisteredBusinessName(value);
         },
-
         message: "cacNameOnRecord must contain a valid registered legal business name.",
       },
     },
@@ -269,104 +234,8 @@ const employerProfileSchema = new mongoose.Schema(
       default: null,
     },
 
-    // ───────────────────── REGULATORY VERIFICATION ─────────────────────
-
-    /**
-     * Nigerian pharmacy premises are checked through PCN.
-     * PCN verification is manual until an authorised API exists.
-     *
-     * Regulatory verification is independent of CAC registration,
-     * representative authority and final employer approval.
-     * Detailed review records belong in KYCVerification.
-     */
-
-    regulatoryBody: {
-      type: String,
-      enum: ["pcn", "hefamaa", "state_moh", "mlscn", "other"],
-      required: true,
-    },
-
-    regulatoryRegistrationNumber: {
-      type: String,
-      trim: true,
-      required: true,
-      maxlength: 100,
-    },
-
-    regulatoryVerificationStatus: {
-      type: String,
-      enum: ["pending", "verified", "rejected", "needs_review"],
-      default: "pending",
-      required: true,
-    },
-
-    regulatoryVerificationMethod: {
-      type: String,
-      enum: ["manual", "api", "provider", "not_checked"],
-      default: "not_checked",
-      required: true,
-    },
-
-    regulatoryVerificationSource: {
-      type: String,
-      enum: [
-        "pcn_public_portal",
-        "hefamaa_portal",
-        "state_moh",
-        "mlscn_portal",
-        "uploaded_document",
-        "provider",
-        "internal_review",
-        "not_checked",
-      ],
-      default: "not_checked",
-      required: true,
-    },
-
-    regulatoryNameOnRecord: {
-      type: String,
-      trim: true,
-      default: null,
-      maxlength: 150,
-    },
-
-    regulatoryVerifiedAt: {
-      type: Date,
-      default: null,
-    },
-
-    regulatoryLastCheckedAt: {
-      type: Date,
-      default: null,
-    },
-
-    regulatoryVerifiedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
-
-    regulatoryVerificationNote: {
-      type: String,
-      trim: true,
-      maxlength: 500,
-      default: null,
-    },
-
-    regulatoryRejectionReason: {
-      type: String,
-      trim: true,
-      maxlength: 500,
-      default: null,
-    },
-
-    // ───────────────────── CONTACT PERSON ─────────────────────
-
-    /**
-     * Employer-declared contact information.
-     * These details do not independently verify authority
-     * to represent the registered business.
-     */
+    // ───────── Contact person ─────────
+    // These details are declared by the employer.
 
     contactFirstName: {
       type: String,
@@ -412,15 +281,8 @@ const employerProfileSchema = new mongoose.Schema(
       maxlength: 30,
     },
 
-    // ───────────────────── FINANCIAL SUMMARY ─────────────────────
-
-    /**
-     * Summary values use whole minor currency units.
-     * Wallet balances and transactions are stored separately.
-     *
-     * DVA provisioning occurs after onboarding commits.
-     * Wallet setup does not establish final employer approval.
-     */
+    // ───────── Financial summary ─────────
+    // Amounts use minor units; wallet balances live elsewhere.
 
     totalShiftsPaid: nonNegativeIntegerField(),
 
@@ -445,15 +307,8 @@ const employerProfileSchema = new mongoose.Schema(
       defaultValue: 0,
     }),
 
-    // ───────────────────── ACCOUNT STATUS ─────────────────────
-
-    /**
-     * Account restrictions are separate from verification.
-     * A previously approved employer may be suspended.
-     *
-     * Marketplace services must enforce account restrictions
-     * regardless of historical approval status.
-     */
+    // ───────── Account status ─────────
+    // Restrictions are independent of CAC and permit verification.
 
     accountStatus: {
       type: String,
@@ -480,7 +335,7 @@ const employerProfileSchema = new mongoose.Schema(
       default: null,
     },
 
-    // ───────────────────── REPUTATION ─────────────────────
+    // ───────── Reputation ─────────
 
     reviews: [
       {
@@ -498,7 +353,7 @@ const employerProfileSchema = new mongoose.Schema(
 
     totalReviews: nonNegativeIntegerField(),
 
-    // ───────────────────── SHIFT ACTIVITY ─────────────────────
+    // ───────── Shift activity ─────────
 
     totalShiftsPosted: nonNegativeIntegerField(),
 
@@ -515,68 +370,14 @@ const employerProfileSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
-
-    // ───────────────────── EMPLOYER APPROVAL ─────────────────────
-
-    /**
-     * Final marketplace approval is a separate admin decision.
-     *
-     * Approval requires verified CAC and regulatory registration,
-     * independent representative checks and applicable eligibility.
-     *
-     * Account restrictions and sanctions must still be enforced
-     * when deciding whether marketplace actions are permitted.
-     */
-
-    employerApprovalStatus: {
-      type: String,
-      enum: ["pending", "approved", "rejected", "restricted", "needs_review"],
-      default: "pending",
-      required: true,
-    },
-
-    employerApprovalStatusUpdatedAt: {
-      type: Date,
-      default: null,
-    },
-
-    employerApprovalStatusUpdatedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
-
-    approvedToPostShiftsAt: {
-      type: Date,
-      default: null,
-    },
-
-    approvedToPostShiftsBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-    },
-
-    employerApprovalNote: {
-      type: String,
-      trim: true,
-      maxlength: 500,
-      default: null,
-    },
-
-    employerRejectionReason: {
-      type: String,
-      trim: true,
-      maxlength: 500,
-      default: null,
-    },
   },
   {
     timestamps: true,
+    optimisticConcurrency: true,
   }
 );
 
-// ───────────────────── INDEXES ─────────────────────
+// ───────── Indexes ─────────
 
 employerProfileSchema.index({ user: 1 }, { unique: true });
 
@@ -607,44 +408,23 @@ employerProfileSchema.index(
   }
 );
 
-employerProfileSchema.index(
-  {
-    countryCode: 1,
-    regulatoryBody: 1,
-    regulatoryRegistrationNumber: 1,
-  },
-  {
-    unique: true,
-  }
-);
-
 employerProfileSchema.index({
   cacVerificationStatus: 1,
-});
-
-employerProfileSchema.index({
-  regulatoryVerificationStatus: 1,
-});
-
-employerProfileSchema.index({
-  employerApprovalStatus: 1,
 });
 
 employerProfileSchema.index({
   type: 1,
   state: 1,
   lga: 1,
-  employerApprovalStatus: 1,
   accountStatus: 1,
 });
 
-// ───────────────────── DOCUMENT VALIDATION ─────────────────────
+// Facility-permit indexes belong to FacilityPermit.
+
+// ───────── Document validation ─────────
 
 employerProfileSchema.pre("validate", function validateEmployerProfile() {
-  // ───────────────────── CAC REGISTRATION ─────────────────────
-
-  // Nigerian businesses require a normalised RC or BN number.
-  // Provider-specific eligibility is checked before a paid lookup.
+  // Validate CAC registration.
   if (
     this.countryCode === "NG" &&
     !CAC_REGISTRATION_PATTERN.test(this.cacRegistrationNumber || "")
@@ -655,8 +435,7 @@ employerProfileSchema.pre("validate", function validateEmployerProfile() {
     );
   }
 
-  // ───────────────────── CAC VERIFICATION STATE ─────────────────────
-
+  // Validate CAC evidence.
   validateVerificationState(this, {
     label: "CAC",
     pathPrefix: "cac",
@@ -671,13 +450,7 @@ employerProfileSchema.pre("validate", function validateEmployerProfile() {
     rejectionReason: this.cacRejectionReason,
   });
 
-  // ───────────────────── CAC LEGAL IDENTITY ─────────────────────
-
-  /**
-   * A verified CAC record must match the profile's legal name.
-   * Later registry-name changes may trigger review but must not
-   * silently replace previously established business identity.
-   */
+  // Verified CAC must match the established legal identity.
   if (this.cacVerificationStatus === "verified") {
     if (!isValidRegisteredBusinessName(this.cacNameOnRecord)) {
       this.invalidate(
@@ -708,40 +481,25 @@ employerProfileSchema.pre("validate", function validateEmployerProfile() {
     }
   }
 
-  // ───────────────────── CAC REGISTRATION CHANGES ─────────────────────
-
-  // A changed registration number cannot retain verified status.
-  // Authorised changes require a fresh verification workflow.
+  // Identity changes require a separate correction workflow.
   if (
     !this.isNew &&
-    this.isModified("cacRegistrationNumber") &&
-    this.cacVerificationStatus === "verified"
+    ["cacRegistrationNumber", "countryCode", "type"].some((path) => this.isModified(path))
   ) {
     this.invalidate(
       "cacRegistrationNumber",
-      "Changing the CAC registration number requires fresh CAC verification."
+      "Established CAC registration, country and business type cannot be changed by ordinary profile updates."
     );
   }
 
-  // ───────────────────── REGULATORY VERIFICATION ─────────────────────
+  // Owners cannot verify their own CAC records.
+  if (this.user && this.cacVerifiedBy && String(this.user) === String(this.cacVerifiedBy)) {
+    this.invalidate("cacVerifiedBy", "An employer cannot verify their own CAC registration.");
+  }
 
-  validateVerificationState(this, {
-    label: "Regulatory",
-    pathPrefix: "regulatory",
-    status: this.regulatoryVerificationStatus,
-    method: this.regulatoryVerificationMethod,
-    source: this.regulatoryVerificationSource,
-    nameOnRecord: this.regulatoryNameOnRecord,
-    verifiedAt: this.regulatoryVerifiedAt,
-    lastCheckedAt: this.regulatoryLastCheckedAt,
-    verifiedBy: this.regulatoryVerifiedBy,
-    verificationNote: this.regulatoryVerificationNote,
-    rejectionReason: this.regulatoryRejectionReason,
-  });
+  // ───────── Account-status audit ─────────
+  // Restrictions require a reason, actor and timestamp.
 
-  // ───────────────────── ACCOUNT STATUS AUDIT ─────────────────────
-
-  // Restricted and suspended accounts require an audit reason and actor.
   const accountStatusHasAudit = hasAnyValue([
     this.accountStatusReason,
     this.accountStatusUpdatedAt,
@@ -778,141 +536,84 @@ employerProfileSchema.pre("validate", function validateEmployerProfile() {
       "Account-status audit data requires both accountStatusUpdatedAt and accountStatusUpdatedBy."
     );
   }
+});
 
-  // ───────────────────── EMPLOYER APPROVAL AUDIT ─────────────────────
+// ───────── Established legal name ─────────
+// Routine saves cannot replace the trusted CAC business name.
 
-  // Every non-pending approval decision requires an actor and timestamp.
-  const approvalStatusHasAudit = hasAnyValue([
-    this.employerApprovalStatusUpdatedAt,
-    this.employerApprovalStatusUpdatedBy,
-  ]);
+employerProfileSchema.pre("save", async function () {
+  if (this.isNew || !this.isModified("businessName")) return;
 
-  if (this.employerApprovalStatus !== "pending") {
-    if (!this.employerApprovalStatusUpdatedAt) {
-      this.invalidate(
-        "employerApprovalStatusUpdatedAt",
-        `${this.employerApprovalStatus} employer approval status requires an update timestamp.`
-      );
-    }
+  const previous = await this.constructor
+    .findById(this._id)
+    .select("businessName")
+    .session(this.$session())
+    .lean();
 
-    if (!this.employerApprovalStatusUpdatedBy) {
-      this.invalidate(
-        "employerApprovalStatusUpdatedBy",
-        `${this.employerApprovalStatus} employer approval status requires an update actor.`
-      );
-    }
-  } else if (
-    approvalStatusHasAudit &&
-    (!this.employerApprovalStatusUpdatedAt || !this.employerApprovalStatusUpdatedBy)
-  ) {
-    this.invalidate(
-      "employerApprovalStatusUpdatedAt",
-      "Employer-approval audit data requires both employerApprovalStatusUpdatedAt and employerApprovalStatusUpdatedBy."
+  if (!previous || previous.businessName !== this.businessName) {
+    throw new Error(
+      "Established CAC business names cannot be changed through ordinary profile updates."
     );
   }
+});
 
-  // ───────────────────── APPROVAL TIMESTAMP PAIR ─────────────────────
+// ───────── Query identity protection ─────────
+// Reject query updates that bypass legal identity protections.
 
-  const hasApprovalTimestamp = Boolean(this.approvedToPostShiftsAt);
-  const hasApprovalActor = Boolean(this.approvedToPostShiftsBy);
-
-  if (hasApprovalTimestamp !== hasApprovalActor) {
-    this.invalidate(
-      "approvedToPostShiftsBy",
-      "approvedToPostShiftsAt and approvedToPostShiftsBy must be set together."
-    );
-  }
-
-  // ───────────────────── APPROVED EMPLOYERS ─────────────────────
-
-  /**
-   * Approval requires verified CAC and regulatory registration.
-   * Independent representative checks remain service-owned.
-   * Suspension can still block marketplace access after approval.
-   */
-  if (this.employerApprovalStatus === "approved") {
-    if (!this.approvedToPostShiftsAt || !this.approvedToPostShiftsBy) {
-      this.invalidate(
-        "approvedToPostShiftsAt",
-        "Approved employers require approval timestamp and approval actor."
-      );
-    }
-
-    if (this.employerRejectionReason) {
-      this.invalidate(
-        "employerRejectionReason",
-        "Approved employers cannot retain a rejection reason."
-      );
-    }
-
-    if (
-      this.cacVerificationStatus !== "verified" ||
-      this.regulatoryVerificationStatus !== "verified"
-    ) {
-      this.invalidate(
-        "employerApprovalStatus",
-        "Employer approval requires verified CAC and regulatory registration."
-      );
-    }
-  }
-
-  // ───────────────────── REJECTED EMPLOYERS ─────────────────────
-
-  if (this.employerApprovalStatus === "rejected") {
-    if (!this.employerRejectionReason) {
-      this.invalidate(
-        "employerRejectionReason",
-        "Rejected employer approval requires a rejection reason."
-      );
-    }
-
-    if (this.approvedToPostShiftsAt || this.approvedToPostShiftsBy) {
-      this.invalidate(
-        "approvedToPostShiftsAt",
-        "Rejected employer approval cannot retain posting approval details."
-      );
-    }
-  } else if (this.employerRejectionReason) {
-    this.invalidate(
-      "employerRejectionReason",
-      "employerRejectionReason may only be set when employerApprovalStatus is rejected."
-    );
-  }
-
-  // ───────────────────── RESTRICTIONS AND REVIEW ─────────────────────
-
+function assertSafeIdentityUpdate(update, options = {}, operation) {
   if (
-    ["restricted", "needs_review"].includes(this.employerApprovalStatus) &&
-    !this.employerApprovalNote
+    Array.isArray(update) ||
+    options.overwrite ||
+    ["replaceOne", "findOneAndReplace"].includes(operation)
   ) {
-    this.invalidate(
-      "employerApprovalNote",
-      `${this.employerApprovalStatus} employer approval status requires an approval note.`
+    throw new Error(
+      "Employer profile replacements and pipelines are unsupported; use document save()."
     );
   }
 
-  if (
-    !["approved", "restricted"].includes(this.employerApprovalStatus) &&
-    (this.approvedToPostShiftsAt || this.approvedToPostShiftsBy)
-  ) {
-    this.invalidate(
-      "approvedToPostShiftsAt",
-      "Posting approval details may only be retained for approved or restricted employers."
+  const protectedPath = (path) =>
+    ["user", "businessName", "cacRegistrationNumber", "countryCode", "type"].includes(
+      String(path).split(".")[0]
     );
+
+  for (const [operator, values] of Object.entries(update || {})) {
+    if (!operator.startsWith("$")) {
+      if (protectedPath(operator)) {
+        throw new Error(
+          "Employer ownership, CAC identity and business type cannot be changed by query updates."
+        );
+      }
+      continue;
+    }
+
+    for (const [path, value] of Object.entries(values || {})) {
+      if (protectedPath(path) || (operator === "$rename" && protectedPath(value))) {
+        throw new Error(
+          "Employer ownership, CAC identity and business type cannot be changed by query updates."
+        );
+      }
+    }
   }
+}
 
-  // ───────────────────── APPROVAL CHRONOLOGY ─────────────────────
+employerProfileSchema.pre(
+  ["updateOne", "updateMany", "findOneAndUpdate", "replaceOne", "findOneAndReplace"],
+  function () {
+    assertSafeIdentityUpdate(this.getUpdate(), this.getOptions(), this.op);
+  }
+);
 
-  // A later approval-status update cannot precede posting approval.
-  if (
-    this.approvedToPostShiftsAt &&
-    this.employerApprovalStatusUpdatedAt &&
-    this.approvedToPostShiftsAt > this.employerApprovalStatusUpdatedAt
-  ) {
-    this.invalidate(
-      "employerApprovalStatusUpdatedAt",
-      "Employer approval status cannot be updated before posting approval was granted."
-    );
+employerProfileSchema.pre("bulkWrite", function (operations) {
+  for (const operation of operations) {
+    if (operation.replaceOne) {
+      throw new Error("Bulk employer profile replacement is unsupported; use document save().");
+    }
+
+    for (const name of ["updateOne", "updateMany"]) {
+      if (operation[name]) {
+        assertSafeIdentityUpdate(operation[name].update, operation[name], name);
+      }
+    }
   }
 });
 

@@ -65,6 +65,19 @@ var NewPassword = (function () {
     submitButton.addEventListener("click", function (e) {
       e.preventDefault();
 
+      const resetToken = new URLSearchParams(window.location.search).get("token");
+
+      if (!resetToken || !/^[a-f0-9]{64}$/.test(resetToken)) {
+        Swal.fire({
+          text: "This reset link is invalid. Please request a new password reset link.",
+          icon: "error",
+          buttonsStyling: false,
+          confirmButtonText: "Okay",
+          customClass: { confirmButton: "btn btn-primary" },
+        });
+        return;
+      }
+
       validator.revalidateField("password");
 
       validator.validate().then(function (status) {
@@ -76,9 +89,21 @@ var NewPassword = (function () {
           // ✅ Automatically includes hidden _csrf field
           const data = Object.fromEntries(new FormData(form));
 
+          // Match the controller's field names without altering passwords.
+          data.newPassword = data.password;
+          data.confirmPassword = data["confirm-password"];
+          delete data.password;
+          delete data["confirm-password"];
+
+          const resetUrl = new URL(form.action, window.location.href);
+          resetUrl.searchParams.set("token", resetToken);
+
           axios
-            .post(form.action, data)
+            .post(resetUrl.toString(), data)
             .then(function (response) {
+              if (response.data?.success !== true) {
+                throw new Error(response.data?.message || "Unable to reset password.");
+              }
               submitButton.removeAttribute("data-kt-indicator");
               submitButton.disabled = false;
 
@@ -101,6 +126,7 @@ var NewPassword = (function () {
               Swal.fire({
                 text:
                   error.response?.data?.message ||
+                  error.message ||
                   "An error occurred while resetting password. Please try again.",
                 icon: "error",
                 buttonsStyling: false,

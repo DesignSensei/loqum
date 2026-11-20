@@ -303,7 +303,7 @@ class DojahVerificationService {
       return crypto.randomUUID();
     }
 
-    const value = String(reference).trim();
+    const value = typeof reference === "string" ? reference.trim() : "";
 
     if (!value || value.length > 64 || !/^[A-Za-z0-9_.:-]+$/.test(value)) {
       throw this.createError({
@@ -323,7 +323,7 @@ class DojahVerificationService {
 
     const environment = this.getEnvironment();
 
-    if (!Object.values(ENDPOINTS).includes(path)) {
+    if (path !== (type === "identity" ? ENDPOINTS.nin : ENDPOINTS.cac)) {
       throw this.createError({
         message: "Invalid Dojah verification endpoint.",
         code: "DOJAH_INVALID_ENDPOINT",
@@ -384,6 +384,13 @@ class DojahVerificationService {
      * must not become a successful lookup.
      */
 
+    if (responseStatus === "not_found" && (payload.entity != null || payload.error)) {
+      throw this.createError({
+        message: "Dojah returned contradictory lookup information.",
+        code: "DOJAH_INVALID_RESPONSE",
+      });
+    }
+
     if (responseStatus === "not_found") {
       throw this.createError({
         message: "The requested registry record was not found.",
@@ -392,7 +399,14 @@ class DojahVerificationService {
       });
     }
 
-    if (payload.status === false || payload.error || ["failed", "error"].includes(responseStatus)) {
+    if (
+      (payload.status != null &&
+        typeof payload.status !== "boolean" &&
+        typeof payload.status !== "string") ||
+      payload.status === false ||
+      payload.error ||
+      ["failed", "error", "pending", "processing"].includes(responseStatus)
+    ) {
       throw this.createError({
         message: "Dojah returned an unsuccessful verification response.",
         code: "DOJAH_INVALID_RESPONSE",
@@ -459,6 +473,23 @@ class DojahVerificationService {
     return normalized;
   }
 
+  static normalizeNameAliases(entity, primary, alternate, optional = false) {
+    const first = entity[primary];
+    const second = entity[alternate];
+    if (
+      first != null &&
+      second != null &&
+      this.normalizeRegistryName(first, 100, optional) !==
+        this.normalizeRegistryName(second, 100, optional)
+    ) {
+      throw this.createError({
+        message: "Dojah returned conflicting NIN name components.",
+        code: "DOJAH_INVALID_IDENTITY_RESPONSE",
+      });
+    }
+    return this.normalizeRegistryName(first ?? second, 100, optional);
+  }
+
   // ───────────────────── IDENTITY METHOD ─────────────────────
 
   /*
@@ -470,9 +501,7 @@ class DojahVerificationService {
    */
 
   static normalizeIdentityType(method) {
-    const value = String(method || "")
-      .trim()
-      .toLowerCase();
+    const value = (typeof method === "string" ? method : "").trim().toLowerCase();
 
     if (value !== "nin") {
       throw this.createError({
@@ -486,7 +515,7 @@ class DojahVerificationService {
   }
 
   static normalizeIdentityNumber(identifier) {
-    const value = String(identifier || "").trim();
+    const value = typeof identifier === "string" ? identifier.trim() : "";
 
     if (!/^\d{11}$/.test(value)) {
       throw this.createError({
@@ -521,7 +550,7 @@ class DojahVerificationService {
    * identity-holder authentication.
    */
 
-  static normalizeIdentityResponse(entity) {
+  static normalizeIdentityResponse(entity, requestedNIN) {
     if (!entity || typeof entity !== "object" || Array.isArray(entity)) {
       throw this.createError({
         message: "Dojah returned invalid identity information.",
@@ -529,15 +558,20 @@ class DojahVerificationService {
       });
     }
 
-    const firstName = this.normalizeRegistryName(entity.first_name ?? entity.firstname, 100);
+    // The basic response need not echo the NIN. If supplied, it must match.
+    if (
+      Object.hasOwn(entity, "nin") &&
+      (typeof entity.nin !== "string" || entity.nin.trim() !== requestedNIN)
+    ) {
+      throw this.createError({
+        message: "Dojah returned mismatched NIN evidence.",
+        code: "DOJAH_INVALID_IDENTITY_RESPONSE",
+      });
+    }
 
-    const middleName = this.normalizeRegistryName(
-      entity.middle_name ?? entity.middlename,
-      100,
-      true
-    );
-
-    const lastName = this.normalizeRegistryName(entity.last_name ?? entity.surname, 100);
+    const firstName = this.normalizeNameAliases(entity, "first_name", "firstname");
+    const middleName = this.normalizeNameAliases(entity, "middle_name", "middlename", true);
+    const lastName = this.normalizeNameAliases(entity, "last_name", "surname");
 
     if (!firstName || !lastName || middleName === null) {
       throw this.createError({
@@ -610,6 +644,7 @@ class DojahVerificationService {
      * undocumented Dojah query parameter.
      */
 
+    const environment = this.getEnvironment();
     let response;
 
     try {
@@ -625,7 +660,7 @@ class DojahVerificationService {
       if (error?.code === "DOJAH_RESOURCE_NOT_FOUND") {
         return {
           provider: "dojah",
-          environment: this.getEnvironment(),
+          environment,
 
           endpoint: ENDPOINTS.nin,
           method: identityType,
@@ -649,7 +684,7 @@ class DojahVerificationService {
       throw error;
     }
 
-    const normalized = this.normalizeIdentityResponse(response.entity);
+    const normalized = this.normalizeIdentityResponse(response.entity, idNumber);
 
     return {
       provider: "dojah",
@@ -734,7 +769,7 @@ class DojahVerificationService {
    */
 
   static normalizeCACNumber(value) {
-    const clean = String(value || "")
+    const clean = (typeof value === "string" ? value : "")
       .trim()
       .toUpperCase()
       .replace(/[\s-]/g, "");
@@ -785,9 +820,11 @@ class DojahVerificationService {
      */
 
     const registrationValue =
-      registration.prefix === "BN" ? entity.business_number || entity.rc_number : entity.rc_number;
+      registration.prefix === "BN"
+        ? (entity.business_number ?? entity.rc_number)
+        : entity.rc_number;
 
-    const rawRegistrationNumber = String(registrationValue || "")
+    const rawRegistrationNumber = (typeof registrationValue === "string" ? registrationValue : "")
       .trim()
       .toUpperCase()
       .replace(/[\s-]/g, "");
@@ -807,13 +844,24 @@ class DojahVerificationService {
 
     const entityName = this.normalizeRegistryName(entity.company_name, 150);
 
-    const entityType = String(entity.type_of_company || "")
-      .trim()
-      .toUpperCase();
+    const entityType = this.normalizeRegistryName(entity.type_of_company, 150)?.toUpperCase();
 
-    const entityStatus = String(entity.status || "")
-      .trim()
-      .toUpperCase();
+    const entityStatus = this.normalizeRegistryName(entity.status, 100)?.toUpperCase();
+
+    const registrationDate =
+      entity.date_of_registration == null || entity.date_of_registration === ""
+        ? null
+        : this.normalizeRegistryName(entity.date_of_registration, 100);
+    if (
+      entity.date_of_registration != null &&
+      entity.date_of_registration !== "" &&
+      !registrationDate
+    ) {
+      throw this.createError({
+        message: "Dojah returned an invalid registration date.",
+        code: "DOJAH_INVALID_CAC_RESPONSE",
+      });
+    }
 
     if (!entityName || !entityType || !entityStatus || entityType !== registration.company_type) {
       throw this.createError({
@@ -843,7 +891,7 @@ class DojahVerificationService {
 
       entityStatus,
 
-      registrationDate: entity.date_of_registration || null,
+      registrationDate,
     };
   }
 
@@ -874,6 +922,7 @@ class DojahVerificationService {
       company_type: registration.company_type,
     };
 
+    const environment = this.getEnvironment();
     let response;
 
     try {
@@ -882,7 +931,7 @@ class DojahVerificationService {
       if (error?.code === "DOJAH_RESOURCE_NOT_FOUND") {
         return {
           provider: "dojah",
-          environment: this.getEnvironment(),
+          environment,
 
           endpoint: ENDPOINTS.cac,
 

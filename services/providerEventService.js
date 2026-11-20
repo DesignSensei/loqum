@@ -10,7 +10,14 @@ class ProviderEventService {
   /* ─────────────────────────────── TRANSACTIONS ─────────────────────────────── */
 
   static async runWithOptionalTransaction(options = {}, callback) {
+    if (typeof callback !== "function") {
+      throw new TypeError("A transaction callback is required.");
+    }
+
     if (options.session) {
+      if (typeof options.session.inTransaction !== "function" || !options.session.inTransaction()) {
+        throw new Error("Provider event writes require an active transaction.");
+      }
       return callback(options.session);
     }
 
@@ -208,7 +215,8 @@ class ProviderEventService {
 
   /* ─────────────────────────────── DUPLICATE VALIDATION ─────────────────────────────── */
 
-  static assertMatchingDuplicate(existing, { provider, eventName, eventCategory, eventKey }) {
+  static assertMatchingDuplicate(existing, identity) {
+    const { provider, eventName, eventCategory, eventKey } = identity;
     if (
       existing.provider !== provider ||
       existing.eventName !== eventName ||
@@ -218,6 +226,35 @@ class ProviderEventService {
       throw new Error(
         "Provider event idempotency key is already associated with a different event."
       );
+    }
+
+    for (const field of [
+      "amount",
+      "providerFee",
+      "netAmount",
+      "countryCode",
+      "currency",
+      "isVerified",
+    ]) {
+      if (
+        Object.prototype.hasOwnProperty.call(identity, field) &&
+        (existing[field] ?? null) !== (identity[field] ?? null)
+      ) {
+        throw new Error(`Duplicate provider event has conflicting ${field}.`);
+      }
+    }
+
+    // Processing may enrich previously absent references. Do not overwrite them,
+    // but reject a retry that supplies a different non-empty reference.
+    for (const field of [
+      "providerEventId",
+      "providerReference",
+      "providerRefundId",
+      "providerRefundReference",
+    ]) {
+      if (identity[field] != null && existing[field] !== identity[field]) {
+        throw new Error(`Duplicate provider event has conflicting ${field}.`);
+      }
     }
 
     return existing;
@@ -620,6 +657,10 @@ class ProviderEventService {
     },
     options = {}
   ) {
+    if (typeof isVerified !== "boolean") {
+      throw new TypeError("Provider event isVerified must be a boolean.");
+    }
+
     let duplicateIdentity = null;
 
     try {
@@ -734,17 +775,25 @@ class ProviderEventService {
           metadata,
         };
 
+        duplicateIdentity = {
+          ...duplicateIdentity,
+          providerReference: cleanProviderReference,
+          providerRefundId: cleanProviderRefundId,
+          providerRefundReference: cleanProviderRefundReference,
+          amount: normalizedAmount,
+          providerFee: normalizedProviderFee,
+          netAmount: normalizedNetAmount,
+          countryCode: String(countryCode).trim().toUpperCase(),
+          currency: String(currency).trim().toUpperCase(),
+          isVerified,
+        };
+
         const prior = await ProviderEvent.findOne({
           eventKey: cleanEventKey,
         }).session(session);
 
         if (prior) {
-          ProviderEventService.assertMatchingDuplicate(prior, {
-            provider: cleanProvider,
-            eventName: cleanEventName,
-            eventCategory: cleanEventCategory,
-            eventKey: cleanEventKey,
-          });
+          ProviderEventService.assertMatchingDuplicate(prior, duplicateIdentity);
 
           return {
             providerEvent: prior,

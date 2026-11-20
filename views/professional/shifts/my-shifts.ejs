@@ -1,0 +1,592 @@
+
+<!-- views/professional/shifts/my-shifts.ejs -->
+
+<!-- ───────────────────── SHIFT TABS ───────────────────── -->
+
+<div class="card card-flush mb-6 mb-xl-8">
+
+  <div class="card-header border-0 pt-4">
+
+    <div class="card-title">
+      <h2 class="fw-bold text-gray-900 fs-5 mb-0">
+        My Shift Activity
+      </h2>
+    </div>
+
+  </div>
+
+  <div class="card-body pt-0 pb-0">
+
+    <nav aria-label="My Shifts categories">
+
+      <ul class="nav nav-stretch nav-line-tabs nav-line-tabs-2x border-transparent fs-6 fw-bold flex-nowrap overflow-auto">
+
+        <% shiftsView.tabs.forEach(function (tab) { %>
+
+          <li class="nav-item flex-shrink-0">
+
+            <a
+              href="<%= tab.url %>"
+              class="nav-link text-active-primary px-3 px-md-5 py-4 <%= tab.isActive ? 'active' : '' %>"
+              <%= tab.isActive ? 'aria-current="page"' : '' %>
+            >
+              <span><%= tab.label %></span>
+
+              <% if (tab.count !== undefined && tab.count !== null) { %>
+                <span class="badge badge-light-primary ms-2">
+                  <%= tab.count %>
+                </span>
+              <% } %>
+
+            </a>
+
+          </li>
+
+        <% }) %>
+
+      </ul>
+
+    </nav>
+
+  </div>
+
+</div>
+
+
+<!-- ───────────────────── RESULTS HEADER ───────────────────── -->
+
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-5">
+
+  <div>
+    <h2 class="fw-bold text-gray-900 fs-4 mb-1">
+      Shift Records
+    </h2>
+
+    <% if (shiftsView.pagination) { %>
+
+      <div class="text-gray-500 fw-semibold fs-7">
+        <%= shiftsView.pagination.totalItems %>
+        <%= shiftsView.pagination.totalItems === 1 ? 'record' : 'records' %>
+      </div>
+
+    <% } %>
+  </div>
+
+</div>
+
+
+<!-- ───────────────────── SHIFT RECORDS ───────────────────── -->
+
+<% if (shiftsView.hasShifts) { %>
+
+  <div class="row g-5 g-xl-8">
+
+    <% shiftsView.shifts.forEach(function (shift) { %>
+
+      <div class="col-12 col-xxl-6">
+
+        <div class="card card-flush h-100">
+
+          <div class="card-body p-5 p-lg-7">
+
+            <!-- Shift identity -->
+
+            <div class="d-flex align-items-start justify-content-between flex-wrap gap-3 mb-6">
+
+              <div class="d-flex align-items-start gap-3 min-w-0">
+
+                <div class="symbol symbol-50px flex-shrink-0">
+
+                  <span class="symbol-label bg-light-primary">
+
+                    <i class="ki-duotone ki-briefcase fs-2x text-primary">
+                      <span class="path1"></span>
+                      <span class="path2"></span>
+                      <span class="path3"></span>
+                    </i>
+
+                  </span>
+
+                </div>
+
+                <div class="min-w-0">
+
+                  <a
+                    href="<%= shift.detailsUrl %>"
+                    class="fw-bold fs-5 text-gray-900 text-hover-primary d-block mb-2 text-break"
+                  >
+                    <%= shift.roleTitle || shift.professionalTypeLabel %>
+                  </a>
+
+                  <div class="text-gray-500 fw-semibold fs-7">
+                    <%= shift.professionalTypeLabel %>
+                  </div>
+
+                  <% if (shift.department) { %>
+
+                    <div class="text-gray-500 fs-7 mt-1">
+                      <%= shift.department %>
+                    </div>
+
+                  <% } %>
+
+                </div>
+
+              </div>
+
+              <% if (shift.statusView) { %>
+
+                <span class="badge <%= shift.statusView.badgeClass %> fw-semibold">
+                  <%= shift.statusView.label %>
+                </span>
+
+              <% } %>
+
+            </div>
+
+
+            <!-- Facility and location -->
+
+            <% if (shift.branch) { %>
+
+              <div class="d-flex align-items-start gap-3 mb-5">
+
+                <i class="ki-duotone ki-geolocation fs-2 text-primary flex-shrink-0">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                </i>
+
+                <div class="min-w-0">
+
+                  <div class="fw-bold text-gray-800 fs-7 mb-1">
+                    <%= shift.branch.name %>
+                  </div>
+
+                  <% if (shift.branch.locationLabel) { %>
+
+                    <div class="text-gray-500 fw-semibold fs-7 text-break">
+                      <%= shift.branch.locationLabel %>
+                    </div>
+
+                  <% } %>
+
+                </div>
+
+              </div>
+
+            <% } %>
+
+
+            <!-- Schedule and pay -->
+
+            <div class="bg-light rounded p-4 mb-5">
+
+              <div class="row g-4">
+
+                <div class="col-12 col-sm-6">
+
+                  <div class="d-flex align-items-start gap-3">
+
+                    <i class="ki-duotone ki-calendar-8 fs-2 text-primary flex-shrink-0">
+                      <span class="path1"></span>
+                      <span class="path2"></span>
+                    </i>
+
+                    <div class="min-w-0">
+
+                      <div class="text-gray-500 fw-semibold fs-8 mb-1">
+                        Schedule
+                      </div>
+
+                      <div class="fw-bold text-gray-800 fs-7">
+                        <%= shift.startTimeDisplay %>
+                      </div>
+
+                      <div class="text-gray-500 fs-7">
+                        to <%= shift.endTimeDisplay %>
+                      </div>
+
+                    </div>
+
+                  </div>
+
+                </div>
+
+                <div class="col-12 col-sm-6">
+
+                  <div class="d-flex align-items-start gap-3">
+
+                    <i class="ki-duotone ki-wallet fs-2 text-primary flex-shrink-0">
+                      <span class="path1"></span>
+                      <span class="path2"></span>
+                    </i>
+
+                    <div>
+
+                      <div class="text-gray-500 fw-semibold fs-8 mb-1">
+                        Hourly Rate
+                      </div>
+
+                      <div class="fw-bold text-gray-900 fs-5">
+                        <%= shift.hourlyRateDisplay %>
+                      </div>
+
+                      <div class="text-gray-500 fs-8">
+                        per hour
+                      </div>
+
+                    </div>
+
+                  </div>
+
+                </div>
+
+              </div>
+
+            </div>
+
+
+            <!-- Applications -->
+
+            <% if (shift.applications.length > 0) { %>
+
+              <div class="mb-5">
+
+                <div class="d-flex align-items-center justify-content-between mb-3">
+
+                  <h3 class="fw-bold text-gray-800 fs-6 mb-0">
+                    My Applications
+                  </h3>
+
+                  <span class="badge badge-light-primary">
+                    <%= shift.applications.length %>
+                  </span>
+
+                </div>
+
+                <div class="border border-dashed border-gray-300 rounded px-4">
+
+                  <% shift.applications.forEach(function (application) { %>
+
+                    <div class="d-flex flex-column flex-sm-row align-items-start justify-content-between gap-2 py-3">
+
+                      <div class="min-w-0">
+
+                        <div class="fw-semibold text-gray-800 fs-7">
+                          <%= application.typeLabel %>
+                        </div>
+
+                        <div class="text-gray-500 fs-8 mt-1">
+                          <%= application.scopeLabel %>
+                        </div>
+
+                        <% if (application.createdAt) { %>
+
+                          <div class="text-gray-400 fs-8 mt-1">
+                            Applied: <%= application.createdAtDisplay %>
+                          </div>
+
+                        <% } %>
+
+                      </div>
+
+                      <% if (application.statusView) { %>
+
+                        <span class="badge <%= application.statusView.badgeClass %> flex-shrink-0">
+                          <%= application.statusView.label %>
+                        </span>
+
+                      <% } %>
+
+                    </div>
+
+                    <% if (application !== shift.applications[shift.applications.length - 1]) { %>
+                      <div class="separator separator-dashed"></div>
+                    <% } %>
+
+                  <% }) %>
+
+                </div>
+
+              </div>
+
+            <% } %>
+
+
+            <!-- Assigned occurrences -->
+
+            <% if (shift.hasAssignedOccurrences) { %>
+
+              <div class="mb-5">
+
+                <div class="d-flex align-items-center justify-content-between gap-3 mb-3">
+
+                  <h3 class="fw-bold text-gray-800 fs-6 mb-0">
+                    My Assigned Work Dates
+                  </h3>
+
+                  <span class="badge badge-light-success">
+                    <%= shift.occurrences.length %>
+                  </span>
+
+                </div>
+
+                <div
+                  class="border border-dashed border-gray-300 rounded px-4 overflow-auto"
+                  style="max-height: 250px;"
+                >
+
+                  <% shift.occurrences.forEach(function (occurrence) { %>
+
+                    <div class="py-3">
+
+                      <div class="d-flex flex-wrap align-items-start justify-content-between gap-2">
+
+                        <div class="min-w-0">
+
+                          <div class="fw-bold text-gray-800 fs-7 mb-1">
+                            <%= occurrence.occurrenceLabel %>
+                          </div>
+
+                          <div class="text-gray-500 fs-8">
+                            <%= occurrence.startTimeDisplay %>
+                          </div>
+
+                        </div>
+
+                        <% if (occurrence.statusView) { %>
+
+                          <span class="badge <%= occurrence.statusView.badgeClass %>">
+                            <%= occurrence.statusView.label %>
+                          </span>
+
+                        <% } %>
+
+                      </div>
+
+                      <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
+
+                        <% if (occurrence.attendanceStatusView) { %>
+
+                          <span class="badge badge-light">
+                            Attendance: <%= occurrence.attendanceStatusView.label %>
+                          </span>
+
+                        <% } %>
+
+                        <% if (occurrence.settlementStatusView) { %>
+
+                          <span class="badge <%= occurrence.settlementStatusView.badgeClass %>">
+                            Settlement: <%= occurrence.settlementStatusView.label %>
+                          </span>
+
+                        <% } %>
+
+                      </div>
+
+                      <a
+                        href="<%= occurrence.detailsUrl %>"
+                        class="fw-bold fs-7 text-primary text-hover-primary mt-3 d-inline-block"
+                      >
+                        View Work Date
+                        <i class="ki-duotone ki-arrow-right fs-5 ms-1">
+                          <span class="path1"></span>
+                          <span class="path2"></span>
+                        </i>
+                      </a>
+
+                    </div>
+
+                    <% if (occurrence !== shift.occurrences[shift.occurrences.length - 1]) { %>
+                      <div class="separator separator-dashed"></div>
+                    <% } %>
+
+                  <% }) %>
+
+                </div>
+
+              </div>
+
+            <% } %>
+
+
+            <!-- Shift action -->
+
+            <div class="separator separator-dashed my-5"></div>
+
+            <div class="d-flex flex-column flex-sm-row align-items-start align-items-sm-center justify-content-between gap-3">
+
+              <div class="text-gray-400 fw-semibold fs-8 text-break">
+
+                <% if (shift.referenceCode) { %>
+                  Reference: <%= shift.referenceCode %>
+                <% } %>
+
+              </div>
+
+              <a
+                href="<%= shift.detailsUrl %>"
+                class="btn btn-light-primary w-100 w-sm-auto flex-shrink-0"
+              >
+                View Shift Details
+
+                <i class="ki-duotone ki-arrow-right fs-3 ms-2">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                </i>
+              </a>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+
+    <% }) %>
+
+  </div>
+
+<% } else { %>
+
+  <!-- ───────────────────── EMPTY STATE ───────────────────── -->
+
+  <div class="card card-flush">
+
+    <div class="card-body d-flex flex-column align-items-center justify-content-center text-center px-5 py-15">
+
+      <div class="symbol symbol-90px mb-6">
+
+        <span class="symbol-label bg-light-primary">
+
+          <i class="ki-duotone ki-calendar-tick fs-4x text-primary">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+          </i>
+
+        </span>
+
+      </div>
+
+      <h3 class="fw-bold text-gray-900 fs-4 mb-3">
+        No Shift Records
+      </h3>
+
+      <p class="text-gray-500 fw-semibold fs-6 mb-6">
+        <%= shiftsView.emptyState.message %>
+      </p>
+
+      <a
+        href="<%= shiftsView.actions.shiftsUrl %>"
+        class="btn btn-primary"
+      >
+        <i class="ki-duotone ki-magnifier fs-3 me-2">
+          <span class="path1"></span>
+          <span class="path2"></span>
+        </i>
+        Find Available Shifts
+      </a>
+
+    </div>
+
+  </div>
+
+<% } %>
+
+
+<!-- ───────────────────── PAGINATION ───────────────────── -->
+
+<% if (shiftsView.pagination && shiftsView.pagination.hasPagination) { %>
+
+  <div class="d-flex flex-column flex-md-row align-items-center justify-content-between gap-4 mt-7">
+
+    <div class="text-gray-500 fw-semibold fs-7">
+      Page <%= shiftsView.pagination.currentPage %>
+      of <%= shiftsView.pagination.totalPages %>
+    </div>
+
+    <nav aria-label="My Shifts pagination">
+
+      <ul class="pagination pagination-circle pagination-outline flex-wrap justify-content-center mb-0">
+
+        <!-- Previous page -->
+
+        <li class="page-item previous <%= shiftsView.pagination.hasPreviousPage ? '' : 'disabled' %>">
+
+          <% if (shiftsView.pagination.hasPreviousPage) { %>
+
+            <a
+              href="<%= shiftsView.pagination.previousPageUrl %>"
+              class="page-link"
+              aria-label="Previous page"
+            >
+              <i class="previous"></i>
+            </a>
+
+          <% } else { %>
+
+            <span class="page-link" aria-disabled="true">
+              <i class="previous"></i>
+            </span>
+
+          <% } %>
+
+        </li>
+
+        <!-- Page numbers -->
+
+        <% shiftsView.pagination.pages.forEach(function (page) { %>
+
+          <li class="page-item <%= page.isActive ? 'active' : '' %>">
+
+            <% if (page.isActive) { %>
+
+              <span class="page-link" aria-current="page">
+                <%= page.page %>
+              </span>
+
+            <% } else { %>
+
+              <a href="<%= page.url %>" class="page-link">
+                <%= page.page %>
+              </a>
+
+            <% } %>
+
+          </li>
+
+        <% }) %>
+
+        <!-- Next page -->
+
+        <li class="page-item next <%= shiftsView.pagination.hasNextPage ? '' : 'disabled' %>">
+
+          <% if (shiftsView.pagination.hasNextPage) { %>
+
+            <a
+              href="<%= shiftsView.pagination.nextPageUrl %>"
+              class="page-link"
+              aria-label="Next page"
+            >
+              <i class="next"></i>
+            </a>
+
+          <% } else { %>
+
+            <span class="page-link" aria-disabled="true">
+              <i class="next"></i>
+            </span>
+
+          <% } %>
+
+        </li>
+
+      </ul>
+
+    </nav>
+
+  </div>
+
+<% } %>

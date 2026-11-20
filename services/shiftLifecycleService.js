@@ -1135,12 +1135,12 @@ class ShiftLifecycleService {
         statusCode: 409,
       });
     }
-    const activeOccurrences = occurrences.filter((occurrence) =>
-      this.isOccurrenceCheckedIn(occurrence)
-    );
+    const activeOccurrences = this.getActiveOccurrences(occurrences);
+
     const scheduledOccurrences = occurrences.filter(
-      (occurrence) => occurrence.status === "scheduled"
+      (occurrence) => occurrence.status === "scheduled" && !this.isOccurrenceCheckedIn(occurrence)
     );
+
     const activeOutcomes = activeOccurrences.map((occurrence) => ({
       occurrence,
       ...this.buildActiveWorkCancellationBreakdown({
@@ -1149,6 +1149,7 @@ class ShiftLifecycleService {
         effectiveAt: now,
       }),
     }));
+
     const outcomes = scheduledOccurrences.map((occurrence) => {
       ShiftOccurrenceCancellationService.assertFutureUntouchedOccurrence({
         occurrence,
@@ -1163,6 +1164,7 @@ class ShiftLifecycleService {
         parentCancellationCode: "employer_cancelled",
         currentTime: now,
       });
+
       return {
         occurrence,
         ...outcome,
@@ -1174,7 +1176,13 @@ class ShiftLifecycleService {
         },
       };
     });
-    const affectedOccurrences = [...activeOccurrences, ...scheduledOccurrences];
+
+    const affectedOccurrences = [...activeOccurrences, ...scheduledOccurrences].sort(
+      (a, b) =>
+        Number(a.sequenceNumber) - Number(b.sequenceNumber) ||
+        Number(a.slotNumber) - Number(b.slotNumber)
+    );
+
     if (!affectedOccurrences.length) {
       throw this.createError({
         message: "No cancellable work remains.",

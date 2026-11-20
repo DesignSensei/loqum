@@ -1,4 +1,5 @@
 // public/js/admin/user-details.js
+
 "use strict";
 
 var AdminUserDetails = (function () {
@@ -15,33 +16,19 @@ var AdminUserDetails = (function () {
     actionsReady: false,
   };
 
-  // ───────────────────────── ELEMENTS ─────────────────────────
+  // ───────── Elements ─────────
 
   function initializeElements() {
     elements = {
       feedback: root.querySelector("#adminUserDetailsFeedback"),
-
       verificationFeedback: root.querySelector("#adminUserVerificationFeedback"),
-
       overviewTab: root.querySelector("#adminUserTab-overview"),
-
       verificationTab: root.querySelector("#adminUserTab-verification"),
-
       cacRecheckButton: root.querySelector("#adminUserCACRecheck"),
-
-      pcnReviewForm: root.querySelector("#adminUserPCNReviewForm"),
-
-      pcnDecision: root.querySelector("#adminUserPCNDecision"),
-
-      pcnRegisteredName: root.querySelector("#adminUserPCNRegisteredName"),
-
-      pcnReviewNote: root.querySelector("#adminUserPCNReviewNote"),
-
-      pcnSubmitButton: root.querySelector("#adminUserPCNSubmit"),
     };
   }
 
-  // ───────────────────────── RESPONSE HELPERS ─────────────────────────
+  // ───────── Response helpers ─────────
 
   function getErrorMessage(error, fallback) {
     var responseMessage =
@@ -69,19 +56,15 @@ var AdminUserDetails = (function () {
     return typeof message === "string" && message.trim() ? message.trim() : fallback;
   }
 
-  function isSuccessfulResponse(response) {
-    return Boolean(response && response.data && response.data.success === true);
-  }
-
   function assertSuccessfulResponse(response, fallback) {
-    if (!isSuccessfulResponse(response)) {
+    if (!response || !response.data || response.data.success !== true) {
       throw new Error(getResponseMessage(response, fallback));
     }
 
     return response;
   }
 
-  // ───────────────────────── UI HELPERS ─────────────────────────
+  // ───────── UI helpers ─────────
 
   function setIndicator(button, loading) {
     if (!button) {
@@ -95,40 +78,18 @@ var AdminUserDetails = (function () {
     }
   }
 
-  function setActionPending(pending, activeButton) {
+  function setActionPending(pending) {
     state.actionPending = Boolean(pending);
 
-    var disabled = !state.actionsReady || state.actionPending;
+    var button = elements.cacRecheckButton;
 
-    if (elements.cacRecheckButton) {
-      elements.cacRecheckButton.disabled = disabled;
-
-      setIndicator(
-        elements.cacRecheckButton,
-        state.actionPending && activeButton === elements.cacRecheckButton
-      );
+    if (!button) {
+      return;
     }
 
-    if (elements.pcnSubmitButton) {
-      elements.pcnSubmitButton.disabled = disabled;
+    button.disabled = !state.actionsReady || state.actionPending;
 
-      setIndicator(
-        elements.pcnSubmitButton,
-        state.actionPending && activeButton === elements.pcnSubmitButton
-      );
-    }
-
-    if (elements.pcnDecision) {
-      elements.pcnDecision.disabled = disabled;
-    }
-
-    if (elements.pcnRegisteredName) {
-      elements.pcnRegisteredName.disabled = disabled;
-    }
-
-    if (elements.pcnReviewNote) {
-      elements.pcnReviewNote.disabled = disabled;
-    }
+    setIndicator(button, state.actionPending);
   }
 
   function showFeedback(message, type) {
@@ -193,7 +154,7 @@ var AdminUserDetails = (function () {
     });
   }
 
-  // ───────────────────────── API HELPER ─────────────────────────
+  // ───────── API helper ─────────
 
   function apiPost(url, payload) {
     return axios.post(url, payload || {}, {
@@ -206,7 +167,7 @@ var AdminUserDetails = (function () {
     });
   }
 
-  // ───────────────────────── TAB MANAGEMENT ─────────────────────────
+  // ───────── Tab management ─────────
 
   function updateTabHash(hash) {
     if (window.location.hash === hash) {
@@ -249,8 +210,9 @@ var AdminUserDetails = (function () {
     window.location.reload();
   }
 
-  // ───────────────────────── CAC VERIFICATION ─────────────────────────
+  // ───────── CAC verification ─────────
 
+  // Action configuration comes from the server-rendered button.
   function getCACActionConfig() {
     var button = elements.cacRecheckButton;
 
@@ -274,7 +236,6 @@ var AdminUserDetails = (function () {
       return;
     }
 
-    var button = elements.cacRecheckButton;
     var action = getCACActionConfig();
 
     if (!action || !action.url || action.method !== "POST") {
@@ -294,7 +255,7 @@ var AdminUserDetails = (function () {
         return;
       }
 
-      setActionPending(true, button);
+      setActionPending(true);
 
       apiPost(action.url, {})
         .then(function (response) {
@@ -311,6 +272,7 @@ var AdminUserDetails = (function () {
             "The CAC verification request has been processed."
           );
 
+          // Staging checks do not grant production verification.
           if (resultData.environment === "staging") {
             message += " This was a staging check. " + "It does not grant production verification.";
           }
@@ -337,212 +299,44 @@ var AdminUserDetails = (function () {
     });
   }
 
-  // ───────────────────────── PCN REVIEW ─────────────────────────
+  // ───────── Initialization ─────────
 
-  function getPCNReviewValues() {
-    return {
-      decision: elements.pcnDecision ? elements.pcnDecision.value.trim() : "",
-
-      nameOnRecord: elements.pcnRegisteredName ? elements.pcnRegisteredName.value.trim() : "",
-
-      note: elements.pcnReviewNote ? elements.pcnReviewNote.value.trim() : "",
-    };
-  }
-
-  function validatePCNReview(values) {
-    var validDecisions = ["verified", "needs_review", "rejected"];
-
-    if (!validDecisions.includes(values.decision)) {
-      return "Select a valid PCN review decision.";
+  function initializeActions() {
+    // Professional details remain read-only here.
+    if (role !== "employer" || !profileId || !elements.cacRecheckButton) {
+      return;
     }
 
-    if (values.decision === "verified" && !values.nameOnRecord) {
-      return (
-        "Enter the name shown on the official " +
-        "PCN record before marking the premises " +
-        "as verified."
+    if (typeof axios === "undefined" || typeof Swal === "undefined") {
+      showFeedback("Verification controls are unavailable. Please refresh the page.", "warning");
+
+      return;
+    }
+
+    if (!csrfToken) {
+      showFeedback(
+        "The security token is missing. Refresh the page before rechecking CAC.",
+        "warning"
       );
-    }
-
-    if (values.nameOnRecord.length > 150) {
-      return "The registered name cannot exceed " + "150 characters.";
-    }
-
-    if (values.note.length < 10) {
-      return "Enter a review note containing at least " + "10 characters.";
-    }
-
-    if (values.note.length > 500) {
-      return "The review note cannot exceed " + "500 characters.";
-    }
-
-    return null;
-  }
-
-  function getPCNConfirmationOptions(decision) {
-    if (decision === "verified") {
-      return {
-        icon: "question",
-        title: "Confirm PCN Verification?",
-        text:
-          "Confirm that you independently checked " +
-          "the official PCN premises register and " +
-          "that the submitted registration details " +
-          "match the record.",
-        confirmButtonText: "Confirm Verification",
-      };
-    }
-
-    if (decision === "rejected") {
-      return {
-        icon: "warning",
-        title: "Reject PCN Verification?",
-        text:
-          "This records a rejected regulatory " +
-          "verification decision and may revoke " +
-          "existing employer approval. Confirm " +
-          "that your findings support this decision.",
-        confirmButtonText: "Reject Verification",
-        confirmButtonClass: "btn btn-danger",
-      };
-    }
-
-    return {
-      icon: "warning",
-      title: "Mark PCN as Needs Review?",
-      text:
-        "This flags the employer's regulatory " +
-        "registration for further review and " +
-        "may revoke existing employer approval.",
-      confirmButtonText: "Mark as Needs Review",
-    };
-  }
-
-  function handlePCNReview(event) {
-    event.preventDefault();
-
-    if (!state.actionsReady || state.actionPending || !elements.pcnReviewForm) {
-      return;
-    }
-
-    var form = elements.pcnReviewForm;
-
-    var url = form.dataset.reviewUrl || "";
-
-    var method = (form.dataset.reviewMethod || "").toUpperCase();
-
-    if (!url || method !== "POST") {
-      showFeedback("The PCN review endpoint is not configured correctly.", "danger");
 
       return;
     }
 
-    var values = getPCNReviewValues();
+    var action = getCACActionConfig();
 
-    var validationError = validatePCNReview(values);
-
-    if (validationError) {
-      showFeedback(validationError, "warning");
-
-      Swal.fire({
-        icon: "warning",
-        title: "Review Information Required",
-        text: validationError,
-        confirmButtonText: "OK",
-      });
+    if (!action || !action.url || action.method !== "POST") {
+      showFeedback("The CAC verification endpoint is not configured correctly.", "danger");
 
       return;
     }
 
-    clearFeedback();
+    elements.cacRecheckButton.addEventListener("click", handleCACRecheck);
 
-    confirmAction(getPCNConfirmationOptions(values.decision)).then(function (result) {
-      if (!result.isConfirmed || state.actionPending) {
-        return;
-      }
+    state.actionsReady = true;
 
-      setActionPending(true, elements.pcnSubmitButton);
-
-      // Exact backend payload:
-      // decision, nameOnRecord, note.
-      apiPost(url, {
-        decision: values.decision,
-        nameOnRecord: values.nameOnRecord,
-        note: values.note,
-      })
-        .then(function (response) {
-          return assertSuccessfulResponse(response, "The PCN review could not be saved.");
-        })
-        .then(function (response) {
-          return Swal.fire({
-            icon: "success",
-            title: "PCN Review Recorded",
-            text: getResponseMessage(
-              response,
-              "The regulatory verification review has been recorded."
-            ),
-            confirmButtonText: "View Updated Record",
-            buttonsStyling: false,
-            customClass: {
-              confirmButton: "btn btn-primary",
-            },
-          }).then(function () {
-            refreshVerificationPage();
-          });
-        })
-        .catch(function (error) {
-          return showActionError(error, "Unable to save the PCN review. Please try again.");
-        })
-        .finally(function () {
-          setActionPending(false);
-        });
-    });
+    // Enable the button only after initialization succeeds.
+    setActionPending(false);
   }
-
-  // ───────────────────────── INITIALIZATION VALIDATION ─────────────────────────
-
-  function hasValidActionEndpoints() {
-    if (elements.cacRecheckButton) {
-      var cacAction = getCACActionConfig();
-
-      if (!cacAction || !cacAction.url || cacAction.method !== "POST") {
-        return false;
-      }
-    }
-
-    if (elements.pcnReviewForm) {
-      var form = elements.pcnReviewForm;
-
-      if (!form.dataset.reviewUrl || (form.dataset.reviewMethod || "").toUpperCase() !== "POST") {
-        return false;
-      }
-
-      if (
-        !elements.pcnDecision ||
-        !elements.pcnRegisteredName ||
-        !elements.pcnReviewNote ||
-        !elements.pcnSubmitButton
-      ) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  // ───────────────────────── EVENTS ─────────────────────────
-
-  function attachActionEvents() {
-    if (elements.cacRecheckButton) {
-      elements.cacRecheckButton.addEventListener("click", handleCACRecheck);
-    }
-
-    if (elements.pcnReviewForm) {
-      elements.pcnReviewForm.addEventListener("submit", handlePCNReview);
-    }
-  }
-
-  // ───────────────────────── INITIALIZATION ─────────────────────────
 
   return {
     init: function () {
@@ -561,54 +355,13 @@ var AdminUserDetails = (function () {
       initializeElements();
 
       csrfToken = root.dataset.csrfToken || "";
-
       role = root.dataset.role || "";
-
       profileId = root.dataset.profileId || "";
 
-      // Tab events are registered exactly once.
       attachTabEvents();
       activateTabFromUrl();
 
-      // Professional verification remains read-only.
-      if (role !== "employer" || !profileId) {
-        return;
-      }
-
-      var hasMutationControls = Boolean(elements.cacRecheckButton || elements.pcnReviewForm);
-
-      if (!hasMutationControls) {
-        return;
-      }
-
-      if (typeof axios === "undefined" || typeof Swal === "undefined") {
-        showFeedback("Verification controls are unavailable. Please refresh the page.", "warning");
-
-        return;
-      }
-
-      if (!csrfToken) {
-        showFeedback(
-          "The security token is missing. Refresh the page before recording a verification decision.",
-          "warning"
-        );
-
-        return;
-      }
-
-      if (!hasValidActionEndpoints()) {
-        showFeedback("The verification endpoints are not configured correctly.", "danger");
-
-        return;
-      }
-
-      attachActionEvents();
-
-      state.actionsReady = true;
-
-      // Buttons were disabled by EJS.
-      // Enable only after initialization succeeds.
-      setActionPending(false);
+      initializeActions();
     },
   };
 })();

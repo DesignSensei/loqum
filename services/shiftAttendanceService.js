@@ -69,19 +69,6 @@ const PARENT_ATTENDANCE_STATUSES = [
   "pending_settlement",
 ];
 
-const EMPLOYER_PIN_PARENT_STATUSES = [
-  "open",
-  "assigned",
-  "confirmed",
-  "in_progress",
-  "disputed",
-  "pending_settlement",
-];
-
-const EMPLOYER_PIN_OCCURRENCE_STATUSES = ["scheduled", "in_progress"];
-
-const EMPLOYER_PIN_ATTENDANCE_STATUSES = ["not_started", "checked_in"];
-
 const TERMINAL_PARENT_ATTENDANCE_STATUSES = ["completed", "cancelled", "no_show"];
 
 /**
@@ -977,36 +964,21 @@ class ShiftAttendanceService {
     return occurrence;
   }
 
+  /**
+   * Authorized employers may retrieve either PIN as soon as its occurrence
+   * exists, regardless of funding, assignment, attendance, or terminal state.
+   *
+   * Business ownership and branch permissions are checked by
+   * getEmployerOccurrenceContext() before these assertions are called.
+   * Professional PIN usage remains governed by assertCanCheckIn() and
+   * assertCanCheckOut(), plus the funding, PIN, and geofence checks.
+   */
   static assertEmployerPinAccess({ shift, occurrence }) {
-    ShiftAttendanceService.assertProtectedFundingActive(shift);
-
-    ShiftAttendanceService.assertCompleteAssignment(occurrence);
-
-    if (!EMPLOYER_PIN_PARENT_STATUSES.includes(shift.status)) {
+    if (!shift?._id || !occurrence?._id || String(occurrence.shift) !== String(shift._id)) {
       throw ShiftAttendanceService.createError({
-        message: "Attendance PINs are not available in the current Shift state.",
-        code: "ATTENDANCE_PINS_NOT_AVAILABLE",
-        statusCode: 403,
-        details: {
-          shiftStatus: shift.status,
-        },
-      });
-    }
-
-    if (
-      !EMPLOYER_PIN_OCCURRENCE_STATUSES.includes(occurrence.status) ||
-      !EMPLOYER_PIN_ATTENDANCE_STATUSES.includes(occurrence.attendanceStatus) ||
-      occurrence.checkedOutAt ||
-      occurrence.earlyTermination?.occurred
-    ) {
-      throw ShiftAttendanceService.createError({
-        message: "Attendance PINs are not available in the current occurrence state.",
-        code: "ATTENDANCE_PINS_NOT_AVAILABLE",
-        statusCode: 403,
-        details: {
-          occurrenceStatus: occurrence.status,
-          attendanceStatus: occurrence.attendanceStatus,
-        },
+        message: "Shift occurrence was not found.",
+        code: "SHIFT_OCCURRENCE_NOT_FOUND",
+        statusCode: 404,
       });
     }
 
@@ -1014,25 +986,13 @@ class ShiftAttendanceService {
   }
 
   static assertCanRevealCheckInPin({ shift, occurrence }) {
-    ShiftAttendanceService.assertEmployerPinAccess({
-      shift,
-      occurrence,
-    });
+    ShiftAttendanceService.assertEmployerPinAccess({ shift, occurrence });
 
-    if (
-      occurrence.status !== "scheduled" ||
-      occurrence.attendanceStatus !== "not_started" ||
-      occurrence.checkedInAt ||
-      occurrence.checkInPinUsedAt
-    ) {
+    if (!/^\d{4}$/.test(String(occurrence.checkInPin ?? ""))) {
       throw ShiftAttendanceService.createError({
-        message: "The check-in PIN is not available in the current occurrence state.",
-        code: "CHECK_IN_PIN_NOT_AVAILABLE",
-        statusCode: 403,
-        details: {
-          occurrenceStatus: occurrence.status,
-          attendanceStatus: occurrence.attendanceStatus,
-        },
+        message: "The check-in PIN was not generated for this occurrence.",
+        code: "CHECK_IN_PIN_NOT_GENERATED",
+        statusCode: 500,
       });
     }
 
@@ -1040,26 +1000,13 @@ class ShiftAttendanceService {
   }
 
   static assertCanRevealCheckOutPin({ shift, occurrence }) {
-    ShiftAttendanceService.assertEmployerPinAccess({
-      shift,
-      occurrence,
-    });
+    ShiftAttendanceService.assertEmployerPinAccess({ shift, occurrence });
 
-    if (
-      occurrence.status !== "in_progress" ||
-      occurrence.attendanceStatus !== "checked_in" ||
-      !occurrence.checkedInAt ||
-      occurrence.checkedOutAt ||
-      occurrence.checkOutPinUsedAt
-    ) {
+    if (!/^\d{4}$/.test(String(occurrence.checkOutPin ?? ""))) {
       throw ShiftAttendanceService.createError({
-        message: "The check-out PIN becomes available after successful check-in.",
-        code: "CHECK_OUT_PIN_NOT_AVAILABLE",
-        statusCode: 403,
-        details: {
-          occurrenceStatus: occurrence.status,
-          attendanceStatus: occurrence.attendanceStatus,
-        },
+        message: "The check-out PIN was not generated for this occurrence.",
+        code: "CHECK_OUT_PIN_NOT_GENERATED",
+        statusCode: 500,
       });
     }
 
@@ -2503,7 +2450,7 @@ class ShiftAttendanceService {
 
         approvedEndTime: null,
 
-        notes: ShiftAttendanceService.normalizeOptionalText(notes, "Checkout fallback notes", 300),
+        notes: ShiftAttendanceService.normalizeOptionalText(notes, "Late checkout notes", 300),
       };
 
       await occurrence.save({

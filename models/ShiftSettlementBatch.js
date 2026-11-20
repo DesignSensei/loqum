@@ -10,7 +10,6 @@ const {
   isValidTimeZone,
   hasDocumentValue,
   sumSafeIntegerValues,
-  sameId,
 } = require("./helpers/schemaValidators");
 
 const { getWeekdayForLocalDate } = require("./helpers/dateTimeHelpers");
@@ -558,6 +557,11 @@ const shiftSettlementBatchSchema = new mongoose.Schema(
 
 /* ─────────────────────────────── MODEL HELPERS ─────────────────────────────── */
 
+function sameId(left, right) {
+  if (!left || !right) return false;
+  return String(left._id || left) === String(right._id || right);
+}
+
 function hasAnyTransactionPairValue(pair) {
   if (!pair) {
     return false;
@@ -647,6 +651,26 @@ function buildSettlementLineIdentityKey(line) {
 }
 
 function validateAttemptAudit(document) {
+  if (
+    document.processingStartedAt &&
+    document.scheduledFor &&
+    document.processingStartedAt < document.scheduledFor
+  ) {
+    document.invalidate("processingStartedAt", "Processing cannot begin before scheduledFor.");
+  }
+
+  for (const field of [
+    "processingStartedAt",
+    "lastAttemptAt",
+    "releasedAt",
+    "failedAt",
+    "cancelledAt",
+  ]) {
+    if (document[field] && document.createdAt && document[field] < document.createdAt) {
+      document.invalidate(field, field + " cannot precede batch creation.");
+    }
+  }
+
   const attemptCount = Number(document.attemptCount || 0);
 
   const hasAttempts = Number.isSafeInteger(attemptCount) && attemptCount > 0;
@@ -716,6 +740,13 @@ shiftSettlementBatchSchema.pre(
     }
 
     /* ─────────────────────────────── PAYOUT CYCLE ─────────────────────────────── */
+
+    if (this.countryCode && this.currency && isValidLocalDateString(this.payoutDate)) {
+      const expectedCycleKey = `${this.countryCode}-${this.currency}-${this.payoutDate}`;
+      if (this.cycleKey !== expectedCycleKey) {
+        this.invalidate("cycleKey", "cycleKey must match countryCode, currency and payoutDate.");
+      }
+    }
 
     if (isValidLocalDateString(this.payoutDate) && Number.isSafeInteger(this.payoutWeekday)) {
       const actualWeekday = getWeekdayForLocalDate(this.payoutDate);

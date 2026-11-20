@@ -14,12 +14,23 @@ function setNoStoreHeaders(res) {
   });
 }
 
+function createControllerError({ message, code, statusCode = 500 }) {
+  const error = new Error(message);
+
+  error.name = "ProfessionalShiftAttendanceControllerError";
+  error.code = code;
+  error.statusCode = statusCode;
+
+  return error;
+}
+
 function isOperationalServiceError(error) {
   return [
     "ShiftAttendanceServiceError",
     "ShiftOccurrenceClaimServiceError",
     "ShiftOccurrenceReconciliationServiceError",
     "ProfessionalShiftAttendanceControllerError",
+    "OvertimeEvidenceUploadError",
   ].includes(error?.name);
 }
 
@@ -27,13 +38,10 @@ function getProfessionalProfileId(req) {
   const professionalProfileId = req.professionalProfile?._id;
 
   if (!professionalProfileId) {
-    const error = new Error("Professional profile context is unavailable.");
-
-    error.name = "ProfessionalShiftAttendanceControllerError";
-    error.code = "PROFESSIONAL_PROFILE_CONTEXT_REQUIRED";
-    error.statusCode = 500;
-
-    throw error;
+    throw createControllerError({
+      message: "Professional profile context is unavailable.",
+      code: "PROFESSIONAL_PROFILE_CONTEXT_REQUIRED",
+    });
   }
 
   return professionalProfileId;
@@ -47,13 +55,9 @@ function buildLocationInput(body = {}) {
 
   return {
     latitude: source.latitude,
-
     longitude: source.longitude,
-
     accuracyMeters: source.accuracyMeters ?? source.accuracy,
-
     capturedAt: source.capturedAt,
-
     locationSource: source.locationSource,
   };
 }
@@ -108,7 +112,7 @@ function handleJsonError({ res, error, logContext, fallbackMessage, fallbackCode
   if (statusCode >= 500) {
     logger.error(`${logContext}:`, error);
   } else {
-    logger.warn(`${logContext} rejected: ` + `${error.code || "UNKNOWN"} - ` + `${error.message}`);
+    logger.warn(`${logContext} rejected: ` + `${error.code || "UNKNOWN"} - ${error.message}`);
   }
 
   const response = {
@@ -126,6 +130,41 @@ function handleJsonError({ res, error, logContext, fallbackMessage, fallbackCode
   setNoStoreHeaders(res);
 
   return res.status(statusCode).json(response);
+}
+
+/* ─────────────────────────────── CHECKOUT EVIDENCE ─────────────────────────────── */
+
+function assertCheckoutEvidenceProcessed(req) {
+  if (!req.is("multipart/form-data")) {
+    return;
+  }
+
+  if (
+    !Array.isArray(req.professionalOvertimeEvidenceUploads) ||
+    !Array.isArray(req.body?.requestEvidence) ||
+    typeof req.cleanupProfessionalOvertimeEvidenceUpload !== "function"
+  ) {
+    throw createControllerError({
+      message: "Checkout evidence upload processing is unavailable.",
+      code: "CHECKOUT_EVIDENCE_UPLOAD_PROCESSING_REQUIRED",
+    });
+  }
+}
+
+async function cleanupFailedCheckoutEvidence(req, originalError) {
+  const cleanup = req.cleanupProfessionalOvertimeEvidenceUpload;
+
+  if (typeof cleanup !== "function") {
+    return;
+  }
+
+  try {
+    await cleanup();
+  } catch (cleanupError) {
+    logger.error("Professional checkout evidence cleanup failed:", cleanupError);
+
+    originalError.cleanupError = cleanupError;
+  }
 }
 
 /* ─────────────────────────────── CHECK-IN ─────────────────────────────── */
@@ -173,7 +212,11 @@ exports.checkIn = async (req, res) => {
 /* ─────────────────────────────── CHECKOUT ─────────────────────────────── */
 
 exports.checkOut = async (req, res) => {
+  let checkoutCommitted = false;
+
   try {
+    assertCheckoutEvidenceProcessed(req);
+
     const result = await ShiftAttendanceService.checkOut({
       shiftId: req.params.shiftId,
 
@@ -204,6 +247,8 @@ exports.checkOut = async (req, res) => {
       currentTime: new Date(),
     });
 
+    checkoutCommitted = true;
+
     setNoStoreHeaders(res);
 
     const message =
@@ -219,6 +264,10 @@ exports.checkOut = async (req, res) => {
       data: result,
     });
   } catch (error) {
+    if (!checkoutCommitted) {
+      await cleanupFailedCheckoutEvidence(req, error);
+    }
+
     return handleJsonError({
       res,
 
@@ -278,13 +327,8 @@ exports.requestCheckoutFallback = async (req, res) => {
 /* ─────────────────────────────── ABSENCE EXPLANATION ─────────────────────────────── */
 
 /**
- * Professional confirms that they did not work a recorded no-show occurrence
- * and provides the one immutable absence explanation audit.
- *
- * This is not a claim and does not change the no-show financial outcome.
- *
- * If the professional says they actually worked, the separate claim flow is
- * used for an attendance_correction claim instead.
+ * Records the professional's immutable explanation for an actual no-show.
+ * Attendance correction remains a separate claim process.
  */
 exports.submitAbsenceExplanation = async (req, res) => {
   try {

@@ -118,6 +118,7 @@
           <!--end::Contact card-->
         </div>
 
+        <!--begin::Geofence information-->
         <div
           class="notice d-flex bg-light-warning rounded border-warning border border-dashed p-6 mt-8"
         >
@@ -133,12 +134,68 @@
             </div>
           </div>
         </div>
+        <!--end::Geofence information-->
+
+        <!--begin::Facility permit information-->
+        <div class="notice d-flex bg-light-info rounded border-info border border-dashed p-6 mt-6">
+          <i class="ki-duotone ki-shield-tick fs-2tx text-info me-4">
+            <span class="path1"></span>
+            <span class="path2"></span>
+          </i>
+
+          <div class="d-flex flex-column flex-grow-1">
+            <div class="fw-bold fs-6 text-gray-800 mb-2">Branch Facility Permits</div>
+
+            <div class="text-gray-700 fs-7 fw-semibold mb-3">
+              Facility permits are specific to this branch and are submitted after branch creation.
+            </div>
+
+            <div class="text-gray-700 fs-7 mb-3">
+              Applicable permit requirements are determined by the platform's regulatory policies
+              and the services provided at this branch.
+            </div>
+
+            <div class="text-gray-700 fs-7 mb-3">
+              Changing this branch's physical premises deactivates its current permits. Required
+              permits for the new premises must be submitted and approved before the branch can
+              regain regulatory readiness.
+            </div>
+
+            <div class="text-gray-600 fs-7">
+              Ordinary changes to the branch name, contact details, assigned manager, or geofence
+              radius do not, by themselves, deactivate existing permits.
+            </div>
+          </div>
+        </div>
+        <!--end::Facility permit information-->
       </div>
 
       <div class="modal-footer justify-content-center border-0 pt-0">
         <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
 
         <% if (employerContext.canManageBranches) { %>
+
+        <!--
+          The branch-specific permit link is populated by
+          public/js/employer/business-profile.js.
+
+          Its destination is:
+          /employer/branches/:branchId/permits
+
+          The link begins disabled until a valid branch ID
+          is supplied by the view-branch modal handler.
+
+          Permit submission, review, renewal, and regulatory
+          readiness remain server-controlled.
+        -->
+        <a id="viewBranchPermitsLink" class="btn btn-light-primary disabled" aria-disabled="true">
+          <i class="ki-duotone ki-shield-tick fs-3 me-1">
+            <span class="path1"></span>
+            <span class="path2"></span>
+          </i>
+          Facility Permits
+        </a>
+
         <button
           type="button"
           class="btn btn-primary js-edit-branch-from-view"
@@ -147,6 +204,7 @@
         >
           Edit Branch
         </button>
+
         <% } %>
       </div>
     </div>

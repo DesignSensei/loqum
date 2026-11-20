@@ -195,11 +195,12 @@ const candidateSnapshotSchema = new mongoose.Schema(
     yearsOfExperience: {
       type: Number,
       min: 0,
-      default: 0,
+      default: null,
 
       validate: {
-        validator: Number.isFinite,
-        message: "candidateSnapshot.yearsOfExperience must be a valid number.",
+        validator: (value) => value === null || Number.isFinite(value),
+        message:
+          "candidateSnapshot.yearsOfExperience must be null or a finite, non-negative number.",
       },
     },
 
@@ -238,12 +239,6 @@ const candidateSnapshotSchema = new mongoose.Schema(
     },
 
     licenceExpiryDate: nullableDateField(),
-
-    identityVerificationStatus: {
-      type: String,
-      enum: [...VERIFICATION_STATUSES, null],
-      default: null,
-    },
 
     certifications: {
       type: [certificationSnapshotSchema],
@@ -501,7 +496,7 @@ const statusHistorySchema = new mongoose.Schema(
     note: {
       type: String,
       trim: true,
-      maxlength: MAX_JOB_APPLICATION_REVIEW_NOTE_LENGTH,
+      maxlength: MAX_JOB_APPLICATION_NOTE_LENGTH,
       default: null,
     },
   },

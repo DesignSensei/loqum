@@ -564,6 +564,17 @@ shiftApplicationSchema.pre("validate", function validateShiftApplication() {
 
   /* ─────────────────────────────── TIMESTAMP ORDER ─────────────────────────────── */
 
+  if (this.createdAt && this.shortlistedAt && this.shortlistedAt < this.createdAt) {
+    this.invalidate("shortlistedAt", "shortlistedAt cannot be earlier than application creation.");
+  }
+
+  // Shortlisting may remain as history, but must precede the terminal outcome.
+  for (const fieldName of Object.values(terminalTimestamps)) {
+    if (this.shortlistedAt && this[fieldName] && this[fieldName] < this.shortlistedAt) {
+      this.invalidate(fieldName, fieldName + " cannot be earlier than shortlistedAt.");
+    }
+  }
+
   if (this.createdAt && this.reviewedAt && this.reviewedAt < this.createdAt) {
     this.invalidate("reviewedAt", "reviewedAt cannot be earlier than application creation.");
   }
@@ -600,6 +611,14 @@ shiftApplicationSchema.pre("validate", function validateShiftApplication() {
       "matchSnapshot.yearsOfExperience",
       "yearsOfExperience must be a non-negative valid number."
     );
+  }
+
+  if (
+    this.matchSnapshot?.distanceKm !== null &&
+    this.matchSnapshot?.distanceKm !== undefined &&
+    (!Number.isFinite(this.matchSnapshot.distanceKm) || this.matchSnapshot.distanceKm < 0)
+  ) {
+    this.invalidate("matchSnapshot.distanceKm", "distanceKm must be a finite non-negative number.");
   }
 
   validateSafeNonNegativeIntegerSnapshot(
@@ -677,6 +696,13 @@ shiftApplicationSchema.pre("validate", function validateShiftApplication() {
 
       if (!this.credits.refundedAt) {
         this.credits.refundedAt = now;
+      }
+
+      if (this.createdAt && this.credits.refundedAt && this.credits.refundedAt < this.createdAt) {
+        this.invalidate(
+          "credits.refundedAt",
+          "credits.refundedAt cannot be earlier than application creation."
+        );
       }
 
       if (!this.credits.refundReason) {

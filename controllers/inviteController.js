@@ -156,7 +156,7 @@ async function assertCanManageInvites(req) {
     user: actor._id,
     role: "admin",
     accountStatus: "active",
-    isCurrent: { $ne: false },
+    isCurrent: true,
   })
     .select("_id")
     .lean();

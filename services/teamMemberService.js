@@ -5,6 +5,7 @@ const mongoose = require("mongoose");
 const EmployerMember = require("../models/EmployerMember");
 const EmployerProfile = require("../models/EmployerProfile");
 const Branch = require("../models/Branch");
+const User = require("../models/User");
 
 const { badgeClass, formatStatus } = require("../utils/statusHelper");
 
@@ -16,7 +17,7 @@ function normalizeId(value) {
 }
 
 function assertValidObjectId(value, message) {
-  if (!mongoose.Types.ObjectId.isValid(value)) {
+  if (!mongoose.isValidObjectId(value)) {
     throw new Error(message);
   }
 }
@@ -46,45 +47,34 @@ function normalizeAccountStatus(accountStatus) {
 }
 
 function normalizeBranchIds(branchIds) {
-  if (!branchIds) {
+  if (branchIds === undefined || branchIds === null || branchIds === "") {
     return [];
   }
 
   const values = Array.isArray(branchIds) ? branchIds : String(branchIds).split(",");
 
-  const cleanIds = values.map((value) => normalizeId(value)).filter(Boolean);
-
+  const cleanIds = values.map(normalizeId).filter(Boolean);
   return [...new Set(cleanIds)];
 }
 
 function getMemberDisplayName(member) {
   const user = member.user;
 
-  if (!user) {
-    return "Unknown member";
-  }
-
-  if (user.displayName) {
-    return user.displayName;
-  }
+  if (!user) return "Unknown member";
+  if (user.displayName) return user.displayName;
 
   const fullName = `${user.firstName || ""} ${user.lastName || ""}`.trim();
-
-  if (fullName) {
-    return fullName;
-  }
-
-  return user.email || "Unknown member";
+  return fullName || user.email || "Unknown member";
 }
 
 function formatMemberRole(role) {
-  const roleLabels = {
+  const labels = {
     admin: "Admin",
     branch_manager: "Branch Manager",
     branch_staff: "Branch Staff",
   };
 
-  return roleLabels[role] || formatStatus(role || "");
+  return labels[role] || formatStatus(role || "");
 }
 
 function syncMemberTopLevelRole(member) {
@@ -100,31 +90,33 @@ function syncMemberTopLevelRole(member) {
   member.role = hasManagerBranch ? "branch_manager" : "branch_staff";
 }
 
-function getExistingAssignedAtMap(member) {
-  const assignedAtByBranchId = new Map();
+/*
+ * Preserve assignment dates and existing per-branch roles
+ * when the caller only edits status or selects the same
+ * top-level role.
+ *
+ * An actual top-level role change intentionally changes
+ * every selected branch to the new role.
+ *
+ * Newly added branches inherit the selected top-level role.
+ */
 
-  const assignments = Array.isArray(member.branches) ? member.branches : [];
+function buildBranchAssignments({ member, branchIds, nextRole, roleChanged }) {
+  const previous = new Map(
+    (Array.isArray(member.branches) ? member.branches : [])
+      .filter((assignment) => assignment.branch)
+      .map((assignment) => [normalizeId(assignment.branch), assignment])
+  );
 
-  assignments.forEach((assignment) => {
-    if (!assignment.branch) return;
+  return branchIds.map((branchId) => {
+    const existing = previous.get(normalizeId(branchId));
 
-    assignedAtByBranchId.set(
-      String(assignment.branch._id || assignment.branch),
-      assignment.assignedAt
-    );
+    return {
+      branch: branchId,
+      role: roleChanged ? nextRole : existing?.role || nextRole,
+      assignedAt: existing?.assignedAt || new Date(),
+    };
   });
-
-  return assignedAtByBranchId;
-}
-
-function buildBranchAssignments({ member, branchIds, role }) {
-  const assignedAtByBranchId = getExistingAssignedAtMap(member);
-
-  return branchIds.map((branchId) => ({
-    branch: branchId,
-    role,
-    assignedAt: assignedAtByBranchId.get(String(branchId)) || new Date(),
-  }));
 }
 
 function shapeBranchAssignment(assignment) {
@@ -145,15 +137,13 @@ function shapeBranchAssignment(assignment) {
 function shapeTeamMember(member) {
   const accountStatus = member.accountStatus || "active";
   const isRemoved = accountStatus === "removed";
-  const isCurrent = member.isCurrent !== false;
+  const isCurrent = member.isCurrent === true;
 
   return {
     _id: member._id,
-
     name: getMemberDisplayName(member),
     email: member.user?.email || "-",
     photo: member.user?.photo || "",
-
     userId: member.user?._id || member.user || null,
 
     role: member.role,
@@ -188,23 +178,14 @@ async function getMemberForBusiness({ memberId, businessId, session = null, popu
   }
 
   assertValidObjectId(cleanMemberId, "Invalid team member ID.");
+  assertValidObjectId(normalizeId(businessId), "Invalid employer business ID.");
 
   const query = EmployerMember.findOne({
     _id: cleanMemberId,
     business: businessId,
   });
 
-  if (session) {
-    query.session(session);
-  }
-
-  /*
-   * Populate member details for read responses.
-   *
-   * Transactional mutations use the unpopulated
-   * member document to avoid unnecessary
-   * additional queries inside the transaction.
-   */
+  if (session) query.session(session);
 
   if (populate) {
     query
@@ -221,27 +202,74 @@ async function getMemberForBusiness({ memberId, businessId, session = null, popu
   return member;
 }
 
-/* ─────────────────────────────── BUSINESS OWNER PROTECTION ─────────────────────────────── */
+/* ─────────────────────────────── BUSINESS AUTHORITY ─────────────────────────────── */
 
 /*
- * The primary employer is identified by
- * EmployerProfile.user, not by the existence
- * or role of an EmployerMember record.
+ * Controllers perform their own authorization.
  *
- * A primary business owner must not be
- * demoted, suspended, restricted or removed
- * through ordinary team membership actions.
+ * Recheck at service level for writes so a direct
+ * service caller cannot bypass that protection.
  *
- * Ownership changes require a separate
- * authorised ownership-management workflow.
+ * Business-level admin is distinct from the
+ * platform User.role.
  */
+
+async function assertCanManageTeam({ actorUserId, businessId, session }) {
+  assertValidObjectId(normalizeId(actorUserId), "Valid actor ID is required.");
+  assertValidObjectId(normalizeId(businessId), "Valid employer business ID is required.");
+
+  const actorQuery = User.findOne({
+    _id: actorUserId,
+    role: "employer",
+    accountStatus: "active",
+    isVerified: true,
+  }).select("_id");
+
+  const businessQuery = EmployerProfile.findById(businessId).select("_id user");
+
+  if (session) {
+    actorQuery.session(session);
+    businessQuery.session(session);
+  }
+
+  const actor = await actorQuery;
+  const business = await businessQuery;
+
+  if (!actor || !business) {
+    throw new Error("An active employer account and business are required.");
+  }
+
+  if (normalizeId(business.user) === normalizeId(actor._id)) {
+    return business;
+  }
+
+  const adminQuery = EmployerMember.findOne({
+    user: actor._id,
+    business: business._id,
+    role: "admin",
+    accountStatus: "active",
+    isCurrent: true,
+  }).select("_id");
+
+  if (session) {
+    adminQuery.session(session);
+  }
+
+  const adminMember = await adminQuery;
+
+  if (!adminMember) {
+    throw new Error(
+      "Only the business owner or an active business administrator can manage team members."
+    );
+  }
+
+  return business;
+}
 
 async function assertNotPrimaryEmployer({ member, businessId, session = null }) {
   const query = EmployerProfile.findById(businessId).select("user");
 
-  if (session) {
-    query.session(session);
-  }
+  if (session) query.session(session);
 
   const business = await query;
 
@@ -261,9 +289,7 @@ async function assertNotPrimaryEmployer({ member, businessId, session = null }) 
 /* ─────────────────────────────── BRANCH VALIDATION ─────────────────────────────── */
 
 async function validateBranchesForBusiness({ branchIds, businessId, session = null }) {
-  if (branchIds.length === 0) {
-    return [];
-  }
+  if (branchIds.length === 0) return [];
 
   branchIds.forEach((branchId) => {
     assertValidObjectId(branchId, "Invalid branch ID.");
@@ -274,9 +300,7 @@ async function validateBranchesForBusiness({ branchIds, businessId, session = nu
     business: businessId,
   }).select("_id name");
 
-  if (session) {
-    query.session(session);
-  }
+  if (session) query.session(session);
 
   const branches = await query;
 
@@ -293,20 +317,52 @@ async function demoteExistingBranchManagers({
   businessId,
   branchIds,
   newManagerMemberId,
-  session = null,
+  updatedBy,
+  session,
 }) {
-  if (!branchIds.length) {
-    return;
+  if (!branchIds.length) return;
+
+  /*
+   * Write branch documents inside the transaction
+   * to serialize competing manager replacements.
+   *
+   * Without a shared write, two transactions could
+   * each see no existing manager and both promote
+   * different members.
+   *
+   * timestamps: false prevents Mongoose from
+   * adding a conflicting updatedAt operator.
+   */
+
+  for (const branchId of [...branchIds].map(normalizeId).sort()) {
+    const lockedBranch = await Branch.findOneAndUpdate(
+      {
+        _id: branchId,
+        business: businessId,
+      },
+      {
+        $currentDate: {
+          updatedAt: true,
+        },
+      },
+      {
+        session,
+        new: true,
+        timestamps: false,
+      }
+    ).select("_id");
+
+    if (!lockedBranch) {
+      throw new Error("Selected branch no longer belongs to this business.");
+    }
   }
 
   /*
-   * Historical removed memberships must
-   * not be modified during manager replacement.
+   * Historical removed memberships are excluded.
    *
-   * Restricted or suspended current memberships
-   * are included so that restoring those members
-   * later cannot restore an obsolete manager
-   * assignment.
+   * Restricted and suspended current memberships
+   * are included, preventing obsolete manager
+   * assignments from returning after reactivation.
    */
 
   const query = EmployerMember.find({
@@ -320,31 +376,28 @@ async function demoteExistingBranchManagers({
         role: "branch_manager",
       },
     },
-  });
-
-  if (session) {
-    query.session(session);
-  }
+  }).session(session);
 
   const existingManagers = await query;
-  const selectedBranchIds = new Set(branchIds.map(String));
+  const selectedBranchIds = new Set(branchIds.map(normalizeId));
 
   for (const member of existingManagers) {
     let changed = false;
 
-    member.branches.forEach((assignment) => {
-      const assignmentBranchId = String(assignment.branch);
-
-      if (selectedBranchIds.has(assignmentBranchId) && assignment.role === "branch_manager") {
+    for (const assignment of member.branches) {
+      if (
+        selectedBranchIds.has(normalizeId(assignment.branch)) &&
+        assignment.role === "branch_manager"
+      ) {
         assignment.role = "branch_staff";
         changed = true;
       }
-    });
+    }
 
     if (changed) {
       syncMemberTopLevelRole(member);
-
-      await member.save(session ? { session } : {});
+      member.updatedBy = updatedBy;
+      await member.save({ session });
     }
   }
 }
@@ -371,23 +424,16 @@ class TeamMemberService {
     accountStatus,
     branchIds,
   }) {
-    /*
-     * A team update may affect more than
-     * one EmployerMember document when
-     * assigning a new branch manager.
-     *
-     * The member update and existing manager
-     * demotions must be atomic.
-     *
-     * If validation or any database write
-     * fails, the transaction must roll back
-     * all related membership changes.
-     */
-
     const session = await mongoose.startSession();
 
     try {
       await session.withTransaction(async () => {
+        await assertCanManageTeam({
+          actorUserId: updatedBy,
+          businessId,
+          session,
+        });
+
         const member = await getMemberForBusiness({
           memberId,
           businessId,
@@ -395,7 +441,7 @@ class TeamMemberService {
           populate: false,
         });
 
-        if (member.accountStatus === "removed" || member.isCurrent === false) {
+        if (member.accountStatus === "removed" || member.isCurrent !== true) {
           throw new Error("Removed team members cannot be edited.");
         }
 
@@ -405,29 +451,33 @@ class TeamMemberService {
           session,
         });
 
+        /*
+         * Administrators cannot modify their own
+         * team roles or account statuses through
+         * ordinary membership management.
+         */
+
+        if (normalizeId(member.user) === normalizeId(updatedBy)) {
+          throw new Error("You cannot update your own team membership.");
+        }
+
         const nextRole = normalizeRole(role || member.role);
 
         const nextAccountStatus = normalizeAccountStatus(accountStatus || member.accountStatus);
 
+        const roleChanged = nextRole !== member.role;
+
         /*
-         * When the caller omits branchIds,
-         * preserve existing branch assignments.
+         * Omitted branchIds preserves existing
+         * branch assignments.
          *
-         * This allows a status-only update
-         * without unintentionally clearing
-         * a member's branches.
-         *
-         * An explicitly supplied empty array
-         * still means no branches were selected.
+         * Explicitly empty branch selections are
+         * not permitted for branch-level roles.
          */
 
         const nextBranchIds =
           branchIds === undefined || branchIds === null
-            ? normalizeBranchIds(
-                (Array.isArray(member.branches) ? member.branches : []).map(
-                  (assignment) => assignment.branch
-                )
-              )
+            ? normalizeBranchIds((member.branches || []).map((assignment) => assignment.branch))
             : normalizeBranchIds(branchIds);
 
         if (nextRole !== "admin" && nextBranchIds.length === 0) {
@@ -442,18 +492,8 @@ class TeamMemberService {
           });
         }
 
-        /*
-         * Apply the intended member changes
-         * inside the same transaction as
-         * subsequent manager reassignment.
-         *
-         * An administrator always has
-         * business-wide access without
-         * individual branch assignments.
-         */
-
-        member.role = nextRole;
         member.accountStatus = nextAccountStatus;
+        member.role = nextRole;
 
         if (nextRole === "admin") {
           member.branches = [];
@@ -461,8 +501,11 @@ class TeamMemberService {
           member.branches = buildBranchAssignments({
             member,
             branchIds: nextBranchIds,
-            role: nextRole,
+            nextRole,
+            roleChanged,
           });
+
+          syncMemberTopLevelRole(member);
         }
 
         member.updatedBy = updatedBy;
@@ -470,24 +513,26 @@ class TeamMemberService {
         await member.save({ session });
 
         /*
-         * Only an active branch manager should
-         * replace other branch managers.
+         * Only an active manager replaces existing
+         * managers.
          *
-         * Suspending or restricting a manager
-         * must not demote active colleagues
-         * or assign authority to someone
-         * who currently cannot exercise it.
+         * Apply replacement only to branches where
+         * this member has branch_manager authority.
          *
-         * When the member becomes active again,
-         * an update with active status will
-         * apply manager replacement as needed.
+         * A member can manage one branch while
+         * serving as ordinary staff at another.
          */
 
-        if (nextRole === "branch_manager" && nextAccountStatus === "active") {
+        if (member.role === "branch_manager" && nextAccountStatus === "active") {
+          const managedBranchIds = member.branches
+            .filter((assignment) => assignment.role === "branch_manager")
+            .map((assignment) => assignment.branch);
+
           await demoteExistingBranchManagers({
             businessId,
-            branchIds: nextBranchIds,
+            branchIds: managedBranchIds,
             newManagerMemberId: member._id,
+            updatedBy,
             session,
           });
         }
@@ -507,95 +552,93 @@ class TeamMemberService {
   /* ─────────────────────────────── REMOVE TEAM MEMBER ─────────────────────────────── */
 
   static async removeTeamMember({ memberId, businessId, removedBy, removalReason }) {
-    const member = await getMemberForBusiness({
-      memberId,
-      businessId,
-      populate: false,
-    });
+    const session = await mongoose.startSession();
 
-    if (member.accountStatus === "removed" || member.isCurrent === false) {
-      throw new Error("This team member has already been removed.");
+    let removedMemberId;
+
+    try {
+      await session.withTransaction(async () => {
+        await assertCanManageTeam({
+          actorUserId: removedBy,
+          businessId,
+          session,
+        });
+
+        const member = await getMemberForBusiness({
+          memberId,
+          businessId,
+          session,
+          populate: false,
+        });
+
+        if (member.accountStatus === "removed" || member.isCurrent !== true) {
+          throw new Error("This team member has already been removed.");
+        }
+
+        if (normalizeId(member.user) === normalizeId(removedBy)) {
+          throw new Error("You cannot remove yourself from the team.");
+        }
+
+        await assertNotPrimaryEmployer({
+          member,
+          businessId,
+          session,
+        });
+
+        /*
+         * Atomically mark the current membership
+         * as removed and preserve its audit record.
+         *
+         * The platform User account is not deleted,
+         * suspended or deactivated.
+         */
+
+        const result = await EmployerMember.findOneAndUpdate(
+          {
+            _id: member._id,
+            business: businessId,
+            isCurrent: true,
+            accountStatus: { $ne: "removed" },
+          },
+          {
+            $set: {
+              accountStatus: "removed",
+              isCurrent: false,
+              removedAt: new Date(),
+              removedBy,
+              removalReason: String(removalReason || "").trim(),
+              updatedBy: removedBy,
+            },
+          },
+          {
+            new: true,
+            runValidators: true,
+            session,
+          }
+        );
+
+        if (!result) {
+          throw new Error("This team member is no longer current or has already been removed.");
+        }
+
+        removedMemberId = result._id;
+      });
+    } finally {
+      await session.endSession();
     }
 
     /*
-     * A business administrator cannot
-     * remove their own membership through
-     * the ordinary team removal endpoint.
+     * Preserve the historical membership.
+     *
+     * Do not clear User.employerProfile or alter
+     * the platform-level User account here.
+     *
+     * A future invitation may establish a new
+     * employer membership after eligibility checks.
      */
-
-    if (normalizeId(member.user) === normalizeId(removedBy)) {
-      throw new Error("You cannot remove yourself from the team.");
-    }
-
-    /*
-     * Protect the primary employer account.
-     *
-     * The business owner cannot be removed
-     * by another business administrator.
-     */
-
-    await assertNotPrimaryEmployer({
-      member,
-      businessId,
-    });
-
-    const removedAt = new Date();
-    const cleanRemovalReason = String(removalReason || "").trim();
-
-    /*
-     * Update only a current, nonremoved
-     * membership.
-     *
-     * This conditional database update
-     * prevents two concurrent removal
-     * requests from both succeeding.
-     *
-     * The historical EmployerMember record
-     * is retained for audit.
-     *
-     * Do not delete, suspend, deactivate
-     * or otherwise modify the user's
-     * platform-level User account.
-     *
-     * Do not clear User.employerProfile here.
-     * The employer context middleware denies
-     * access when there is no active, current
-     * membership.
-     *
-     * A subsequent invitation from another
-     * business may update User.employerProfile
-     * after validating the removal history.
-     */
-
-    const removedMember = await EmployerMember.findOneAndUpdate(
-      {
-        _id: member._id,
-        business: businessId,
-        isCurrent: true,
-        accountStatus: { $ne: "removed" },
-      },
-      {
-        $set: {
-          accountStatus: "removed",
-          isCurrent: false,
-          removedAt,
-          removedBy,
-          removalReason: cleanRemovalReason,
-          updatedBy: removedBy,
-        },
-      },
-      {
-        new: true,
-        runValidators: true,
-      }
-    );
-
-    if (!removedMember) {
-      throw new Error("This team member is no longer current or has already been removed.");
-    }
 
     const historicalMember = await getMemberForBusiness({
-      memberId: removedMember._id,
+      memberId: removedMemberId,
       businessId,
     });
 

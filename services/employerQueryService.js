@@ -134,14 +134,22 @@ async function resolveEmployerDataAccess({ employerProfile, actorUserId, employe
     throw createEmployerAccessError("You do not have an authorised employer team role.");
   }
 
-  const assignedBranchIds =
-    isPrimaryEmployer || isBusinessAdmin
-      ? []
-      : (Array.isArray(member?.branches) ? member.branches : [])
-          .map((assignment) => assignment?.branch)
-          .filter((branchId) => mongoose.isValidObjectId(branchId));
-
   const isBusinessWide = isPrimaryEmployer || isBusinessAdmin;
+  const branchAssignments = Array.isArray(member?.branches) ? member.branches : [];
+
+  const assignedBranchIds = isBusinessWide
+    ? []
+    : branchAssignments
+        .map((assignment) => assignment?.branch)
+        .filter((branchId) => mongoose.isValidObjectId(branchId));
+
+  // A mixed-role member can manage only branches assigned as branch_manager.
+  const managedBranchIds = isBusinessWide
+    ? []
+    : branchAssignments
+        .filter((assignment) => assignment?.role === "branch_manager")
+        .map((assignment) => assignment.branch)
+        .filter((branchId) => mongoose.isValidObjectId(branchId));
 
   const canViewShifts = Boolean(
     employerContext.canViewShifts === true && (isBusinessWide || isBranchManager || isBranchStaff)
@@ -189,6 +197,7 @@ async function resolveEmployerDataAccess({ employerProfile, actorUserId, employe
     isBusinessWide,
 
     assignedBranchIds,
+    managedBranchIds,
 
     canViewShifts,
     canPostShifts,
@@ -215,7 +224,7 @@ class EmployerQueryService {
     const query = { business: businessId, isActive: true };
 
     if (!access.isBusinessWide) {
-      query._id = { $in: access.assignedBranchIds };
+      query._id = { $in: access.managedBranchIds || [] };
     }
 
     const branches = await Branch.find(query).select("_id").lean();

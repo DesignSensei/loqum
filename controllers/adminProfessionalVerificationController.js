@@ -62,6 +62,49 @@ function setNoStoreHeaders(res) {
   });
 }
 
+// ───────────────────────── DASHBOARD PAGE ─────────────────────────
+
+exports.getDashboardPage = async (req, res, next) => {
+  setNoStoreHeaders(res);
+
+  try {
+    const pageOptions = await AdminProfessionalVerificationService.getDashboardPageOptions({
+      adminUserId: req.user?._id,
+    });
+
+    return res.render("admin/professional-verifications/index", {
+      ...pageOptions,
+
+      layout: "layouts/app-layout",
+      title: "Professional Verification",
+
+      breadcrumbs: [
+        {
+          label: "Home",
+          url: "/admin/dashboard",
+        },
+        {
+          label: "Professional Verification",
+          url: null,
+        },
+      ],
+
+      scripts: '<script src="/js/admin/professional-verifications.js"></script>',
+      csrfToken: req.csrfToken(),
+    });
+  } catch (error) {
+    const rawCode = typeof error?.code === "string" ? error.code : "";
+
+    const code = /^[A-Z][A-Z0-9_]{2,99}$/.test(rawCode)
+      ? rawCode
+      : "ADMIN_PROFESSIONAL_VERIFICATION_ERROR";
+
+    logger.error(`Render professional verification dashboard: ${code}`);
+
+    return next(error);
+  }
+};
+
 // ───────────────────────── DASHBOARD DATA ─────────────────────────
 
 exports.getDashboard = async (req, res) => {

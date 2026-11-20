@@ -1439,26 +1439,53 @@ class FacilityPermitVerificationService {
       branchId,
     });
 
-    const permits = await FacilityPermit.find({
+    // Whitelist the employer-visible fields. Administrative notes, reviewer
+    // identities, private storage references and premises snapshots stay private.
+    const records = await FacilityPermit.find({
       business: businessId,
       branch: branchId,
     })
-      .select("-documentRef")
+      .select(
+        "_id requirementKey scope authorityName permitNumber permitDescription " +
+          "status isCurrent validityType validFromDate expiryDate licensingYear " +
+          "submittedAt reviewedAt verifiedAt activatedAt deactivatedAt revokedAt renewalOf"
+      )
       .sort({
         submittedAt: -1,
         _id: -1,
       })
       .lean();
 
+    const permits = records.map((permit) => ({
+      _id: String(permit._id),
+      id: String(permit._id),
+      requirementKey: permit.requirementKey,
+      scope: permit.scope,
+      authorityName: permit.authorityName,
+      permitNumber: permit.permitNumber,
+      permitDescription: permit.permitDescription || null,
+      status: permit.status,
+      isCurrent: permit.isCurrent === true,
+      validityType: permit.validityType || null,
+      validFromDate: permit.validFromDate || null,
+      expiryDate: permit.expiryDate || null,
+      licensingYear: permit.licensingYear || null,
+      submittedAt: permit.submittedAt || null,
+      reviewedAt: permit.reviewedAt || null,
+      verifiedAt: permit.verifiedAt || null,
+      activatedAt: permit.activatedAt || null,
+      deactivatedAt: permit.deactivatedAt || null,
+      revoked: Boolean(permit.revokedAt),
+      renewalOf: permit.renewalOf ? String(permit.renewalOf) : null,
+      renewalOfId: permit.renewalOf ? String(permit.renewalOf) : null,
+    }));
+
     const readiness = await this.getBranchReadiness({
       businessId,
       branchId,
     });
 
-    return {
-      permits,
-      readiness,
-    };
+    return { permits, readiness };
   }
 }
 

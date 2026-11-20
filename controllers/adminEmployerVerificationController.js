@@ -580,36 +580,3 @@ exports.revokeFacilityPermit = async (req, res) => {
     return sendError(res, error, "Revoke facility permit");
   }
 };
-
-// ───────────────────── RETIRED PCN REVIEW ─────────────────────
-
-/*
- * Keep the legacy export temporarily
- * for compatibility with existing routes.
- *
- * The current service rejects employer-wide
- * PCN mutation with HTTP 410.
- *
- * Permit verification is now performed per branch.
- */
-
-exports.reviewPCN = async (req, res) => {
-  setNoStoreHeaders(res);
-
-  try {
-    const result = await AdminEmployerVerificationService.reviewPCN({
-      adminUserId: getAdminUserId(req),
-      employerProfileId: req.params.employerProfileId,
-
-      decision: req.body?.decision,
-
-      nameOnRecord: req.body?.nameOnRecord,
-
-      note: req.body?.note,
-    });
-
-    return res.status(200).json(result);
-  } catch (error) {
-    return sendError(res, error, "Retired employer-wide PCN review");
-  }
-};

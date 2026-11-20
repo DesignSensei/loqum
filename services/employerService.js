@@ -334,14 +334,26 @@ class EmployerService {
       throw new Error("This business account is not eligible for profile editing.");
     }
 
-    const actor = await User.findOne({
+    const actorFilter = {
       _id: actorUserId,
       role: "employer",
       accountStatus: "active",
       isVerified: true,
-    })
-      .select("_id")
-      .session(session);
+    };
+
+    // Coordinate this authorization decision with concurrent account changes.
+    const actorQuery = session
+      ? User.findOneAndUpdate(
+          actorFilter,
+          { $inc: { __v: 1 } },
+          {
+            new: true,
+            session,
+            timestamps: false,
+          }
+        )
+      : User.findOne(actorFilter);
+    const actor = await actorQuery.select("_id");
 
     if (!actor) {
       throw new Error("Your account is not eligible to update business details.");
@@ -353,13 +365,27 @@ class EmployerService {
       return true;
     }
 
-    const membership = await EmployerMember.exists({
+    const memberFilter = {
       business: employerProfile._id,
       user: actorUserId,
       role: "admin",
       accountStatus: "active",
       isCurrent: true,
-    }).session(session);
+    };
+
+    // A demotion or removal must conflict with an in-flight profile edit.
+    const memberQuery = session
+      ? EmployerMember.findOneAndUpdate(
+          memberFilter,
+          { $inc: { __v: 1 } },
+          {
+            new: true,
+            session,
+            timestamps: false,
+          }
+        )
+      : EmployerMember.findOne(memberFilter);
+    const membership = await memberQuery.select("_id");
 
     if (!membership) {
       throw new Error("You are not authorised to update this business profile.");

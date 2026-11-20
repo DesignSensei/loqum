@@ -132,11 +132,10 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
      * before completion.
      *
      * consumed:
-     * Successful production CAC evidence was
-     * transferred during employer onboarding.
-     *
-     * The verification service owns permitted
-     * transitions through atomic database updates.
+     * Successful production CAC verification confirms
+     * the registered business identity.
+     * Branch facility permits and marketplace
+     * eligibility are assessed separately.
      */
 
     status: {
@@ -410,8 +409,11 @@ const preOnboardingCACVerificationSchema = new mongoose.Schema(
      * CAC verification evidence and the registered
      * legal business name in the same transaction.
      *
-     * Consumption does not establish representative
-     * authority or final employer KYB approval.
+     * Consumption transfers verified production CAC
+     * evidence into permanent onboarding records.
+     *
+     * Branch permit readiness and posting eligibility
+     * remain separate checks.
      */
 
     consumedAt: {

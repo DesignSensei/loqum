@@ -24,6 +24,7 @@ const { parseFacilityPermitUpload } = require("../middleware/uploadMiddleware");
 
 const employerController = require("../controllers/employerController");
 const employerVerificationController = require("../controllers/employerVerificationController");
+const employerBranchPermitPageController = require("../controllers/employerBranchPermitPageController");
 const branchController = require("../controllers/branchController");
 const inviteController = require("../controllers/inviteController");
 const teamMemberController = require("../controllers/teamMemberController");
@@ -109,6 +110,12 @@ router.post("/branches/:branchId/status", branchController.postSetBranchStatus);
 // Keep these routes after attachEmployerProfile/attachEmployerContext.
 // CSRF protection must be applied by the application's existing
 // global/router-level CSRF middleware before POST requests reach here.
+
+// HTML management page. Keep the existing /permits GET route as JSON.
+router.get(
+  "/branches/:branchId/permits/manage",
+  employerBranchPermitPageController.getBranchPermitsPage
+);
 
 router.get("/branches/:branchId/permits", employerVerificationController.getBranchFacilityPermits);
 

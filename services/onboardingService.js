@@ -855,7 +855,7 @@ class OnboardingService {
 
     /*
      * Persist the CAC registered legal name.
-     * Employer approval remains separate.
+     * Branch facility-permit verification is handled separately.
      */
 
     profile.set({
@@ -958,9 +958,6 @@ class OnboardingService {
 
       requiresReview: false,
       stagingOnly: false,
-
-      representativeAuthorized: false,
-      employerApproved: false,
 
       verificationId: records[0]._id,
     };

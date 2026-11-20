@@ -428,7 +428,7 @@ function buildVerificationView(employerProfile, branchItems = []) {
 
   const trustedRegisteredName =
     cacVerificationStatus === "verified"
-      ? employerProfile.cacNameOnRecord || employerProfile.businessName || "Not available"
+      ? employerProfile.cacNameOnRecord || "Not available"
       : "Not yet verified";
 
   const cacItem = {
@@ -530,7 +530,21 @@ function buildBranchPermitVerificationItems(rows = [], access = {}) {
 
     const branchActive = branch.isActive === true;
 
-    const canPostShifts = Boolean(readiness?.canPost === true && access.canPostShifts === true);
+    // Viewing an assigned branch does not grant branch-level posting authority.
+    const canManageThisBranch = Boolean(
+      access.isBusinessWide === true ||
+      (access.isBranchManager === true &&
+        Array.isArray(access.managedBranchIds) &&
+        access.managedBranchIds.some((branchId) => String(branchId) === String(branch._id)))
+    );
+
+    const canPostShifts = Boolean(
+      readiness?.canPost === true &&
+      access.canPostShifts === true &&
+      branchActive &&
+      permitsComplete &&
+      canManageThisBranch
+    );
 
     let note;
 
@@ -602,14 +616,89 @@ function buildBranchPermitVerificationItems(rows = [], access = {}) {
       showPolicyNotice: policyUnavailable,
       showMissingNotice: !policyUnavailable && missingRequirementKeys.length > 0,
 
-      // Item 56 will provide an authorized HTML destination.
-      showManagePermitsAction: false,
-      managePermitsUrl: null,
+      // Only active business-wide owner/admin accounts can manage permits.
+      showManagePermitsAction:
+        access.isBusinessWide === true && access.businessAccountStatus === "active",
+      managePermitsUrl:
+        access.isBusinessWide === true && access.businessAccountStatus === "active"
+          ? `/employer/branches/${String(branch._id)}/permits/manage`
+          : null,
     };
   });
 }
 
 class EmployerViewService {
+  static buildBusinessProfilePageView({
+    employerProfile,
+    activeTab,
+    employerContext,
+    employerPermissions,
+  }) {
+    const access = employerPermissions;
+
+    const canManageBranches = Boolean(
+      access.isBusinessWide === true &&
+      access.canViewBranches === true &&
+      employerContext.canManageBranches === true
+    );
+
+    const showOverview = activeTab === "overview";
+    const showBusinessDetails = activeTab === "business-details";
+    const showVerification = activeTab === "verification";
+
+    const showBranches = Boolean(activeTab === "branches" && access.canViewBranches === true);
+
+    const showTeamMembers = Boolean(activeTab === "team" && access.canViewTeamMembers === true);
+
+    const showInvites = Boolean(activeTab === "invites" && access.canInviteMembers === true);
+
+    return {
+      countryCode: String(employerProfile.countryCode || "NG")
+        .trim()
+        .toLowerCase(),
+
+      showOverview,
+      showBusinessDetails,
+      showVerification,
+      showBranches,
+      showTeamMembers,
+      showInvites,
+
+      showAddBranchModal: showBranches && canManageBranches,
+      showViewBranchModal: showBranches,
+      showEditBranchModal: showBranches && canManageBranches,
+
+      showTeamMemberModals: showTeamMembers,
+      showInviteModals: showInvites,
+    };
+  }
+
+  static getBusinessProfileScripts(activeTab, googleMapsBrowserKey) {
+    const scripts = ['<script src="/js/employer/business-profile.js"></script>'];
+
+    if (activeTab === "branches" || activeTab === "business-details") {
+      scripts.unshift('<script src="/js/location-picker.js"></script>');
+
+      scripts.push(`
+      <script
+        async
+        defer
+        src="https://maps.googleapis.com/maps/api/js?key=${googleMapsBrowserKey}&libraries=places&callback=initBusinessProfileAddressAutocomplete"
+      ></script>
+    `);
+    }
+
+    if (activeTab === "team") {
+      scripts.push('<script src="/js/employer/team-members.js"></script>');
+    }
+
+    if (activeTab === "invites") {
+      scripts.push('<script src="/js/employer/invite-member.js"></script>');
+    }
+
+    return scripts.join("\n");
+  }
+
   static buildDashboardData({ employerProfile, access, queries }) {
     const {
       wallet,
@@ -960,7 +1049,8 @@ class EmployerViewService {
 
       canViewBranches: access?.canViewBranches === true,
       canManageBusinessDetails: access?.canManageBusinessProfile === true,
-      canManagePermits: access?.isBusinessWide === true,
+      canManagePermits:
+        access?.isBusinessWide === true && access?.businessAccountStatus === "active",
     };
 
     const fundingReadiness = canManageWallet

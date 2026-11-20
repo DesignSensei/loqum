@@ -167,6 +167,115 @@ class ShiftFundingService {
     return profile;
   }
 
+  // Lock the actor and current membership when a funding transaction is active.
+  // These writes conflict with concurrent status or membership changes.
+  static async assertCurrentFundingActor({
+    userId,
+    business,
+    branchId = null,
+    financialObligation = false,
+    session = null,
+  }) {
+    const actorId = ShiftFundingService.validateObjectId(userId, "user ID");
+    const businessId = ShiftFundingService.validateObjectId(business?._id, "business ID");
+
+    const actorFilter = {
+      _id: actorId,
+      role: "employer",
+      accountStatus: "active",
+      isVerified: true,
+    };
+
+    const actor = session
+      ? await User.findOneAndUpdate(
+          actorFilter,
+          { $inc: { __v: 1 } },
+          { new: true, session, timestamps: false }
+        ).select("_id")
+      : await User.findOne(actorFilter).select("_id");
+
+    if (!actor) {
+      throw ShiftFundingService.createFundingError({
+        message: "An active, verified employer account is required for this payment action.",
+        code: "SHIFT_FUNDING_ACTOR_INELIGIBLE",
+        statusCode: 403,
+      });
+    }
+
+    if (String(business.user?._id || business.user) === String(actorId)) {
+      return true;
+    }
+
+    const memberFilter = {
+      user: actorId,
+      business: businessId,
+      accountStatus: "active",
+      isCurrent: true,
+    };
+
+    if (financialObligation) {
+      memberFilter.role = "admin";
+    } else {
+      const normalizedBranchId = ShiftFundingService.validateObjectId(branchId, "branch ID");
+      memberFilter.$or = [
+        { role: "admin" },
+        {
+          role: "branch_manager",
+          branches: {
+            $elemMatch: {
+              branch: normalizedBranchId,
+              role: "branch_manager",
+            },
+          },
+        },
+      ];
+    }
+
+    const member = session
+      ? await EmployerMember.findOneAndUpdate(
+          memberFilter,
+          { $inc: { __v: 1 } },
+          { new: true, session, timestamps: false }
+        ).select("_id")
+      : await EmployerMember.findOne(memberFilter).select("_id");
+
+    if (!member) {
+      throw ShiftFundingService.createFundingError({
+        message: financialObligation
+          ? "Only the current business owner or an active business administrator can resolve this payment obligation."
+          : "You do not have current permission to fund this Shift branch.",
+        code: financialObligation
+          ? "SHIFT_OBLIGATION_PAYMENT_NOT_ALLOWED"
+          : "SHIFT_FUNDING_BRANCH_ACCESS_DENIED",
+        statusCode: 403,
+      });
+    }
+
+    return true;
+  }
+
+  static async assertCurrentExistingObligationAuthority({ userId, businessId, session }) {
+    const normalizedBusinessId = ShiftFundingService.validateObjectId(businessId, "business ID");
+    const business = await EmployerProfile.findById(normalizedBusinessId)
+      .select("_id user")
+      .session(session);
+
+    if (!business) {
+      throw ShiftFundingService.createFundingError({
+        message: "The employer business for this payment obligation was not found.",
+        code: "EMPLOYER_PROFILE_NOT_FOUND",
+        statusCode: 404,
+      });
+    }
+
+    return ShiftFundingService.assertCurrentFundingActor({
+      userId,
+      business,
+      financialObligation: true,
+      session,
+    });
+  }
+
   // Only initial funding/publication uses this gate. Existing payments,
   // duplicate-payment returns and overtime obligations keep their own paths.
   static async assertInitialFundingEligibility({ shift, userId = null, session = null }) {
@@ -196,52 +305,37 @@ class ShiftFundingService {
         statusCode: 403,
       });
     }
-    const business = await EmployerProfile.findById(businessId).session(session);
-    if (
-      !business ||
-      business.cacVerificationStatus !== "verified" ||
-      business.accountStatus !== "active"
-    ) {
+    // Serialize publication eligibility with concurrent business restrictions.
+    const businessFilter = {
+      _id: businessId,
+      cacVerificationStatus: "verified",
+      accountStatus: "active",
+    };
+    const business = session
+      ? await EmployerProfile.findOneAndUpdate(
+          businessFilter,
+          { $inc: { __v: 1 } },
+          { new: true, session, timestamps: false }
+        )
+      : await EmployerProfile.findOne(businessFilter);
+
+    if (!business) {
       throw ShiftFundingService.createFundingError({
         message: "The business is not eligible to publish new Shifts.",
         code: "SHIFT_FUNDING_BUSINESS_INELIGIBLE",
         statusCode: 403,
       });
     }
+
+    // Trusted Paystack finalization has no userId: received money must still
+    // be reconciled even if the initiating employer later loses authority.
     if (userId != null) {
-      const actor = await User.findOne({
-        _id: userId,
-        role: "employer",
-        accountStatus: "active",
-        isVerified: true,
-      }).session(session);
-      let allowed = Boolean(actor && String(business.user) === String(userId));
-      if (actor && !allowed) {
-        const member = await EmployerMember.findOne({
-          user: userId,
-          business: businessId,
-          accountStatus: "active",
-          isCurrent: true,
-        }).session(session);
-        allowed = Boolean(
-          member &&
-          (member.role === "admin" ||
-            (member.role === "branch_manager" &&
-              Array.isArray(member.branches) &&
-              member.branches.some(
-                (assignment) =>
-                  String(assignment.branch) === String(branchId) &&
-                  assignment.role === "branch_manager"
-              )))
-        );
-      }
-      if (!allowed) {
-        throw ShiftFundingService.createFundingError({
-          message: "You do not have current permission to fund this Shift branch.",
-          code: "SHIFT_FUNDING_BRANCH_ACCESS_DENIED",
-          statusCode: 403,
-        });
-      }
+      await ShiftFundingService.assertCurrentFundingActor({
+        userId,
+        business,
+        branchId,
+        session,
+      });
     }
     // The updated permit service joins the funding transaction when supplied.
     // On confirmation, this runs only after received money is recorded, and
@@ -1554,6 +1648,7 @@ class ShiftFundingService {
       });
       const latestAttempt = await ShiftFundingService.getLatestPaystackAttempt({
         shiftId,
+
         session,
       });
 
@@ -2298,6 +2393,12 @@ class ShiftFundingService {
         session,
       });
 
+      await ShiftFundingService.assertCurrentExistingObligationAuthority({
+        userId: normalizedUserId,
+        businessId: shift.business,
+        session,
+      });
+
       const occurrence = await ShiftFundingService.getEmployerOccurrenceForOvertimeFunding({
         occurrenceId: normalizedOccurrenceId,
         employerProfileId: profile._id,
@@ -2924,6 +3025,12 @@ class ShiftFundingService {
         shiftId: normalizedShiftId,
         employerProfileId: profile._id,
         employerContext,
+        session,
+      });
+
+      await ShiftFundingService.assertCurrentExistingObligationAuthority({
+        userId: normalizedUserId,
+        businessId: shift.business,
         session,
       });
 

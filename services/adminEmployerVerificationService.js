@@ -742,17 +742,6 @@ class AdminEmployerVerificationService {
       data: result,
     };
   }
-
-  // Retired employer-wide PCN endpoint intentionally returns HTTP 410.
-  static async reviewPCN({ adminUserId } = {}) {
-    await this.assertAdmin(adminUserId);
-
-    throw this.createError(
-      "Employer-wide PCN review has been retired. Review a permit for a specific branch.",
-      410,
-      "EMPLOYER_WIDE_PCN_REVIEW_RETIRED"
-    );
-  }
 }
 
 module.exports = AdminEmployerVerificationService;

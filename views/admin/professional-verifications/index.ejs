@@ -1,0 +1,621 @@
+<!-- views/admin/professional-verifications/index.ejs -->
+
+<div
+  id="adminProfessionalVerifications"
+  data-csrf-token="<%= csrfToken %>"
+  data-summary-url="/admin/professional-verifications/summary"
+  data-queue-url="/admin/professional-verifications/data"
+  data-professional-base-url="/admin/professionals"
+  data-attempt-base-url="/admin/professional-verifications/attempts"
+>
+  <!-- Page header -->
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-4 mb-8">
+    <div>
+      <h1 class="fw-bold fs-2 mb-2">Professional Verification</h1>
+      <div class="text-muted fw-semibold fs-6">
+        Review practising licences against trusted NIN registry evidence and manage final
+        professional approval.
+      </div>
+    </div>
+  </div>
+
+  <!-- Summary -->
+  <div class="row g-5 mb-8">
+    <div class="col-6 col-lg-3">
+      <div class="card card-flush h-100">
+        <div class="card-body">
+          <div class="text-muted fw-semibold mb-2">Awaiting Review</div>
+          <div id="professionalAwaitingCount" class="fw-bold fs-2 text-gray-900">
+            <%= stats.awaitingReview %>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-6 col-lg-3">
+      <div class="card card-flush h-100">
+        <div class="card-body">
+          <div class="text-muted fw-semibold mb-2">Licence Submissions</div>
+          <div id="professionalLicenceReviewCount" class="fw-bold fs-2 text-gray-900">
+            <%= stats.licenceReview %>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-6 col-lg-3">
+      <div class="card card-flush h-100">
+        <div class="card-body">
+          <div class="text-muted fw-semibold mb-2">Ready for Approval</div>
+          <div id="professionalReadyCount" class="fw-bold fs-2 text-gray-900">
+            <%= stats.readyForApproval %>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-6 col-lg-3">
+      <div class="card card-flush h-100">
+        <div class="card-body">
+          <div class="text-muted fw-semibold mb-2">Approved Professionals</div>
+          <div id="professionalApprovedCount" class="fw-bold fs-2 text-gray-900">
+            <%= stats.approved %>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div
+    id="professionalVerificationFeedback"
+    class="alert alert-info d-none mb-6"
+    role="alert"
+    aria-live="polite"
+  ></div>
+
+  <div class="row g-6">
+    <!-- Verification queue -->
+    <div class="col-12 col-xl-4">
+      <div class="card card-flush h-100">
+        <div class="card-header">
+          <div class="card-title">
+            <h3 class="fw-bold m-0">Verification Queue</h3>
+          </div>
+
+          <div class="card-toolbar">
+            <button
+              type="button"
+              id="refreshProfessionalQueue"
+              class="btn btn-sm btn-light-primary"
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <div class="fv-row mb-5">
+            <label for="professionalStatusFilter" class="form-label fw-semibold">
+              Review Status
+            </label>
+            <select id="professionalStatusFilter" class="form-select form-select-solid">
+              <option value="awaiting_review" selected>Awaiting Review</option>
+              <option value="licence_review">Licence Submissions</option>
+              <option value="ready_for_approval">Ready for Approval</option>
+              <option value="pending">Pending Approval</option>
+              <option value="needs_review">Needs Review</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+              <option value="all">All Professionals</option>
+            </select>
+          </div>
+
+          <div class="fv-row mb-5">
+            <label for="professionalTypeFilter" class="form-label fw-semibold">
+              Professional Type
+            </label>
+            <select id="professionalTypeFilter" class="form-select form-select-solid">
+              <option value="">All Professional Types</option>
+              <% professionalTypeOptions.forEach(function (type) { %>
+              <option value="<%= type %>">
+                <%= type.replace(/_/g, " ").replace(/\b\w/g, function (letter) { return
+                letter.toUpperCase(); }) %>
+              </option>
+              <% }); %>
+            </select>
+          </div>
+
+          <div class="fv-row mb-5">
+            <label for="professionalVerificationSearch" class="form-label fw-semibold">
+              Search
+            </label>
+            <div class="input-group">
+              <input
+                type="search"
+                id="professionalVerificationSearch"
+                class="form-control"
+                placeholder="Licence number, specialty or issuing body"
+                maxlength="80"
+              />
+              <button type="button" id="professionalSearchButton" class="btn btn-light-primary">
+                Search
+              </button>
+            </div>
+          </div>
+
+          <div
+            id="professionalQueueCount"
+            class="text-muted fw-semibold fs-7 mb-4"
+            aria-live="polite"
+          >
+            Loading professionals...
+          </div>
+
+          <div id="professionalQueueLoading" class="text-center py-8" role="status">
+            <span class="spinner-border spinner-border-sm text-primary"></span>
+            <span class="text-muted fw-semibold ms-2">Loading queue...</span>
+          </div>
+
+          <div id="professionalQueueEmpty" class="text-center text-muted fw-semibold py-8 d-none">
+            No professionals match the selected filters.
+          </div>
+
+          <div
+            id="professionalQueueItems"
+            class="d-flex flex-column gap-3"
+            aria-label="Professional verification queue"
+          ></div>
+
+          <div class="d-flex justify-content-between align-items-center gap-3 mt-6">
+            <button
+              type="button"
+              id="professionalPreviousPage"
+              class="btn btn-sm btn-light"
+              disabled
+            >
+              Previous
+            </button>
+
+            <span id="professionalPageLabel" class="text-muted fw-semibold fs-7">
+              Page 1 of 1
+            </span>
+
+            <button type="button" id="professionalNextPage" class="btn btn-sm btn-light" disabled>
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Verification details -->
+    <div class="col-12 col-xl-8">
+      <div class="card card-flush h-100">
+        <div class="card-header">
+          <div class="card-title">
+            <h3 class="fw-bold m-0">Professional Verification Details</h3>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <div id="professionalNoSelection" class="text-center py-15">
+            <i class="ki-duotone ki-shield-tick fs-3x text-muted mb-4">
+              <span class="path1"></span>
+              <span class="path2"></span>
+            </i>
+            <div class="text-gray-700 fw-semibold">
+              Select a professional to inspect their NIN and practising-licence evidence.
+            </div>
+          </div>
+
+          <div id="professionalDetailsLoading" class="text-center py-15 d-none" role="status">
+            <span class="spinner-border text-primary"></span>
+            <div class="text-muted fw-semibold mt-3">Loading verification details...</div>
+          </div>
+
+          <div id="professionalDetailsContent" class="d-none">
+            <input type="hidden" id="selectedProfessionalProfileId" value="" />
+
+            <!-- Professional summary -->
+            <div class="d-flex flex-wrap justify-content-between align-items-start gap-4 mb-8">
+              <div>
+                <h3 id="professionalDetailsType" class="fw-bold fs-3 mb-2">-</h3>
+                <div id="professionalDetailsSpecialty" class="text-muted fw-semibold">-</div>
+              </div>
+
+              <div class="d-flex flex-wrap gap-2">
+                <span id="professionalAccountStatus" class="badge badge-light-secondary">-</span>
+                <span id="professionalApprovalStatus" class="badge badge-light-secondary">-</span>
+              </div>
+            </div>
+
+            <!-- NIN registry evidence -->
+            <div class="card card-flush border mb-8">
+              <div class="card-header">
+                <div class="card-title">
+                  <h4 class="fw-bold m-0">NIN Registry Evidence</h4>
+                </div>
+                <div class="card-toolbar">
+                  <span id="professionalNINStatus" class="badge badge-light-secondary">-</span>
+                </div>
+              </div>
+
+              <div class="card-body">
+                <div class="row g-5 mb-6">
+                  <div class="col-12">
+                    <div class="text-muted fw-semibold fs-7 mb-1">Registered Legal Name</div>
+                    <div id="professionalNINName" class="fw-bold text-gray-900">-</div>
+                  </div>
+
+                  <div class="col-12 col-md-6">
+                    <div class="text-muted fw-semibold fs-7 mb-1">Verification Provider</div>
+                    <div id="professionalNINProvider" class="fw-semibold">-</div>
+                  </div>
+
+                  <div class="col-12 col-md-6">
+                    <div class="text-muted fw-semibold fs-7 mb-1">Registry Checked</div>
+                    <div id="professionalNINCheckedAt" class="fw-semibold">-</div>
+                  </div>
+
+                  <div class="col-12">
+                    <div class="text-muted fw-semibold fs-7 mb-1">Name Acknowledgement</div>
+                    <div id="professionalNINAcknowledgement" class="fw-semibold">-</div>
+                  </div>
+                </div>
+
+                <div class="notice bg-light rounded p-4 text-gray-700 fw-semibold">
+                  NIN registry evidence is used to compare the applicant's recorded legal name with
+                  the practising-licence holder. It is not a separate administrative
+                  identity-approval step or proof of biometric holder authentication.
+                </div>
+              </div>
+            </div>
+
+            <!-- Practising licence -->
+            <div class="card card-flush border mb-8">
+              <div class="card-header">
+                <div class="card-title">
+                  <h4 class="fw-bold m-0">Practising Licence</h4>
+                </div>
+                <div class="card-toolbar">
+                  <span id="professionalLicenceStatus" class="badge badge-light-secondary">-</span>
+                </div>
+              </div>
+
+              <div class="card-body">
+                <div class="row g-5 mb-6">
+                  <div class="col-12 col-md-6">
+                    <div class="text-muted fw-semibold fs-7 mb-1">Licence Number</div>
+                    <div id="professionalLicenceNumber" class="fw-bold">-</div>
+                  </div>
+
+                  <div class="col-12 col-md-6">
+                    <div class="text-muted fw-semibold fs-7 mb-1">Issuing Body</div>
+                    <div id="professionalLicenceIssuer" class="fw-semibold">-</div>
+                  </div>
+
+                  <div class="col-12">
+                    <div class="text-muted fw-semibold fs-7 mb-1">Reviewed Licence-Holder Name</div>
+                    <div id="professionalLicenceName" class="fw-bold">-</div>
+                  </div>
+
+                  <div class="col-12 col-md-6">
+                    <div class="text-muted fw-semibold fs-7 mb-1">Validity Type</div>
+                    <div id="professionalLicenceValidityType" class="fw-semibold">-</div>
+                  </div>
+
+                  <div class="col-12 col-md-6">
+                    <div class="text-muted fw-semibold fs-7 mb-1">Licensing Year</div>
+                    <div id="professionalLicenceYear" class="fw-semibold">-</div>
+                  </div>
+
+                  <div class="col-12 col-md-6">
+                    <div class="text-muted fw-semibold fs-7 mb-1">Recorded Expiry</div>
+                    <div id="professionalLicenceExpiry" class="fw-semibold">-</div>
+                  </div>
+
+                  <div class="col-12 col-md-6">
+                    <div class="text-muted fw-semibold fs-7 mb-1">Last Verified</div>
+                    <div id="professionalLicenceVerifiedAt" class="fw-semibold">-</div>
+                  </div>
+                </div>
+
+                <div
+                  id="professionalLicenceValidityNotice"
+                  class="notice bg-light rounded p-4 fw-semibold mb-6"
+                ></div>
+
+                <div id="professionalLicenceReviewNote" class="text-muted fw-semibold mb-6"></div>
+
+                <div class="d-flex flex-wrap gap-3">
+                  <a
+                    id="professionalPendingDocumentLink"
+                    class="btn btn-light-primary disabled"
+                    aria-disabled="true"
+                    tabindex="-1"
+                  >
+                    Download Pending Licence
+                  </a>
+
+                  <a
+                    id="professionalCurrentDocumentLink"
+                    class="btn btn-light disabled"
+                    aria-disabled="true"
+                    tabindex="-1"
+                  >
+                    Download Current Licence
+                  </a>
+
+                  <a
+                    id="professionalUpcomingDocumentLink"
+                    class="btn btn-light disabled"
+                    aria-disabled="true"
+                    tabindex="-1"
+                  >
+                    Download Upcoming Licence
+                  </a>
+                </div>
+
+                <div id="professionalPendingDocumentNote" class="text-muted fs-7 mt-4"></div>
+
+                <div class="text-muted fs-7 mt-3">
+                  Licence files are retrieved through the authenticated administrator endpoint.
+                </div>
+              </div>
+            </div>
+
+            <!-- Upcoming renewal -->
+            <div id="professionalUpcomingLicenceSection" class="card card-flush border mb-8 d-none">
+              <div class="card-header">
+                <div class="card-title">
+                  <h4 class="fw-bold m-0">Approved Upcoming Licence</h4>
+                </div>
+              </div>
+
+              <div class="card-body">
+                <div class="row g-5">
+                  <div class="col-12 col-md-6">
+                    <div class="text-muted fw-semibold fs-7 mb-1">Valid From</div>
+                    <div id="professionalUpcomingValidFrom" class="fw-bold">-</div>
+                  </div>
+                  <div class="col-12 col-md-6">
+                    <div class="text-muted fw-semibold fs-7 mb-1">Expiry</div>
+                    <div id="professionalUpcomingExpiry" class="fw-bold">-</div>
+                  </div>
+                  <div class="col-12">
+                    <div class="text-muted fw-semibold fs-7 mb-1">Licence-Holder Name</div>
+                    <div id="professionalUpcomingName" class="fw-semibold">-</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Licence review -->
+            <div id="professionalLicenceReviewSection" class="card card-flush border mb-8 d-none">
+              <div class="card-header">
+                <div class="card-title">
+                  <h4 class="fw-bold m-0">Review Submitted Practising Licence</h4>
+                </div>
+              </div>
+
+              <div class="card-body">
+                <div class="notice bg-light-info rounded p-4 fw-semibold text-gray-700 mb-6">
+                  Inspect the pending document, compare its holder name with the trusted NIN
+                  registry evidence, and assess current professional authorisation before recording
+                  a decision. Council checks are supplementary where available.
+                </div>
+
+                <form id="professionalLicenceReviewForm" novalidate>
+                  <div class="fv-row mb-6">
+                    <label for="professionalLicenceDecision" class="required form-label">
+                      Review Decision
+                    </label>
+                    <select id="professionalLicenceDecision" class="form-select">
+                      <option value="">Select a decision</option>
+                      <option value="verified">Verify Licence</option>
+                      <option value="needs_review">Needs Further Review</option>
+                      <option value="rejected">Reject Licence</option>
+                    </select>
+                  </div>
+
+                  <div id="professionalLicenceApprovalFields" class="d-none">
+                    <div class="fv-row mb-6">
+                      <label for="professionalLicenceHolderName" class="required form-label">
+                        Licence-Holder Name Confirmed from Evidence
+                      </label>
+                      <input
+                        id="professionalLicenceHolderName"
+                        type="text"
+                        class="form-control"
+                        maxlength="150"
+                        autocomplete="off"
+                      />
+                    </div>
+
+                    <div class="fv-row mb-6">
+                      <label for="professionalLicenceValiditySelection" class="required form-label">
+                        Verified Validity Type
+                      </label>
+
+                      <select id="professionalLicenceValiditySelection" class="form-select">
+                        <option value="">Select validity type</option>
+                        <option value="expiry_date">Specified Expiry Date</option>
+                        <option value="licensing_year">Approved Licensing Year</option>
+                        <option value="life">Confirmed Life Licence</option>
+                      </select>
+                    </div>
+
+                    <div id="professionalLicenceExpiryGroup" class="fv-row mb-6 d-none">
+                      <label for="professionalLicenceExpiryInput" class="required form-label">
+                        Verified Expiry Date
+                      </label>
+                      <input id="professionalLicenceExpiryInput" type="date" class="form-control" />
+                    </div>
+
+                    <div id="professionalLicenceYearGroup" class="fv-row mb-6 d-none">
+                      <label for="professionalLicenceYearInput" class="required form-label">
+                        Approved Licensing Year
+                      </label>
+                      <input
+                        id="professionalLicenceYearInput"
+                        type="number"
+                        class="form-control"
+                        min="1900"
+                        max="2199"
+                        step="1"
+                        placeholder="YYYY"
+                      />
+                      <div class="form-text">
+                        Only select this mode when the reviewed credential follows a calendar-year
+                        validity rule.
+                      </div>
+                    </div>
+
+                    <div class="fv-row mb-6">
+                      <label class="form-check form-check-custom form-check-solid">
+                        <input
+                          id="professionalCouncilReviewed"
+                          type="checkbox"
+                          class="form-check-input"
+                        />
+                        <span class="form-check-label fw-semibold">
+                          I completed a council or regulator check
+                        </span>
+                      </label>
+                    </div>
+
+                    <div id="professionalCouncilSourceGroup" class="fv-row mb-6 d-none">
+                      <label for="professionalCouncilSource" class="form-label">
+                        Council Verification Source
+                      </label>
+                      <input
+                        id="professionalCouncilSource"
+                        type="text"
+                        class="form-control"
+                        maxlength="150"
+                        placeholder="Record the actual source checked"
+                      />
+                    </div>
+                  </div>
+
+                  <div class="fv-row mb-6">
+                    <label for="professionalLicenceNote" class="required form-label">
+                      Administrative Review Note
+                    </label>
+                    <textarea
+                      id="professionalLicenceNote"
+                      class="form-control"
+                      maxlength="1000"
+                      rows="4"
+                      placeholder="Record the evidence examined, findings, and the reason for your decision."
+                    ></textarea>
+                  </div>
+
+                  <button
+                    type="submit"
+                    id="professionalLicenceReviewSubmit"
+                    class="btn btn-primary"
+                  >
+                    <span class="indicator-label">Save Licence Review</span>
+                    <span class="indicator-progress">
+                      Saving...
+                      <span class="spinner-border spinner-border-sm ms-2"></span>
+                    </span>
+                  </button>
+                </form>
+              </div>
+            </div>
+
+            <!-- Final professional approval -->
+            <div id="professionalApprovalSection" class="card card-flush border mb-8 d-none">
+              <div class="card-header">
+                <div class="card-title">
+                  <h4 class="fw-bold m-0">Final Professional Approval</h4>
+                </div>
+              </div>
+
+              <div class="card-body">
+                <div
+                  id="professionalApprovalReadinessNotice"
+                  class="notice bg-light rounded p-4 fw-semibold mb-6"
+                ></div>
+
+                <form id="professionalApprovalForm" novalidate>
+                  <div class="fv-row mb-6">
+                    <label for="professionalApprovalDecision" class="required form-label">
+                      Approval Decision
+                    </label>
+                    <select id="professionalApprovalDecision" class="form-select">
+                      <option value="">Select a decision</option>
+                      <option value="approved">Approve Professional</option>
+                      <option value="needs_review">Needs Further Review</option>
+                      <option value="rejected">Reject Professional</option>
+                    </select>
+                  </div>
+
+                  <div class="fv-row mb-6">
+                    <label for="professionalApprovalNote" class="required form-label">
+                      Decision Note
+                    </label>
+                    <textarea
+                      id="professionalApprovalNote"
+                      class="form-control"
+                      maxlength="1000"
+                      rows="4"
+                      placeholder="Explain the final decision and supporting evidence."
+                    ></textarea>
+                  </div>
+
+                  <button type="submit" id="professionalApprovalSubmit" class="btn btn-primary">
+                    <span class="indicator-label">Save Approval Decision</span>
+                    <span class="indicator-progress">
+                      Saving...
+                      <span class="spinner-border spinner-border-sm ms-2"></span>
+                    </span>
+                  </button>
+                </form>
+              </div>
+            </div>
+
+            <!-- Verification history -->
+            <div class="card card-flush border">
+              <div class="card-header">
+                <div class="card-title">
+                  <h4 class="fw-bold m-0">Verification History</h4>
+                </div>
+              </div>
+
+              <div class="card-body">
+                <div class="table-responsive">
+                  <table class="table table-row-dashed align-middle gy-4">
+                    <thead>
+                      <tr class="fw-bold text-muted text-uppercase fs-7">
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Checked</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody id="professionalVerificationHistoryBody">
+                      <tr>
+                        <td colspan="4" class="text-center text-muted py-6">
+                          No verification history loaded.
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div
+                  id="professionalAttemptEvidence"
+                  class="bg-light rounded p-5 mt-5 d-none"
+                  aria-live="polite"
+                ></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1019,7 +1019,7 @@ var EmployerBusinessProfile = (function () {
       if (viewBranchPermitsLink) {
         if (branchId) {
           viewBranchPermitsLink.href =
-            "/employer/branches/" + encodeURIComponent(branchId) + "/permits";
+            "/employer/branches/" + encodeURIComponent(branchId) + "/permits/manage";
           viewBranchPermitsLink.removeAttribute("aria-disabled");
           viewBranchPermitsLink.classList.remove("disabled");
         } else {

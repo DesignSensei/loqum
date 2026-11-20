@@ -1,9 +1,9 @@
+// middleware/employerMiddleware.js
+
 const EmployerProfile = require("../models/EmployerProfile");
 const EmployerMember = require("../models/EmployerMember");
 
 const EmployerDelinquencyService = require("../services/employerDelinquencyService");
-
-const ALLOWED_MEMBER_ROLES = new Set(["admin", "branch_manager", "branch_staff"]);
 
 function getId(value) {
   return value ? String(value._id || value) : "";
@@ -17,6 +17,7 @@ function expectsJSON(req) {
   );
 }
 
+// Business eligibility is separate from branch permit readiness.
 function isBusinessEligibleToOperate(profile) {
   return Boolean(
     profile && profile.cacVerificationStatus === "verified" && profile.accountStatus === "active"
@@ -118,6 +119,7 @@ async function buildEmployerContext({ user, profile, currentTime = new Date() })
   const userId = getId(user._id);
   const businessId = getId(profile._id);
 
+  // Always recheck current membership.
   const resolvedEmployerMember = await loadEmployerMember({
     userId,
     businessId,
@@ -125,10 +127,7 @@ async function buildEmployerContext({ user, profile, currentTime = new Date() })
 
   const isPrimaryEmployer = getId(profile.user) === userId;
 
-  if (
-    !isPrimaryEmployer &&
-    (!resolvedEmployerMember || !ALLOWED_MEMBER_ROLES.has(resolvedEmployerMember.role))
-  ) {
+  if (!isPrimaryEmployer && !resolvedEmployerMember) {
     return {
       employerMember: null,
       employerContext: null,
@@ -143,47 +142,40 @@ async function buildEmployerContext({ user, profile, currentTime = new Date() })
 
   const isBranchStaff = employerMemberRole === "branch_staff";
 
-  const isBusinessWide = isPrimaryEmployer || isBusinessAdmin;
+  const assignedBranchIds =
+    resolvedEmployerMember?.branches
+      ?.map((assignment) => getId(assignment.branch))
+      .filter(Boolean) || [];
 
-  const assignedBranchIds = isBusinessWide
-    ? []
-    : [
-        ...new Set(
-          (resolvedEmployerMember?.branches || [])
-            .map((assignment) => getId(assignment?.branch))
-            .filter(Boolean)
-        ),
-      ];
-
-  const canManageAllShifts = isBusinessWide;
+  const canManageAllShifts = isPrimaryEmployer || isBusinessAdmin;
 
   const canManageAssignedBranchShifts = isBranchManager;
 
-  const canViewShifts = isBusinessWide || isBranchManager || isBranchStaff;
+  const canViewShifts = isPrimaryEmployer || isBusinessAdmin || isBranchManager || isBranchStaff;
 
-  const roleCanPostShifts = isBusinessWide || isBranchManager;
+  const roleCanPostShifts = isPrimaryEmployer || isBusinessAdmin || isBranchManager;
 
   const canViewClaims = canViewShifts;
 
-  const canManageClaims = isBusinessWide || isBranchManager;
+  const canManageClaims = isPrimaryEmployer || isBusinessAdmin || isBranchManager;
 
   const canViewDisputes = canViewShifts;
 
-  const canManageDisputes = isBusinessWide || isBranchManager;
+  const canManageDisputes = isPrimaryEmployer || isBusinessAdmin || isBranchManager;
 
-  const canManagePostShiftWorkflows = isBusinessWide || isBranchManager;
+  const canManagePostShiftWorkflows = isPrimaryEmployer || isBusinessAdmin || isBranchManager;
 
-  const canViewWallet = isBusinessWide || isBranchManager;
+  const canViewWallet = isPrimaryEmployer || isBusinessAdmin || isBranchManager;
 
-  const canManageWallet = isBusinessWide;
+  const canManageWallet = isPrimaryEmployer || isBusinessAdmin;
 
-  const canManageFinancialObligations = isBusinessWide;
+  const canManageFinancialObligations = isPrimaryEmployer || isBusinessAdmin;
 
-  const canFundShifts = isBusinessWide || isBranchManager;
+  const canFundShifts = isPrimaryEmployer || isBusinessAdmin || isBranchManager;
 
-  const canViewRefunds = isBusinessWide;
+  const canViewRefunds = isPrimaryEmployer || isBusinessAdmin;
 
-  const canManageRefundActions = isBusinessWide;
+  const canManageRefundActions = isPrimaryEmployer || isBusinessAdmin;
 
   const delinquency = await EmployerDelinquencyService.getRestrictionState({
     businessId: profile._id,
@@ -192,17 +184,11 @@ async function buildEmployerContext({ user, profile, currentTime = new Date() })
 
   const businessEligible = isBusinessEligibleToOperate(profile);
 
-  const canPostShifts = Boolean(roleCanPostShifts && businessEligible && delinquency.canPostShifts);
+  // Branch permit readiness is enforced by the shift services.
+  const canPostShifts = roleCanPostShifts && businessEligible && delinquency.canPostShifts;
 
-  const canManageBusinessProfile = Boolean(isBusinessWide && profile.accountStatus === "active");
-
-  const canManageBranches = Boolean(isBusinessWide && profile.accountStatus === "active");
-
-  const canManageInvites = Boolean(isBusinessWide && profile.accountStatus === "active");
-
-  const canCreateNewObligations = Boolean(
-    roleCanPostShifts && businessEligible && delinquency.canCreateNewObligations
-  );
+  const canManageInvites =
+    (isPrimaryEmployer || isBusinessAdmin) && profile.accountStatus === "active";
 
   const employerContext = {
     employerMemberRole,
@@ -215,12 +201,12 @@ async function buildEmployerContext({ user, profile, currentTime = new Date() })
     assignedBranchIds,
 
     canViewBusinessProfile: true,
-    canManageBusinessProfile,
+    canManageBusinessProfile: isPrimaryEmployer || isBusinessAdmin,
 
     canViewBranches: true,
-    canManageBranches,
+    canManageBranches: isPrimaryEmployer || isBusinessAdmin,
 
-    canViewTeamMembers: isBusinessWide,
+    canViewTeamMembers: isPrimaryEmployer || isBusinessAdmin,
 
     canInviteMembers: canManageInvites,
 
@@ -245,7 +231,8 @@ async function buildEmployerContext({ user, profile, currentTime = new Date() })
     canViewRefunds,
     canManageRefundActions,
 
-    canCreateNewObligations,
+    canCreateNewObligations:
+      roleCanPostShifts && businessEligible && delinquency.canCreateNewObligations,
 
     newObligationsRestricted: delinquency.restricted,
 
@@ -261,15 +248,15 @@ async function buildEmployerContext({ user, profile, currentTime = new Date() })
 }
 
 function noEmployerAccess(req, res) {
+  if (!req.user?.isOnboarded) {
+    return res.redirect("/onboarding/employer");
+  }
+
   if (expectsJSON(req)) {
     return res.status(403).json({
       success: false,
       message: "You do not have access to an active employer business.",
     });
-  }
-
-  if (!req.user?.isOnboarded) {
-    return res.redirect("/onboarding/employer");
   }
 
   return res.status(403).render("auth/not-found", {
@@ -281,24 +268,10 @@ function noEmployerAccess(req, res) {
 exports.attachEmployerProfile = async (req, res, next) => {
   try {
     if (!req.user) {
-      if (expectsJSON(req)) {
-        return res.status(401).json({
-          success: false,
-          message: "Please sign in.",
-        });
-      }
-
       return res.redirect("/login");
     }
 
     if (req.user.role !== "employer") {
-      if (expectsJSON(req)) {
-        return res.status(403).json({
-          success: false,
-          message: "Employer access is required.",
-        });
-      }
-
       return res.status(403).render("auth/not-found", {
         layout: "layouts/auth-layout-no-index",
         title: "Forbidden",
@@ -341,10 +314,8 @@ exports.attachEmployerContext = async (req, res, next) => {
     if (!employerContext) {
       req.employerProfile = null;
       req.employerMember = null;
-      req.employerContext = null;
 
       res.locals.employerProfile = null;
-      res.locals.employerMember = null;
       res.locals.employerContext = null;
 
       return noEmployerAccess(req, res);
@@ -396,10 +367,12 @@ exports.attachOptionalEmployerContext = async (req, res, next) => {
 
     req.employerProfile = profile;
     req.employerMember = contextResult.employerMember;
+
     req.employerContext = contextResult.employerContext;
 
     res.locals.employerProfile = profile;
-    res.locals.employerMember = contextResult.employerMember;
+    res.locals.employerMember = contextResult.employerContext ? contextResult.employerMember : null;
+
     res.locals.employerContext = contextResult.employerContext;
 
     return next();

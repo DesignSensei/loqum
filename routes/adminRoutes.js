@@ -1,3 +1,5 @@
+// routes/adminRoutes.js
+
 const express = require("express");
 const router = express.Router();
 
@@ -83,13 +85,13 @@ router.post(
   adminEmployerVerificationController.revokeFacilityPermit
 );
 
-router.post(
-  "/employers/:employerProfileId/verification/pcn/review",
-  adminEmployerVerificationController.reviewPCN
-);
-
 // Professional verification
-router.get("/professional-verifications", adminProfessionalVerificationController.getDashboard);
+router.get("/professional-verifications", adminProfessionalVerificationController.getDashboardPage);
+
+router.get(
+  "/professional-verifications/summary",
+  adminProfessionalVerificationController.getDashboard
+);
 
 router.get(
   "/professional-verifications/data",

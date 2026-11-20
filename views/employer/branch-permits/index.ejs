@@ -1,0 +1,336 @@
+<!-- views/employer/branch-permits/index.ejs -->
+
+<% const requirements = Array.isArray(readiness && readiness.requirements) ? readiness.requirements
+: []; %> <% const history = Array.isArray(permits) ? permits : []; %> <% const policyUnavailable =
+String(readiness && readiness.reason || '').startsWith('FACILITY_PERMIT_POLICY_'); %>
+
+<div
+  id="branchPermitPage"
+  data-branch-id="<%= branchId %>"
+  data-submit-url="/employer/branches/<%= branchId %>/permits"
+  data-readiness-url="/employer/branches/<%= branchId %>/permits/readiness"
+>
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-4 mb-8">
+    <div>
+      <a class="btn btn-sm btn-light mb-4" href="<%= branchesUrl %>">
+        <i class="ki-duotone ki-arrow-left fs-4 me-1"
+          ><span class="path1"></span><span class="path2"></span
+        ></i>
+        Back to Branches
+      </a>
+
+      <h1 class="fw-bold fs-2 mb-2">Facility Permits</h1>
+
+      <div class="text-muted fw-semibold">
+        <%= branch.name || 'Branch' %> &middot; <%= branch.state || '-' %>, <%= branch.lga || '-' %>
+      </div>
+    </div>
+
+    <button type="button" id="refreshBranchPermitReadiness" class="btn btn-light-primary">
+      <i class="ki-duotone ki-arrows-circle fs-3"
+        ><span class="path1"></span><span class="path2"></span
+      ></i>
+      Refresh Status
+    </button>
+  </div>
+
+  <% if (policyUnavailable) { %>
+  <div
+    class="notice d-flex bg-light-warning border border-warning border-dashed rounded p-6 mb-8"
+    role="alert"
+  >
+    <i class="ki-duotone ki-information-5 fs-2tx text-warning me-4"
+      ><span class="path1"></span><span class="path2"></span><span class="path3"></span
+    ></i>
+
+    <div class="fw-semibold text-gray-800">
+      Facility permit requirements are temporarily unavailable. Submissions are disabled until the
+      platform's regulatory policy is configured. Contact Loqum Support if this continues.
+    </div>
+  </div>
+  <% } else if (readiness && readiness.canPost === true) { %>
+  <div class="notice d-flex bg-light-success border border-success border-dashed rounded p-6 mb-8">
+    <i class="ki-duotone ki-shield-tick fs-2tx text-success me-4"
+      ><span class="path1"></span><span class="path2"></span
+    ></i>
+
+    <div>
+      <div class="fw-bold text-gray-900 mb-1">Current facility requirements satisfied</div>
+
+      <div class="fw-semibold text-gray-700 fs-7">
+        This branch currently satisfies the applicable permit checks. Shift posting still requires
+        separate account, actor and marketplace eligibility checks at the time of posting.
+      </div>
+    </div>
+  </div>
+  <% } else { %>
+  <div class="notice d-flex bg-light-warning border border-warning border-dashed rounded p-6 mb-8">
+    <i class="ki-duotone ki-information-5 fs-2tx text-warning me-4"
+      ><span class="path1"></span><span class="path2"></span><span class="path3"></span
+    ></i>
+
+    <div>
+      <div class="fw-bold text-gray-900 mb-1">
+        Branch is not currently eligible to post regulated shifts
+      </div>
+
+      <div class="fw-semibold text-gray-700 fs-7">
+        <% if (readiness && readiness.branchActive !== true) { %> This branch is administratively
+        inactive. Reactivating it will not bypass permit requirements. <% } else if (readiness &&
+        readiness.identityReady !== true) { %> The business or branch must meet the applicable
+        account and CAC eligibility checks. <% } else { %> One or more required facility permits are
+        not currently in force. <% } %>
+      </div>
+    </div>
+  </div>
+  <% } %>
+
+  <div class="card mb-8">
+    <div class="card-header">
+      <h3 class="card-title fw-bold">Applicable Permit Requirements</h3>
+    </div>
+
+    <div class="card-body">
+      <% if (!requirements.length) { %>
+      <div class="text-muted fw-semibold">
+        No permit requirements are available for this branch.
+      </div>
+      <% } else { %>
+      <div class="row g-5">
+        <% requirements.forEach((requirement) => { %> <% const records = history.filter((item) =>
+        item.requirementKey === requirement.requirementKey); %> <% const pending =
+        records.some((item) => item.status === 'pending'); %> <% const newest = records[0] || null;
+        %> <% const displayName = String(requirement.requirementKey || '').replace(/[_:-]/g, ' ');
+        %>
+
+        <div class="col-12 col-xl-6">
+          <div class="card card-flush border h-100">
+            <div class="card-body p-6">
+              <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+                <div>
+                  <div class="fw-bold text-gray-900 fs-5 text-capitalize"><%= displayName %></div>
+
+                  <div class="text-muted fs-7">
+                    <%= requirement.authorityName || 'Relevant regulatory authority' %>
+                  </div>
+                </div>
+
+                <% if (requirement.satisfied) { %>
+                <span class="badge badge-light-success">Satisfied</span>
+                <% } else if (pending) { %>
+                <span class="badge badge-light-warning">Pending review</span>
+                <% } else { %>
+                <span class="badge badge-light-danger">Required</span>
+                <% } %>
+              </div>
+
+              <div class="text-gray-700 fs-7 fw-semibold mb-4">
+                <% if (pending) { %> A submission is awaiting administrative review. You cannot
+                submit another pending document for this requirement. <% } else if
+                (requirement.satisfied) { %> This requirement is currently satisfied. You can submit
+                a renewal when you have updated evidence. <% } else if (newest && newest.status ===
+                'needs_review') { %> Additional review is required. You may submit updated
+                supporting evidence. <% } else if (newest && newest.status === 'rejected') { %> The
+                previous submission was not approved. You may submit a replacement document. <% }
+                else { %> Upload a valid document for administrative verification. <% } %>
+              </div>
+
+              <% if (!pending) { %>
+              <button
+                type="button"
+                class="btn btn-sm btn-primary js-select-permit-requirement"
+                data-requirement-key="<%= requirement.requirementKey %>"
+                data-requirement-label="<%= displayName %>"
+              >
+                <%= requirement.satisfied ? 'Submit Renewal' : 'Submit Evidence' %>
+              </button>
+              <% } %>
+            </div>
+          </div>
+        </div>
+        <% }) %>
+      </div>
+      <% } %>
+    </div>
+  </div>
+
+  <% if (!policyUnavailable && requirements.length) { %>
+  <div id="branchPermitSubmissionCard" class="card mb-8">
+    <div class="card-header">
+      <h3 class="card-title fw-bold">Submit Facility Permit Evidence</h3>
+    </div>
+
+    <div class="card-body">
+      <p class="text-muted fw-semibold mb-6">
+        Choose a requirement above. Uploaded documents are reviewed by a Loqum administrator.
+        Official validity dates and approval decisions cannot be set here.
+      </p>
+
+      <form id="branchPermitSubmissionForm" method="POST" enctype="multipart/form-data" novalidate>
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+        <input type="hidden" id="selectedPermitRequirementKey" name="requirementKey" value="" />
+
+        <div class="fv-row mb-6">
+          <label for="selectedPermitRequirementLabel" class="required form-label">
+            Permit Requirement
+          </label>
+
+          <input
+            id="selectedPermitRequirementLabel"
+            class="form-control form-control-solid"
+            type="text"
+            value="Select a requirement above"
+            readonly
+          />
+        </div>
+
+        <div class="fv-row mb-6">
+          <label for="branchPermitNumber" class="required form-label">
+            Permit or Licence Number
+          </label>
+
+          <input
+            id="branchPermitNumber"
+            name="permitNumber"
+            class="form-control"
+            type="text"
+            maxlength="120"
+            autocomplete="off"
+            required
+          />
+        </div>
+
+        <div class="fv-row mb-6">
+          <label for="branchPermitDescription" class="form-label"> Description (optional) </label>
+
+          <textarea
+            id="branchPermitDescription"
+            name="permitDescription"
+            class="form-control"
+            maxlength="300"
+            rows="3"
+          ></textarea>
+        </div>
+
+        <div class="fv-row mb-6">
+          <label for="branchPermitDocument" class="required form-label">
+            Supporting Document
+          </label>
+
+          <input
+            id="branchPermitDocument"
+            name="permitDocument"
+            type="file"
+            class="form-control"
+            accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
+            required
+          />
+
+          <div class="form-text">PDF, JPG, PNG or WebP. Maximum file size: 10 MB.</div>
+        </div>
+
+        <div
+          id="branchPermitSubmissionMessage"
+          class="alert d-none"
+          role="alert"
+          aria-live="polite"
+        ></div>
+
+        <button type="submit" id="branchPermitSubmitButton" class="btn btn-primary" disabled>
+          <span class="indicator-label">Submit for Review</span>
+
+          <span class="indicator-progress">
+            Submitting...
+            <span class="spinner-border spinner-border-sm ms-2"></span>
+          </span>
+        </button>
+      </form>
+    </div>
+  </div>
+  <% } %>
+
+  <div class="card">
+    <div class="card-header">
+      <h3 class="card-title fw-bold">Submission and Renewal History</h3>
+    </div>
+
+    <div class="card-body">
+      <% if (!history.length) { %>
+      <div class="text-muted fw-semibold text-center py-8">
+        No permit documents have been submitted for this branch.
+      </div>
+      <% } else { %>
+      <div class="table-responsive">
+        <table class="table table-row-dashed align-middle gy-5">
+          <thead>
+            <tr class="text-gray-600 fw-bold text-uppercase fs-7">
+              <th>Requirement</th>
+              <th>Permit</th>
+              <th>Review Status</th>
+              <th>Validity</th>
+              <th>Submitted</th>
+            </tr>
+          </thead>
+
+          <tbody class="fw-semibold text-gray-700">
+            <% history.forEach((permit) => { %> <% const state = permit.revoked ? 'revoked' :
+            permit.status; %> <% const statusClass = state === 'verified' ? 'badge-light-success' :
+            state === 'pending' ? 'badge-light-warning' : state === 'needs_review' ?
+            'badge-light-info' : 'badge-light-danger'; %>
+
+            <tr>
+              <td>
+                <div class="fw-bold text-gray-900 text-capitalize">
+                  <%= String(permit.requirementKey || '').replace(/[_:-]/g, ' ') %>
+                </div>
+
+                <div class="text-muted fs-7"><%= permit.authorityName || '-' %></div>
+              </td>
+
+              <td>
+                <div><%= permit.permitNumber || '-' %></div>
+
+                <% if (permit.renewalOfId) { %>
+                <div class="text-muted fs-7">Renewal submission</div>
+                <% } %>
+              </td>
+
+              <td>
+                <span class="badge <%= statusClass %> text-capitalize">
+                  <%= String(state || '-').replace(/_/g, ' ') %>
+                </span>
+
+                <% if (permit.isCurrent && !permit.revoked) { %>
+                <div class="text-muted fs-7 mt-1">Current approval</div>
+                <% } %>
+              </td>
+
+              <td>
+                <% if (permit.status === 'verified' && !permit.revoked) { %>
+                <div>From: <%= permit.validFromDate || '-' %></div>
+
+                <div>
+                  Until: <%= permit.validityType === 'indefinite' ? 'No fixed expiry' :
+                  (permit.expiryDate || '-') %>
+                </div>
+
+                <% if (!permit.isCurrent && !permit.activatedAt) { %>
+                <div class="text-muted fs-7">Scheduled / not yet current</div>
+                <% } %> <% } else { %>
+                <span class="text-muted">Awaiting or without approval</span>
+                <% } %>
+              </td>
+
+              <td>
+                <%= permit.submittedAt ? new Date(permit.submittedAt).toLocaleDateString('en-GB', {
+                timeZone: 'Africa/Lagos' }) : '-' %>
+              </td>
+            </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+      <% } %>
+    </div>
+  </div>
+</div>

@@ -386,9 +386,7 @@ class PreOnboardingCACVerificationService {
       eligibleForOnboarding,
       provisional: true,
       stagingOnly: !production,
-      representativeAuthorized: false,
-      employerApproved: false,
-      requiresRepresentativeVerification: true,
+
       requiresReview: production && ["needs_review", "not_found"].includes(record.status),
       cached,
       provider: record.provider,

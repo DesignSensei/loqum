@@ -51,7 +51,7 @@
         </div>
       <% } %>
 
-      <% if (employerContext.canManageBranches) { %>
+      <% if (businessProfilePage.showAddBranchModal) { %>
         <button
           type="button"
           class="btn btn-sm btn-primary"
@@ -157,7 +157,7 @@
                         data-branch-phone="<%= branch.contactPhone || '' %>"
                         data-branch-geofence-radius="<%= branch.geofenceRadiusMeters != null ? branch.geofenceRadiusMeters : '' %>"
                         data-branch-status="<%= branch.isActive ? 'active' : 'inactive' %>"
-                        <% if (employerContext.canManageBranches) { %>
+                        <% if (businessProfilePage.showEditBranchModal) { %>
                           data-branch-manager-id="<%= branch.managerMemberId || '' %>"
                           data-branch-latitude="<%= branch.latitude != null ? branch.latitude : '' %>"
                           data-branch-longitude="<%= branch.longitude != null ? branch.longitude : '' %>"
@@ -168,7 +168,7 @@
                       </a>
                     </div>
 
-                    <% if (employerContext.canManageBranches) { %>
+                    <% if (businessProfilePage.showEditBranchModal) { %>
                       <div class="menu-item px-3">
                         <a
                           href="#"
@@ -237,7 +237,7 @@
           <%= branchStatusView.emptyMessage || "Branches matching this filter will appear here." %>
         </div>
 
-        <% if (!branchStatusView.hasAnyBranches && employerContext.canManageBranches) { %>
+        <% if (!branchStatusView.hasAnyBranches && businessProfilePage.showAddBranchModal) { %>
           <button
             type="button"
             class="btn btn-primary"

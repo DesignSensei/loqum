@@ -1,6 +1,7 @@
 // controllers/employerController.js
 
 const EmployerService = require("../services/employerService");
+const EmployerViewService = require("../services/employerViewService");
 const locations = require("../config/locations");
 const logger = require("../utils/logger");
 
@@ -106,53 +107,6 @@ function canAccessBusinessProfileTab(employerContext, activeTab) {
   return true;
 }
 
-// ───────────────────── PAGE PRESENTATION ─────────────────────
-
-function buildBusinessProfilePageView({
-  employerProfile,
-  activeTab,
-  employerContext,
-  employerPermissions,
-}) {
-  const access = employerPermissions;
-
-  const canManageBranches = Boolean(
-    access.isBusinessWide === true &&
-    access.canViewBranches === true &&
-    employerContext.canManageBranches === true
-  );
-
-  const showOverview = activeTab === "overview";
-  const showBusinessDetails = activeTab === "business-details";
-  const showVerification = activeTab === "verification";
-
-  const showBranches = Boolean(activeTab === "branches" && access.canViewBranches === true);
-
-  const showTeamMembers = Boolean(activeTab === "team" && access.canViewTeamMembers === true);
-
-  const showInvites = Boolean(activeTab === "invites" && access.canInviteMembers === true);
-
-  return {
-    countryCode: String(employerProfile.countryCode || "NG")
-      .trim()
-      .toLowerCase(),
-
-    showOverview,
-    showBusinessDetails,
-    showVerification,
-    showBranches,
-    showTeamMembers,
-    showInvites,
-
-    showAddBranchModal: showBranches && canManageBranches,
-    showViewBranchModal: showBranches,
-    showEditBranchModal: showBranches && canManageBranches,
-
-    showTeamMemberModals: showTeamMembers,
-    showInviteModals: showInvites,
-  };
-}
-
 // Encode data as a safe JavaScript literal for an HTML script element.
 function serializeForInlineScript(value) {
   return JSON.stringify(value)
@@ -232,34 +186,6 @@ function handleBusinessDetailsUpdateError(error, res, next) {
   return next(error);
 }
 
-// ───────────────────── BUSINESS PROFILE SCRIPTS ─────────────────────
-
-function getBusinessProfileScripts(activeTab) {
-  const scripts = ['<script src="/js/employer/business-profile.js"></script>'];
-
-  if (activeTab === "branches" || activeTab === "business-details") {
-    scripts.unshift('<script src="/js/location-picker.js"></script>');
-
-    scripts.push(`
-      <script
-        async
-        defer
-        src="https://maps.googleapis.com/maps/api/js?key=${process.env.GOOGLE_MAPS_BROWSER_KEY}&libraries=places&callback=initBusinessProfileAddressAutocomplete"
-      ></script>
-    `);
-  }
-
-  if (activeTab === "team") {
-    scripts.push('<script src="/js/employer/team-members.js"></script>');
-  }
-
-  if (activeTab === "invites") {
-    scripts.push('<script src="/js/employer/invite-member.js"></script>');
-  }
-
-  return scripts.join("\n");
-}
-
 // ───────────────────── EMPLOYER DASHBOARD ─────────────────────
 
 exports.getDashboard = async (req, res, next) => {
@@ -320,7 +246,11 @@ exports.getBusinessProfile = async (req, res, next) => {
 
     const memberStatus = getMemberStatusFilter(req.query.memberStatus || "active");
 
-    const businessProfileData = await EmployerService.getBusinessProfileData(employerProfile, {
+    // View-model spreads must receive plain profile fields, not Mongoose internals.
+    const profileForView =
+      typeof employerProfile.toObject === "function" ? employerProfile.toObject() : employerProfile;
+
+    const businessProfileData = await EmployerService.getBusinessProfileData(profileForView, {
       actorUserId: req.user._id,
       employerContext,
       activeTab,
@@ -329,8 +259,8 @@ exports.getBusinessProfile = async (req, res, next) => {
       memberStatus,
     });
 
-    const businessProfilePage = buildBusinessProfilePageView({
-      employerProfile,
+    const businessProfilePage = EmployerViewService.buildBusinessProfilePageView({
+      employerProfile: profileForView,
       activeTab,
       employerContext,
       employerPermissions: businessProfileData.employerPermissions,
@@ -360,7 +290,10 @@ exports.getBusinessProfile = async (req, res, next) => {
 
       googleMapsApiKey: process.env.GOOGLE_MAPS_BROWSER_KEY,
 
-      scripts: getBusinessProfileScripts(activeTab),
+      scripts: EmployerViewService.getBusinessProfileScripts(
+        activeTab,
+        process.env.GOOGLE_MAPS_BROWSER_KEY
+      ),
 
       ...businessProfileData,
     });

@@ -119,9 +119,7 @@
         </div>
 
         <!--begin::Geofence information-->
-        <div
-          class="notice d-flex bg-light-warning rounded border-warning border border-dashed p-6 mt-8"
-        >
+        <div class="notice d-flex bg-light-warning rounded border-warning border-dashed p-6 mt-8">
           <i class="ki-duotone ki-information-5 fs-2tx text-warning me-4">
             <span class="path1"></span>
             <span class="path2"></span>
@@ -137,7 +135,7 @@
         <!--end::Geofence information-->
 
         <!--begin::Facility permit information-->
-        <div class="notice d-flex bg-light-info rounded border-info border border-dashed p-6 mt-6">
+        <div class="notice d-flex bg-light-info rounded border-info border-dashed p-6 mt-6">
           <i class="ki-duotone ki-shield-tick fs-2tx text-info me-4">
             <span class="path1"></span>
             <span class="path2"></span>
@@ -173,21 +171,8 @@
       <div class="modal-footer justify-content-center border-0 pt-0">
         <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
 
-        <% if (employerContext.canManageBranches) { %>
-
-        <!--
-          The branch-specific permit link is populated by
-          public/js/employer/business-profile.js.
-
-          Its destination is:
-          /employer/branches/:branchId/permits
-
-          The link begins disabled until a valid branch ID
-          is supplied by the view-branch modal handler.
-
-          Permit submission, review, renewal, and regulatory
-          readiness remain server-controlled.
-        -->
+        <% if (businessProfilePage.showEditBranchModal) { %>
+        <!-- The branch ID is populated by public/js/employer/business-profile.js. -->
         <a id="viewBranchPermitsLink" class="btn btn-light-primary disabled" aria-disabled="true">
           <i class="ki-duotone ki-shield-tick fs-3 me-1">
             <span class="path1"></span>
@@ -204,7 +189,6 @@
         >
           Edit Branch
         </button>
-
         <% } %>
       </div>
     </div>

@@ -1,0 +1,784 @@
+<!-- views/admin/employer-verifications/index.ejs -->
+
+<div
+  id="adminEmployerVerifications"
+  data-csrf-token="<%= csrfToken %>"
+  data-queue-url="/admin/employer-verifications/data"
+  data-permit-queue-url="/admin/employer-verifications/permits"
+  data-employer-base-url="/admin/employers"
+>
+  <!--begin::Page header-->
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-4 mb-8">
+    <div>
+      <h1 class="fw-bold fs-2 mb-2">Employer Verification</h1>
+      <div class="text-muted fw-semibold fs-6">
+        Review business CAC registration and branch-specific facility permits.
+      </div>
+    </div>
+  </div>
+  <!--end::Page header-->
+
+  <!--begin::Feedback-->
+  <div
+    id="verificationFeedback"
+    class="alert alert-info d-none mb-6"
+    role="alert"
+    aria-live="polite"
+  ></div>
+  <!--end::Feedback-->
+
+  <!--begin::Verification tabs-->
+  <ul class="nav nav-tabs nav-line-tabs nav-line-tabs-2x fs-6 fw-bold mb-8" role="tablist">
+    <li class="nav-item" role="presentation">
+      <button
+        type="button"
+        class="nav-link active"
+        id="employerCACVerificationTab"
+        data-bs-toggle="tab"
+        data-bs-target="#employerCACVerificationPane"
+        role="tab"
+        aria-controls="employerCACVerificationPane"
+        aria-selected="true"
+      >
+        <i class="ki-duotone ki-verify fs-3 me-2">
+          <span class="path1"></span>
+          <span class="path2"></span>
+        </i>
+        CAC Verification
+      </button>
+    </li>
+
+    <li class="nav-item" role="presentation">
+      <button
+        type="button"
+        class="nav-link"
+        id="facilityPermitVerificationTab"
+        data-bs-toggle="tab"
+        data-bs-target="#facilityPermitVerificationPane"
+        role="tab"
+        aria-controls="facilityPermitVerificationPane"
+        aria-selected="false"
+      >
+        <i class="ki-duotone ki-shield-tick fs-3 me-2">
+          <span class="path1"></span>
+          <span class="path2"></span>
+        </i>
+        Facility Permits
+      </button>
+    </li>
+  </ul>
+  <!--end::Verification tabs-->
+
+  <div class="tab-content">
+    <!--begin::CAC verification-->
+    <div
+      class="tab-pane fade show active"
+      id="employerCACVerificationPane"
+      role="tabpanel"
+      aria-labelledby="employerCACVerificationTab"
+      tabindex="0"
+    >
+      <div class="row g-6">
+        <!--begin::Employer queue-->
+        <div class="col-12 col-xl-4">
+          <div class="card card-flush h-100">
+            <div class="card-header">
+              <div class="card-title">
+                <h3 class="fw-bold m-0">Employers</h3>
+              </div>
+
+              <div class="card-toolbar">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-light-primary"
+                  id="refreshVerificationQueue"
+                >
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <div class="mb-5">
+                <label for="verificationStatusFilter" class="form-label fw-semibold">
+                  Filter employers
+                </label>
+
+                <select
+                  id="verificationStatusFilter"
+                  class="form-select form-select-solid"
+                  aria-label="Filter employer verification status"
+                >
+                  <option value="review" selected>Requires review</option>
+                  <option value="all">All employers</option>
+                  <option value="pending">Pending</option>
+                  <option value="needs_review">Needs review</option>
+                  <option value="verified">Verified</option>
+                  <option value="rejected">Rejected</option>
+                  <option value="restricted">Restricted accounts</option>
+                  <option value="suspended">Suspended accounts</option>
+                </select>
+              </div>
+
+              <div
+                id="verificationQueueCount"
+                class="text-muted fw-semibold fs-7 mb-4"
+                aria-live="polite"
+              >
+                Loading employers...
+              </div>
+
+              <div id="verificationQueueLoading" class="text-center py-8" role="status">
+                <span class="spinner-border spinner-border-sm text-primary"></span>
+                <span class="text-muted fw-semibold ms-2">Loading queue...</span>
+              </div>
+
+              <div
+                id="verificationQueueEmpty"
+                class="text-center text-muted fw-semibold py-8 d-none"
+              >
+                No employers match the selected filter.
+              </div>
+
+              <div
+                id="verificationQueueItems"
+                class="d-flex flex-column gap-3"
+                aria-label="Employer verification queue"
+              ></div>
+
+              <div class="d-flex justify-content-between align-items-center gap-3 mt-6">
+                <button
+                  type="button"
+                  id="verificationPreviousPage"
+                  class="btn btn-sm btn-light"
+                  disabled
+                >
+                  Previous
+                </button>
+
+                <span id="verificationPageLabel" class="text-muted fw-semibold fs-7">
+                  Page 1 of 1
+                </span>
+
+                <button
+                  type="button"
+                  id="verificationNextPage"
+                  class="btn btn-sm btn-light"
+                  disabled
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!--end::Employer queue-->
+
+        <!--begin::Employer details-->
+        <div class="col-12 col-xl-8">
+          <div class="card card-flush h-100">
+            <div class="card-header">
+              <div class="card-title">
+                <h3 class="fw-bold m-0">Business Verification Details</h3>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <div id="verificationNoSelection" class="text-center py-15">
+                <i class="ki-duotone ki-information-5 fs-3x text-muted mb-4">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                  <span class="path3"></span>
+                </i>
+
+                <div class="text-gray-700 fw-semibold">
+                  Select an employer to view CAC verification details.
+                </div>
+              </div>
+
+              <div id="verificationDetailsLoading" class="text-center py-15 d-none" role="status">
+                <span class="spinner-border text-primary"></span>
+                <div class="text-muted fw-semibold mt-3">Loading employer details...</div>
+              </div>
+
+              <div id="verificationDetailsContent" class="d-none">
+                <input type="hidden" id="selectedVerificationEmployerId" value="" />
+
+                <!--begin::Business summary-->
+                <div class="d-flex flex-wrap justify-content-between align-items-start gap-4 mb-8">
+                  <div>
+                    <h3 id="verificationBusinessName" class="fw-bold fs-3 mb-2">-</h3>
+                    <div id="verificationBusinessType" class="text-muted fw-semibold">-</div>
+                  </div>
+
+                  <span id="verificationAccountStatus" class="badge badge-light-secondary">
+                    -
+                  </span>
+                </div>
+
+                <div class="row g-5 mb-8">
+                  <div class="col-12 col-md-6">
+                    <div class="fw-semibold text-muted fs-7 mb-1">CAC Registration Number</div>
+                    <div id="verificationCACNumber" class="fw-bold text-gray-800">-</div>
+                  </div>
+
+                  <div class="col-12 col-md-6">
+                    <div class="fw-semibold text-muted fs-7 mb-1">Business Email</div>
+                    <div id="verificationBusinessEmail" class="fw-bold text-gray-800">-</div>
+                  </div>
+
+                  <div class="col-12">
+                    <div class="fw-semibold text-muted fs-7 mb-1">Business Location</div>
+                    <div id="verificationBusinessLocation" class="fw-bold text-gray-800">-</div>
+                  </div>
+                </div>
+                <!--end::Business summary-->
+
+                <!--begin::CAC verification card-->
+                <div class="card card-flush border mb-8">
+                  <div class="card-header">
+                    <div class="card-title">
+                      <h4 class="fw-bold m-0">CAC Registration Verification</h4>
+                    </div>
+
+                    <div class="card-toolbar">
+                      <span id="verificationCACStatus" class="badge badge-light-secondary">
+                        -
+                      </span>
+                    </div>
+                  </div>
+
+                  <div class="card-body">
+                    <div class="row g-5 mb-6">
+                      <div class="col-12 col-md-6">
+                        <div class="fw-semibold text-muted fs-7 mb-1">Verified Name</div>
+                        <div id="verificationCACName" class="fw-bold text-gray-800">-</div>
+                      </div>
+
+                      <div class="col-12 col-md-6">
+                        <div class="fw-semibold text-muted fs-7 mb-1">Last Checked</div>
+                        <div id="verificationCACCheckedAt" class="fw-bold text-gray-800">-</div>
+                      </div>
+                    </div>
+
+                    <div class="fw-semibold text-muted fs-7 mb-2">Verification Note</div>
+
+                    <div
+                      id="verificationCACNote"
+                      class="bg-light rounded p-4 text-gray-700 fw-semibold mb-6"
+                    >
+                      -
+                    </div>
+
+                    <button type="button" id="verificationCACRecheck" class="btn btn-light-primary">
+                      <span class="indicator-label">Run CAC Recheck</span>
+
+                      <span class="indicator-progress">
+                        Checking...
+                        <span class="spinner-border spinner-border-sm ms-2"></span>
+                      </span>
+                    </button>
+
+                    <div class="text-muted fs-7 mt-4">
+                      CAC rechecks use the server-controlled provider verification workflow.
+                    </div>
+                  </div>
+                </div>
+                <!--end::CAC verification card-->
+
+                <!--begin::CAC verification history-->
+                <div class="card card-flush border">
+                  <div class="card-header">
+                    <div class="card-title">
+                      <h4 class="fw-bold m-0">CAC Verification History</h4>
+                    </div>
+                  </div>
+
+                  <div class="card-body">
+                    <div class="table-responsive">
+                      <table class="table table-row-dashed align-middle gy-4">
+                        <thead>
+                          <tr class="fw-bold text-muted text-uppercase fs-7">
+                            <th>Type</th>
+                            <th>Provider</th>
+                            <th>Status</th>
+                            <th>Checked</th>
+                          </tr>
+                        </thead>
+
+                        <tbody id="verificationHistoryBody">
+                          <tr>
+                            <td colspan="4" class="text-center text-muted py-6">
+                              No verification history loaded.
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+                <!--end::CAC verification history-->
+              </div>
+            </div>
+          </div>
+        </div>
+        <!--end::Employer details-->
+      </div>
+    </div>
+    <!--end::CAC verification-->
+
+    <!--begin::Facility permit verification-->
+    <div
+      class="tab-pane fade"
+      id="facilityPermitVerificationPane"
+      role="tabpanel"
+      aria-labelledby="facilityPermitVerificationTab"
+      tabindex="0"
+    >
+      <div class="row g-6">
+        <!--begin::Facility permit queue-->
+        <div class="col-12 col-xl-4">
+          <div class="card card-flush h-100">
+            <div class="card-header">
+              <div class="card-title">
+                <h3 class="fw-bold m-0">Permit Review Queue</h3>
+              </div>
+
+              <div class="card-toolbar">
+                <button
+                  type="button"
+                  id="refreshFacilityPermitQueue"
+                  class="btn btn-sm btn-light-primary"
+                >
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <div class="mb-5">
+                <label for="facilityPermitStatusFilter" class="form-label fw-semibold">
+                  Filter permits
+                </label>
+
+                <select id="facilityPermitStatusFilter" class="form-select form-select-solid">
+                  <option value="review" selected>Requires review</option>
+                  <option value="all">All submissions</option>
+                  <option value="pending">Pending</option>
+                  <option value="needs_review">Needs review</option>
+                  <option value="verified">Verified</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              </div>
+
+              <div
+                id="facilityPermitQueueCount"
+                class="text-muted fw-semibold fs-7 mb-4"
+                aria-live="polite"
+              >
+                Loading permits...
+              </div>
+
+              <div id="facilityPermitQueueLoading" class="text-center py-8" role="status">
+                <span class="spinner-border spinner-border-sm text-primary"></span>
+                <span class="text-muted fw-semibold ms-2">Loading queue...</span>
+              </div>
+
+              <div
+                id="facilityPermitQueueEmpty"
+                class="text-center text-muted fw-semibold py-8 d-none"
+              >
+                No permits match the selected filter.
+              </div>
+
+              <div
+                id="facilityPermitQueueItems"
+                class="d-flex flex-column gap-3"
+                aria-label="Facility permit review queue"
+              ></div>
+
+              <div class="d-flex justify-content-between align-items-center gap-3 mt-6">
+                <button
+                  type="button"
+                  id="facilityPermitPreviousPage"
+                  class="btn btn-sm btn-light"
+                  disabled
+                >
+                  Previous
+                </button>
+
+                <span id="facilityPermitPageLabel" class="text-muted fw-semibold fs-7">
+                  Page 1 of 1
+                </span>
+
+                <button
+                  type="button"
+                  id="facilityPermitNextPage"
+                  class="btn btn-sm btn-light"
+                  disabled
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!--end::Facility permit queue-->
+
+        <!--begin::Facility permit details-->
+        <div class="col-12 col-xl-8">
+          <div class="card card-flush h-100">
+            <div class="card-header">
+              <div class="card-title">
+                <h3 class="fw-bold m-0">Facility Permit Details</h3>
+              </div>
+            </div>
+
+            <div class="card-body">
+              <div id="facilityPermitNoSelection" class="text-center py-15">
+                <i class="ki-duotone ki-shield-tick fs-3x text-muted mb-4">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                </i>
+
+                <div class="text-gray-700 fw-semibold">
+                  Select a permit submission to review its evidence and validity.
+                </div>
+              </div>
+
+              <div id="facilityPermitDetailsLoading" class="text-center py-15 d-none" role="status">
+                <span class="spinner-border text-primary"></span>
+                <div class="text-muted fw-semibold mt-3">Loading permit details...</div>
+              </div>
+
+              <div id="facilityPermitDetailsContent" class="d-none">
+                <!--begin::Selected permit identifiers-->
+                <input type="hidden" id="selectedFacilityPermitId" value="" />
+                <input type="hidden" id="selectedFacilityPermitBusinessId" value="" />
+                <input type="hidden" id="selectedFacilityPermitBranchId" value="" />
+                <!--end::Selected permit identifiers-->
+
+                <!--begin::Permit overview-->
+                <div class="d-flex flex-wrap justify-content-between align-items-start gap-4 mb-8">
+                  <div>
+                    <h3 id="facilityPermitBusinessName" class="fw-bold fs-3 mb-2">-</h3>
+                    <div id="facilityPermitBranchName" class="text-muted fw-semibold">-</div>
+                  </div>
+
+                  <span id="facilityPermitStatus" class="badge badge-light-secondary"> - </span>
+                </div>
+
+                <div class="row g-5 mb-8">
+                  <div class="col-12 col-md-6">
+                    <div class="fw-semibold text-muted fs-7 mb-1">Requirement</div>
+                    <div id="facilityPermitRequirement" class="fw-bold text-gray-800">-</div>
+                  </div>
+
+                  <div class="col-12 col-md-6">
+                    <div class="fw-semibold text-muted fs-7 mb-1">Regulatory Authority</div>
+                    <div id="facilityPermitAuthority" class="fw-bold text-gray-800">-</div>
+                  </div>
+
+                  <div class="col-12 col-md-6">
+                    <div class="fw-semibold text-muted fs-7 mb-1">Permit Number</div>
+                    <div id="facilityPermitNumber" class="fw-bold text-gray-800">-</div>
+                  </div>
+
+                  <div class="col-12 col-md-6">
+                    <div class="fw-semibold text-muted fs-7 mb-1">Requirement Scope</div>
+                    <div id="facilityPermitScope" class="fw-bold text-gray-800">-</div>
+                  </div>
+
+                  <div class="col-12">
+                    <div class="fw-semibold text-muted fs-7 mb-1">Branch Premises</div>
+                    <div id="facilityPermitPremises" class="fw-bold text-gray-800">-</div>
+                  </div>
+
+                  <div class="col-12">
+                    <div class="fw-semibold text-muted fs-7 mb-1">Submitted Description</div>
+                    <div id="facilityPermitDescription" class="text-gray-700 fw-semibold">-</div>
+                  </div>
+
+                  <div class="col-12 col-md-6">
+                    <div class="fw-semibold text-muted fs-7 mb-1">Submitted At</div>
+                    <div id="facilityPermitSubmittedAt" class="fw-bold text-gray-800">-</div>
+                  </div>
+
+                  <div class="col-12 col-md-6">
+                    <div class="fw-semibold text-muted fs-7 mb-1">Review Date</div>
+                    <div id="facilityPermitReviewedAt" class="fw-bold text-gray-800">-</div>
+                  </div>
+                </div>
+                <!--end::Permit overview-->
+
+                <!--begin::Supporting evidence-->
+                <div class="card card-flush border mb-8">
+                  <div class="card-header">
+                    <div class="card-title">
+                      <h4 class="fw-bold m-0">Supporting Document</h4>
+                    </div>
+                  </div>
+
+                  <div class="card-body">
+                    <div class="text-gray-700 fw-semibold mb-5">
+                      Download and inspect the submitted document before recording a review
+                      decision. Confirm the regulator, permitted activities, validity and physical
+                      premises.
+                    </div>
+
+                    <a
+                      id="facilityPermitDocumentLink"
+                      class="btn btn-light-primary disabled"
+                      aria-disabled="true"
+                      tabindex="-1"
+                    >
+                      <i class="ki-duotone ki-file-down fs-3 me-1">
+                        <span class="path1"></span>
+                        <span class="path2"></span>
+                      </i>
+                      Download Permit Document
+                    </a>
+
+                    <div class="text-muted fs-7 mt-4">
+                      Evidence is retrieved through the authorized private document endpoint.
+                    </div>
+                  </div>
+                </div>
+                <!--end::Supporting evidence-->
+
+                <!--begin::Existing validity-->
+                <div class="card card-flush border mb-8">
+                  <div class="card-header">
+                    <div class="card-title">
+                      <h4 class="fw-bold m-0">Recorded Validity</h4>
+                    </div>
+                  </div>
+
+                  <div class="card-body">
+                    <div class="row g-5">
+                      <div class="col-12 col-md-6">
+                        <div class="text-muted fw-semibold fs-7 mb-1">Validity Type</div>
+                        <div id="facilityPermitRecordedValidityType" class="fw-bold">-</div>
+                      </div>
+
+                      <div class="col-12 col-md-6">
+                        <div class="text-muted fw-semibold fs-7 mb-1">Valid From</div>
+                        <div id="facilityPermitRecordedValidFrom" class="fw-bold">-</div>
+                      </div>
+
+                      <div class="col-12 col-md-6">
+                        <div class="text-muted fw-semibold fs-7 mb-1">Expiry</div>
+                        <div id="facilityPermitRecordedExpiry" class="fw-bold">-</div>
+                      </div>
+
+                      <div class="col-12 col-md-6">
+                        <div class="text-muted fw-semibold fs-7 mb-1">Current Approval</div>
+                        <div id="facilityPermitCurrentStatus" class="fw-bold">-</div>
+                      </div>
+                    </div>
+
+                    <div id="facilityPermitReviewHistory" class="text-muted fs-7 mt-5"></div>
+                  </div>
+                </div>
+                <!--end::Existing validity-->
+
+                <!--begin::Permit review form-->
+                <div id="facilityPermitReviewSection" class="card card-flush border mb-8 d-none">
+                  <div class="card-header">
+                    <div class="card-title">
+                      <h4 class="fw-bold m-0">Review Permit Submission</h4>
+                    </div>
+                  </div>
+
+                  <div class="card-body">
+                    <form id="facilityPermitReviewForm" novalidate>
+                      <div class="fv-row mb-6">
+                        <label for="facilityPermitDecision" class="required form-label">
+                          Review Decision
+                        </label>
+
+                        <select id="facilityPermitDecision" name="decision" class="form-select">
+                          <option value="">Select a decision</option>
+                          <option value="verified">Approve Permit</option>
+                          <option value="needs_review">Request Additional Review</option>
+                          <option value="rejected">Reject Permit</option>
+                        </select>
+                      </div>
+
+                      <!--begin::Approval validity-->
+                      <div id="facilityPermitValidityFields" class="d-none">
+                        <div
+                          class="notice d-flex bg-light-info rounded border border-info border-dashed p-5 mb-6"
+                        >
+                          <div class="text-gray-700 fw-semibold fs-7">
+                            Enter only validity information confirmed from the permit and applicable
+                            regulatory policy. LOQUM does not automatically grant indefinite
+                            validity.
+                          </div>
+                        </div>
+
+                        <div class="fv-row mb-6">
+                          <label for="facilityPermitValidityType" class="required form-label">
+                            Approved Validity Type
+                          </label>
+
+                          <select
+                            id="facilityPermitValidityType"
+                            name="validityType"
+                            class="form-select"
+                          >
+                            <option value="">Select validity type</option>
+                            <option value="expiry_date">Specified Expiry Date</option>
+                            <option value="licensing_year">Approved Licensing Year</option>
+                            <option value="indefinite">Confirmed Indefinite Validity</option>
+                          </select>
+
+                          <div class="form-text">
+                            The server will reject validity types not permitted by the configured
+                            requirement policy.
+                          </div>
+                        </div>
+
+                        <div class="fv-row mb-6">
+                          <label for="facilityPermitValidFromDate" class="required form-label">
+                            Valid From
+                          </label>
+
+                          <input
+                            type="date"
+                            id="facilityPermitValidFromDate"
+                            name="validFromDate"
+                            class="form-control"
+                          />
+                        </div>
+
+                        <div id="facilityPermitExpiryDateGroup" class="fv-row mb-6 d-none">
+                          <label for="facilityPermitExpiryDate" class="required form-label">
+                            Verified Expiry Date
+                          </label>
+
+                          <input
+                            type="date"
+                            id="facilityPermitExpiryDate"
+                            name="expiryDate"
+                            class="form-control"
+                          />
+                        </div>
+
+                        <div id="facilityPermitLicensingYearGroup" class="fv-row mb-6 d-none">
+                          <label for="facilityPermitLicensingYear" class="required form-label">
+                            Approved Licensing Year
+                          </label>
+
+                          <input
+                            type="number"
+                            id="facilityPermitLicensingYear"
+                            name="licensingYear"
+                            class="form-control"
+                            min="1900"
+                            max="2199"
+                            step="1"
+                            placeholder="YYYY"
+                          />
+
+                          <div class="form-text">
+                            Use this option only when the official requirement follows a
+                            calendar-year validity rule.
+                          </div>
+                        </div>
+                      </div>
+                      <!--end::Approval validity-->
+
+                      <div class="fv-row mb-6">
+                        <label for="facilityPermitReviewNote" class="required form-label">
+                          Administrative Review Note
+                        </label>
+
+                        <textarea
+                          id="facilityPermitReviewNote"
+                          name="note"
+                          class="form-control"
+                          maxlength="1000"
+                          rows="4"
+                          placeholder="Record verification checks, findings and the reason for your decision."
+                        ></textarea>
+
+                        <div class="form-text">
+                          Approvals require at least 20 characters describing the verification
+                          checks performed.
+                        </div>
+                      </div>
+
+                      <button type="submit" id="facilityPermitReviewSubmit" class="btn btn-primary">
+                        <span class="indicator-label">Save Review Decision</span>
+
+                        <span class="indicator-progress">
+                          Saving...
+                          <span class="spinner-border spinner-border-sm ms-2"></span>
+                        </span>
+                      </button>
+                    </form>
+                  </div>
+                </div>
+                <!--end::Permit review form-->
+
+                <!--begin::Permit revocation-->
+                <div id="facilityPermitRevocationSection" class="card card-flush border d-none">
+                  <div class="card-header">
+                    <div class="card-title">
+                      <h4 class="fw-bold text-danger m-0">Revoke Verified Permit</h4>
+                    </div>
+                  </div>
+
+                  <div class="card-body">
+                    <div class="text-gray-700 fw-semibold mb-5">
+                      Revocation withdraws the permit's approval without deleting its original
+                      evidence or audit history.
+                    </div>
+
+                    <form id="facilityPermitRevocationForm" novalidate>
+                      <div class="fv-row mb-6">
+                        <label for="facilityPermitRevocationReason" class="required form-label">
+                          Revocation Reason
+                        </label>
+
+                        <textarea
+                          id="facilityPermitRevocationReason"
+                          name="reason"
+                          class="form-control"
+                          maxlength="500"
+                          rows="3"
+                          placeholder="Explain why this verified permit must be revoked."
+                        ></textarea>
+
+                        <div class="form-text">
+                          A meaningful reason of at least 15 characters is required.
+                        </div>
+                      </div>
+
+                      <button
+                        type="submit"
+                        id="facilityPermitRevokeSubmit"
+                        class="btn btn-light-danger"
+                      >
+                        <span class="indicator-label">Revoke Permit</span>
+
+                        <span class="indicator-progress">
+                          Revoking...
+                          <span class="spinner-border spinner-border-sm ms-2"></span>
+                        </span>
+                      </button>
+                    </form>
+                  </div>
+                </div>
+                <!--end::Permit revocation-->
+              </div>
+            </div>
+          </div>
+        </div>
+        <!--end::Facility permit details-->
+      </div>
+    </div>
+    <!--end::Facility permit verification-->
+  </div>
+</div>

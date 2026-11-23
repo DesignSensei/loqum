@@ -1535,9 +1535,19 @@ class EmployerBillingService {
 
       billingCycle: plan.billingCycle,
 
+      billingCycleDisplay: plan.billingCycle
+        ? plan.billingCycle.charAt(0).toUpperCase() + plan.billingCycle.slice(1)
+        : "Billing period",
+
       activeJobSlots: Number(plan.benefits?.activeJobSlots || 0),
 
       basePlatformFeeRate: plan.benefits?.basePlatformFeeRate ?? null,
+
+      basePlatformFeePercentDisplay:
+        plan.benefits?.basePlatformFeeRate === null ||
+        plan.benefits?.basePlatformFeeRate === undefined
+          ? null
+          : `${(Number(plan.benefits.basePlatformFeeRate) * 100).toFixed(2)}%`,
 
       featureKeys: Array.isArray(plan.benefits?.featureKeys) ? [...plan.benefits.featureKeys] : [],
     }));
@@ -1871,6 +1881,19 @@ class EmployerBillingService {
 
     const remainingJobSlots = Math.max(activeJobSlots - occupiedJobSlots, 0);
 
+    const remainingJobSlotsLabel = `${remainingJobSlots} slot${remainingJobSlots === 1 ? "" : "s"} currently available.`;
+
+    const basePlatformFeeRate = planSnapshot.benefits?.basePlatformFeeRate ?? null;
+
+    const basePlatformFeePercentDisplay =
+      basePlatformFeeRate === null ? null : `${(Number(basePlatformFeeRate) * 100).toFixed(2)}%`;
+
+    const billingCycle = planSnapshot.billingCycle || null;
+
+    const billingCycleDisplay = billingCycle
+      ? billingCycle.charAt(0).toUpperCase() + billingCycle.slice(1)
+      : "-";
+
     const pendingPlanChange = subscription.pendingPlanChange
       ? {
           changeType: subscription.pendingPlanChange.changeType,
@@ -1974,7 +1997,9 @@ class EmployerBillingService {
 
       planName: planSnapshot.name || null,
 
-      billingCycle: planSnapshot.billingCycle || null,
+      billingCycle,
+
+      billingCycleDisplay,
 
       countryCode: planSnapshot.countryCode || null,
 
@@ -1990,9 +2015,13 @@ class EmployerBillingService {
 
       remainingJobSlots,
 
+      remainingJobSlotsLabel,
+
       activePublications,
 
-      basePlatformFeeRate: planSnapshot.benefits?.basePlatformFeeRate ?? null,
+      basePlatformFeeRate,
+
+      basePlatformFeePercentDisplay,
 
       featureKeys: Array.isArray(planSnapshot.benefits?.featureKeys)
         ? [...planSnapshot.benefits.featureKeys]
@@ -2129,6 +2158,10 @@ class EmployerBillingService {
       }),
     ]);
 
+    const changeableSubscriptionPlans = subscriptionPlans.filter(
+      (plan) => String(plan.id) !== String(subscription.planId || "")
+    );
+
     return {
       pageTitle: "Billing & Wallet",
 
@@ -2155,6 +2188,8 @@ class EmployerBillingService {
       subscription,
 
       subscriptionPlans,
+
+      changeableSubscriptionPlans,
 
       paymentsDue,
 

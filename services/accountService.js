@@ -111,6 +111,9 @@ class AccountService {
         phoneCode: user?.phoneCode || "+234",
         phoneNumber: user?.phoneNumber || "",
 
+        legalNameIsProtected:
+          !user || user.role === "professional" || user.legalNameSource === "nin_registry",
+
         accountTypeLabel: this.getAccountTypeLabel(user?.role),
         teamRoleLabel: this.getTeamRoleLabel({
           user,

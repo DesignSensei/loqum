@@ -1089,22 +1089,84 @@ class JobViewService {
       (job?.recruitmentStatus === "draft" && job?.publicationStatus === "unpublished") ||
       (job?.recruitmentStatus === "active" &&
         ["expired", "ended"].includes(job?.publicationStatus));
+
     const canEditJob =
       canViewJobs === true && canManageJobs === true && Boolean(jobView?.id) && editableState;
+
     const publicationExpiredByTime =
       job?.recruitmentStatus === "active" &&
       ["live", "paused"].includes(job?.publicationStatus) &&
       job?.currentPublication?.expiresAt &&
       new Date(job.currentPublication.expiresAt) <= currentTime;
+
     const canReviewPublication =
       canViewJobs === true &&
       canManageJobs === true &&
       Boolean(jobView?.id) &&
       (editableState || publicationExpiredByTime);
+
+    const detailJob = jobView ? { ...jobView, ...this.buildEmployerJobContentView(job) } : null;
+
+    const displayValue = (value) =>
+      value === null || value === undefined || value === "" ? "Not provided" : value;
+
+    const detailFields = detailJob
+      ? [
+          ["Profession", detailJob.professionalTypeLabel],
+          ["Specialty", detailJob.specialty],
+          ["Department", detailJob.department],
+          ["Employment type", detailJob.employmentTypeLabel],
+          ["Workplace type", detailJob.workplaceTypeLabel],
+          ["Branch", detailJob.branch?.name],
+          ["Location", detailJob.locationLabel],
+          ["Vacancies", detailJob.vacancyCount],
+          ["Minimum years of experience", detailJob.minimumYearsOfExperience],
+          ["Expected start date", detailJob.employmentStartDateDisplay],
+          [
+            "Application deadline (UTC)",
+            detailJob.applicationDeadline ? detailJob.applicationDeadlineDisplay : "Not set",
+          ],
+          ["Created", detailJob.createdAtDisplay],
+          ["Last updated", detailJob.updatedAtDisplay],
+        ].map(([label, value]) => ({
+          label,
+          value: displayValue(value),
+        }))
+      : [];
+
+    const textSections = detailJob
+      ? [
+          { label: "Summary", text: detailJob.summary || "Not provided" },
+          { label: "Description", text: detailJob.description || "Not provided" },
+          {
+            label: "Education requirement",
+            text: detailJob.educationRequirement || "Not provided",
+          },
+        ]
+      : [];
+
+    const listSections = detailJob
+      ? [
+          { label: "Responsibilities", items: detailJob.responsibilities },
+          { label: "Requirements", items: detailJob.requirements },
+          { label: "Preferred qualifications", items: detailJob.preferredQualifications },
+          { label: "Skills", items: detailJob.skills },
+          { label: "Benefits", items: detailJob.benefits },
+        ].map(({ label, items }) => ({
+          label,
+          items: Array.isArray(items) ? items : [],
+        }))
+      : [];
+
     return {
       pageTitle: jobView?.roleTitle || "Job Details",
       employer,
-      job: jobView ? { ...jobView, ...this.buildEmployerJobContentView(job) } : null,
+
+      job: detailJob,
+      detailFields,
+      textSections,
+      listSections,
+
       publications: publicationViews,
       hasPublicationHistory: publicationViews.length > 0,
       permissions: {

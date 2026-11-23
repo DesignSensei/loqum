@@ -410,18 +410,6 @@ kycVerificationSchema.index({
 
 kycVerificationSchema.index(
   {
-    professional: 1,
-    type: 1,
-  },
-  {
-    partialFilterExpression: {
-      professional: { $type: "objectId" },
-    },
-  }
-);
-
-kycVerificationSchema.index(
-  {
     employer: 1,
     type: 1,
   },

@@ -154,8 +154,6 @@
 
 <!-- ───────────────────── LICENCE MANAGEMENT ───────────────────── -->
 
-<% const licence = verificationView.licence; %>
-
 <div class="card mb-5 mb-xl-8">
   <div class="card-header">
     <div class="card-title">
@@ -186,21 +184,21 @@
     <div class="d-flex flex-wrap align-items-center gap-3 mb-5">
       <span class="fw-semibold text-gray-600 fs-7"> Current licence: </span>
 
-      <span class="badge <%= licence.statusBadgeClass %> fw-bold">
-        <%= licence.statusLabel %>
+      <span class="badge <%= verificationView.licence.statusBadgeClass %> fw-bold">
+        <%= verificationView.licence.statusLabel %>
       </span>
 
-      <% if (licence.current && licence.expiryLabel) { %>
+      <% if (verificationView.licence.current && verificationView.licence.expiryLabel) { %>
       <span class="text-gray-600 fs-7">
-        <%= licence.expiryLabel === 'Lifetime' ? 'Lifetime validity' : 'Valid until ' +
-        licence.expiryLabel %>
+        <% if (verificationView.licence.expiryLabel === "Lifetime") { %> Lifetime validity <% } else
+        { %> Valid until <%= verificationView.licence.expiryLabel %> <% } %>
       </span>
       <% } %>
     </div>
 
     <!-- ───────────────────── PENDING SUBMISSION ───────────────────── -->
 
-    <% if (licence.hasPendingSubmission) { %>
+    <% if (verificationView.licence.hasPendingSubmission) { %>
 
     <div
       class="notice d-flex align-items-start bg-light-info border border-info border-dashed rounded p-4 mb-5"
@@ -214,9 +212,10 @@
         <div class="fw-bold text-gray-900 fs-7 mb-1">Licence submission awaiting review</div>
 
         <div class="fw-semibold text-gray-600 fs-7">
-          Submitted: <%= licence.pendingDateLabel || 'Recently' %>. <% if (licence.current) { %>
-          Your existing approved licence remains current until its expiry. <% } else { %> Submission
-          does not authorise you to take on new work. <% } %>
+          Submitted: <%= verificationView.licence.pendingDateLabel || 'Recently' %>. <% if
+          (verificationView.licence.current) { %> Your existing approved licence remains current
+          until its expiry. <% } else { %> Submission does not authorise you to take on new work. <%
+          } %>
         </div>
       </div>
     </div>
@@ -225,7 +224,7 @@
 
     <!-- ───────────────────── UPCOMING APPROVED RENEWAL ───────────────────── -->
 
-    <% if (licence.hasApprovedUpcoming && licence.upcoming) { %>
+    <% if (verificationView.licence.hasApprovedUpcoming && verificationView.licence.upcoming) { %>
 
     <div
       class="notice d-flex align-items-start bg-light-success border border-success border-dashed rounded p-4 mb-5"
@@ -239,8 +238,8 @@
         <div class="fw-bold text-gray-900 fs-7 mb-1">Approved renewal scheduled</div>
 
         <div class="fw-semibold text-gray-600 fs-7">
-          Effective from <%= licence.upcoming.startsOnLabel %>. The renewal does not authorise work
-          before its effective date.
+          Effective from <%= verificationView.licence.upcoming.startsOnLabel %>. The renewal does
+          not authorise work before its effective date.
         </div>
       </div>
     </div>
@@ -259,14 +258,14 @@
 
     <!-- ───────────────────── LICENCE UPLOAD FORM ───────────────────── -->
 
-    <% if (licence.canSubmitDocument && licence.uploadAction) { %>
+    <% if (verificationView.licence.canSubmitDocument && verificationView.licence.uploadAction) { %>
 
     <form
       id="professionalLicenceUploadForm"
-      action="<%= licence.uploadAction %>"
+      action="<%= verificationView.licence.uploadAction %>"
       method="POST"
       enctype="multipart/form-data"
-      data-max-bytes="<%= licence.uploadMaxBytes %>"
+      data-max-bytes="<%= verificationView.licence.uploadMaxBytes %>"
     >
       <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
 
@@ -279,25 +278,29 @@
           id="professionalLicenceDocument"
           type="file"
           class="form-control form-control-solid"
-          name="<%= licence.uploadFieldName %>"
-          accept="<%= licence.uploadAccept %>"
+          name="<%= verificationView.licence.uploadFieldName %>"
+          accept="<%= verificationView.licence.uploadAccept %>"
           aria-describedby="professionalLicenceUploadHelp"
           required
         />
 
         <div id="professionalLicenceUploadHelp" class="text-muted fw-semibold fs-7 mt-3">
-          <%= licence.uploadHelpMessage %>
+          <%= verificationView.licence.uploadHelpMessage %>
         </div>
       </div>
 
       <button type="submit" id="professionalLicenceUploadButton" class="btn btn-primary">
-        <span id="professionalLicenceUploadButtonLabel"> <%= licence.uploadButtonLabel %> </span>
+        <span id="professionalLicenceUploadButtonLabel">
+          <%= verificationView.licence.uploadButtonLabel %>
+        </span>
       </button>
     </form>
 
     <% } else { %>
 
-    <div class="text-gray-600 fw-semibold fs-7"><%= licence.uploadHelpMessage %></div>
+    <div class="text-gray-600 fw-semibold fs-7">
+      <%= verificationView.licence.uploadHelpMessage %>
+    </div>
 
     <% } %>
   </div>
@@ -325,7 +328,7 @@
           <%= verificationView.licenceExpiryMessage %>
         </div>
 
-        <% if (licence.expired && licence.withinGrace) { %>
+        <% if (verificationView.licence.expired && verificationView.licence.withinGrace) { %>
 
         <div class="fw-bold text-danger fs-7 mt-3">
           The renewal grace period does not permit work with an expired licence.
@@ -341,19 +344,21 @@
 
 <div class="card mb-5 mb-xl-8">
   <div class="card-body p-5 p-lg-7">
-    <div
-      class="notice d-flex align-items-start bg-light-info border border-info border-dashed rounded p-4 p-lg-5"
-    >
-      <i class="ki-duotone ki-lock fs-2x text-info me-4 flex-shrink-0">
-        <span class="path1"></span>
-        <span class="path2"></span>
-        <span class="path3"></span>
-      </i>
+    <div class="d-flex align-items-start gap-4">
+      <div
+        class="notice d-flex align-items-start bg-light-info border border-info border-dashed rounded p-4 p-lg-5"
+      >
+        <i class="ki-duotone ki-lock fs-2x text-info me-4 flex-shrink-0">
+          <span class="path1"></span>
+          <span class="path2"></span>
+          <span class="path3"></span>
+        </i>
 
-      <div class="flex-grow-1 min-w-0">
-        <div class="fw-bold text-gray-900 fs-6 mb-2">Protected Identity and Licence Details</div>
+        <div class="flex-grow-1 min-w-0">
+          <div class="fw-bold text-gray-900 fs-6 mb-2">Protected Identity and Licence Details</div>
 
-        <div class="fw-semibold text-gray-600 fs-7"><%= verificationView.supportMessage %></div>
+          <div class="fw-semibold text-gray-600 fs-7"><%= verificationView.supportMessage %></div>
+        </div>
       </div>
     </div>
   </div>

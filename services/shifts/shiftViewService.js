@@ -6157,6 +6157,20 @@ class ShiftViewService {
       isNoShow && hasEnded && !occurrence.absenceExplanation && !occurrence.absenceExplainedAt
     );
 
+    const pinLength = 4;
+    const pinDigits = Array.from({ length: pinLength }, (_, index) => index + 1);
+
+    const maxEvidenceFiles = 3;
+    const maxEvidenceFileSizeBytes = 20 * 1024 * 1024;
+
+    const evidenceRows = Array.from({ length: maxEvidenceFiles }, (_, index) => ({
+      index,
+      label: `Evidence ${index + 1}`,
+      hiddenClass: index === 0 ? "" : "d-none",
+      canRemove: index > 0,
+      removeLabel: `Remove evidence ${index + 1}`,
+    }));
+
     // These flags are presentation guidance only.
     // Attendance services revalidate funding, assignment,
     // PINs, attendance windows, geofencing and current state.
@@ -6166,7 +6180,8 @@ class ShiftViewService {
         available: isNotStarted,
         url: isNotStarted ? `${baseUrl}/check-in` : null,
         label: "Check In",
-        pinLength: 4,
+        pinLength,
+        pinDigits,
         requiresLocation: true,
         locationSource: "browser",
       },
@@ -6175,7 +6190,8 @@ class ShiftViewService {
         available: isCheckedIn,
         url: isCheckedIn ? `${baseUrl}/check-out` : null,
         label: "Check Out",
-        pinLength: 4,
+        pinLength,
+        pinDigits,
         requiresLocation: true,
         locationSource: "browser",
 
@@ -6222,9 +6238,13 @@ class ShiftViewService {
 
           manifestFieldName: "overtimeEvidenceManifest",
 
-          maxFiles: 3,
+          maxFiles: maxEvidenceFiles,
 
-          maxFileSizeBytes: 20 * 1024 * 1024,
+          rows: evidenceRows,
+
+          maxFileSizeBytes: maxEvidenceFileSizeBytes,
+
+          maxFileSizeDisplay: `${maxEvidenceFileSizeBytes / (1024 * 1024)} MB`,
 
           maxDescriptionLength: 500,
 

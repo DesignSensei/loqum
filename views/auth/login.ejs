@@ -1,7 +1,5 @@
 <!-- views/auth/login.ejs -->
 
-<% const view = loginView; %>
-
 <div class="d-flex flex-center flex-column flex-lg-row-fluid">
   <div class="text-center mb-10">
     <img alt="Logo" src="/assets/images/logo_purple.png" class="h-30px h-lg-40px" />
@@ -18,23 +16,23 @@
       >
         <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
 
-        <% if (view.isInviteLogin) { %>
-        <input type="hidden" name="inviteToken" value="<%= view.inviteToken %>" />
+        <% if (loginView.isInviteLogin) { %>
+        <input type="hidden" name="inviteToken" value="<%= loginView.inviteToken %>" />
         <% } %>
 
         <!-- Heading -->
         <div class="text-center mb-11">
           <h1 class="text-gray-900 fw-bolder mb-3">
-            <% if (view.isInviteLogin) { %> Accept Invite to
-            <span class="brand-accent"><%= view.inviteBusinessName %></span> <% } else { %> Log In
-            to <span class="brand-accent">Loqum</span>
+            <% if (loginView.isInviteLogin) { %> Accept Invite to
+            <span class="brand-accent"><%= loginView.inviteBusinessName %></span> <% } else { %> Log
+            In to <span class="brand-accent">Loqum</span>
             <% } %>
           </h1>
 
-          <div class="text-gray-500 fw-semibold fs-6"><%= view.subtitle %></div>
+          <div class="text-gray-500 fw-semibold fs-6"><%= loginView.subtitle %></div>
         </div>
 
-        <% if (view.isInviteLogin) { %> <% if (view.hasInviteError) { %>
+        <% if (loginView.isInviteLogin) { %> <% if (loginView.hasInviteError) { %>
         <div class="alert bg-light-danger border border-danger d-flex align-items-center p-4 mb-8">
           <i class="ki-duotone ki-information-5 fs-2x text-danger me-4">
             <span class="path1"></span>
@@ -44,7 +42,7 @@
 
           <div class="d-flex flex-column">
             <span class="fw-bold text-gray-900 fs-6">Invite cannot be used</span>
-            <span class="text-gray-600 fs-7"><%= view.inviteError %></span>
+            <span class="text-gray-600 fs-7"><%= loginView.inviteError %></span>
           </div>
         </div>
         <% } else { %>
@@ -52,17 +50,19 @@
           <div class="fw-bold text-gray-900 fs-6 mb-1">Team Invite</div>
 
           <div class="text-gray-600 fs-7">
-            You were invited to join <strong><%= view.inviteBusinessName %></strong> <% if
-            (view.inviteBranchName) { %> at <strong><%= view.inviteBranchName %></strong> <% } %> as
-            <strong><%= view.inviteRoleLabel %></strong>.
+            You were invited to join <strong><%= loginView.inviteBusinessName %></strong> <% if
+            (loginView.inviteBranchName) { %> at
+            <strong><%= loginView.inviteBranchName %></strong> <% } %> as
+            <strong><%= loginView.inviteRoleLabel %></strong>.
           </div>
         </div>
-        <% } %> <% } %> <% if (!view.shouldDisableSubmit) { %> <% if (view.showGoogleLogin) { %>
+        <% } %> <% } %> <% if (!loginView.shouldDisableSubmit) { %> <% if
+        (loginView.showGoogleLogin) { %>
         <!-- Google Login -->
         <div class="row g-3 mb-9">
           <div class="col-md-12">
             <a
-              href="<%= view.googleLoginUrl || '/auth/google' %>"
+              href="<%= loginView.googleLoginUrl || '/auth/google' %>"
               class="btn btn-flex btn-outline btn-text-gray-700 btn-active-color-primary bg-state-light flex-center text-nowrap w-100"
             >
               <img
@@ -71,8 +71,8 @@
                 class="h-15px me-3"
               />
 
-              <% if (view.isInviteLogin) { %> Sign in with Google to accept invite <% } else { %>
-              Sign in with Google <% } %>
+              <% if (loginView.isInviteLogin) { %> Sign in with Google to accept invite <% } else {
+              %> Sign in with Google <% } %>
             </a>
           </div>
         </div>
@@ -84,12 +84,12 @@
 
         <!-- Email -->
         <div class="fv-row mb-8">
-          <% if (view.isInviteLogin) { %>
+          <% if (loginView.isInviteLogin) { %>
           <input
             type="email"
             placeholder="Email"
             name="email"
-            value="<%= view.inviteEmail %>"
+            value="<%= loginView.inviteEmail %>"
             autocomplete="off"
             class="form-control bg-transparent"
             readonly
@@ -141,7 +141,7 @@
         <!-- Submit -->
         <div class="d-grid mb-10">
           <button type="submit" id="kt_sign_in_submit" class="btn btn-primary">
-            <span class="indicator-label"><%= view.submitLabel %></span>
+            <span class="indicator-label"><%= loginView.submitLabel %></span>
 
             <span class="indicator-progress">
               Please wait...
@@ -153,10 +153,10 @@
 
         <!-- Signup -->
         <div class="text-gray-500 text-center fw-semibold fs-6">
-          <% if (view.isInviteLogin) { %> Need to create an account?
-          <a href="<%= view.signupUrl %>" class="link-primary">Sign up with this invite</a>
+          <% if (loginView.isInviteLogin) { %> Need to create an account?
+          <a href="<%= loginView.signupUrl %>" class="link-primary">Sign up with this invite</a>
           <% } else { %> Not a user yet?
-          <a href="<%= view.signupUrl %>" class="link-primary">Sign up</a>
+          <a href="<%= loginView.signupUrl %>" class="link-primary">Sign up</a>
           <% } %>
         </div>
       </form>

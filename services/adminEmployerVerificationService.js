@@ -1,3 +1,5 @@
+// services/adminEmployerVerificationService.js
+
 const mongoose = require("mongoose");
 
 const EmployerProfile = require("../models/EmployerProfile");
@@ -151,125 +153,38 @@ class AdminEmployerVerificationService {
   }
 
   static buildEmployerQuery(filter) {
-    if (filter === "restricted") {
-      return { accountStatus: "restricted" };
+    if (filter === "restricted" || filter === "suspended") {
+      return { accountStatus: filter };
     }
 
-    if (filter === "suspended") {
-      return { accountStatus: "suspended" };
+    if (filter === "review") {
+      return {
+        cacVerificationStatus: { $in: ["pending", "needs_review"] },
+      };
+    }
+
+    if (["pending", "needs_review", "verified", "rejected"].includes(filter)) {
+      return { cacVerificationStatus: filter };
     }
 
     return {};
   }
 
-  static getReviewStatusCriteria(filter) {
-    switch (filter) {
-      case "review":
-        return {
-          cacStatuses: ["pending", "needs_review"],
-          permitStatuses: ["pending", "needs_review"],
-        };
-
-      case "pending":
-      case "needs_review":
-      case "verified":
-      case "rejected":
-        return {
-          cacStatuses: [filter],
-          permitStatuses: [filter],
-        };
-
-      default:
-        return null;
-    }
-  }
-
   static buildEmployerListPipeline({ filter, page, limit }) {
-    const pipeline = [
+    return [
+      { $match: this.buildEmployerQuery(filter) },
       {
-        $match: this.buildEmployerQuery(filter),
+        $facet: {
+          employers: [
+            { $sort: { createdAt: -1, _id: -1 } },
+            { $skip: (page - 1) * limit },
+            { $limit: limit },
+            { $project: EMPLOYER_LIST_FIELDS },
+          ],
+          count: [{ $count: "total" }],
+        },
       },
     ];
-
-    const criteria = this.getReviewStatusCriteria(filter);
-
-    if (criteria) {
-      pipeline.push({
-        $lookup: {
-          from: FacilityPermit.collection.name,
-          let: {
-            employerId: "$_id",
-          },
-          pipeline: [
-            {
-              $match: {
-                status: {
-                  $in: criteria.permitStatuses,
-                },
-                $expr: {
-                  $eq: ["$business", "$$employerId"],
-                },
-              },
-            },
-            {
-              $limit: 1,
-            },
-            {
-              $project: {
-                _id: 1,
-              },
-            },
-          ],
-          as: "_matchingPermits",
-        },
-      });
-
-      pipeline.push({
-        $match: {
-          $or: [
-            {
-              cacVerificationStatus: {
-                $in: criteria.cacStatuses,
-              },
-            },
-            {
-              "_matchingPermits.0": {
-                $exists: true,
-              },
-            },
-          ],
-        },
-      });
-    }
-
-    pipeline.push({
-      $facet: {
-        employers: [
-          {
-            $sort: {
-              createdAt: -1,
-              _id: -1,
-            },
-          },
-          {
-            $skip: (page - 1) * limit,
-          },
-          {
-            $limit: limit,
-          },
-          {
-            $project: EMPLOYER_LIST_FIELDS,
-          },
-        ],
-        count: [
-          {
-            $count: "total",
-          },
-        ],
-      },
-    });
-
-    return pipeline;
   }
 
   static permitCountsGroup(groupId) {

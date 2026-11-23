@@ -1454,6 +1454,25 @@ class JobPublicationService {
         });
       }
 
+      // Resume only while recruitment remains active.
+      if (job.recruitmentStatus !== "active") {
+        throw this.createError({
+          message: "Only active recruitment can be resumed.",
+          code: "JOB_RECRUITMENT_NOT_RESUMABLE",
+          statusCode: 409,
+        });
+      }
+
+      // Check current eligibility without repeating CAC verification
+      // or consuming another publication entitlement.
+      await this.assertBranchPublicationEligibility({
+        job,
+        actorUserId: resumedBy,
+        employerContext,
+        adminEmployerContext,
+        session,
+      });
+
       latestPause.resumedAt = resumedAt;
       latestPause.resumedBy = resumedBy;
 

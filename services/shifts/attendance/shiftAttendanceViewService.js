@@ -809,6 +809,11 @@ class ShiftAttendanceViewService {
     return SUMMARY_CARD_DEFINITIONS.map((definition) => ({
       ...definition,
 
+      iconPathClasses: Array.from(
+        { length: definition.iconPaths },
+        (_, index) => `path${index + 1}`
+      ),
+
       value: ShiftAttendanceViewService.toSafeInteger(scopeCounts[definition.key], 0),
     }));
   }

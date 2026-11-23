@@ -1,7 +1,5 @@
 <!-- views/auth/signup.ejs -->
 
-<% const view = signupView; %>
-
 <div class="d-flex flex-center flex-column flex-lg-row-fluid">
   <div class="text-center mb-10">
     <img alt="Logo" src="/assets/images/logo_purple.png" class="h-30px h-lg-40px" />
@@ -10,13 +8,13 @@
   <div class="d-flex flex-column flex-lg-row-fluid w-75 w-lg-500px p-10 order-1 order-lg-1">
     <div class="text-center mb-11">
       <h1 class="text-gray-900 fw-bolder mb-3">
-        <% if (view.isInviteSignup) { %> Join
-        <span class="brand-accent"><%= view.inviteBusinessName %></span> <% } else { %> Sign Up to
+        <% if (signupView.isInviteSignup) { %> Join
+        <span class="brand-accent"><%= signupView.inviteBusinessName %></span> <% } else { %> Sign Up to
         <span class="brand-accent">Loqum</span>
         <% } %>
       </h1>
 
-      <div class="text-gray-500 fw-semibold fs-6"><%= view.subtitle %></div>
+      <div class="text-gray-500 fw-semibold fs-6"><%= signupView.subtitle %></div>
     </div>
 
     <form
@@ -28,8 +26,8 @@
     >
       <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
 
-      <% if (view.isInviteSignup) { %>
-      <input type="hidden" name="inviteToken" value="<%= view.inviteToken %>" />
+      <% if (signupView.isInviteSignup) { %>
+      <input type="hidden" name="inviteToken" value="<%= signupView.inviteToken %>" />
       <% } %>
 
       <!-- ───────────────────────── EMPLOYER TEAM INVITATION ───────────────────────── -->
@@ -53,8 +51,8 @@
          */
       %>
 
-      <% if (view.isInviteSignup) { %>
-        <% if (view.hasInviteError) { %>
+      <% if (signupView.isInviteSignup) { %>
+        <% if (signupView.hasInviteError) { %>
         <div class="alert bg-light-danger border border-danger d-flex align-items-center p-4 mb-8">
           <i class="ki-duotone ki-information-5 fs-2x text-danger me-4">
             <span class="path1"></span>
@@ -64,10 +62,10 @@
 
           <div class="d-flex flex-column">
             <span class="fw-bold text-gray-900 fs-6">Invite cannot be used</span>
-            <span class="text-gray-600 fs-7"><%= view.inviteError %></span>
+            <span class="text-gray-600 fs-7"><%= signupView.inviteError %></span>
           </div>
         </div>
-        <% } else if (view.existingInviteUser) { %>
+        <% } else if (signupView.existingInviteUser) { %>
         <div class="alert bg-light-warning border border-warning d-flex align-items-center p-4 mb-8">
           <i class="ki-duotone ki-information-5 fs-2x text-warning me-4">
             <span class="path1"></span>
@@ -79,11 +77,11 @@
             <span class="fw-bold text-gray-900 fs-6">Account already exists</span>
 
             <span class="text-gray-600 fs-7">
-              An account already exists for <strong><%= view.inviteEmail %></strong>. Please log in to
+              An account already exists for <strong><%= signupView.inviteEmail %></strong>. Please log in to
               accept this invite.
             </span>
 
-            <a href="<%= view.loginUrl %>" class="btn btn-sm btn-light-warning mt-3 align-self-start">
+            <a href="<%= signupView.loginUrl %>" class="btn btn-sm btn-light-warning mt-3 align-self-start">
               Log In
             </a>
           </div>
@@ -93,16 +91,16 @@
           <div class="fw-bold text-gray-900 fs-6 mb-1">Team Invite</div>
 
           <div class="text-gray-600 fs-7">
-            You were invited to join <strong><%= view.inviteBusinessName %></strong> <% if
-            (view.inviteBranchName) { %> at <strong><%= view.inviteBranchName %></strong> <% } %> as
-            <strong><%= view.inviteRoleLabel %></strong>.
+            You were invited to join <strong><%= signupView.inviteBusinessName %></strong> <% if
+            (signupView.inviteBranchName) { %> at <strong><%= signupView.inviteBranchName %></strong> <% } %> as
+            <strong><%= signupView.inviteRoleLabel %></strong>.
           </div>
         </div>
         <% } %>
       <% } %>
 
-      <% if (!view.shouldDisableSubmit) { %>
-        <% if (!view.isInviteSignup) { %>
+      <% if (!signupView.shouldDisableSubmit) { %>
+        <% if (!signupView.isInviteSignup) { %>
 
         <!-- ───────────────────────── ACCOUNT TYPE ───────────────────────── -->
 
@@ -166,7 +164,7 @@
         </div>
         <% } %>
 
-        <% if (view.showGoogleSignup) { %>
+        <% if (signupView.showGoogleSignup) { %>
 
         <!-- ───────────────────────── GOOGLE SIGNUP ───────────────────────── -->
 
@@ -175,7 +173,7 @@
             <button
               type="button"
               id="googleSignupBtn"
-              data-google-signup-url="<%= view.googleSignupUrl %>"
+              data-google-signup-url="<%= signupView.googleSignupUrl %>"
               class="btn btn-flex btn-outline btn-text-gray-700 btn-active-color-primary bg-state-light flex-center text-nowrap w-100"
             >
               <img
@@ -184,7 +182,7 @@
                 class="h-15px me-3"
               />
 
-              <% if (view.isInviteSignup) { %> Accept Invite with Google <% } else { %> Sign up with
+              <% if (signupView.isInviteSignup) { %> Accept Invite with Google <% } else { %> Sign up with
               Google <% } %>
             </button>
           </div>
@@ -232,8 +230,8 @@
 
         <!-- First Name -->
         <div
-          class="fv-row mb-8<% if (!view.isInviteSignup) { %> d-none<% } %>"
-          <% if (!view.isInviteSignup) { %>data-professional-signup-hidden="true"<% } %>
+          class="fv-row mb-8<% if (!signupView.isInviteSignup) { %> d-none<% } %>"
+          <% if (!signupView.isInviteSignup) { %>data-professional-signup-hidden="true"<% } %>
         >
           <input
             type="text"
@@ -241,7 +239,7 @@
             name="firstName"
             class="form-control bg-transparent"
             autocomplete="given-name"
-            <% if (!view.isInviteSignup) { %>
+            <% if (!signupView.isInviteSignup) { %>
             disabled
             data-professional-signup-disabled="true"
             <% } %>
@@ -251,8 +249,8 @@
 
         <!-- Last Name -->
         <div
-          class="fv-row mb-8<% if (!view.isInviteSignup) { %> d-none<% } %>"
-          <% if (!view.isInviteSignup) { %>data-professional-signup-hidden="true"<% } %>
+          class="fv-row mb-8<% if (!signupView.isInviteSignup) { %> d-none<% } %>"
+          <% if (!signupView.isInviteSignup) { %>data-professional-signup-hidden="true"<% } %>
         >
           <input
             type="text"
@@ -260,7 +258,7 @@
             name="lastName"
             class="form-control bg-transparent"
             autocomplete="family-name"
-            <% if (!view.isInviteSignup) { %>
+            <% if (!signupView.isInviteSignup) { %>
             disabled
             data-professional-signup-disabled="true"
             <% } %>
@@ -271,12 +269,12 @@
         <!-- ───────────────────────── EMAIL ───────────────────────── -->
 
         <div class="fv-row mb-8">
-          <% if (view.isInviteSignup) { %>
+          <% if (signupView.isInviteSignup) { %>
           <input
             type="email"
             placeholder="Email"
             name="email"
-            value="<%= view.inviteEmail %>"
+            value="<%= signupView.inviteEmail %>"
             class="form-control bg-transparent"
             autocomplete="email"
             readonly
@@ -360,7 +358,7 @@
 
         <div class="d-grid mb-10">
           <button type="submit" id="kt_sign_up_submit" class="btn btn-primary">
-            <span class="indicator-label"><%= view.submitLabel %></span>
+            <span class="indicator-label"><%= signupView.submitLabel %></span>
 
             <span class="indicator-progress">
               Please wait...
@@ -374,7 +372,7 @@
 
       <div class="text-gray-500 text-center fw-semibold fs-6">
         Already a User?
-        <a href="<%= view.loginUrl %>" class="link-primary">Log In</a>
+        <a href="<%= signupView.loginUrl %>" class="link-primary">Log In</a>
       </div>
     </form>
   </div>

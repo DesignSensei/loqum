@@ -1,5 +1,3 @@
-// controllers/employerBranchPermitPageController.js
-
 const mongoose = require("mongoose");
 
 const FacilityPermitVerificationService = require("../services/facilityPermitVerificationService");
@@ -12,6 +10,129 @@ function renderNotFound(res, statusCode = 404) {
     layout: "layouts/auth-layout-no-index",
     title: statusCode === 403 ? "Forbidden" : "Not Found",
   });
+}
+
+function formatRequirementName(value) {
+  return String(value || "").replace(/[_:-]/g, " ");
+}
+
+function formatSubmissionDate(value) {
+  if (!value) return "-";
+
+  const date = new Date(value);
+
+  return Number.isNaN(date.getTime())
+    ? "-"
+    : date.toLocaleDateString("en-GB", {
+        timeZone: "Africa/Lagos",
+      });
+}
+
+function buildPermitView({ branch, branchId, permits, readiness }) {
+  const requirements = Array.isArray(readiness?.requirements) ? readiness.requirements : [];
+  const history = Array.isArray(permits) ? permits : [];
+
+  const policyUnavailable = String(readiness?.reason || "").startsWith("FACILITY_PERMIT_POLICY_");
+
+  const readinessMode = policyUnavailable
+    ? "policy_unavailable"
+    : readiness?.canPost === true
+      ? "ready"
+      : "not_ready";
+
+  let readinessMessage = null;
+
+  if (readinessMode === "not_ready") {
+    if (readiness?.branchActive !== true) {
+      readinessMessage =
+        "This branch is administratively inactive. Reactivating it will not bypass permit requirements.";
+    } else if (readiness?.identityReady !== true) {
+      readinessMessage =
+        "The business or branch must meet the applicable account and CAC eligibility checks.";
+    } else {
+      readinessMessage = "One or more required facility permits are not currently in force.";
+    }
+  }
+
+  const requirementCards = requirements.map((requirement) => {
+    const records = history.filter((item) => item.requirementKey === requirement.requirementKey);
+
+    const pending = records.some((item) => item.status === "pending");
+    const newest = records[0] || null;
+    const satisfied = Boolean(requirement.satisfied);
+
+    let helpMessage = "Upload a valid document for administrative verification.";
+
+    if (pending) {
+      helpMessage =
+        "A submission is awaiting administrative review. You cannot submit another pending document for this requirement.";
+    } else if (satisfied) {
+      helpMessage =
+        "This requirement is currently satisfied. You can submit a renewal when you have updated evidence.";
+    } else if (newest?.status === "needs_review") {
+      helpMessage = "Additional review is required. You may submit updated supporting evidence.";
+    } else if (newest?.status === "rejected") {
+      helpMessage =
+        "The previous submission was not approved. You may submit a replacement document.";
+    }
+
+    return {
+      requirementKey: requirement.requirementKey,
+      displayName: formatRequirementName(requirement.requirementKey),
+      authorityName: requirement.authorityName || "Relevant regulatory authority",
+      statusLabel: satisfied ? "Satisfied" : pending ? "Pending review" : "Required",
+      statusBadgeClass: satisfied
+        ? "badge-light-success"
+        : pending
+          ? "badge-light-warning"
+          : "badge-light-danger",
+      helpMessage,
+      canSubmit: !pending,
+      submitLabel: satisfied ? "Submit Renewal" : "Submit Evidence",
+    };
+  });
+
+  const historyRows = history.map((permit) => {
+    const state = permit.revoked ? "revoked" : permit.status;
+    const showValidity = permit.status === "verified" && !permit.revoked;
+
+    const statusBadgeClass =
+      state === "verified"
+        ? "badge-light-success"
+        : state === "pending"
+          ? "badge-light-warning"
+          : state === "needs_review"
+            ? "badge-light-info"
+            : "badge-light-danger";
+
+    return {
+      requirementLabel: formatRequirementName(permit.requirementKey),
+      authorityName: permit.authorityName || "-",
+      permitNumber: permit.permitNumber || "-",
+      isRenewal: Boolean(permit.renewalOfId),
+      statusLabel: String(state || "-").replace(/_/g, " "),
+      statusBadgeClass,
+      isCurrent: Boolean(permit.isCurrent && !permit.revoked),
+      showValidity,
+      validFromLabel: permit.validFromDate || "-",
+      validUntilLabel:
+        permit.validityType === "indefinite" ? "No fixed expiry" : permit.expiryDate || "-",
+      isScheduled: Boolean(showValidity && !permit.isCurrent && !permit.activatedAt),
+      submittedDateLabel: formatSubmissionDate(permit.submittedAt),
+    };
+  });
+
+  return {
+    branchName: branch.name || "Branch",
+    branchLocationLabel: `${branch.state || "-"}, ${branch.lga || "-"}`,
+    submitUrl: `/employer/branches/${branchId}/permits`,
+    readinessUrl: `/employer/branches/${branchId}/permits/readiness`,
+    readinessMode,
+    readinessMessage,
+    requirements: requirementCards,
+    history: historyRows,
+    showSubmissionForm: !policyUnavailable && requirementCards.length > 0,
+  };
 }
 
 exports.getBranchPermitsPage = async (req, res, next) => {
@@ -34,7 +155,6 @@ exports.getBranchPermitsPage = async (req, res, next) => {
       return renderNotFound(res);
     }
 
-    // Reuse the authoritative owner/admin policy; page visibility is not authorization.
     await FacilityPermitVerificationService.assertEmployerManager({
       businessId,
       actorUserId,
@@ -45,8 +165,6 @@ exports.getBranchPermitsPage = async (req, res, next) => {
       branchId,
     });
 
-    // Bring approved, due renewals into effect before displaying their status.
-    // Policy misconfiguration must not be turned into a default approval.
     try {
       await FacilityPermitVerificationService.activateDuePermits({
         businessId,
@@ -64,6 +182,13 @@ exports.getBranchPermitsPage = async (req, res, next) => {
       actorUserId,
     });
 
+    const permitView = buildPermitView({
+      branch,
+      branchId: String(branchId),
+      permits,
+      readiness,
+    });
+
     return res.render("employer/branch-permits/index", {
       layout: "layouts/app-layout",
       title: "Branch Facility Permits",
@@ -72,10 +197,7 @@ exports.getBranchPermitsPage = async (req, res, next) => {
         { label: "Business Profile", url: BRANCHES_URL },
         { label: "Branch Facility Permits", url: null },
       ],
-      branch,
-      branchId: String(branchId),
-      permits,
-      readiness,
+      permitView,
       branchesUrl: BRANCHES_URL,
       csrfToken: req.csrfToken(),
       scripts: '<script src="/js/employer/branch-permits.js"></script>',

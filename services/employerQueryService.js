@@ -135,20 +135,20 @@ async function resolveEmployerDataAccess({ employerProfile, actorUserId, employe
   }
 
   const isBusinessWide = isPrimaryEmployer || isBusinessAdmin;
+
+  const managedBranchIds = isBusinessWide
+    ? []
+    : (Array.isArray(member?.branches) ? member.branches : [])
+        .filter((assignment) => assignment?.role === "branch_manager")
+        .map((assignment) => assignment?.branch?._id || assignment?.branch)
+        .filter((branchId) => mongoose.isValidObjectId(branchId));
+
   const branchAssignments = Array.isArray(member?.branches) ? member.branches : [];
 
   const assignedBranchIds = isBusinessWide
     ? []
     : branchAssignments
         .map((assignment) => assignment?.branch)
-        .filter((branchId) => mongoose.isValidObjectId(branchId));
-
-  // A mixed-role member can manage only branches assigned as branch_manager.
-  const managedBranchIds = isBusinessWide
-    ? []
-    : branchAssignments
-        .filter((assignment) => assignment?.role === "branch_manager")
-        .map((assignment) => assignment.branch)
         .filter((branchId) => mongoose.isValidObjectId(branchId));
 
   const canViewShifts = Boolean(

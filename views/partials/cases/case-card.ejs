@@ -83,8 +83,7 @@
 
     <!-- Authoritative occurrence context -->
 
-    <% if (caseItem.authoritativeOccurrence) { %> <% const authority =
-    caseItem.authoritativeOccurrence; %>
+    <% if (caseItem.authoritativeOccurrence) { %>
 
     <details class="border border-gray-300 rounded p-4 mb-5">
       <summary class="fw-bold text-gray-800 cursor-pointer">
@@ -98,9 +97,9 @@
           <div class="col-md-6 col-xl-3">
             <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Occurrence status</div>
 
-            <% if (authority.status) { %>
-            <span class="badge <%= authority.status.className %>">
-              <%= authority.status.label %>
+            <% if (caseItem.authoritativeOccurrence.status) { %>
+            <span class="badge <%= caseItem.authoritativeOccurrence.status.className %>">
+              <%= caseItem.authoritativeOccurrence.status.label %>
             </span>
             <% } else { %>
             <span class="text-gray-500"> Not available </span>
@@ -112,9 +111,9 @@
           <div class="col-md-6 col-xl-3">
             <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Attendance status</div>
 
-            <% if (authority.attendanceStatus) { %>
-            <span class="badge <%= authority.attendanceStatus.className %>">
-              <%= authority.attendanceStatus.label %>
+            <% if (caseItem.authoritativeOccurrence.attendanceStatus) { %>
+            <span class="badge <%= caseItem.authoritativeOccurrence.attendanceStatus.className %>">
+              <%= caseItem.authoritativeOccurrence.attendanceStatus.label %>
             </span>
             <% } else { %>
             <span class="text-gray-500"> Not available </span>
@@ -127,7 +126,7 @@
             <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Scheduled start</div>
 
             <div class="fw-semibold text-gray-800">
-              <%= authority.scheduled?.startTime?.label || "Not available" %>
+              <%= caseItem.authoritativeOccurrence.scheduled?.startTime?.label || "Not available" %>
             </div>
           </div>
 
@@ -137,7 +136,7 @@
             <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Scheduled end</div>
 
             <div class="fw-semibold text-gray-800">
-              <%= authority.scheduled?.endTime?.label || "Not available" %>
+              <%= caseItem.authoritativeOccurrence.scheduled?.endTime?.label || "Not available" %>
             </div>
           </div>
 
@@ -147,7 +146,9 @@
             <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Authoritative check-in</div>
 
             <div class="fw-semibold text-gray-800">
-              <%= authority.attendance?.authoritativeCheckInAt?.label || "Not available" %>
+              <% if (caseItem.authoritativeOccurrence.attendance?.authoritativeCheckOutAt?.label) {
+              %> <%= caseItem.authoritativeOccurrence.attendance.authoritativeCheckOutAt.label %> <%
+              } else { %> Not available <% } %>
             </div>
           </div>
 
@@ -157,7 +158,8 @@
             <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Authoritative checkout</div>
 
             <div class="fw-semibold text-gray-800">
-              <%= authority.attendance?.authoritativeCheckOutAt?.label || "Not available" %>
+              <%= caseItem.authoritativeOccurrence.attendance?.authoritativeCheckOutAt?.label ||
+              "Not available" %>
             </div>
           </div>
 
@@ -167,7 +169,7 @@
             <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">BASE billable hours</div>
 
             <div class="fw-semibold text-gray-800">
-              <%= authority.base?.billableHours ?? "Not available" %>
+              <%= caseItem.authoritativeOccurrence.base?.billableHours ?? "Not available" %>
             </div>
           </div>
 
@@ -177,7 +179,8 @@
             <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">BASE professional pay</div>
 
             <div class="fw-semibold text-gray-800">
-              <%= authority.base?.professionalPayDisplay || "Not available" %>
+              <%= caseItem.authoritativeOccurrence.base?.professionalPayDisplay || "Not available"
+              %>
             </div>
           </div>
 
@@ -187,7 +190,7 @@
             <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">BASE platform fee</div>
 
             <div class="fw-semibold text-gray-800">
-              <%= authority.base?.platformFeeDisplay || "Not available" %>
+              <%= caseItem.authoritativeOccurrence.base?.platformFeeDisplay || "Not available" %>
             </div>
           </div>
 
@@ -197,7 +200,7 @@
             <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">BASE employer charge</div>
 
             <div class="fw-semibold text-gray-800">
-              <%= authority.base?.employerChargeDisplay || "Not available" %>
+              <%= caseItem.authoritativeOccurrence.base?.employerChargeDisplay || "Not available" %>
             </div>
           </div>
 
@@ -207,9 +210,12 @@
             <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Refundable amount</div>
 
             <div class="fw-semibold text-gray-800">
-              <%= authority.refund?.refundableAmountDisplay || "Not available" %>
-            </div>
-          </div>
+  <% if (caseItem.authoritativeOccurrence.attendance?.authoritativeCheckInAt?.label) { %>
+    <%= caseItem.authoritativeOccurrence.attendance.authoritativeCheckInAt.label %>
+  <% } else { %>
+    Not available
+  <% } %>
+</div>
 
           <!-- Refunded amount -->
 
@@ -217,7 +223,8 @@
             <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">Refunded amount</div>
 
             <div class="fw-semibold text-gray-800">
-              <%= authority.refund?.refundedAmountDisplay || "Not available" %>
+              <%= caseItem.authoritativeOccurrence.refund?.refundedAmountDisplay || "Not available"
+              %>
             </div>
           </div>
         </div>
@@ -268,11 +275,10 @@
 
     <!-- Case withdrawal action -->
 
-    <% if (caseItem.actions?.withdraw?.available) { %> <% const withdrawAction =
-    caseItem.actions.withdraw; %>
+    <% if (caseItem.actions?.withdraw?.available) { %>
 
     <form
-      action="<%= withdrawAction.url %>"
+      action="<%= caseItem.actions.withdraw.url %>"
       method="post"
       data-case-action-form
       class="border-top mt-5 pt-4"
@@ -282,7 +288,7 @@
       <div class="row g-3 align-items-end">
         <div class="col-md-9">
           <label class="form-label fw-bold" for="case-withdrawal-reason-<%= caseItem.id %>">
-            <%= withdrawAction.reasonLabel %>
+            <%= caseItem.actions.withdraw.reasonLabel %>
           </label>
 
           <textarea
@@ -290,16 +296,16 @@
             class="form-control"
             name="reason"
             rows="2"
-            minlength="<%= withdrawAction.reasonMinLength %>"
-            maxlength="<%= withdrawAction.reasonMaxLength %>"
-            placeholder="<%= withdrawAction.reasonPlaceholder %>"
+            minlength="<%= caseItem.actions.withdraw.reasonMinLength %>"
+            maxlength="<%= caseItem.actions.withdraw.reasonMaxLength %>"
+            placeholder="<%= caseItem.actions.withdraw.reasonPlaceholder %>"
             required
           ></textarea>
         </div>
 
         <div class="col-md-3">
           <button type="submit" class="btn btn-sm btn-light-danger w-100">
-            <%= withdrawAction.label %>
+            <%= caseItem.actions.withdraw.label %>
           </button>
         </div>
       </div>

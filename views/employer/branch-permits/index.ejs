@@ -1,58 +1,63 @@
 <!-- views/employer/branch-permits/index.ejs -->
 
-<% const requirements = Array.isArray(readiness && readiness.requirements) ? readiness.requirements
-: []; %> <% const history = Array.isArray(permits) ? permits : []; %> <% const policyUnavailable =
-String(readiness && readiness.reason || '').startsWith('FACILITY_PERMIT_POLICY_'); %>
-
 <div
   id="branchPermitPage"
-  data-branch-id="<%= branchId %>"
-  data-submit-url="/employer/branches/<%= branchId %>/permits"
-  data-readiness-url="/employer/branches/<%= branchId %>/permits/readiness"
+  data-submit-url="<%= permitView.submitUrl %>"
+  data-readiness-url="<%= permitView.readinessUrl %>"
 >
   <div class="d-flex flex-wrap justify-content-between align-items-center gap-4 mb-8">
     <div>
       <a class="btn btn-sm btn-light mb-4" href="<%= branchesUrl %>">
-        <i class="ki-duotone ki-arrow-left fs-4 me-1"
-          ><span class="path1"></span><span class="path2"></span
-        ></i>
+        <i class="ki-duotone ki-arrow-left fs-4 me-1">
+          <span class="path1"></span>
+          <span class="path2"></span>
+        </i>
         Back to Branches
       </a>
 
       <h1 class="fw-bold fs-2 mb-2">Facility Permits</h1>
 
       <div class="text-muted fw-semibold">
-        <%= branch.name || 'Branch' %> &middot; <%= branch.state || '-' %>, <%= branch.lga || '-' %>
+        <%= permitView.branchName %> &middot; <%= permitView.branchLocationLabel %>
       </div>
     </div>
 
     <button type="button" id="refreshBranchPermitReadiness" class="btn btn-light-primary">
-      <i class="ki-duotone ki-arrows-circle fs-3"
-        ><span class="path1"></span><span class="path2"></span
-      ></i>
+      <i class="ki-duotone ki-arrows-circle fs-3">
+        <span class="path1"></span>
+        <span class="path2"></span>
+      </i>
       Refresh Status
     </button>
   </div>
 
-  <% if (policyUnavailable) { %>
+  <!-- ───────────────────── BRANCH READINESS ───────────────────── -->
+
+  <% if (permitView.readinessMode === "policy_unavailable") { %>
+
   <div
     class="notice d-flex bg-light-warning border border-warning border-dashed rounded p-6 mb-8"
     role="alert"
   >
-    <i class="ki-duotone ki-information-5 fs-2tx text-warning me-4"
-      ><span class="path1"></span><span class="path2"></span><span class="path3"></span
-    ></i>
+    <i class="ki-duotone ki-information-5 fs-2tx text-warning me-4">
+      <span class="path1"></span>
+      <span class="path2"></span>
+      <span class="path3"></span>
+    </i>
 
     <div class="fw-semibold text-gray-800">
       Facility permit requirements are temporarily unavailable. Submissions are disabled until the
       platform's regulatory policy is configured. Contact Loqum Support if this continues.
     </div>
   </div>
-  <% } else if (readiness && readiness.canPost === true) { %>
+
+  <% } else if (permitView.readinessMode === "ready") { %>
+
   <div class="notice d-flex bg-light-success border border-success border-dashed rounded p-6 mb-8">
-    <i class="ki-duotone ki-shield-tick fs-2tx text-success me-4"
-      ><span class="path1"></span><span class="path2"></span
-    ></i>
+    <i class="ki-duotone ki-shield-tick fs-2tx text-success me-4">
+      <span class="path1"></span>
+      <span class="path2"></span>
+    </i>
 
     <div>
       <div class="fw-bold text-gray-900 mb-1">Current facility requirements satisfied</div>
@@ -63,27 +68,28 @@ String(readiness && readiness.reason || '').startsWith('FACILITY_PERMIT_POLICY_'
       </div>
     </div>
   </div>
+
   <% } else { %>
+
   <div class="notice d-flex bg-light-warning border border-warning border-dashed rounded p-6 mb-8">
-    <i class="ki-duotone ki-information-5 fs-2tx text-warning me-4"
-      ><span class="path1"></span><span class="path2"></span><span class="path3"></span
-    ></i>
+    <i class="ki-duotone ki-information-5 fs-2tx text-warning me-4">
+      <span class="path1"></span>
+      <span class="path2"></span>
+      <span class="path3"></span>
+    </i>
 
     <div>
       <div class="fw-bold text-gray-900 mb-1">
         Branch is not currently eligible to post regulated shifts
       </div>
 
-      <div class="fw-semibold text-gray-700 fs-7">
-        <% if (readiness && readiness.branchActive !== true) { %> This branch is administratively
-        inactive. Reactivating it will not bypass permit requirements. <% } else if (readiness &&
-        readiness.identityReady !== true) { %> The business or branch must meet the applicable
-        account and CAC eligibility checks. <% } else { %> One or more required facility permits are
-        not currently in force. <% } %>
-      </div>
+      <div class="fw-semibold text-gray-700 fs-7"><%= permitView.readinessMessage %></div>
     </div>
   </div>
+
   <% } %>
+
+  <!-- ───────────────────── APPLICABLE REQUIREMENTS ───────────────────── -->
 
   <div class="card mb-8">
     <div class="card-header">
@@ -91,70 +97,63 @@ String(readiness && readiness.reason || '').startsWith('FACILITY_PERMIT_POLICY_'
     </div>
 
     <div class="card-body">
-      <% if (!requirements.length) { %>
+      <% if (!permitView.requirements.length) { %>
+
       <div class="text-muted fw-semibold">
         No permit requirements are available for this branch.
       </div>
+
       <% } else { %>
+
       <div class="row g-5">
-        <% requirements.forEach((requirement) => { %> <% const records = history.filter((item) =>
-        item.requirementKey === requirement.requirementKey); %> <% const pending =
-        records.some((item) => item.status === 'pending'); %> <% const newest = records[0] || null;
-        %> <% const displayName = String(requirement.requirementKey || '').replace(/[_:-]/g, ' ');
-        %>
+        <% permitView.requirements.forEach((requirement) => { %>
 
         <div class="col-12 col-xl-6">
           <div class="card card-flush border h-100">
             <div class="card-body p-6">
               <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
                 <div>
-                  <div class="fw-bold text-gray-900 fs-5 text-capitalize"><%= displayName %></div>
-
-                  <div class="text-muted fs-7">
-                    <%= requirement.authorityName || 'Relevant regulatory authority' %>
+                  <div class="fw-bold text-gray-900 fs-5 text-capitalize">
+                    <%= requirement.displayName %>
                   </div>
+
+                  <div class="text-muted fs-7"><%= requirement.authorityName %></div>
                 </div>
 
-                <% if (requirement.satisfied) { %>
-                <span class="badge badge-light-success">Satisfied</span>
-                <% } else if (pending) { %>
-                <span class="badge badge-light-warning">Pending review</span>
-                <% } else { %>
-                <span class="badge badge-light-danger">Required</span>
-                <% } %>
+                <span class="badge <%= requirement.statusBadgeClass %>">
+                  <%= requirement.statusLabel %>
+                </span>
               </div>
 
-              <div class="text-gray-700 fs-7 fw-semibold mb-4">
-                <% if (pending) { %> A submission is awaiting administrative review. You cannot
-                submit another pending document for this requirement. <% } else if
-                (requirement.satisfied) { %> This requirement is currently satisfied. You can submit
-                a renewal when you have updated evidence. <% } else if (newest && newest.status ===
-                'needs_review') { %> Additional review is required. You may submit updated
-                supporting evidence. <% } else if (newest && newest.status === 'rejected') { %> The
-                previous submission was not approved. You may submit a replacement document. <% }
-                else { %> Upload a valid document for administrative verification. <% } %>
-              </div>
+              <div class="text-gray-700 fs-7 fw-semibold mb-4"><%= requirement.helpMessage %></div>
 
-              <% if (!pending) { %>
+              <% if (requirement.canSubmit) { %>
+
               <button
                 type="button"
                 class="btn btn-sm btn-primary js-select-permit-requirement"
                 data-requirement-key="<%= requirement.requirementKey %>"
-                data-requirement-label="<%= displayName %>"
+                data-requirement-label="<%= requirement.displayName %>"
               >
-                <%= requirement.satisfied ? 'Submit Renewal' : 'Submit Evidence' %>
+                <%= requirement.submitLabel %>
               </button>
+
               <% } %>
             </div>
           </div>
         </div>
+
         <% }) %>
       </div>
+
       <% } %>
     </div>
   </div>
 
-  <% if (!policyUnavailable && requirements.length) { %>
+  <!-- ───────────────────── PERMIT SUBMISSION ───────────────────── -->
+
+  <% if (permitView.showSubmissionForm) { %>
+
   <div id="branchPermitSubmissionCard" class="card mb-8">
     <div class="card-header">
       <h3 class="card-title fw-bold">Submit Facility Permit Evidence</h3>
@@ -168,6 +167,7 @@ String(readiness && readiness.reason || '').startsWith('FACILITY_PERMIT_POLICY_'
 
       <form id="branchPermitSubmissionForm" method="POST" enctype="multipart/form-data" novalidate>
         <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
         <input type="hidden" id="selectedPermitRequirementKey" name="requirementKey" value="" />
 
         <div class="fv-row mb-6">
@@ -247,7 +247,10 @@ String(readiness && readiness.reason || '').startsWith('FACILITY_PERMIT_POLICY_'
       </form>
     </div>
   </div>
+
   <% } %>
+
+  <!-- ───────────────────── PERMIT HISTORY ───────────────────── -->
 
   <div class="card">
     <div class="card-header">
@@ -255,11 +258,14 @@ String(readiness && readiness.reason || '').startsWith('FACILITY_PERMIT_POLICY_'
     </div>
 
     <div class="card-body">
-      <% if (!history.length) { %>
+      <% if (!permitView.history.length) { %>
+
       <div class="text-muted fw-semibold text-center py-8">
         No permit documents have been submitted for this branch.
       </div>
+
       <% } else { %>
+
       <div class="table-responsive">
         <table class="table table-row-dashed align-middle gy-5">
           <thead>
@@ -273,63 +279,59 @@ String(readiness && readiness.reason || '').startsWith('FACILITY_PERMIT_POLICY_'
           </thead>
 
           <tbody class="fw-semibold text-gray-700">
-            <% history.forEach((permit) => { %> <% const state = permit.revoked ? 'revoked' :
-            permit.status; %> <% const statusClass = state === 'verified' ? 'badge-light-success' :
-            state === 'pending' ? 'badge-light-warning' : state === 'needs_review' ?
-            'badge-light-info' : 'badge-light-danger'; %>
+            <% permitView.history.forEach((permit) => { %>
 
             <tr>
               <td>
                 <div class="fw-bold text-gray-900 text-capitalize">
-                  <%= String(permit.requirementKey || '').replace(/[_:-]/g, ' ') %>
+                  <%= permit.requirementLabel %>
                 </div>
 
-                <div class="text-muted fs-7"><%= permit.authorityName || '-' %></div>
+                <div class="text-muted fs-7"><%= permit.authorityName %></div>
               </td>
 
               <td>
-                <div><%= permit.permitNumber || '-' %></div>
+                <div><%= permit.permitNumber %></div>
 
-                <% if (permit.renewalOfId) { %>
+                <% if (permit.isRenewal) { %>
                 <div class="text-muted fs-7">Renewal submission</div>
                 <% } %>
               </td>
 
               <td>
-                <span class="badge <%= statusClass %> text-capitalize">
-                  <%= String(state || '-').replace(/_/g, ' ') %>
+                <span class="badge <%= permit.statusBadgeClass %> text-capitalize">
+                  <%= permit.statusLabel %>
                 </span>
 
-                <% if (permit.isCurrent && !permit.revoked) { %>
+                <% if (permit.isCurrent) { %>
                 <div class="text-muted fs-7 mt-1">Current approval</div>
                 <% } %>
               </td>
 
               <td>
-                <% if (permit.status === 'verified' && !permit.revoked) { %>
-                <div>From: <%= permit.validFromDate || '-' %></div>
+                <% if (permit.showValidity) { %>
 
-                <div>
-                  Until: <%= permit.validityType === 'indefinite' ? 'No fixed expiry' :
-                  (permit.expiryDate || '-') %>
-                </div>
+                <div>From: <%= permit.validFromLabel %></div>
 
-                <% if (!permit.isCurrent && !permit.activatedAt) { %>
+                <div>Until: <%= permit.validUntilLabel %></div>
+
+                <% if (permit.isScheduled) { %>
                 <div class="text-muted fs-7">Scheduled / not yet current</div>
                 <% } %> <% } else { %>
-                <span class="text-muted">Awaiting or without approval</span>
+
+                <span class="text-muted"> Awaiting or without approval </span>
+
                 <% } %>
               </td>
 
-              <td>
-                <%= permit.submittedAt ? new Date(permit.submittedAt).toLocaleDateString('en-GB', {
-                timeZone: 'Africa/Lagos' }) : '-' %>
-              </td>
+              <td><%= permit.submittedDateLabel %></td>
             </tr>
+
             <% }) %>
           </tbody>
         </table>
       </div>
+
       <% } %>
     </div>
   </div>

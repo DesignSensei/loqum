@@ -1,4 +1,3 @@
-
 <!-- views/professional/shifts/show.ejs -->
 
 <!-- Global action feedback -->
@@ -12,7 +11,6 @@
 <div class="row g-5 g-xl-8">
   <!-- Main content -->
   <div class="col-12 col-xl-8">
-
     <!-- Shift overview -->
     <div class="card card-flush mb-6 mb-xl-8">
       <div class="card-header">
@@ -31,98 +29,71 @@
         </div>
 
         <% if (shiftDetailsView.shift.branch) { %>
-          <div class="d-flex align-items-start gap-3 mb-5">
-            <i class="ki-duotone ki-geolocation fs-2 text-primary flex-shrink-0">
-              <span class="path1"></span>
-              <span class="path2"></span>
-            </i>
+        <div class="d-flex align-items-start gap-3 mb-5">
+          <i class="ki-duotone ki-geolocation fs-2 text-primary flex-shrink-0">
+            <span class="path1"></span>
+            <span class="path2"></span>
+          </i>
 
-            <div class="min-w-0">
-              <div class="fw-bold text-gray-800 fs-6">
-                <%= shiftDetailsView.shift.branch.name %>
-              </div>
+          <div class="min-w-0">
+            <div class="fw-bold text-gray-800 fs-6"><%= shiftDetailsView.shift.branch.name %></div>
 
-              <% if (shiftDetailsView.shift.branch.locationLabel) { %>
-                <div class="text-gray-500 fs-7 mt-1 text-break">
-                  <%= shiftDetailsView.shift.branch.locationLabel %>
-                </div>
-              <% } %>
+            <% if (shiftDetailsView.shift.branch.locationLabel) { %>
+            <div class="text-gray-500 fs-7 mt-1 text-break">
+              <%= shiftDetailsView.shift.branch.locationLabel %>
+            </div>
+            <% } %>
+          </div>
+        </div>
+        <% } %> <% if (shiftDetailsView.shift.department) { %>
+        <div class="d-flex align-items-start gap-3 mb-5">
+          <i class="ki-duotone ki-briefcase fs-2 text-primary flex-shrink-0">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+          </i>
+
+          <div>
+            <div class="text-gray-500 fw-semibold fs-8 mb-1">Department</div>
+            <div class="text-gray-800 fw-semibold fs-6">
+              <%= shiftDetailsView.shift.department %>
             </div>
           </div>
-        <% } %>
+        </div>
+        <% } %> <% if (shiftDetailsView.shift.description) { %>
+        <div class="separator separator-dashed my-6"></div>
 
-        <% if (shiftDetailsView.shift.department) { %>
-          <div class="d-flex align-items-start gap-3 mb-5">
-            <i class="ki-duotone ki-briefcase fs-2 text-primary flex-shrink-0">
-              <span class="path1"></span>
-              <span class="path2"></span>
-              <span class="path3"></span>
-            </i>
+        <h4 class="fw-bold text-gray-900 fs-5 mb-3">About This Shift</h4>
 
-            <div>
-              <div class="text-gray-500 fw-semibold fs-8 mb-1">
-                Department
-              </div>
-              <div class="text-gray-800 fw-semibold fs-6">
-                <%= shiftDetailsView.shift.department %>
-              </div>
-            </div>
-          </div>
-        <% } %>
+        <p class="text-gray-600 fs-6 mb-0" style="white-space: pre-line">
+          <%= shiftDetailsView.shift.description %>
+        </p>
+        <% } %> <% if ( Array.isArray(shiftDetailsView.shift.requiredSkills) &&
+        shiftDetailsView.shift.requiredSkills.length > 0 ) { %>
+        <div class="separator separator-dashed my-6"></div>
 
-        <% if (shiftDetailsView.shift.description) { %>
-          <div class="separator separator-dashed my-6"></div>
+        <h4 class="fw-bold text-gray-900 fs-5 mb-4">Required Skills</h4>
 
-          <h4 class="fw-bold text-gray-900 fs-5 mb-3">
-            About This Shift
-          </h4>
+        <div class="d-flex flex-wrap gap-2">
+          <% shiftDetailsView.shift.requiredSkills.forEach(function (skill) { %>
+          <span class="badge badge-light-primary fw-semibold"> <%= skill %> </span>
+          <% }) %>
+        </div>
+        <% } %> <% if (shiftDetailsView.shift.dressCode) { %>
+        <div class="separator separator-dashed my-6"></div>
 
-          <p class="text-gray-600 fs-6 mb-0" style="white-space: pre-line"><%= shiftDetailsView.shift.description %></p>
-        <% } %>
+        <h4 class="fw-bold text-gray-900 fs-5 mb-2">Dress Code</h4>
 
-        <% if (
-          Array.isArray(shiftDetailsView.shift.requiredSkills) &&
-          shiftDetailsView.shift.requiredSkills.length > 0
-        ) { %>
-          <div class="separator separator-dashed my-6"></div>
-
-          <h4 class="fw-bold text-gray-900 fs-5 mb-4">
-            Required Skills
-          </h4>
-
-          <div class="d-flex flex-wrap gap-2">
-            <% shiftDetailsView.shift.requiredSkills.forEach(function (skill) { %>
-              <span class="badge badge-light-primary fw-semibold">
-                <%= skill %>
-              </span>
-            <% }) %>
-          </div>
-        <% } %>
-
-        <% if (shiftDetailsView.shift.dressCode) { %>
-          <div class="separator separator-dashed my-6"></div>
-
-          <h4 class="fw-bold text-gray-900 fs-5 mb-2">
-            Dress Code
-          </h4>
-
-          <div class="text-gray-600 fs-6">
-            <%= shiftDetailsView.shift.dressCode %>
-          </div>
+        <div class="text-gray-600 fs-6"><%= shiftDetailsView.shift.dressCode %></div>
         <% } %>
       </div>
     </div>
 
     <!-- Application opportunities -->
-    <div
-      class="card card-flush mb-6 mb-xl-8"
-      id="professionalShiftOpportunities"
-    >
+    <div class="card card-flush mb-6 mb-xl-8" id="professionalShiftOpportunities">
       <div class="card-header">
         <div class="card-title">
-          <h2 class="fw-bold text-gray-900 fs-4 mb-0">
-            Application Opportunities
-          </h2>
+          <h2 class="fw-bold text-gray-900 fs-4 mb-0">Application Opportunities</h2>
         </div>
 
         <div class="card-toolbar">
@@ -133,331 +104,273 @@
       </div>
 
       <div class="card-body pt-3">
-        <% if (shiftDetailsView.shift.opportunities.length > 0) { %>
-          <% shiftDetailsView.shift.opportunities.forEach(function (opportunity, index) { %>
-            <div class="border border-dashed border-gray-300 rounded p-5 mb-4">
-              <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-4">
-                <div>
-                  <h3 class="fw-bold text-gray-900 fs-6 mb-2">
-                    <%= opportunity.label %>
-                  </h3>
+        <% if (shiftDetailsView.shift.opportunities.length > 0) { %> <%
+        shiftDetailsView.shift.opportunities.forEach(function (opportunity, index) { %>
+        <div class="border border-dashed border-gray-300 rounded p-5 mb-4">
+          <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-4">
+            <div>
+              <h3 class="fw-bold text-gray-900 fs-6 mb-2"><%= opportunity.label %></h3>
 
-                  <% if (opportunity.slotNumber) { %>
-                    <div class="text-gray-500 fs-7">
-                      Position <%= opportunity.slotNumber %>
-                    </div>
-                  <% } %>
-                </div>
-
-                <% if (opportunity.application && opportunity.application.statusView) { %>
-                  <span class="badge <%= opportunity.application.statusView.badgeClass %>">
-                    <%= opportunity.application.statusView.label %>
-                  </span>
-                <% } else if (opportunity.canApply) { %>
-                  <span class="badge badge-light-success">
-                    Eligible to Apply
-                  </span>
-                <% } else { %>
-                  <span class="badge badge-light-secondary">
-                    Unavailable
-                  </span>
-                <% } %>
-              </div>
-
-              <% if (opportunity.intervals.length > 0) { %>
-                <div class="mb-5">
-                  <div class="text-gray-500 fw-semibold fs-8 mb-3">
-                    Covered Work Dates
-                  </div>
-
-                  <% opportunity.intervals.forEach(function (interval) { %>
-                    <div class="d-flex align-items-start gap-2 mb-2">
-                      <i class="ki-duotone ki-calendar-8 fs-4 text-primary flex-shrink-0">
-                        <span class="path1"></span>
-                        <span class="path2"></span>
-                      </i>
-
-                      <div class="text-gray-700 fs-7">
-                        <%= interval.startTimeDisplay %>
-                        <span class="text-gray-400 mx-1">—</span>
-                        <%= interval.endTimeDisplay %>
-                      </div>
-                    </div>
-                  <% }) %>
-                </div>
-              <% } %>
-
-              <% if (opportunity.application) { %>
-                <div class="notice d-flex bg-light-info border border-info border-dashed rounded p-4">
-                  <i class="ki-duotone ki-information-5 fs-2 text-info me-3 flex-shrink-0">
-                    <span class="path1"></span>
-                    <span class="path2"></span>
-                    <span class="path3"></span>
-                  </i>
-
-                  <div class="text-gray-700 fw-semibold fs-7">
-                    You already have an application for this opportunity.
-                    Review its status under My Applications.
-                  </div>
-                </div>
-
-              <% } else if (opportunity.unavailableReason) { %>
-                <div class="notice d-flex bg-light-warning border border-warning border-dashed rounded p-4">
-                  <i class="ki-duotone ki-information-5 fs-2 text-warning me-3 flex-shrink-0">
-                    <span class="path1"></span>
-                    <span class="path2"></span>
-                    <span class="path3"></span>
-                  </i>
-
-                  <div class="text-gray-700 fw-semibold fs-7">
-                    <%= opportunity.unavailableReason.message %>
-                  </div>
-                </div>
-
-              <% } else if (
-                opportunity.canApply &&
-                opportunity.applyAction &&
-                opportunity.applyAction.available
-              ) { %>
-                <form
-                  action="<%= opportunity.applyAction.url %>"
-                  method="POST"
-                  data-professional-shift-apply
-                >
-                  <input
-                    type="hidden"
-                    name="_csrf"
-                    value="<%= csrfToken %>"
-                  />
-
-                  <% if (
-                    opportunity.applicationTarget &&
-                    opportunity.applicationTarget.occurrenceId
-                  ) { %>
-                    <input
-                      type="hidden"
-                      name="occurrenceId"
-                      value="<%= opportunity.applicationTarget.occurrenceId %>"
-                    />
-                  <% } %>
-
-                  <% if (
-                    opportunity.applicationTarget &&
-                    opportunity.applicationTarget.replacementForAssignmentId
-                  ) { %>
-                    <input
-                      type="hidden"
-                      name="replacementForAssignmentId"
-                      value="<%= opportunity.applicationTarget.replacementForAssignmentId %>"
-                    />
-                  <% } %>
-
-                  <div class="mb-4">
-                    <label
-                      for="professionalApplicationNote-<%= index %>"
-                      class="form-label fw-semibold text-gray-800"
-                    >
-                      Application Note
-                      <span class="text-gray-500 fw-normal">(Optional)</span>
-                    </label>
-
-                    <textarea
-                      id="professionalApplicationNote-<%= index %>"
-                      name="note"
-                      class="form-control form-control-solid"
-                      rows="3"
-                      maxlength="<%= opportunity.applyAction.maxNoteLength %>"
-                      placeholder="Briefly introduce yourself or share relevant experience."
-                    ></textarea>
-
-                    <div class="form-text">
-                      Maximum <%= opportunity.applyAction.maxNoteLength %> characters.
-                    </div>
-                  </div>
-
-                  <div
-                    class="alert alert-danger d-none mb-4"
-                    data-shift-form-error
-                    role="alert"
-                    aria-live="polite"
-                  ></div>
-
-                  <button
-                    type="submit"
-                    class="btn btn-primary w-100 w-sm-auto"
-                    data-shift-form-submit
-                  >
-                    <span class="indicator-label">
-                      <%= opportunity.applyAction.label %>
-                    </span>
-
-                    <span class="indicator-progress">
-                      Submitting...
-                      <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
-                    </span>
-                  </button>
-                </form>
-              <% } else { %>
-                <div class="notice d-flex bg-light-warning border border-warning border-dashed rounded p-4">
-                  <i class="ki-duotone ki-information-5 fs-2 text-warning me-3 flex-shrink-0">
-                    <span class="path1"></span>
-                    <span class="path2"></span>
-                    <span class="path3"></span>
-                  </i>
-
-                  <div class="text-gray-700 fw-semibold fs-7">
-                    Applications are not currently available for this opportunity.
-                  </div>
-                </div>
+              <% if (opportunity.slotNumber) { %>
+              <div class="text-gray-500 fs-7">Position <%= opportunity.slotNumber %></div>
               <% } %>
             </div>
-          <% }) %>
-        <% } else { %>
-          <div class="text-center py-8">
-            <i class="ki-duotone ki-calendar-remove fs-3x text-gray-400 mb-4">
+
+            <% if (opportunity.application && opportunity.application.statusView) { %>
+            <span class="badge <%= opportunity.application.statusView.badgeClass %>">
+              <%= opportunity.application.statusView.label %>
+            </span>
+            <% } else if (opportunity.canApply) { %>
+            <span class="badge badge-light-success"> Eligible to Apply </span>
+            <% } else { %>
+            <span class="badge badge-light-secondary"> Unavailable </span>
+            <% } %>
+          </div>
+
+          <% if (opportunity.intervals.length > 0) { %>
+          <div class="mb-5">
+            <div class="text-gray-500 fw-semibold fs-8 mb-3">Covered Work Dates</div>
+
+            <% opportunity.intervals.forEach(function (interval) { %>
+            <div class="d-flex align-items-start gap-2 mb-2">
+              <i class="ki-duotone ki-calendar-8 fs-4 text-primary flex-shrink-0">
+                <span class="path1"></span>
+                <span class="path2"></span>
+              </i>
+
+              <div class="text-gray-700 fs-7">
+                <%= interval.startTimeDisplay %>
+                <span class="text-gray-400 mx-1">—</span>
+                <%= interval.endTimeDisplay %>
+              </div>
+            </div>
+            <% }) %>
+          </div>
+          <% } %> <% if (opportunity.application) { %>
+          <div class="notice d-flex bg-light-info border border-info border-dashed rounded p-4">
+            <i class="ki-duotone ki-information-5 fs-2 text-info me-3 flex-shrink-0">
               <span class="path1"></span>
               <span class="path2"></span>
+              <span class="path3"></span>
             </i>
 
-            <h3 class="fw-bold text-gray-800 fs-5 mb-2">
-              No Application Opportunities
-            </h3>
-
-            <p class="text-gray-500 fs-6 mb-0">
-              There are currently no application opportunities for this shift.
-            </p>
+            <div class="text-gray-700 fw-semibold fs-7">
+              You already have an application for this opportunity. Review its status under My
+              Applications.
+            </div>
           </div>
+
+          <% } else if (opportunity.unavailableReason) { %>
+          <div
+            class="notice d-flex bg-light-warning border border-warning border-dashed rounded p-4"
+          >
+            <i class="ki-duotone ki-information-5 fs-2 text-warning me-3 flex-shrink-0">
+              <span class="path1"></span>
+              <span class="path2"></span>
+              <span class="path3"></span>
+            </i>
+
+            <div class="text-gray-700 fw-semibold fs-7">
+              <%= opportunity.unavailableReason.message %>
+            </div>
+          </div>
+
+          <% } else if ( opportunity.canApply && opportunity.applyAction &&
+          opportunity.applyAction.available ) { %>
+          <form
+            action="<%= opportunity.applyAction.url %>"
+            method="POST"
+            data-professional-shift-apply
+          >
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+            <% if ( opportunity.applicationTarget && opportunity.applicationTarget.occurrenceId ) {
+            %>
+            <input
+              type="hidden"
+              name="occurrenceId"
+              value="<%= opportunity.applicationTarget.occurrenceId %>"
+            />
+            <% } %> <% if ( opportunity.applicationTarget &&
+            opportunity.applicationTarget.replacementForAssignmentId ) { %>
+            <input
+              type="hidden"
+              name="replacementForAssignmentId"
+              value="<%= opportunity.applicationTarget.replacementForAssignmentId %>"
+            />
+            <% } %>
+
+            <div class="mb-4">
+              <label
+                for="professionalApplicationNote-<%= index %>"
+                class="form-label fw-semibold text-gray-800"
+              >
+                Application Note
+                <span class="text-gray-500 fw-normal">(Optional)</span>
+              </label>
+
+              <textarea
+                id="professionalApplicationNote-<%= index %>"
+                name="note"
+                class="form-control form-control-solid"
+                rows="3"
+                maxlength="<%= opportunity.applyAction.maxNoteLength %>"
+                placeholder="Briefly introduce yourself or share relevant experience."
+              ></textarea>
+
+              <div class="form-text">
+                Maximum <%= opportunity.applyAction.maxNoteLength %> characters.
+              </div>
+            </div>
+
+            <div
+              class="alert alert-danger d-none mb-4"
+              data-shift-form-error
+              role="alert"
+              aria-live="polite"
+            ></div>
+
+            <button type="submit" class="btn btn-primary w-100 w-sm-auto" data-shift-form-submit>
+              <span class="indicator-label"> <%= opportunity.applyAction.label %> </span>
+
+              <span class="indicator-progress">
+                Submitting...
+                <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+              </span>
+            </button>
+          </form>
+          <% } else { %>
+          <div
+            class="notice d-flex bg-light-warning border border-warning border-dashed rounded p-4"
+          >
+            <i class="ki-duotone ki-information-5 fs-2 text-warning me-3 flex-shrink-0">
+              <span class="path1"></span>
+              <span class="path2"></span>
+              <span class="path3"></span>
+            </i>
+
+            <div class="text-gray-700 fw-semibold fs-7">
+              Applications are not currently available for this opportunity.
+            </div>
+          </div>
+          <% } %>
+        </div>
+        <% }) %> <% } else { %>
+        <div class="text-center py-8">
+          <i class="ki-duotone ki-calendar-remove fs-3x text-gray-400 mb-4">
+            <span class="path1"></span>
+            <span class="path2"></span>
+          </i>
+
+          <h3 class="fw-bold text-gray-800 fs-5 mb-2">No Application Opportunities</h3>
+
+          <p class="text-gray-500 fs-6 mb-0">
+            There are currently no application opportunities for this shift.
+          </p>
+        </div>
         <% } %>
       </div>
     </div>
 
     <!-- My applications -->
     <% if (shiftDetailsView.shift.applications.length > 0) { %>
-      <div
-        class="card card-flush mb-6 mb-xl-8"
-        id="professionalShiftApplications"
-      >
-        <div class="card-header">
-          <div class="card-title">
-            <h2 class="fw-bold text-gray-900 fs-4 mb-0">
-              My Applications
-            </h2>
-          </div>
-
-          <div class="card-toolbar">
-            <span class="badge badge-light-primary">
-              <%= shiftDetailsView.shift.applications.length %>
-            </span>
-          </div>
+    <div class="card card-flush mb-6 mb-xl-8" id="professionalShiftApplications">
+      <div class="card-header">
+        <div class="card-title">
+          <h2 class="fw-bold text-gray-900 fs-4 mb-0">My Applications</h2>
         </div>
 
-        <div class="card-body pt-3">
-          <% shiftDetailsView.shift.applications.forEach(function (application) { %>
-            <div class="border border-dashed border-gray-300 rounded p-5 mb-4">
-              <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
-                <div>
-                  <div class="fw-bold text-gray-900 fs-6">
-                    <%= application.typeLabel %>
-                  </div>
-
-                  <div class="text-gray-500 fs-7 mt-1">
-                    <%= application.scopeLabel %>
-                  </div>
-                </div>
-
-                <% if (application.statusView) { %>
-                  <span class="badge <%= application.statusView.badgeClass %>">
-                    <%= application.statusView.label %>
-                  </span>
-                <% } %>
-              </div>
-
-              <% if (application.createdAt) { %>
-                <div class="text-gray-500 fs-7 mb-3">
-                  Submitted: <%= application.createdAtDisplay %>
-                </div>
-              <% } %>
-
-              <% if (application.note) { %>
-                <div class="text-gray-600 fs-7 mb-3" style="white-space: pre-line"><%= application.note %></div>
-              <% } %>
-
-              <% if (
-                application.withdrawAction &&
-                application.withdrawAction.available
-              ) { %>
-                <div class="separator separator-dashed my-5"></div>
-
-                <form
-                  action="<%= application.withdrawAction.url %>"
-                  method="POST"
-                  data-professional-shift-withdraw
-                >
-                  <input
-                    type="hidden"
-                    name="_csrf"
-                    value="<%= csrfToken %>"
-                  />
-
-                  <div class="mb-4">
-                    <label
-                      for="professionalWithdrawalReason-<%= application.id %>"
-                      class="form-label fw-semibold text-gray-700"
-                    >
-                      Reason for Withdrawal
-                      <span class="text-gray-500 fw-normal">(Optional)</span>
-                    </label>
-
-                    <textarea
-                      id="professionalWithdrawalReason-<%= application.id %>"
-                      name="withdrawalReason"
-                      class="form-control form-control-solid"
-                      rows="2"
-                      maxlength="<%= application.withdrawAction.maxReasonLength %>"
-                      placeholder="Tell us why you are withdrawing."
-                    ></textarea>
-
-                    <div class="form-text">
-                      Maximum <%= application.withdrawAction.maxReasonLength %> characters.
-                    </div>
-                  </div>
-
-                  <div
-                    class="alert alert-danger d-none mb-4"
-                    data-shift-form-error
-                    role="alert"
-                    aria-live="polite"
-                  ></div>
-
-                  <button
-                    type="submit"
-                    class="btn btn-sm btn-light-danger"
-                    data-shift-form-submit
-                  >
-                    <span class="indicator-label">
-                      <%= application.withdrawAction.label %>
-                    </span>
-
-                    <span class="indicator-progress">
-                      Withdrawing...
-                      <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
-                    </span>
-                  </button>
-                </form>
-              <% } %>
-            </div>
-          <% }) %>
+        <div class="card-toolbar">
+          <span class="badge badge-light-primary">
+            <%= shiftDetailsView.shift.applications.length %>
+          </span>
         </div>
       </div>
+
+      <div class="card-body pt-3">
+        <% shiftDetailsView.shift.applications.forEach(function (application) { %>
+        <div class="border border-dashed border-gray-300 rounded p-5 mb-4">
+          <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
+            <div>
+              <div class="fw-bold text-gray-900 fs-6"><%= application.typeLabel %></div>
+
+              <div class="text-gray-500 fs-7 mt-1"><%= application.scopeLabel %></div>
+            </div>
+
+            <% if (application.statusView) { %>
+            <span class="badge <%= application.statusView.badgeClass %>">
+              <%= application.statusView.label %>
+            </span>
+            <% } %>
+          </div>
+
+          <% if (application.createdAt) { %>
+          <div class="text-gray-500 fs-7 mb-3">Submitted: <%= application.createdAtDisplay %></div>
+          <% } %> <% if (application.note) { %>
+          <div class="text-gray-600 fs-7 mb-3" style="white-space: pre-line">
+            <%= application.note %>
+          </div>
+          <% } %> <% if ( application.withdrawAction && application.withdrawAction.available ) { %>
+          <div class="separator separator-dashed my-5"></div>
+
+          <form
+            action="<%= application.withdrawAction.url %>"
+            method="POST"
+            data-professional-shift-withdraw
+          >
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+            <div class="mb-4">
+              <label
+                for="professionalWithdrawalReason-<%= application.id %>"
+                class="form-label fw-semibold text-gray-700"
+              >
+                Reason for Withdrawal
+                <span class="text-gray-500 fw-normal">(Optional)</span>
+              </label>
+
+              <textarea
+                id="professionalWithdrawalReason-<%= application.id %>"
+                name="withdrawalReason"
+                class="form-control form-control-solid"
+                rows="2"
+                maxlength="<%= application.withdrawAction.maxReasonLength %>"
+                placeholder="Tell us why you are withdrawing."
+              ></textarea>
+
+              <div class="form-text">
+                Maximum <%= application.withdrawAction.maxReasonLength %> characters.
+              </div>
+            </div>
+
+            <div
+              class="alert alert-danger d-none mb-4"
+              data-shift-form-error
+              role="alert"
+              aria-live="polite"
+            ></div>
+
+            <button type="submit" class="btn btn-sm btn-light-danger" data-shift-form-submit>
+              <span class="indicator-label"> <%= application.withdrawAction.label %> </span>
+
+              <span class="indicator-progress">
+                Withdrawing...
+                <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+              </span>
+            </button>
+          </form>
+          <% } %>
+        </div>
+        <% }) %>
+      </div>
+    </div>
     <% } %>
 
     <!-- Assigned work dates -->
     <div class="card card-flush mb-6 mb-xl-8">
       <div class="card-header">
         <div class="card-title">
-          <h2 class="fw-bold text-gray-900 fs-4 mb-0">
-            My Assigned Work Dates
-          </h2>
+          <h2 class="fw-bold text-gray-900 fs-4 mb-0">My Assigned Work Dates</h2>
         </div>
 
         <div class="card-toolbar">
@@ -469,1169 +382,1082 @@
 
       <div class="card-body pt-3">
         <% if (shiftDetailsView.shift.occurrences.length > 0) { %>
-          <div class="d-flex flex-column gap-3">
-            <% shiftDetailsView.shift.occurrences.forEach(function (occurrence) { %>
-              <a
-                href="<%= occurrence.detailsUrl %>"
-                class="d-block border border-dashed rounded p-4 text-decoration-none <%= shiftDetailsView.selectedOccurrence && shiftDetailsView.selectedOccurrence.id === occurrence.id ? 'border-primary bg-light-primary' : 'border-gray-300 bg-hover-light' %>"
-              >
-                <div class="d-flex flex-wrap align-items-start justify-content-between gap-3">
-                  <div>
-                    <div class="fw-bold text-gray-900 fs-6 mb-2">
-                      <%= occurrence.occurrenceLabel %>
-                    </div>
+        <div class="d-flex flex-column gap-3">
+          <% shiftDetailsView.shift.occurrences.forEach(function (occurrence) { %>
+          <a
+            href="<%= occurrence.detailsUrl %>"
+            class="d-block border border-dashed rounded p-4 text-decoration-none <%= shiftDetailsView.selectedOccurrence && shiftDetailsView.selectedOccurrence.id === occurrence.id ? 'border-primary bg-light-primary' : 'border-gray-300 bg-hover-light' %>"
+          >
+            <div class="d-flex flex-wrap align-items-start justify-content-between gap-3">
+              <div>
+                <div class="fw-bold text-gray-900 fs-6 mb-2"><%= occurrence.occurrenceLabel %></div>
 
-                    <div class="text-gray-600 fs-7">
-                      <%= occurrence.startTimeDisplay %>
-                    </div>
+                <div class="text-gray-600 fs-7"><%= occurrence.startTimeDisplay %></div>
 
-                    <div class="text-gray-500 fs-7 mt-1">
-                      to <%= occurrence.endTimeDisplay %>
-                    </div>
-                  </div>
+                <div class="text-gray-500 fs-7 mt-1">to <%= occurrence.endTimeDisplay %></div>
+              </div>
 
-                  <div class="d-flex flex-wrap align-items-center gap-2">
-                    <% if (occurrence.statusView) { %>
-                      <span class="badge <%= occurrence.statusView.badgeClass %>">
-                        <%= occurrence.statusView.label %>
-                      </span>
-                    <% } %>
+              <div class="d-flex flex-wrap align-items-center gap-2">
+                <% if (occurrence.statusView) { %>
+                <span class="badge <%= occurrence.statusView.badgeClass %>">
+                  <%= occurrence.statusView.label %>
+                </span>
+                <% } %> <% if (occurrence.attendanceStatusView) { %>
+                <span class="badge <%= occurrence.attendanceStatusView.badgeClass %>">
+                  <%= occurrence.attendanceStatusView.label %>
+                </span>
+                <% } %>
 
-                    <% if (occurrence.attendanceStatusView) { %>
-                      <span class="badge <%= occurrence.attendanceStatusView.badgeClass %>">
-                        <%= occurrence.attendanceStatusView.label %>
-                      </span>
-                    <% } %>
-
-                    <i class="ki-duotone ki-arrow-right fs-2 text-primary">
-                      <span class="path1"></span>
-                      <span class="path2"></span>
-                    </i>
-                  </div>
-                </div>
-              </a>
-            <% }) %>
-          </div>
+                <i class="ki-duotone ki-arrow-right fs-2 text-primary">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                </i>
+              </div>
+            </div>
+          </a>
+          <% }) %>
+        </div>
         <% } else { %>
-          <div class="text-center py-8">
-            <i class="ki-duotone ki-calendar-tick fs-3x text-gray-400 mb-4">
-              <span class="path1"></span>
-              <span class="path2"></span>
-            </i>
+        <div class="text-center py-8">
+          <i class="ki-duotone ki-calendar-tick fs-3x text-gray-400 mb-4">
+            <span class="path1"></span>
+            <span class="path2"></span>
+          </i>
 
-            <p class="text-gray-500 fw-semibold fs-6 mb-0">
-              You do not have any assigned work dates for this shift.
-            </p>
-          </div>
+          <p class="text-gray-500 fw-semibold fs-6 mb-0">
+            You do not have any assigned work dates for this shift.
+          </p>
+        </div>
         <% } %>
       </div>
     </div>
 
     <!-- Selected occurrence -->
     <% if (shiftDetailsView.hasSelectedOccurrence) { %>
-      <% const selected = shiftDetailsView.selectedOccurrence; %>
-      <% const attendance = selected.attendanceActions; %>
 
-      <div
-        class="card card-flush mb-6 mb-xl-8"
-        id="professionalSelectedOccurrence"
-      >
-        <div class="card-header">
-          <div class="card-title">
-            <h2 class="fw-bold text-gray-900 fs-4 mb-0">
-              Selected Work Date
-            </h2>
+    <div class="card card-flush mb-6 mb-xl-8" id="professionalSelectedOccurrence">
+      <div class="card-header">
+        <div class="card-title">
+          <h2 class="fw-bold text-gray-900 fs-4 mb-0">Selected Work Date</h2>
+        </div>
+      </div>
+
+      <div class="card-body pt-3">
+        <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-6">
+          <div>
+            <h3 class="fw-bold text-gray-900 fs-5 mb-2">
+              <%= shiftDetailsView.selectedOccurrence.occurrenceLabel %>
+            </h3>
+
+            <div class="text-gray-600 fs-7">
+              <%= shiftDetailsView.selectedOccurrence.startTimeDisplay %>
+            </div>
+
+            <div class="text-gray-500 fs-7 mt-1">
+              to <%= shiftDetailsView.selectedOccurrence.endTimeDisplay %>
+            </div>
           </div>
+
+          <% if (shiftDetailsView.selectedOccurrence.statusView) { %>
+          <span class="badge <%= shiftDetailsView.selectedOccurrence.statusView.badgeClass %>">
+            <%= shiftDetailsView.selectedOccurrence.statusView.label %>
+          </span>
+          <% } %>
         </div>
 
-        <div class="card-body pt-3">
-          <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-6">
-            <div>
-              <h3 class="fw-bold text-gray-900 fs-5 mb-2">
-                <%= selected.occurrenceLabel %>
-              </h3>
+        <!-- Attendance summary -->
+        <div class="bg-light rounded p-5 mb-6">
+          <h4 class="fw-bold text-gray-900 fs-6 mb-4">Attendance</h4>
 
-              <div class="text-gray-600 fs-7">
-                <%= selected.startTimeDisplay %>
-              </div>
+          <div class="row g-4">
+            <div class="col-12 col-sm-6">
+              <div class="text-gray-500 fs-8 mb-1">Check-in</div>
 
-              <div class="text-gray-500 fs-7 mt-1">
-                to <%= selected.endTimeDisplay %>
+              <div class="fw-semibold text-gray-800 fs-7">
+                <%= shiftDetailsView.selectedOccurrence.checkedInAt ?
+                shiftDetailsView.selectedOccurrence.checkedInAtDisplay : 'Not recorded' %>
               </div>
             </div>
 
-            <% if (selected.statusView) { %>
-              <span class="badge <%= selected.statusView.badgeClass %>">
-                <%= selected.statusView.label %>
+            <div class="col-12 col-sm-6">
+              <div class="text-gray-500 fs-8 mb-1">Check-out</div>
+
+              <div class="fw-semibold text-gray-800 fs-7">
+                <%= shiftDetailsView.selectedOccurrence.checkedOutAt ?
+                shiftDetailsView.selectedOccurrence.checkedOutAtDisplay : 'Not recorded' %>
+              </div>
+            </div>
+          </div>
+
+          <% if (shiftDetailsView.selectedOccurrence.attendanceStatusView) { %>
+          <div class="mt-4">
+            <span
+              class="badge <%= shiftDetailsView.selectedOccurrence.attendanceStatusView.badgeClass %>"
+            >
+              <%= shiftDetailsView.selectedOccurrence.attendanceStatusView.label %>
+            </span>
+          </div>
+          <% } %>
+        </div>
+
+        <!-- Attendance actions -->
+        <% if (shiftDetailsView.selectedOccurrence.attendanceActions) { %>
+
+        <!-- Check-in -->
+        <% if (shiftDetailsView.selectedOccurrence.attendanceActions.checkIn.available) { %>
+        <div class="border border-dashed border-gray-300 rounded p-5 mb-6">
+          <div class="d-flex align-items-start gap-3 mb-5">
+            <div class="symbol symbol-45px flex-shrink-0">
+              <span class="symbol-label bg-light-primary">
+                <i class="ki-duotone ki-login fs-2x text-primary">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                </i>
               </span>
-            <% } %>
+            </div>
+
+            <div>
+              <h4 class="fw-bold text-gray-900 fs-5 mb-2">Check In</h4>
+
+              <p class="text-gray-600 fs-7 mb-0">
+                Enter the four-digit check-in PIN provided by your employer. Your location will be
+                verified when you submit.
+              </p>
+            </div>
           </div>
 
-          <!-- Attendance summary -->
-          <div class="bg-light rounded p-5 mb-6">
-            <h4 class="fw-bold text-gray-900 fs-6 mb-4">
-              Attendance
-            </h4>
+          <form
+            action="<%= shiftDetailsView.selectedOccurrence.attendanceActions.checkIn.url %>"
+            method="POST"
+            data-professional-shift-attendance="check-in"
+            data-attendance-requires-location="true"
+          >
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
 
-            <div class="row g-4">
-              <div class="col-12 col-sm-6">
-                <div class="text-gray-500 fs-8 mb-1">
-                  Check-in
-                </div>
+            <!-- The visible PIN boxes are combined into this field by JavaScript. -->
+            <input type="hidden" name="pin" value="" data-attendance-pin-value />
 
-                <div class="fw-semibold text-gray-800 fs-7">
-                  <%= selected.checkedInAt ? selected.checkedInAtDisplay : 'Not recorded' %>
-                </div>
+            <div
+              class="mb-5"
+              data-attendance-pin
+              data-attendance-pin-length="<%= shiftDetailsView.selectedOccurrence.attendanceActions.checkIn.pinLength %>"
+            >
+              <label class="form-label fw-semibold text-gray-800 d-block mb-3">
+                Check-in PIN
+              </label>
+
+              <div
+                class="d-flex flex-wrap align-items-center gap-2 gap-sm-3"
+                role="group"
+                aria-label="Four-digit check-in PIN"
+              >
+                <% shiftDetailsView.selectedOccurrence.attendanceActions.checkIn.pinDigits.forEach(
+                function (digitNumber) { %>
+                <input
+                  type="text"
+                  class="form-control form-control-solid text-center fw-bold fs-2"
+                  style="width: 58px; height: 60px"
+                  inputmode="numeric"
+                  pattern="[0-9]"
+                  maxlength="1"
+                  autocomplete="off"
+                  aria-label="Check-in PIN digit <%= digitNumber %>"
+                  data-attendance-pin-digit
+                  required
+                />
+                <% }); %>
               </div>
 
-              <div class="col-12 col-sm-6">
-                <div class="text-gray-500 fs-8 mb-1">
-                  Check-out
-                </div>
+              <div class="form-text mt-3">The PIN is provided by the employer at the facility.</div>
+            </div>
 
-                <div class="fw-semibold text-gray-800 fs-7">
-                  <%= selected.checkedOutAt ? selected.checkedOutAtDisplay : 'Not recorded' %>
-                </div>
+            <div
+              class="notice d-flex bg-light-primary border border-primary border-dashed rounded p-4 mb-5"
+            >
+              <i class="ki-duotone ki-geolocation fs-2 text-primary me-3 flex-shrink-0">
+                <span class="path1"></span>
+                <span class="path2"></span>
+              </i>
+
+              <div class="text-gray-700 fs-7">
+                Please allow location access. Check-in is subject to the attendance window and
+                facility location verification.
               </div>
             </div>
 
-            <% if (selected.attendanceStatusView) { %>
-              <div class="mt-4">
-                <span class="badge <%= selected.attendanceStatusView.badgeClass %>">
-                  <%= selected.attendanceStatusView.label %>
-                </span>
-              </div>
-            <% } %>
+            <div
+              class="alert alert-danger d-none mb-4"
+              data-attendance-form-error
+              role="alert"
+              aria-live="polite"
+            ></div>
+
+            <button
+              type="submit"
+              class="btn btn-primary w-100 w-sm-auto"
+              data-attendance-form-submit
+            >
+              <span class="indicator-label">
+                <i class="ki-duotone ki-login fs-3 me-2">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                </i>
+                <%= shiftDetailsView.selectedOccurrence.attendanceActions.checkIn.label %>
+              </span>
+
+              <span class="indicator-progress">
+                Checking in...
+                <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+              </span>
+            </button>
+          </form>
+        </div>
+        <% } %>
+
+        <!-- Checkout -->
+        <% if (shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.available) { %>
+
+        <div class="border border-dashed border-gray-300 rounded p-5 mb-6">
+          <div class="d-flex align-items-start gap-3 mb-5">
+            <div class="symbol symbol-45px flex-shrink-0">
+              <span class="symbol-label bg-light-primary">
+                <i class="ki-duotone ki-logout fs-2x text-primary">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                </i>
+              </span>
+            </div>
+
+            <div>
+              <h4 class="fw-bold text-gray-900 fs-5 mb-2">Check Out</h4>
+
+              <p class="text-gray-600 fs-7 mb-0">
+                Enter the four-digit checkout PIN provided by your employer. Your current location
+                will be verified.
+              </p>
+            </div>
           </div>
 
-          <!-- Attendance actions -->
-          <% if (attendance) { %>
+          <form
+            action="<%= shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.url %>"
+            method="POST"
+            enctype="multipart/form-data"
+            data-professional-shift-attendance="check-out"
+            data-attendance-requires-location="true"
+            data-scheduled-end-time="<%= shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.scheduledEndTime %>"
+          >
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
 
-            <!-- Check-in -->
-            <% if (attendance.checkIn.available) { %>
-              <div class="border border-dashed border-gray-300 rounded p-5 mb-6">
-                <div class="d-flex align-items-start gap-3 mb-5">
-                  <div class="symbol symbol-45px flex-shrink-0">
-                    <span class="symbol-label bg-light-primary">
-                      <i class="ki-duotone ki-login fs-2x text-primary">
-                        <span class="path1"></span>
-                        <span class="path2"></span>
-                      </i>
-                    </span>
-                  </div>
+            <input type="hidden" name="pin" value="" data-attendance-pin-value />
 
-                  <div>
-                    <h4 class="fw-bold text-gray-900 fs-5 mb-2">
-                      Check In
-                    </h4>
+            <!-- Checkout PIN -->
+            <div
+              class="mb-5"
+              data-attendance-pin
+              data-attendance-pin-length="<%= shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.pinLength %>"
+            >
+              <label class="form-label fw-semibold text-gray-800 d-block mb-3">
+                Checkout PIN
+              </label>
 
-                    <p class="text-gray-600 fs-7 mb-0">
-                      Enter the four-digit check-in PIN provided by your employer.
-                      Your location will be verified when you submit.
-                    </p>
-                  </div>
-                </div>
-
-                <form
-                  action="<%= attendance.checkIn.url %>"
-                  method="POST"
-                  data-professional-shift-attendance="check-in"
-                  data-attendance-requires-location="true"
-                >
-                  <input
-                    type="hidden"
-                    name="_csrf"
-                    value="<%= csrfToken %>"
-                  />
-
-                  <!-- The visible PIN boxes are combined into this field by JavaScript. -->
-                  <input
-                    type="hidden"
-                    name="pin"
-                    value=""
-                    data-attendance-pin-value
-                  />
-
-                  <div
-                    class="mb-5"
-                    data-attendance-pin
-                    data-attendance-pin-length="<%= attendance.checkIn.pinLength %>"
-                  >
-                    <label class="form-label fw-semibold text-gray-800 d-block mb-3">
-                      Check-in PIN
-                    </label>
-
-                    <div
-                      class="d-flex flex-wrap align-items-center gap-2 gap-sm-3"
-                      role="group"
-                      aria-label="Four-digit check-in PIN"
-                    >
-                      <% for (let digitIndex = 0; digitIndex < attendance.checkIn.pinLength; digitIndex += 1) { %>
-                        <input
-                          type="text"
-                          class="form-control form-control-solid text-center fw-bold fs-2"
-                          style="width: 58px; height: 60px;"
-                          inputmode="numeric"
-                          pattern="[0-9]"
-                          maxlength="1"
-                          autocomplete="off"
-                          aria-label="Check-in PIN digit <%= digitIndex + 1 %>"
-                          data-attendance-pin-digit
-                          required
-                        />
-                      <% } %>
-                    </div>
-
-                    <div class="form-text mt-3">
-                      The PIN is provided by the employer at the facility.
-                    </div>
-                  </div>
-
-                  <div class="notice d-flex bg-light-primary border border-primary border-dashed rounded p-4 mb-5">
-                    <i class="ki-duotone ki-geolocation fs-2 text-primary me-3 flex-shrink-0">
-                      <span class="path1"></span>
-                      <span class="path2"></span>
-                    </i>
-
-                    <div class="text-gray-700 fs-7">
-                      Please allow location access. Check-in is subject to
-                      the attendance window and facility location verification.
-                    </div>
-                  </div>
-
-                  <div
-                    class="alert alert-danger d-none mb-4"
-                    data-attendance-form-error
-                    role="alert"
-                    aria-live="polite"
-                  ></div>
-
-                  <button
-                    type="submit"
-                    class="btn btn-primary w-100 w-sm-auto"
-                    data-attendance-form-submit
-                  >
-                    <span class="indicator-label">
-                      <i class="ki-duotone ki-login fs-3 me-2">
-                        <span class="path1"></span>
-                        <span class="path2"></span>
-                      </i>
-                      <%= attendance.checkIn.label %>
-                    </span>
-
-                    <span class="indicator-progress">
-                      Checking in...
-                      <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
-                    </span>
-                  </button>
-                </form>
+              <div
+                class="d-flex flex-wrap align-items-center gap-2 gap-sm-3"
+                role="group"
+                aria-label="Four-digit checkout PIN"
+              >
+                <% shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.pinDigits.forEach(
+                function (digitNumber) { %>
+                <input
+                  type="text"
+                  class="form-control form-control-solid text-center fw-bold fs-2"
+                  style="width: 58px; height: 60px"
+                  inputmode="numeric"
+                  pattern="[0-9]"
+                  maxlength="1"
+                  autocomplete="off"
+                  aria-label="Checkout PIN digit <%= digitNumber %>"
+                  data-attendance-pin-digit
+                  required
+                />
+                <% }); %>
               </div>
-            <% } %>
 
-            <!-- Checkout -->
-            <% if (attendance.checkOut.available) { %>
-              <% const evidenceConfig = attendance.checkOut.evidenceUpload; %>
+              <div class="form-text mt-3">Enter the PIN provided by your employer.</div>
+            </div>
 
-              <div class="border border-dashed border-gray-300 rounded p-5 mb-6">
-                <div class="d-flex align-items-start gap-3 mb-5">
-                  <div class="symbol symbol-45px flex-shrink-0">
-                    <span class="symbol-label bg-light-primary">
-                      <i class="ki-duotone ki-logout fs-2x text-primary">
-                        <span class="path1"></span>
-                        <span class="path2"></span>
-                      </i>
-                    </span>
-                  </div>
+            <!-- Location information -->
+            <div
+              class="notice d-flex bg-light-primary border border-primary border-dashed rounded p-4 mb-5"
+            >
+              <i class="ki-duotone ki-geolocation fs-2 text-primary me-3 flex-shrink-0">
+                <span class="path1"></span>
+                <span class="path2"></span>
+              </i>
 
-                  <div>
-                    <h4 class="fw-bold text-gray-900 fs-5 mb-2">
-                      Check Out
-                    </h4>
+              <div class="text-gray-700 fs-7">
+                Your current location will be verified before checkout is recorded.
+              </div>
+            </div>
 
-                    <p class="text-gray-600 fs-7 mb-0">
-                      Enter the four-digit checkout PIN provided by your employer.
-                      Your current location will be verified.
-                    </p>
+            <!-- Late checkout options -->
+            <div class="d-none mb-5" data-attendance-late-fields>
+              <div class="separator separator-dashed mb-5"></div>
+
+              <div
+                class="notice d-flex bg-light-warning border border-warning border-dashed rounded p-4 mb-5"
+              >
+                <i class="ki-duotone ki-information-5 fs-2 text-warning me-3 flex-shrink-0">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                  <span class="path3"></span>
+                </i>
+
+                <div>
+                  <div class="fw-bold text-gray-900 fs-7 mb-1">Late Checkout</div>
+
+                  <div class="text-gray-700 fs-7">
+                    Your scheduled shift end time has passed. Confirm whether you worked beyond your
+                    scheduled hours.
                   </div>
                 </div>
+              </div>
 
-                <form
-                  action="<%= attendance.checkOut.url %>"
-                  method="POST"
-                  enctype="multipart/form-data"
-                  data-professional-shift-attendance="check-out"
-                  data-attendance-requires-location="true"
-                  data-scheduled-end-time="<%= attendance.checkOut.scheduledEndTime %>"
+              <div class="mb-5">
+                <label
+                  for="professionalLateCheckoutOption"
+                  class="form-label fw-semibold text-gray-800"
                 >
-                  <input
-                    type="hidden"
-                    name="_csrf"
-                    value="<%= csrfToken %>"
-                  />
+                  Did You Work Overtime?
+                </label>
 
-                  <input
-                    type="hidden"
-                    name="pin"
-                    value=""
-                    data-attendance-pin-value
-                  />
+                <select
+                  id="professionalLateCheckoutOption"
+                  name="lateCheckoutOption"
+                  class="form-select form-select-solid"
+                  data-attendance-late-option
+                  disabled
+                >
+                  <option value="">Select an option</option>
 
-                  <!-- Checkout PIN -->
-                  <div
-                    class="mb-5"
-                    data-attendance-pin
-                    data-attendance-pin-length="<%= attendance.checkOut.pinLength %>"
+                  <%
+                  shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.lateCheckoutOptions.forEach(function
+                  (option) { %>
+                  <option value="<%= option.value %>"><%= option.label %></option>
+                  <% }) %>
+                </select>
+              </div>
+
+              <!-- Normal late checkout -->
+              <div class="d-none" data-attendance-normal-late-fields>
+                <div class="mb-4">
+                  <label
+                    for="professionalLateCheckoutReason"
+                    class="form-label fw-semibold text-gray-800"
                   >
-                    <label class="form-label fw-semibold text-gray-800 d-block mb-3">
-                      Checkout PIN
+                    Reason for Late Checkout
+                  </label>
+
+                  <select
+                    id="professionalLateCheckoutReason"
+                    name="lateCheckoutReason"
+                    class="form-select form-select-solid"
+                    data-attendance-late-reason
+                    disabled
+                  >
+                    <option value="">Select a reason</option>
+
+                    <%
+                    shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.lateCheckoutReasons.forEach(function
+                    (reason) { %>
+                    <option value="<%= reason.value %>"><%= reason.label %></option>
+                    <% }) %>
+                  </select>
+                </div>
+
+                <div class="mb-5">
+                  <label
+                    for="professionalLateCheckoutNotes"
+                    class="form-label fw-semibold text-gray-800"
+                  >
+                    Additional Notes
+                    <span class="text-gray-500 fw-normal"> (Required when Other is selected) </span>
+                  </label>
+
+                  <textarea
+                    id="professionalLateCheckoutNotes"
+                    name="lateCheckoutNotes"
+                    class="form-control form-control-solid"
+                    rows="3"
+                    maxlength="<%= shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.maxLateCheckoutNotesLength %>"
+                    placeholder="Explain why you are checking out late."
+                    data-attendance-late-notes
+                    disabled
+                  ></textarea>
+
+                  <div class="form-text">
+                    Maximum <%=
+                    shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.maxLateCheckoutNotesLength
+                    %> characters.
+                  </div>
+                </div>
+              </div>
+
+              <!-- Overtime request -->
+              <div class="d-none" data-attendance-overtime-fields>
+                <div class="border border-dashed border-primary rounded p-4 p-sm-5 mb-5">
+                  <div class="d-flex align-items-center gap-3 mb-5">
+                    <div class="symbol symbol-40px flex-shrink-0">
+                      <span class="symbol-label bg-light-primary">
+                        <i class="ki-duotone ki-time fs-2 text-primary">
+                          <span class="path1"></span>
+                          <span class="path2"></span>
+                        </i>
+                      </span>
+                    </div>
+
+                    <div>
+                      <h5 class="fw-bold text-gray-900 fs-6 mb-1">Overtime Request</h5>
+
+                      <div class="text-gray-500 fs-7">
+                        Provide details of the additional work performed.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="mb-5">
+                    <label
+                      for="professionalOvertimeStatement"
+                      class="form-label fw-semibold text-gray-800"
+                    >
+                      Overtime Explanation
+                      <span class="text-danger">*</span>
                     </label>
 
-                    <div
-                      class="d-flex flex-wrap align-items-center gap-2 gap-sm-3"
-                      role="group"
-                      aria-label="Four-digit checkout PIN"
+                    <textarea
+                      id="professionalOvertimeStatement"
+                      name="requestStatement"
+                      class="form-control form-control-solid"
+                      rows="4"
+                      maxlength="<%= shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.maxOvertimeStatementLength %>"
+                      placeholder="Explain the additional work you performed after your scheduled shift ended."
+                      data-attendance-overtime-statement
+                      disabled
+                    ></textarea>
+
+                    <div class="form-text">
+                      Maximum <%=
+                      shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.maxOvertimeStatementLength
+                      %> characters.
+                    </div>
+                  </div>
+
+                  <div class="mb-5">
+                    <label
+                      for="professionalOvertimeMinutes"
+                      class="form-label fw-semibold text-gray-800"
                     >
-                      <% for (let digitIndex = 0; digitIndex < attendance.checkOut.pinLength; digitIndex += 1) { %>
-                        <input
-                          type="text"
-                          class="form-control form-control-solid text-center fw-bold fs-2"
-                          style="width: 58px; height: 60px;"
-                          inputmode="numeric"
-                          pattern="[0-9]"
-                          maxlength="1"
-                          autocomplete="off"
-                          aria-label="Checkout PIN digit <%= digitIndex + 1 %>"
-                          data-attendance-pin-digit
-                          required
-                        />
-                      <% } %>
-                    </div>
+                      Overtime Minutes
+                      <span class="text-gray-500 fw-normal"> (Optional) </span>
+                    </label>
 
-                    <div class="form-text mt-3">
-                      Enter the PIN provided by your employer.
-                    </div>
-                  </div>
+                    <input
+                      type="number"
+                      id="professionalOvertimeMinutes"
+                      name="requestedOvertimeMinutes"
+                      class="form-control form-control-solid"
+                      min="1"
+                      max="<%= shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.maxOvertimeMinutes %>"
+                      step="1"
+                      placeholder="Enter additional minutes worked"
+                      data-attendance-overtime-minutes
+                      disabled
+                    />
 
-                  <!-- Location information -->
-                  <div class="notice d-flex bg-light-primary border border-primary border-dashed rounded p-4 mb-5">
-                    <i class="ki-duotone ki-geolocation fs-2 text-primary me-3 flex-shrink-0">
-                      <span class="path1"></span>
-                      <span class="path2"></span>
-                    </i>
-
-                    <div class="text-gray-700 fs-7">
-                      Your current location will be verified before checkout is recorded.
+                    <div class="form-text">
+                      If left blank, Loqum uses the recorded post-schedule attendance duration.
+                      Requested minutes cannot exceed that recorded duration.
                     </div>
                   </div>
 
-                  <!-- Late checkout options -->
+                  <!-- Supporting evidence -->
+                  <% if
+                  (shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.evidenceUpload &&
+                  shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.evidenceUpload.available)
+                  { %>
+                  <div class="separator separator-dashed my-6"></div>
+
                   <div
-                    class="d-none mb-5"
-                    data-attendance-late-fields
+                    data-attendance-evidence
+                    data-attendance-evidence-max-files="<%= shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.evidenceUpload.maxFiles %>"
+                    data-attendance-evidence-max-bytes="<%= shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.evidenceUpload.maxFileSizeBytes %>"
                   >
-                    <div class="separator separator-dashed mb-5"></div>
-
-                    <div class="notice d-flex bg-light-warning border border-warning border-dashed rounded p-4 mb-5">
-                      <i class="ki-duotone ki-information-5 fs-2 text-warning me-3 flex-shrink-0">
-                        <span class="path1"></span>
-                        <span class="path2"></span>
-                        <span class="path3"></span>
-                      </i>
-
+                    <div
+                      class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3"
+                    >
                       <div>
-                        <div class="fw-bold text-gray-900 fs-7 mb-1">
-                          Late Checkout
-                        </div>
+                        <h5 class="fw-bold text-gray-900 fs-6 mb-1">
+                          Supporting Evidence
+                          <span class="text-gray-500 fw-normal fs-7"> (Optional) </span>
+                        </h5>
 
-                        <div class="text-gray-700 fs-7">
-                          Your scheduled shift end time has passed.
-                          Confirm whether you worked beyond your scheduled hours.
-                        </div>
+                        <p class="text-gray-500 fs-7 mb-0">
+                          Add any available evidence supporting your overtime request.
+                        </p>
                       </div>
+
+                      <span class="badge badge-light-primary">
+                        Up to <%=
+                        shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.evidenceUpload.maxFiles
+                        %> files
+                      </span>
                     </div>
 
-                    <div class="mb-5">
-                      <label
-                        for="professionalLateCheckoutOption"
-                        class="form-label fw-semibold text-gray-800"
+                    <div class="text-gray-500 fs-8 mb-4">
+                      Maximum <%=
+                      shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.evidenceUpload.maxFileSizeDisplay
+                      %> per file.
+                    </div>
+
+                    <input
+                      type="hidden"
+                      name="<%= shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.evidenceUpload.manifestFieldName %>"
+                      value="[]"
+                      data-attendance-evidence-manifest
+                      disabled
+                    />
+
+                    <div class="d-flex flex-column gap-4 mb-4" data-attendance-evidence-list>
+                      <%
+                      shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.evidenceUpload.rows.forEach(
+                      function (evidenceRow) { %>
+                      <div
+                        class="border border-dashed border-gray-300 rounded p-4 <%= evidenceRow.hiddenClass %>"
+                        data-attendance-evidence-item
+                        data-attendance-evidence-index="<%= evidenceRow.index %>"
                       >
-                        Did You Work Overtime?
-                      </label>
+                        <div class="d-flex align-items-center justify-content-between gap-3 mb-4">
+                          <div class="fw-semibold text-gray-800 fs-7"><%= evidenceRow.label %></div>
 
-                      <select
-                        id="professionalLateCheckoutOption"
-                        name="lateCheckoutOption"
-                        class="form-select form-select-solid"
-                        data-attendance-late-option
-                        disabled
-                      >
-                        <option value="">
-                          Select an option
-                        </option>
-
-                        <% attendance.checkOut.lateCheckoutOptions.forEach(function (option) { %>
-                          <option value="<%= option.value %>">
-                            <%= option.label %>
-                          </option>
-                        <% }) %>
-                      </select>
-                    </div>
-
-                    <!-- Normal late checkout -->
-                    <div
-                      class="d-none"
-                      data-attendance-normal-late-fields
-                    >
-                      <div class="mb-4">
-                        <label
-                          for="professionalLateCheckoutReason"
-                          class="form-label fw-semibold text-gray-800"
-                        >
-                          Reason for Late Checkout
-                        </label>
-
-                        <select
-                          id="professionalLateCheckoutReason"
-                          name="lateCheckoutReason"
-                          class="form-select form-select-solid"
-                          data-attendance-late-reason
-                          disabled
-                        >
-                          <option value="">
-                            Select a reason
-                          </option>
-
-                          <% attendance.checkOut.lateCheckoutReasons.forEach(function (reason) { %>
-                            <option value="<%= reason.value %>">
-                              <%= reason.label %>
-                            </option>
-                          <% }) %>
-                        </select>
-                      </div>
-
-                      <div class="mb-5">
-                        <label
-                          for="professionalLateCheckoutNotes"
-                          class="form-label fw-semibold text-gray-800"
-                        >
-                          Additional Notes
-                          <span class="text-gray-500 fw-normal">
-                            (Required when Other is selected)
-                          </span>
-                        </label>
-
-                        <textarea
-                          id="professionalLateCheckoutNotes"
-                          name="lateCheckoutNotes"
-                          class="form-control form-control-solid"
-                          rows="3"
-                          maxlength="<%= attendance.checkOut.maxLateCheckoutNotesLength %>"
-                          placeholder="Explain why you are checking out late."
-                          data-attendance-late-notes
-                          disabled
-                        ></textarea>
-
-                        <div class="form-text">
-                          Maximum <%= attendance.checkOut.maxLateCheckoutNotesLength %> characters.
-                        </div>
-                      </div>
-                    </div>
-
-                    <!-- Overtime request -->
-                    <div
-                      class="d-none"
-                      data-attendance-overtime-fields
-                    >
-                      <div class="border border-dashed border-primary rounded p-4 p-sm-5 mb-5">
-                        <div class="d-flex align-items-center gap-3 mb-5">
-                          <div class="symbol symbol-40px flex-shrink-0">
-                            <span class="symbol-label bg-light-primary">
-                              <i class="ki-duotone ki-time fs-2 text-primary">
-                                <span class="path1"></span>
-                                <span class="path2"></span>
-                              </i>
-                            </span>
-                          </div>
-
-                          <div>
-                            <h5 class="fw-bold text-gray-900 fs-6 mb-1">
-                              Overtime Request
-                            </h5>
-
-                            <div class="text-gray-500 fs-7">
-                              Provide details of the additional work performed.
-                            </div>
-                          </div>
+                          <% if (evidenceRow.canRemove) { %>
+                          <button
+                            type="button"
+                            class="btn btn-sm btn-icon btn-light-danger"
+                            data-attendance-evidence-remove
+                            aria-label="<%= evidenceRow.removeLabel %>"
+                          >
+                            <i class="ki-duotone ki-cross fs-3"></i>
+                          </button>
+                          <% } %>
                         </div>
 
-                        <div class="mb-5">
+                        <div class="mb-4">
                           <label
-                            for="professionalOvertimeStatement"
+                            for="professionalOvertimeEvidenceType-<%= evidenceRow.index %>"
                             class="form-label fw-semibold text-gray-800"
                           >
-                            Overtime Explanation
-                            <span class="text-danger">*</span>
+                            Evidence Type
                           </label>
 
-                          <textarea
-                            id="professionalOvertimeStatement"
-                            name="requestStatement"
-                            class="form-control form-control-solid"
-                            rows="4"
-                            maxlength="<%= attendance.checkOut.maxOvertimeStatementLength %>"
-                            placeholder="Explain the additional work you performed after your scheduled shift ended."
-                            data-attendance-overtime-statement
+                          <select
+                            id="professionalOvertimeEvidenceType-<%= evidenceRow.index %>"
+                            class="form-select form-select-solid"
+                            data-attendance-evidence-type
                             disabled
-                          ></textarea>
+                          >
+                            <option value="">Select evidence type</option>
 
-                          <div class="form-text">
-                            Maximum <%= attendance.checkOut.maxOvertimeStatementLength %> characters.
-                          </div>
+                            <%
+                            shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.evidenceUpload.types.forEach(function
+                            (type) { %>
+                            <option value="<%= type.value %>" data-accept="<%= type.accept %>">
+                              <%= type.label %>
+                            </option>
+                            <% }) %>
+                          </select>
                         </div>
 
-                        <div class="mb-5">
+                        <div class="mb-4">
                           <label
-                            for="professionalOvertimeMinutes"
+                            for="professionalOvertimeEvidenceFile-<%= evidenceRow.index %>"
                             class="form-label fw-semibold text-gray-800"
                           >
-                            Overtime Minutes
-                            <span class="text-gray-500 fw-normal">
-                              (Optional)
-                            </span>
+                            Choose File
                           </label>
 
                           <input
-                            type="number"
-                            id="professionalOvertimeMinutes"
-                            name="requestedOvertimeMinutes"
+                            type="file"
+                            id="professionalOvertimeEvidenceFile-<%= evidenceRow.index %>"
+                            name="<%= shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.evidenceUpload.inputName %>"
                             class="form-control form-control-solid"
-                            min="1"
-                            max="<%= attendance.checkOut.maxOvertimeMinutes %>"
-                            step="1"
-                            placeholder="Enter additional minutes worked"
-                            data-attendance-overtime-minutes
+                            data-attendance-evidence-file
                             disabled
                           />
 
                           <div class="form-text">
-                            If left blank, Loqum uses the recorded post-schedule
-                            attendance duration. Requested minutes cannot exceed
-                            that recorded duration.
+                            Accepted formats depend on the selected evidence type.
                           </div>
                         </div>
 
-                        <!-- Supporting evidence -->
-                        <% if (evidenceConfig && evidenceConfig.available) { %>
-                          <div
-                            class="separator separator-dashed my-6"
-                          ></div>
-
-                          <div
-                            data-attendance-evidence
-                            data-attendance-evidence-max-files="<%= evidenceConfig.maxFiles %>"
-                            data-attendance-evidence-max-bytes="<%= evidenceConfig.maxFileSizeBytes %>"
+                        <div>
+                          <label
+                            for="professionalOvertimeEvidenceDescription-<%= evidenceRow.index %>"
+                            class="form-label fw-semibold text-gray-800"
                           >
-                            <div class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3">
-                              <div>
-                                <h5 class="fw-bold text-gray-900 fs-6 mb-1">
-                                  Supporting Evidence
-                                  <span class="text-gray-500 fw-normal fs-7">
-                                    (Optional)
-                                  </span>
-                                </h5>
+                            Description
+                            <span class="text-gray-500 fw-normal"> (Optional) </span>
+                          </label>
 
-                                <p class="text-gray-500 fs-7 mb-0">
-                                  Add any available evidence supporting your overtime request.
-                                </p>
-                              </div>
+                          <textarea
+                            id="professionalOvertimeEvidenceDescription-<%= evidenceRow.index %>"
+                            class="form-control form-control-solid"
+                            rows="2"
+                            maxlength="<%= shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.evidenceUpload.maxDescriptionLength %>"
+                            placeholder="Briefly describe what this evidence shows."
+                            data-attendance-evidence-description
+                            disabled
+                          ></textarea>
 
-                              <span class="badge badge-light-primary">
-                                Up to <%= evidenceConfig.maxFiles %> files
-                              </span>
-                            </div>
-
-                            <div class="text-gray-500 fs-8 mb-4">
-                              Maximum <%= evidenceConfig.maxFileSizeBytes / (1024 * 1024) %> MB per file.
-                            </div>
-
-                            <input
-                              type="hidden"
-                              name="<%= evidenceConfig.manifestFieldName %>"
-                              value="[]"
-                              data-attendance-evidence-manifest
-                              disabled
-                            />
-
-                            <div
-                              class="d-flex flex-column gap-4 mb-4"
-                              data-attendance-evidence-list
-                            >
-                              <% for (let evidenceIndex = 0; evidenceIndex < evidenceConfig.maxFiles; evidenceIndex += 1) { %>
-                                <div
-                                  class="border border-dashed border-gray-300 rounded p-4 <%= evidenceIndex === 0 ? '' : 'd-none' %>"
-                                  data-attendance-evidence-item
-                                  data-attendance-evidence-index="<%= evidenceIndex %>"
-                                >
-                                  <div class="d-flex align-items-center justify-content-between gap-3 mb-4">
-                                    <div class="fw-semibold text-gray-800 fs-7">
-                                      Evidence <%= evidenceIndex + 1 %>
-                                    </div>
-
-                                    <% if (evidenceIndex > 0) { %>
-                                      <button
-                                        type="button"
-                                        class="btn btn-sm btn-icon btn-light-danger"
-                                        data-attendance-evidence-remove
-                                        aria-label="Remove evidence <%= evidenceIndex + 1 %>"
-                                      >
-                                        <i class="ki-duotone ki-cross fs-3"></i>
-                                      </button>
-                                    <% } %>
-                                  </div>
-
-                                  <div class="mb-4">
-                                    <label
-                                      for="professionalOvertimeEvidenceType-<%= evidenceIndex %>"
-                                      class="form-label fw-semibold text-gray-800"
-                                    >
-                                      Evidence Type
-                                    </label>
-
-                                    <select
-                                      id="professionalOvertimeEvidenceType-<%= evidenceIndex %>"
-                                      class="form-select form-select-solid"
-                                      data-attendance-evidence-type
-                                      disabled
-                                    >
-                                      <option value="">
-                                        Select evidence type
-                                      </option>
-
-                                      <% evidenceConfig.types.forEach(function (type) { %>
-                                        <option
-                                          value="<%= type.value %>"
-                                          data-accept="<%= type.accept %>"
-                                        >
-                                          <%= type.label %>
-                                        </option>
-                                      <% }) %>
-                                    </select>
-                                  </div>
-
-                                  <div class="mb-4">
-                                    <label
-                                      for="professionalOvertimeEvidenceFile-<%= evidenceIndex %>"
-                                      class="form-label fw-semibold text-gray-800"
-                                    >
-                                      Choose File
-                                    </label>
-
-                                    <input
-                                      type="file"
-                                      id="professionalOvertimeEvidenceFile-<%= evidenceIndex %>"
-                                      name="<%= evidenceConfig.inputName %>"
-                                      class="form-control form-control-solid"
-                                      data-attendance-evidence-file
-                                      disabled
-                                    />
-
-                                    <div class="form-text">
-                                      Accepted formats depend on the selected evidence type.
-                                    </div>
-                                  </div>
-
-                                  <div>
-                                    <label
-                                      for="professionalOvertimeEvidenceDescription-<%= evidenceIndex %>"
-                                      class="form-label fw-semibold text-gray-800"
-                                    >
-                                      Description
-                                      <span class="text-gray-500 fw-normal">
-                                        (Optional)
-                                      </span>
-                                    </label>
-
-                                    <textarea
-                                      id="professionalOvertimeEvidenceDescription-<%= evidenceIndex %>"
-                                      class="form-control form-control-solid"
-                                      rows="2"
-                                      maxlength="<%= evidenceConfig.maxDescriptionLength %>"
-                                      placeholder="Briefly describe what this evidence shows."
-                                      data-attendance-evidence-description
-                                      disabled
-                                    ></textarea>
-
-                                    <div class="form-text">
-                                      Maximum <%= evidenceConfig.maxDescriptionLength %> characters.
-                                    </div>
-                                  </div>
-                                </div>
-                              <% } %>
-                            </div>
-
-                            <button
-                              type="button"
-                              class="btn btn-sm btn-light-primary"
-                              data-attendance-evidence-add
-                              disabled
-                            >
-                              <i class="ki-duotone ki-plus fs-3 me-1"></i>
-                              Add Another File
-                            </button>
-
-                            <div class="notice d-flex bg-light-warning border border-warning border-dashed rounded p-4 mt-5">
-                              <i class="ki-duotone ki-shield-tick fs-2 text-warning me-3 flex-shrink-0">
-                                <span class="path1"></span>
-                                <span class="path2"></span>
-                              </i>
-
-                              <div class="text-gray-700 fs-7">
-                                <%= evidenceConfig.privacyNotice %>
-                              </div>
-                            </div>
-                          </div>
-                        <% } %>
-
-                        <!-- Overtime approval notice -->
-                        <div class="notice d-flex bg-light-info border border-info border-dashed rounded p-4 mt-5">
-                          <i class="ki-duotone ki-information-5 fs-2 text-info me-3 flex-shrink-0">
-                            <span class="path1"></span>
-                            <span class="path2"></span>
-                            <span class="path3"></span>
-                          </i>
-
-                          <div class="text-gray-700 fs-7">
-                            Submitting an overtime request does not guarantee payment.
-                            The requested overtime is subject to the existing review
-                            and approval process.
+                          <div class="form-text">
+                            Maximum <%=
+                            shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.evidenceUpload.maxDescriptionLength
+                            %> characters.
                           </div>
                         </div>
                       </div>
+                      <% }); %>
                     </div>
-                  </div>
 
-                  <!-- Checkout errors -->
-                  <div
-                    class="alert alert-danger d-none mb-4"
-                    data-attendance-form-error
-                    role="alert"
-                    aria-live="polite"
-                  ></div>
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-light-primary"
+                      data-attendance-evidence-add
+                      disabled
+                    >
+                      <i class="ki-duotone ki-plus fs-3 me-1"></i>
+                      Add Another File
+                    </button>
 
-                  <!-- Checkout submission -->
-                  <button
-                    type="submit"
-                    class="btn btn-primary w-100 w-sm-auto"
-                    data-attendance-form-submit
-                  >
-                    <span class="indicator-label">
-                      <i class="ki-duotone ki-logout fs-3 me-2">
+                    <div
+                      class="notice d-flex bg-light-warning border border-warning border-dashed rounded p-4 mt-5"
+                    >
+                      <i class="ki-duotone ki-shield-tick fs-2 text-warning me-3 flex-shrink-0">
                         <span class="path1"></span>
                         <span class="path2"></span>
-                      </i>
-                      <%= attendance.checkOut.label %>
-                    </span>
-
-                    <span class="indicator-progress">
-                      Processing checkout...
-                      <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
-                    </span>
-                  </button>
-                </form>
-              </div>
-            <% } %>
-
-            <!-- Checkout fallback -->
-            <% if (
-              attendance.checkoutFallback &&
-              attendance.checkoutFallback.available
-            ) { %>
-              <div class="border border-dashed border-gray-300 rounded p-5 mb-6">
-                <div class="d-flex align-items-start gap-3 mb-5">
-                  <i class="ki-duotone ki-information-5 fs-2x text-warning flex-shrink-0">
-                    <span class="path1"></span>
-                    <span class="path2"></span>
-                    <span class="path3"></span>
-                  </i>
-
-                  <div>
-                    <h4 class="fw-bold text-gray-900 fs-5 mb-2">
-                      Having Trouble Checking Out?
-                    </h4>
-
-                    <p class="text-gray-600 fs-7 mb-0">
-                      If normal checkout cannot be completed, you can
-                      submit a checkout review request.
-                    </p>
-                  </div>
-                </div>
-
-                <form
-                  action="<%= attendance.checkoutFallback.url %>"
-                  method="POST"
-                  data-professional-shift-attendance="checkout-fallback"
-                >
-                  <input
-                    type="hidden"
-                    name="_csrf"
-                    value="<%= csrfToken %>"
-                  />
-
-                  <div class="mb-4">
-                    <label
-                      for="professionalCheckoutFallbackReason"
-                      class="form-label fw-semibold text-gray-800"
-                    >
-                      Reason for Checkout Review
-                    </label>
-
-                    <select
-                      id="professionalCheckoutFallbackReason"
-                      name="reason"
-                      class="form-select form-select-solid"
-                      required
-                    >
-                      <option value="">
-                        Select a reason
-                      </option>
-
-                      <% attendance.checkoutFallback.reasons.forEach(function (reason) { %>
-                        <option value="<%= reason.value %>">
-                          <%= reason.label %>
-                        </option>
-                      <% }) %>
-                    </select>
-                  </div>
-
-                  <div class="mb-4">
-                    <label
-                      for="professionalCheckoutFallbackNotes"
-                      class="form-label fw-semibold text-gray-800"
-                    >
-                      Additional Details
-                      <span class="text-gray-500 fw-normal">
-                        (Optional)
-                      </span>
-                    </label>
-
-                    <textarea
-                      id="professionalCheckoutFallbackNotes"
-                      name="notes"
-                      class="form-control form-control-solid"
-                      rows="3"
-                      maxlength="<%= attendance.checkoutFallback.maxNotesLength %>"
-                      placeholder="Describe the issue preventing checkout."
-                    ></textarea>
-
-                    <div class="form-text">
-                      Maximum <%= attendance.checkoutFallback.maxNotesLength %> characters.
-                    </div>
-                  </div>
-
-                  <div class="alert alert-danger d-none mb-4" data-attendance-form-error></div>
-
-                  <button
-                    type="submit"
-                    class="btn btn-light-warning w-100 w-sm-auto"
-                    data-attendance-form-submit
-                  >
-                    <span class="indicator-label">
-                      <%= attendance.checkoutFallback.label %>
-                    </span>
-
-                    <span class="indicator-progress">
-                      Submitting...
-                      <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
-                    </span>
-                  </button>
-                </form>
-              </div>
-            <% } %>
-
-            <!-- Attendance status notices -->
-            <% if (attendance.attendanceStatus.isCheckoutReviewPending) { %>
-              <div class="notice d-flex bg-light-warning border border-warning border-dashed rounded p-5 mb-5">
-                <i class="ki-duotone ki-time fs-2x text-warning me-3 flex-shrink-0">
-                  <span class="path1"></span>
-                  <span class="path2"></span>
-                </i>
-
-                <div>
-                  <h4 class="fw-bold text-gray-900 fs-6 mb-2">
-                    Checkout Review Pending
-                  </h4>
-
-                  <p class="text-gray-700 fs-7 mb-0">
-                    Your checkout review is awaiting resolution.
-                    Settlement will proceed according to the review outcome.
-                  </p>
-                </div>
-              </div>
-            <% } %>
-
-            <% if (attendance.attendanceStatus.isCheckedOut) { %>
-              <div class="notice d-flex bg-light-success border border-success border-dashed rounded p-5 mb-5">
-                <i class="ki-duotone ki-check-circle fs-2x text-success me-3 flex-shrink-0">
-                  <span class="path1"></span>
-                  <span class="path2"></span>
-                </i>
-
-                <div>
-                  <h4 class="fw-bold text-gray-900 fs-6 mb-2">
-                    Checkout Recorded
-                  </h4>
-
-                  <p class="text-gray-700 fs-7 mb-0">
-                    Your checkout has been recorded successfully.
-                    You can review the attendance and settlement details below.
-                  </p>
-                </div>
-              </div>
-            <% } %>
-
-            <!-- No-show explanation -->
-            <% if (attendance.attendanceStatus.isNoShow) { %>
-              <div class="border border-dashed border-warning rounded p-5 mb-6">
-                <h4 class="fw-bold text-gray-900 fs-5 mb-3">
-                  Recorded No-show
-                </h4>
-
-                <p class="text-gray-600 fs-7 mb-4">
-                  This work date has been recorded as a no-show.
-                  If you did not work, you may explain your absence.
-                  If you actually worked, use the attendance-correction claim process.
-                </p>
-
-                <% if (selected.absenceExplanation) { %>
-                  <div class="bg-light rounded p-4 mb-4">
-                    <div class="fw-semibold text-gray-800 fs-7 mb-2">
-                      Your Absence Explanation
-                    </div>
-
-                    <div class="text-gray-600 fs-7" style="white-space: pre-line"><%= selected.absenceExplanation %></div>
-
-                    <% if (selected.absenceExplainedAt) { %>
-                      <div class="text-gray-500 fs-8 mt-3">
-                        Submitted: <%= selected.absenceExplainedAtDisplay %>
-                      </div>
-                    <% } %>
-                  </div>
-                <% } %>
-
-                <% if (attendance.absenceExplanation.available) { %>
-                  <form
-                    action="<%= attendance.absenceExplanation.url %>"
-                    method="POST"
-                    data-professional-shift-attendance="absence-explanation"
-                  >
-                    <input
-                      type="hidden"
-                      name="_csrf"
-                      value="<%= csrfToken %>"
-                    />
-
-                    <div class="mb-4">
-                      <label
-                        for="professionalAbsenceExplanation"
-                        class="form-label fw-semibold text-gray-800"
-                      >
-                        Explain Your Absence
-                      </label>
-
-                      <textarea
-                        id="professionalAbsenceExplanation"
-                        name="explanation"
-                        class="form-control form-control-solid"
-                        rows="4"
-                        maxlength="<%= attendance.absenceExplanation.maxExplanationLength %>"
-                        placeholder="Explain why you could not attend this shift."
-                        required
-                      ></textarea>
-
-                      <div class="form-text">
-                        Maximum <%= attendance.absenceExplanation.maxExplanationLength %> characters.
-                        This explanation cannot be edited after submission.
-                      </div>
-                    </div>
-
-                    <div class="notice d-flex bg-light-info border border-info border-dashed rounded p-4 mb-4">
-                      <i class="ki-duotone ki-information-5 fs-2 text-info me-3 flex-shrink-0">
-                        <span class="path1"></span>
-                        <span class="path2"></span>
-                        <span class="path3"></span>
                       </i>
 
                       <div class="text-gray-700 fs-7">
-                        An absence explanation does not reverse a no-show
-                        or create a payment claim.
+                        <%=
+                        shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.evidenceUpload.privacyNotice
+                        %>
                       </div>
                     </div>
-
-                    <div class="alert alert-danger d-none mb-4" data-attendance-form-error></div>
-
-                    <button
-                      type="submit"
-                      class="btn btn-light-primary w-100 w-sm-auto"
-                      data-attendance-form-submit
-                    >
-                      <span class="indicator-label">
-                        <%= attendance.absenceExplanation.label %>
-                      </span>
-
-                      <span class="indicator-progress">
-                        Submitting...
-                        <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
-                      </span>
-                    </button>
-                  </form>
-                <% } %>
-              </div>
-            <% } %>
-          <% } %>
-
-          <!-- Overtime request status -->
-          <% if (selected.overtime && selected.overtime.status) { %>
-            <div class="border border-dashed border-gray-300 rounded p-5 mb-6">
-              <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
-                <h4 class="fw-bold text-gray-900 fs-6 mb-0">
-                  Overtime Request
-                </h4>
-
-                <% if (selected.overtime.statusView) { %>
-                  <span class="badge <%= selected.overtime.statusView.badgeClass %>">
-                    <%= selected.overtime.statusView.label %>
-                  </span>
-                <% } %>
-              </div>
-
-              <% if (
-                selected.overtime.requestedMinutes !== null &&
-                selected.overtime.requestedMinutes !== undefined
-              ) { %>
-                <div class="d-flex justify-content-between align-items-center gap-3 mb-3">
-                  <span class="text-gray-600 fw-semibold fs-7">
-                    Requested Duration
-                  </span>
-
-                  <span class="text-gray-800 fw-semibold fs-7">
-                    <%= selected.overtime.requestedMinutesDisplay %>
-                  </span>
-                </div>
-              <% } %>
-
-              <% if (
-                selected.overtime.approvedMinutes !== null &&
-                selected.overtime.approvedMinutes !== undefined
-              ) { %>
-                <div class="d-flex justify-content-between align-items-center gap-3">
-                  <span class="text-gray-600 fw-semibold fs-7">
-                    Approved Duration
-                  </span>
-
-                  <span class="text-gray-800 fw-semibold fs-7">
-                    <%= selected.overtime.approvedMinutesDisplay %>
-                  </span>
-                </div>
-              <% } %>
-            </div>
-          <% } %>
-
-          <!-- Earnings and settlement -->
-          <div class="border border-dashed border-gray-300 rounded p-5">
-            <h4 class="fw-bold text-gray-900 fs-6 mb-4">
-              Earnings & Settlement
-            </h4>
-
-            <div class="d-flex align-items-center justify-content-between flex-wrap gap-3 mb-4">
-              <span class="text-gray-600 fw-semibold fs-7">
-                Estimated Professional Pay
-              </span>
-
-              <span class="fw-bold text-gray-900 fs-5">
-                <%= selected.estimatedProfessionalPayDisplay %>
-              </span>
-            </div>
-
-            <div class="d-flex align-items-center justify-content-between flex-wrap gap-3 mb-4">
-              <span class="text-gray-600 fw-semibold fs-7">
-                Base Professional Pay
-              </span>
-
-              <span class="fw-bold text-gray-900 fs-6">
-                <%= selected.baseProfessionalPayDisplay %>
-              </span>
-            </div>
-
-            <div class="d-flex align-items-center justify-content-between flex-wrap gap-3 mb-4">
-              <span class="text-gray-600 fw-semibold fs-7">
-                Overtime Professional Pay
-              </span>
-
-              <span class="fw-bold text-gray-900 fs-6">
-                <%= selected.overtimeProfessionalPayDisplay %>
-              </span>
-            </div>
-
-            <% if (selected.settlementStatusView) { %>
-              <div class="separator separator-dashed my-4"></div>
-
-              <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
-                <span class="text-gray-600 fw-semibold fs-7">
-                  Settlement Status
-                </span>
-
-                <span class="badge <%= selected.settlementStatusView.badgeClass %>">
-                  <%= selected.settlementStatusView.label %>
-                </span>
-              </div>
-            <% } %>
-
-            <% if (selected.baseSettlement) { %>
-              <div class="separator separator-dashed my-4"></div>
-
-              <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
-                <div>
-                  <div class="fw-semibold text-gray-800 fs-7">
-                    Base Settlement
                   </div>
+                  <% } %>
 
-                  <div class="text-gray-500 fs-8 mt-1">
-                    <%= selected.baseSettlement.professionalPayDisplay %>
+                  <!-- Overtime approval notice -->
+                  <div
+                    class="notice d-flex bg-light-info border border-info border-dashed rounded p-4 mt-5"
+                  >
+                    <i class="ki-duotone ki-information-5 fs-2 text-info me-3 flex-shrink-0">
+                      <span class="path1"></span>
+                      <span class="path2"></span>
+                      <span class="path3"></span>
+                    </i>
+
+                    <div class="text-gray-700 fs-7">
+                      Submitting an overtime request does not guarantee payment. The requested
+                      overtime is subject to the existing review and approval process.
+                    </div>
                   </div>
                 </div>
-
-                <% if (selected.baseSettlement.statusView) { %>
-                  <span class="badge <%= selected.baseSettlement.statusView.badgeClass %>">
-                    <%= selected.baseSettlement.statusView.label %>
-                  </span>
-                <% } %>
               </div>
-            <% } %>
+            </div>
 
-            <% if (selected.overtimeSettlement) { %>
-              <div class="separator separator-dashed my-4"></div>
+            <!-- Checkout errors -->
+            <div
+              class="alert alert-danger d-none mb-4"
+              data-attendance-form-error
+              role="alert"
+              aria-live="polite"
+            ></div>
 
-              <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
-                <div>
-                  <div class="fw-semibold text-gray-800 fs-7">
-                    Overtime Settlement
-                  </div>
+            <!-- Checkout submission -->
+            <button
+              type="submit"
+              class="btn btn-primary w-100 w-sm-auto"
+              data-attendance-form-submit
+            >
+              <span class="indicator-label">
+                <i class="ki-duotone ki-logout fs-3 me-2">
+                  <span class="path1"></span>
+                  <span class="path2"></span>
+                </i>
+                <%= shiftDetailsView.selectedOccurrence.attendanceActions.checkOut.label %>
+              </span>
 
-                  <div class="text-gray-500 fs-8 mt-1">
-                    <%= selected.overtimeSettlement.professionalPayDisplay %>
-                  </div>
-                </div>
+              <span class="indicator-progress">
+                Processing checkout...
+                <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+              </span>
+            </button>
+          </form>
+        </div>
+        <% } %>
 
-                <% if (selected.overtimeSettlement.statusView) { %>
-                  <span class="badge <%= selected.overtimeSettlement.statusView.badgeClass %>">
-                    <%= selected.overtimeSettlement.statusView.label %>
-                  </span>
-                <% } %>
+        <!-- Checkout fallback -->
+        <% if ( shiftDetailsView.selectedOccurrence.attendanceActions.checkoutFallback &&
+        shiftDetailsView.selectedOccurrence.attendanceActions.checkoutFallback.available ) { %>
+        <div class="border border-dashed border-gray-300 rounded p-5 mb-6">
+          <div class="d-flex align-items-start gap-3 mb-5">
+            <i class="ki-duotone ki-information-5 fs-2x text-warning flex-shrink-0">
+              <span class="path1"></span>
+              <span class="path2"></span>
+              <span class="path3"></span>
+            </i>
+
+            <div>
+              <h4 class="fw-bold text-gray-900 fs-5 mb-2">Having Trouble Checking Out?</h4>
+
+              <p class="text-gray-600 fs-7 mb-0">
+                If normal checkout cannot be completed, you can submit a checkout review request.
+              </p>
+            </div>
+          </div>
+
+          <form
+            action="<%= shiftDetailsView.selectedOccurrence.attendanceActions.checkoutFallback.url %>"
+            method="POST"
+            data-professional-shift-attendance="checkout-fallback"
+          >
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+            <div class="mb-4">
+              <label
+                for="professionalCheckoutFallbackReason"
+                class="form-label fw-semibold text-gray-800"
+              >
+                Reason for Checkout Review
+              </label>
+
+              <select
+                id="professionalCheckoutFallbackReason"
+                name="reason"
+                class="form-select form-select-solid"
+                required
+              >
+                <option value="">Select a reason</option>
+
+                <%
+                shiftDetailsView.selectedOccurrence.attendanceActions.checkoutFallback.reasons.forEach(function
+                (reason) { %>
+                <option value="<%= reason.value %>"><%= reason.label %></option>
+                <% }) %>
+              </select>
+            </div>
+
+            <div class="mb-4">
+              <label
+                for="professionalCheckoutFallbackNotes"
+                class="form-label fw-semibold text-gray-800"
+              >
+                Additional Details
+                <span class="text-gray-500 fw-normal"> (Optional) </span>
+              </label>
+
+              <textarea
+                id="professionalCheckoutFallbackNotes"
+                name="notes"
+                class="form-control form-control-solid"
+                rows="3"
+                maxlength="<%= shiftDetailsView.selectedOccurrence.attendanceActions.checkoutFallback.maxNotesLength %>"
+                placeholder="Describe the issue preventing checkout."
+              ></textarea>
+
+              <div class="form-text">
+                Maximum <%=
+                shiftDetailsView.selectedOccurrence.attendanceActions.checkoutFallback.maxNotesLength
+                %> characters.
               </div>
-            <% } %>
+            </div>
+
+            <div class="alert alert-danger d-none mb-4" data-attendance-form-error></div>
+
+            <button
+              type="submit"
+              class="btn btn-light-warning w-100 w-sm-auto"
+              data-attendance-form-submit
+            >
+              <span class="indicator-label">
+                <%= shiftDetailsView.selectedOccurrence.attendanceActions.checkoutFallback.label %>
+              </span>
+
+              <span class="indicator-progress">
+                Submitting...
+                <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+              </span>
+            </button>
+          </form>
+        </div>
+        <% } %>
+
+        <!-- Attendance status notices -->
+        <% if
+        (shiftDetailsView.selectedOccurrence.attendanceActions.attendanceStatus.isCheckoutReviewPending)
+        { %>
+        <div
+          class="notice d-flex bg-light-warning border border-warning border-dashed rounded p-5 mb-5"
+        >
+          <i class="ki-duotone ki-time fs-2x text-warning me-3 flex-shrink-0">
+            <span class="path1"></span>
+            <span class="path2"></span>
+          </i>
+
+          <div>
+            <h4 class="fw-bold text-gray-900 fs-6 mb-2">Checkout Review Pending</h4>
+
+            <p class="text-gray-700 fs-7 mb-0">
+              Your checkout review is awaiting resolution. Settlement will proceed according to the
+              review outcome.
+            </p>
           </div>
         </div>
+        <% } %> <% if
+        (shiftDetailsView.selectedOccurrence.attendanceActions.attendanceStatus.isCheckedOut) { %>
+        <div
+          class="notice d-flex bg-light-success border border-success border-dashed rounded p-5 mb-5"
+        >
+          <i class="ki-duotone ki-check-circle fs-2x text-success me-3 flex-shrink-0">
+            <span class="path1"></span>
+            <span class="path2"></span>
+          </i>
+
+          <div>
+            <h4 class="fw-bold text-gray-900 fs-6 mb-2">Checkout Recorded</h4>
+
+            <p class="text-gray-700 fs-7 mb-0">
+              Your checkout has been recorded successfully. You can review the attendance and
+              settlement details below.
+            </p>
+          </div>
+        </div>
+        <% } %>
+
+        <!-- No-show explanation -->
+        <% if (shiftDetailsView.selectedOccurrence.attendanceActions.attendanceStatus.isNoShow) { %>
+        <div class="border border-dashed border-warning rounded p-5 mb-6">
+          <h4 class="fw-bold text-gray-900 fs-5 mb-3">Recorded No-show</h4>
+
+          <p class="text-gray-600 fs-7 mb-4">
+            This work date has been recorded as a no-show. If you did not work, you may explain your
+            absence. If you actually worked, use the attendance-correction claim process.
+          </p>
+
+          <% if (shiftDetailsView.selectedOccurrence.absenceExplanation) { %>
+          <div class="bg-light rounded p-4 mb-4">
+            <div class="fw-semibold text-gray-800 fs-7 mb-2">Your Absence Explanation</div>
+
+            <div class="text-gray-600 fs-7" style="white-space: pre-line">
+              <%= shiftDetailsView.selectedOccurrence.absenceExplanation %>
+            </div>
+
+            <% if (shiftDetailsView.selectedOccurrence.absenceExplainedAt) { %>
+            <div class="text-gray-500 fs-8 mt-3">
+              Submitted: <%= shiftDetailsView.selectedOccurrence.absenceExplainedAtDisplay %>
+            </div>
+            <% } %>
+          </div>
+          <% } %> <% if
+          (shiftDetailsView.selectedOccurrence.attendanceActions.absenceExplanation.available) { %>
+          <form
+            action="<%= shiftDetailsView.selectedOccurrence.attendanceActions.absenceExplanation.url %>"
+            method="POST"
+            data-professional-shift-attendance="absence-explanation"
+          >
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+
+            <div class="mb-4">
+              <label
+                for="professionalAbsenceExplanation"
+                class="form-label fw-semibold text-gray-800"
+              >
+                Explain Your Absence
+              </label>
+
+              <textarea
+                id="professionalAbsenceExplanation"
+                name="explanation"
+                class="form-control form-control-solid"
+                rows="4"
+                maxlength="<%= shiftDetailsView.selectedOccurrence.attendanceActions.absenceExplanation.maxExplanationLength %>"
+                placeholder="Explain why you could not attend this shift."
+                required
+              ></textarea>
+
+              <div class="form-text">
+                Maximum <%=
+                shiftDetailsView.selectedOccurrence.attendanceActions.absenceExplanation.maxExplanationLength
+                %> characters. This explanation cannot be edited after submission.
+              </div>
+            </div>
+
+            <div
+              class="notice d-flex bg-light-info border border-info border-dashed rounded p-4 mb-4"
+            >
+              <i class="ki-duotone ki-information-5 fs-2 text-info me-3 flex-shrink-0">
+                <span class="path1"></span>
+                <span class="path2"></span>
+                <span class="path3"></span>
+              </i>
+
+              <div class="text-gray-700 fs-7">
+                An absence explanation does not reverse a no-show or create a payment claim.
+              </div>
+            </div>
+
+            <div class="alert alert-danger d-none mb-4" data-attendance-form-error></div>
+
+            <button
+              type="submit"
+              class="btn btn-light-primary w-100 w-sm-auto"
+              data-attendance-form-submit
+            >
+              <span class="indicator-label">
+                <%= shiftDetailsView.selectedOccurrence.attendanceActions.absenceExplanation.label
+                %>
+              </span>
+
+              <span class="indicator-progress">
+                Submitting...
+                <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+              </span>
+            </button>
+          </form>
+          <% } %>
+        </div>
+        <% } %> <% } %>
+
+        <!-- Overtime request status -->
+        <% if (shiftDetailsView.selectedOccurrence.overtime &&
+        shiftDetailsView.selectedOccurrence.overtime.status) { %>
+        <div class="border border-dashed border-gray-300 rounded p-5 mb-6">
+          <div class="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+            <h4 class="fw-bold text-gray-900 fs-6 mb-0">Overtime Request</h4>
+
+            <% if (shiftDetailsView.selectedOccurrence.overtime.statusView) { %>
+            <span
+              class="badge <%= shiftDetailsView.selectedOccurrence.overtime.statusView.badgeClass %>"
+            >
+              <%= shiftDetailsView.selectedOccurrence.overtime.statusView.label %>
+            </span>
+            <% } %>
+          </div>
+
+          <% if ( shiftDetailsView.selectedOccurrence.overtime.requestedMinutes !== null &&
+          shiftDetailsView.selectedOccurrence.overtime.requestedMinutes !== undefined ) { %>
+          <div class="d-flex justify-content-between align-items-center gap-3 mb-3">
+            <span class="text-gray-600 fw-semibold fs-7"> Requested Duration </span>
+
+            <span class="text-gray-800 fw-semibold fs-7">
+              <%= shiftDetailsView.selectedOccurrence.overtime.requestedMinutesDisplay %>
+            </span>
+          </div>
+          <% } %> <% if ( shiftDetailsView.selectedOccurrence.overtime.approvedMinutes !== null &&
+          shiftDetailsView.selectedOccurrence.overtime.approvedMinutes !== undefined ) { %>
+          <div class="d-flex justify-content-between align-items-center gap-3">
+            <span class="text-gray-600 fw-semibold fs-7"> Approved Duration </span>
+
+            <span class="text-gray-800 fw-semibold fs-7">
+              <%= shiftDetailsView.selectedOccurrence.overtime.approvedMinutesDisplay %>
+            </span>
+          </div>
+          <% } %>
+        </div>
+        <% } %>
+
+        <!-- Earnings and settlement -->
+        <div class="border border-dashed border-gray-300 rounded p-5">
+          <h4 class="fw-bold text-gray-900 fs-6 mb-4">Earnings & Settlement</h4>
+
+          <div class="d-flex align-items-center justify-content-between flex-wrap gap-3 mb-4">
+            <span class="text-gray-600 fw-semibold fs-7"> Estimated Professional Pay </span>
+
+            <span class="fw-bold text-gray-900 fs-5">
+              <%= shiftDetailsView.selectedOccurrence.estimatedProfessionalPayDisplay %>
+            </span>
+          </div>
+
+          <div class="d-flex align-items-center justify-content-between flex-wrap gap-3 mb-4">
+            <span class="text-gray-600 fw-semibold fs-7"> Base Professional Pay </span>
+
+            <span class="fw-bold text-gray-900 fs-6">
+              <%= shiftDetailsView.selectedOccurrence.baseProfessionalPayDisplay %>
+            </span>
+          </div>
+
+          <div class="d-flex align-items-center justify-content-between flex-wrap gap-3 mb-4">
+            <span class="text-gray-600 fw-semibold fs-7"> Overtime Professional Pay </span>
+
+            <span class="fw-bold text-gray-900 fs-6">
+              <%= shiftDetailsView.selectedOccurrence.overtimeProfessionalPayDisplay %>
+            </span>
+          </div>
+
+          <% if (shiftDetailsView.selectedOccurrence.settlementStatusView) { %>
+          <div class="separator separator-dashed my-4"></div>
+
+          <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+            <span class="text-gray-600 fw-semibold fs-7"> Settlement Status </span>
+
+            <span
+              class="badge <%= shiftDetailsView.selectedOccurrence.settlementStatusView.badgeClass %>"
+            >
+              <%= shiftDetailsView.selectedOccurrence.settlementStatusView.label %>
+            </span>
+          </div>
+          <% } %> <% if (shiftDetailsView.selectedOccurrence.baseSettlement) { %>
+          <div class="separator separator-dashed my-4"></div>
+
+          <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+            <div>
+              <div class="fw-semibold text-gray-800 fs-7">Base Settlement</div>
+
+              <div class="text-gray-500 fs-8 mt-1">
+                <%= shiftDetailsView.selectedOccurrence.baseSettlement.professionalPayDisplay %>
+              </div>
+            </div>
+
+            <% if (shiftDetailsView.selectedOccurrence.baseSettlement.statusView) { %>
+            <span
+              class="badge <%= shiftDetailsView.selectedOccurrence.baseSettlement.statusView.badgeClass %>"
+            >
+              <%= shiftDetailsView.selectedOccurrence.baseSettlement.statusView.label %>
+            </span>
+            <% } %>
+          </div>
+          <% } %> <% if (shiftDetailsView.selectedOccurrence.overtimeSettlement) { %>
+          <div class="separator separator-dashed my-4"></div>
+
+          <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+            <div>
+              <div class="fw-semibold text-gray-800 fs-7">Overtime Settlement</div>
+
+              <div class="text-gray-500 fs-8 mt-1">
+                <%= shiftDetailsView.selectedOccurrence.overtimeSettlement.professionalPayDisplay %>
+              </div>
+            </div>
+
+            <% if (shiftDetailsView.selectedOccurrence.overtimeSettlement.statusView) { %>
+            <span
+              class="badge <%= shiftDetailsView.selectedOccurrence.overtimeSettlement.statusView.badgeClass %>"
+            >
+              <%= shiftDetailsView.selectedOccurrence.overtimeSettlement.statusView.label %>
+            </span>
+            <% } %>
+          </div>
+          <% } %>
+        </div>
       </div>
+    </div>
     <% } %>
   </div>
 
@@ -1640,33 +1466,25 @@
     <div class="card card-flush mb-6 mb-xl-8">
       <div class="card-header">
         <div class="card-title">
-          <h2 class="fw-bold text-gray-900 fs-5 mb-0">
-            Shift Summary
-          </h2>
+          <h2 class="fw-bold text-gray-900 fs-5 mb-0">Shift Summary</h2>
         </div>
       </div>
 
       <div class="card-body pt-3">
         <div class="mb-6">
-          <div class="text-gray-500 fw-semibold fs-7 mb-2">
-            Hourly Rate
-          </div>
+          <div class="text-gray-500 fw-semibold fs-7 mb-2">Hourly Rate</div>
 
           <div class="fs-2 fw-bold text-gray-900">
             <%= shiftDetailsView.shift.hourlyRateDisplay %>
           </div>
 
-          <div class="text-gray-500 fs-7">
-            per hour
-          </div>
+          <div class="text-gray-500 fs-7">per hour</div>
         </div>
 
         <div class="separator separator-dashed mb-5"></div>
 
         <div class="mb-5">
-          <div class="text-gray-500 fs-7 mb-2">
-            Starts
-          </div>
+          <div class="text-gray-500 fs-7 mb-2">Starts</div>
 
           <div class="fw-bold text-gray-800 fs-6">
             <%= shiftDetailsView.shift.startTimeDisplay %>
@@ -1674,73 +1492,51 @@
         </div>
 
         <div class="mb-5">
-          <div class="text-gray-500 fs-7 mb-2">
-            Ends
-          </div>
+          <div class="text-gray-500 fs-7 mb-2">Ends</div>
 
-          <div class="fw-bold text-gray-800 fs-6">
-            <%= shiftDetailsView.shift.endTimeDisplay %>
-          </div>
+          <div class="fw-bold text-gray-800 fs-6"><%= shiftDetailsView.shift.endTimeDisplay %></div>
         </div>
 
         <% if (shiftDetailsView.shift.scheduleTimeZone) { %>
-          <div class="mb-5">
-            <div class="text-gray-500 fs-7 mb-2">
-              Time Zone
-            </div>
+        <div class="mb-5">
+          <div class="text-gray-500 fs-7 mb-2">Time Zone</div>
 
-            <div class="fw-semibold text-gray-800 fs-7">
-              <%= shiftDetailsView.shift.scheduleTimeZone %>
-            </div>
+          <div class="fw-semibold text-gray-800 fs-7">
+            <%= shiftDetailsView.shift.scheduleTimeZone %>
           </div>
-        <% } %>
+        </div>
+        <% } %> <% if (shiftDetailsView.shift.requiredProfessionals) { %>
+        <div class="mb-5">
+          <div class="text-gray-500 fs-7 mb-2">Professionals Required</div>
 
-        <% if (shiftDetailsView.shift.requiredProfessionals) { %>
-          <div class="mb-5">
-            <div class="text-gray-500 fs-7 mb-2">
-              Professionals Required
-            </div>
-
-            <div class="fw-bold text-gray-800 fs-6">
-              <%= shiftDetailsView.shift.requiredProfessionals %>
-            </div>
+          <div class="fw-bold text-gray-800 fs-6">
+            <%= shiftDetailsView.shift.requiredProfessionals %>
           </div>
-        <% } %>
+        </div>
+        <% } %> <% if (shiftDetailsView.shift.occurrenceCount) { %>
+        <div class="mb-5">
+          <div class="text-gray-500 fs-7 mb-2">Scheduled Work Dates</div>
 
-        <% if (shiftDetailsView.shift.occurrenceCount) { %>
-          <div class="mb-5">
-            <div class="text-gray-500 fs-7 mb-2">
-              Scheduled Work Dates
-            </div>
-
-            <div class="fw-bold text-gray-800 fs-6">
-              <%= shiftDetailsView.shift.occurrenceCount %>
-            </div>
+          <div class="fw-bold text-gray-800 fs-6">
+            <%= shiftDetailsView.shift.occurrenceCount %>
           </div>
-        <% } %>
+        </div>
+        <% } %> <% if (shiftDetailsView.shift.distanceKm !== null) { %>
+        <div class="mb-5">
+          <div class="text-gray-500 fs-7 mb-2">Distance</div>
 
-        <% if (shiftDetailsView.shift.distanceKm !== null) { %>
-          <div class="mb-5">
-            <div class="text-gray-500 fs-7 mb-2">
-              Distance
-            </div>
-
-            <div class="fw-semibold text-gray-800 fs-7">
-              <%= shiftDetailsView.shift.distanceDisplay %>
-            </div>
+          <div class="fw-semibold text-gray-800 fs-7">
+            <%= shiftDetailsView.shift.distanceDisplay %>
           </div>
-        <% } %>
+        </div>
+        <% } %> <% if (shiftDetailsView.shift.breakDuration) { %>
+        <div>
+          <div class="text-gray-500 fs-7 mb-2">Declared Break</div>
 
-        <% if (shiftDetailsView.shift.breakDuration) { %>
-          <div>
-            <div class="text-gray-500 fs-7 mb-2">
-              Declared Break
-            </div>
-
-            <div class="fw-semibold text-gray-800 fs-7">
-              <%= shiftDetailsView.shift.breakDuration %> minutes
-            </div>
+          <div class="fw-semibold text-gray-800 fs-7">
+            <%= shiftDetailsView.shift.breakDuration %> minutes
           </div>
+        </div>
         <% } %>
       </div>
     </div>
@@ -1749,17 +1545,13 @@
     <div class="card card-flush">
       <div class="card-header">
         <div class="card-title">
-          <h2 class="fw-bold text-gray-900 fs-5 mb-0">
-            My Participation
-          </h2>
+          <h2 class="fw-bold text-gray-900 fs-5 mb-0">My Participation</h2>
         </div>
       </div>
 
       <div class="card-body pt-3">
         <div class="d-flex align-items-center justify-content-between mb-4">
-          <span class="text-gray-600 fw-semibold fs-7">
-            Applications
-          </span>
+          <span class="text-gray-600 fw-semibold fs-7"> Applications </span>
 
           <span class="badge badge-light-primary">
             <%= shiftDetailsView.shift.applications.length %>
@@ -1767,9 +1559,7 @@
         </div>
 
         <div class="d-flex align-items-center justify-content-between mb-4">
-          <span class="text-gray-600 fw-semibold fs-7">
-            Assigned Work Dates
-          </span>
+          <span class="text-gray-600 fw-semibold fs-7"> Assigned Work Dates </span>
 
           <span class="badge badge-light-success">
             <%= shiftDetailsView.shift.occurrences.length %>
@@ -1777,9 +1567,7 @@
         </div>
 
         <div class="d-flex align-items-center justify-content-between">
-          <span class="text-gray-600 fw-semibold fs-7">
-            Application Opportunities
-          </span>
+          <span class="text-gray-600 fw-semibold fs-7"> Application Opportunities </span>
 
           <span class="badge badge-light-info">
             <%= shiftDetailsView.shift.opportunities.length %>

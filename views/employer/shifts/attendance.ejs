@@ -136,9 +136,9 @@
           <div class="symbol symbol-60px mb-5">
             <span class="symbol-label <%= card.symbolClass %>">
               <i class="ki-duotone <%= card.icon %> fs-2x <%= card.iconClass %>">
-                <% for (let pathIndex = 1; pathIndex <= card.iconPaths; pathIndex += 1) { %>
-                <span class="path<%= pathIndex %>"></span>
-                <% } %>
+                <% card.iconPathClasses.forEach((pathClass) => { %>
+                <span class="<%= pathClass %>"></span>
+                <% }); %>
               </i>
             </span>
           </div>

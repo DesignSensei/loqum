@@ -444,23 +444,6 @@ class EmployerService {
               "Change the main facility's location through Branch management so its permits can be reassessed."
             );
           }
-
-          const regulatoryReviewStarted = Boolean(
-            (employerProfile.regulatoryVerificationStatus &&
-              !["pending", "not_started"].includes(employerProfile.regulatoryVerificationStatus)) ||
-            (employerProfile.regulatoryVerificationMethod &&
-              employerProfile.regulatoryVerificationMethod !== "not_checked") ||
-            (employerProfile.regulatoryVerificationSource &&
-              employerProfile.regulatoryVerificationSource !== "not_checked") ||
-            employerProfile.regulatoryLastCheckedAt ||
-            employerProfile.regulatoryVerifiedAt
-          );
-
-          if (regulatoryReviewStarted) {
-            throw new Error(
-              "Changes to reviewed business premises require additional regulatory review. Please contact support."
-            );
-          }
         }
 
         // Only ordinary contact and permitted location fields are persisted.

@@ -147,6 +147,12 @@ async function buildEmployerContext({ user, profile, currentTime = new Date() })
       ?.map((assignment) => getId(assignment.branch))
       .filter(Boolean) || [];
 
+  const managedBranchIds =
+    resolvedEmployerMember?.branches
+      ?.filter((assignment) => assignment.role === "branch_manager")
+      .map((assignment) => getId(assignment.branch))
+      .filter(Boolean) || [];
+
   const canManageAllShifts = isPrimaryEmployer || isBusinessAdmin;
 
   const canManageAssignedBranchShifts = isBranchManager;
@@ -199,6 +205,7 @@ async function buildEmployerContext({ user, profile, currentTime = new Date() })
     isBranchStaff,
 
     assignedBranchIds,
+    managedBranchIds,
 
     canViewBusinessProfile: true,
     canManageBusinessProfile: isPrimaryEmployer || isBusinessAdmin,

@@ -18,7 +18,8 @@ const {
 
 const adminController = require("../controllers/adminController");
 const adminShiftClaimController = require("../controllers/adminShiftClaimController");
-const adminPlatformSettingsController = require("../controllers/adminACPlatformSettingsController");
+
+const adminPlatformSettingsController = require("../controllers/adminPlatformSettingsController");
 
 const adminShiftController = require("../controllers/adminShiftController");
 const adminShiftApplicationController = require("../controllers/adminShiftApplicationController");

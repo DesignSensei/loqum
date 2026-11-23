@@ -3,11 +3,8 @@
 <!-- Admin adjudication -->
 
 <% if (issue.actions.adjudicate?.available && issue.adjudication?.available) { %>
-  <% const adjudicationAction = issue.actions.adjudicate; %>
-  <% const adjudication = issue.adjudication; %>
-
   <form
-    action="<%= adjudicationAction.url %>"
+    action="<%= issue.actions.adjudicate.url %>"
     method="post"
     data-case-action-form
     data-admin-adjudication
@@ -35,14 +32,14 @@
           class="form-select"
           name="decision"
           data-admin-decision
-          data-admin-outcome-decisions="<%= adjudication.adminOutcomeRequiredForDecisions.join(",") %>"
+          data-admin-outcome-decisions="<%= issue.adjudication.adminOutcomeRequiredForDecisions.join(",") %>"
           required
         >
           <option value="">
             Choose a decision
           </option>
 
-          <% adjudication.decisions.forEach((decision) => { %>
+          <% issue.adjudication.decisions.forEach((decision) => { %>
             <option value="<%= decision.value %>">
               <%= decision.label %>
             </option>
@@ -76,7 +73,7 @@
 
     <!-- Final authoritative outcome -->
 
-    <% if (adjudication.adminOutcome?.fields?.length) { %>
+    <% if (issue.adjudication.adminOutcome?.fields?.length) { %>
       <div
         class="bg-light rounded p-4 mb-4 d-none"
         data-admin-outcome
@@ -90,7 +87,7 @@
         </div>
 
         <div class="row g-3">
-          <% adjudication.adminOutcome.fields.forEach((field) => { %>
+          <% issue.adjudication.adminOutcome.fields.forEach((field) => { %>
             <div class="<%= field.columnClass || "col-12" %>">
               <label
                 class="form-label"
@@ -138,13 +135,11 @@
 
     <!-- Admin evidence -->
 
-    <% if (adjudication.evidence?.allowed) { %>
-      <% const evidenceConfig = adjudication.evidence; %>
-
+    <% if (issue.adjudication.evidence?.allowed) { %>
       <div
         class="mb-4"
         data-case-evidence
-        data-evidence-max-items="<%= evidenceConfig.maxItems %>"
+        data-evidence-max-items="<%= issue.adjudication.evidence.maxItems %>"
       >
         <div
           class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3"
@@ -156,8 +151,8 @@
 
             <div class="text-gray-500 fs-7">
               Add any evidence relied upon for the final adjudication.
-              Up to <%= evidenceConfig.maxItems %>
-              item<%= evidenceConfig.maxItems === 1 ? "" : "s" %>.
+              Up to <%= issue.adjudication.evidence.maxItems %>
+              item<%= issue.adjudication.evidence.maxItems === 1 ? "" : "s" %>.
             </div>
           </div>
 
@@ -219,7 +214,7 @@
                     Select evidence type
                   </option>
 
-                  <% evidenceConfig.typeOptions.forEach((option) => { %>
+                  <% issue.adjudication.evidence.typeOptions.forEach((option) => { %>
                     <option value="<%= option.value %>">
                       <%= option.label %>
                     </option>
@@ -238,7 +233,7 @@
                   type="text"
                   class="form-control"
                   name="evidence[__INDEX__][reference]"
-                  maxlength="<%= evidenceConfig.referenceMaxLength %>"
+                  maxlength="<%= issue.adjudication.evidence.referenceMaxLength %>"
                   placeholder="URL, file reference, system reference, or other evidence reference"
                   data-evidence-reference
                   required
@@ -260,7 +255,7 @@
                   class="form-control"
                   name="evidence[__INDEX__][description]"
                   rows="2"
-                  maxlength="<%= evidenceConfig.descriptionMaxLength %>"
+                  maxlength="<%= issue.adjudication.evidence.descriptionMaxLength %>"
                   placeholder="Optional description of this evidence"
                   data-evidence-description
                 ></textarea>
@@ -276,8 +271,8 @@
           data-evidence-limit-message
         >
           You have reached the maximum of
-          <%= evidenceConfig.maxItems %>
-          evidence item<%= evidenceConfig.maxItems === 1 ? "" : "s" %>.
+          <%= issue.adjudication.evidence.maxItems %>
+          evidence item<%= issue.adjudication.evidence.maxItems === 1 ? "" : "s" %>.
         </div>
       </div>
     <% } %>
@@ -302,7 +297,7 @@
         type="submit"
         class="btn btn-sm btn-danger"
       >
-        <%= adjudicationAction.submitLabel %>
+        <%= issue.actions.adjudicate.submitLabel %>
       </button>
     </div>
 

@@ -1,22 +1,19 @@
 <!-- views/professional/dashboard/index.ejs -->
 
-<% const view = typeof dashboardView !== "undefined" && dashboardView ? dashboardView : {}; const
-dashboardStats = typeof stats !== "undefined" && stats ? stats : {}; const applications = typeof
-recentApplications !== "undefined" && Array.isArray(recentApplications) ? recentApplications : [];
-%>
-
 <div class="row mb-4">
   <div class="col-12">
-    <div class="alert <%= view.profileAlertClass %> border d-flex align-items-center p-4 mb-0">
-      <i class="ki-duotone <%= view.profileIconClass %> fs-2x me-4">
+    <div
+      class="alert <%= dashboardView.profileAlertClass %> border d-flex align-items-center p-4 mb-0"
+    >
+      <i class="ki-duotone <%= dashboardView.profileIconClass %> fs-2x me-4">
         <span class="path1"></span>
         <span class="path2"></span>
         <span class="path3"></span>
       </i>
 
       <div class="d-flex flex-column">
-        <span class="fw-bold text-gray-900 fs-6"><%= view.profileTitle %></span>
-        <span class="text-gray-600 fs-7"><%= view.profileMessage %></span>
+        <span class="fw-bold text-gray-900 fs-6"><%= dashboardView.profileTitle %></span>
+        <span class="text-gray-600 fs-7"><%= dashboardView.profileMessage %></span>
       </div>
     </div>
   </div>
@@ -35,11 +32,13 @@ recentApplications !== "undefined" && Array.isArray(recentApplications) ? recent
 
           <div>
             <div class="fw-bold text-gray-900 fs-6">Profile Verification</div>
-            <div class="text-gray-500 fs-7"><%= view.profileStatusLabel %></div>
+            <div class="text-gray-500 fs-7"><%= dashboardView.profileStatusLabel %></div>
           </div>
         </div>
 
-        <span class="badge <%= view.profileBadgeClass %>"> <%= view.profileBadgeLabel %> </span>
+        <span class="badge <%= dashboardView.profileBadgeClass %>">
+          <%= dashboardView.profileBadgeLabel %>
+        </span>
       </div>
     </div>
   </div>
@@ -55,11 +54,13 @@ recentApplications !== "undefined" && Array.isArray(recentApplications) ? recent
 
           <div>
             <div class="fw-bold text-gray-900 fs-6">Professional Approval</div>
-            <div class="text-gray-500 fs-7"><%= view.approvalStatusLabel %></div>
+            <div class="text-gray-500 fs-7"><%= dashboardView.approvalStatusLabel %></div>
           </div>
         </div>
 
-        <span class="badge <%= view.approvalBadgeClass %>"> <%= view.approvalBadgeLabel %> </span>
+        <span class="badge <%= dashboardView.approvalBadgeClass %>">
+          <%= dashboardView.approvalBadgeLabel %>
+        </span>
       </div>
     </div>
   </div>
@@ -76,12 +77,12 @@ recentApplications !== "undefined" && Array.isArray(recentApplications) ? recent
 
           <div>
             <div class="fw-bold text-gray-900 fs-6">Marketplace</div>
-            <div class="text-gray-500 fs-7"><%= view.marketplaceStatusLabel %></div>
+            <div class="text-gray-500 fs-7"><%= dashboardView.marketplaceStatusLabel %></div>
           </div>
         </div>
 
-        <span class="badge <%= view.marketplaceBadgeClass %>">
-          <%= view.marketplaceBadgeLabel %>
+        <span class="badge <%= dashboardView.marketplaceBadgeClass %>">
+          <%= dashboardView.marketplaceBadgeLabel %>
         </span>
       </div>
     </div>
@@ -100,17 +101,19 @@ recentApplications !== "undefined" && Array.isArray(recentApplications) ? recent
 
           <div>
             <div class="fw-bold text-gray-900 fs-6">Payout Setup</div>
-            <div class="text-gray-500 fs-7"><%= view.payoutStatusLabel %></div>
+            <div class="text-gray-500 fs-7"><%= dashboardView.payoutStatusLabel %></div>
           </div>
         </div>
 
-        <span class="badge <%= view.payoutBadgeClass %>"> <%= view.payoutBadgeLabel %> </span>
+        <span class="badge <%= dashboardView.payoutBadgeClass %>">
+          <%= dashboardView.payoutBadgeLabel %>
+        </span>
       </div>
     </div>
   </div>
 </div>
 
-<% if (view.showPayoutNotice) { %>
+<% if (dashboardView.showPayoutNotice) { %>
 <div class="row mb-5">
   <div class="col-12">
     <div class="alert bg-light-warning border border-warning d-flex align-items-center p-4 mb-0">
@@ -121,8 +124,8 @@ recentApplications !== "undefined" && Array.isArray(recentApplications) ? recent
       </i>
 
       <div class="d-flex flex-column">
-        <span class="fw-bold text-gray-900 fs-6"><%= view.payoutTitle %></span>
-        <span class="text-gray-600 fs-7"><%= view.payoutMessage %></span>
+        <span class="fw-bold text-gray-900 fs-6"><%= dashboardView.payoutTitle %></span>
+        <span class="text-gray-600 fs-7"><%= dashboardView.payoutMessage %></span>
       </div>
     </div>
   </div>
@@ -135,7 +138,7 @@ recentApplications !== "undefined" && Array.isArray(recentApplications) ? recent
       <div class="card-header pt-5 pb-0">
         <div class="card-title d-flex flex-column">
           <span class="fs-2hx fw-bold text-gray-900 me-2 lh-1 ls-n2">
-            <%= dashboardStats.applicationsSubmitted %>
+            <%= stats.applicationsSubmitted %>
           </span>
           <span class="text-gray-500 pt-1 fw-semibold fs-6"> Applications Submitted </span>
         </div>
@@ -158,7 +161,7 @@ recentApplications !== "undefined" && Array.isArray(recentApplications) ? recent
       <div class="card-header pt-5 pb-0">
         <div class="card-title d-flex flex-column">
           <span class="fs-2hx fw-bold text-gray-900 me-2 lh-1 ls-n2">
-            <%= dashboardStats.pendingApplications %>
+            <%= stats.pendingApplications %>
           </span>
           <span class="text-gray-500 pt-1 fw-semibold fs-6"> Pending Applications </span>
         </div>
@@ -181,7 +184,7 @@ recentApplications !== "undefined" && Array.isArray(recentApplications) ? recent
       <div class="card-header pt-5 pb-0">
         <div class="card-title d-flex flex-column">
           <span class="fs-2hx fw-bold text-gray-900 me-2 lh-1 ls-n2">
-            <%= dashboardStats.upcomingShifts %>
+            <%= stats.upcomingShifts %>
           </span>
           <span class="text-gray-500 pt-1 fw-semibold fs-6"> Upcoming Shifts </span>
         </div>
@@ -207,7 +210,7 @@ recentApplications !== "undefined" && Array.isArray(recentApplications) ? recent
           <div class="d-flex align-items-center">
             <span class="fs-4 fw-semibold text-gray-500 me-1 align-self-start">₦</span>
             <span class="fs-2hx fw-bold text-gray-900 me-2 lh-1 ls-n2">
-              <%= view.walletBalanceFormatted %>
+              <%= dashboardView.walletBalanceFormatted %>
             </span>
           </div>
           <span class="text-gray-500 pt-1 fw-semibold fs-6">Wallet Balance</span>
@@ -217,9 +220,9 @@ recentApplications !== "undefined" && Array.isArray(recentApplications) ? recent
       <div class="card-body d-flex align-items-end pt-6 pb-5">
         <a
           href="/professional/wallet"
-          class="badge <%= view.walletCtaBadgeClass %> fs-7 fw-bold text-decoration-none"
+          class="badge <%= dashboardView.walletCtaBadgeClass %> fs-7 fw-bold text-decoration-none"
         >
-          <%= view.walletCtaLabel %>
+          <%= dashboardView.walletCtaLabel %>
         </a>
       </div>
     </div>
@@ -241,7 +244,7 @@ recentApplications !== "undefined" && Array.isArray(recentApplications) ? recent
       </div>
 
       <div class="card-body pt-4">
-        <% if (applications.length > 0) { %>
+        <% if (recentApplications.length > 0) { %>
         <div class="table-responsive">
           <table class="table align-middle table-row-dashed fs-6 gy-2">
             <thead>
@@ -257,7 +260,7 @@ recentApplications !== "undefined" && Array.isArray(recentApplications) ? recent
             </thead>
 
             <tbody class="fw-bold text-gray-600">
-              <% applications.forEach(function (application) { %>
+              <% recentApplications.forEach(function (application) { %>
               <tr>
                 <td><%= application.referenceCode %></td>
                 <td><%= application.roleTitle %></td>
@@ -290,13 +293,13 @@ recentApplications !== "undefined" && Array.isArray(recentApplications) ? recent
 
           <span class="text-gray-500 fw-semibold fs-6 mb-4"> No applications submitted yet </span>
 
-          <% if (view.canApplyForShifts) { %>
+          <% if (dashboardView.canApplyForShifts) { %>
           <a href="/professional/shifts" class="btn btn-sm btn-primary">
             Browse Available Shifts
           </a>
           <% } else { %>
           <span class="badge badge-light-warning fs-7 fw-bold">
-            <%= view.applyShiftLockedMessage %>
+            <%= dashboardView.applyShiftLockedMessage %>
           </span>
           <% } %>
         </div>
@@ -316,7 +319,7 @@ recentApplications !== "undefined" && Array.isArray(recentApplications) ? recent
 
       <div class="card-body pt-4">
         <div class="d-flex flex-column gap-3">
-          <% if (view.canApplyForShifts) { %>
+          <% if (dashboardView.canApplyForShifts) { %>
           <a
             href="/professional/shifts"
             class="d-flex align-items-center bg-light-primary rounded p-3 text-decoration-none"

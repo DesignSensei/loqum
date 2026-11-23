@@ -1,12 +1,10 @@
 <!-- views/employer/jobs/show.ejs -->
 
-<% const job = jobView.job; %>
-
 <div class="d-flex flex-column gap-6">
   <div class="d-flex flex-wrap justify-content-between align-items-center gap-4">
     <a href="<%= jobView.actions.jobsUrl %>" class="btn btn-light"> Back to jobs </a>
 
-    <% if (job && jobView.permissions.canViewJobs) { %>
+    <% if (jobView.job && jobView.permissions.canViewJobs) { %>
     <div class="d-flex flex-wrap gap-3">
       <% if (jobView.actions.publicationReviewUrl) { %>
       <a href="<%= jobView.actions.publicationReviewUrl %>" class="btn btn-primary">
@@ -23,7 +21,7 @@
     <% } %>
   </div>
 
-  <% if (!job || !jobView.permissions.canViewJobs) { %>
+  <% if (!jobView.job || !jobView.permissions.canViewJobs) { %>
   <div class="card">
     <div class="card-body">
       <h1 class="fs-3">Job unavailable</h1>
@@ -41,49 +39,42 @@
 
   <section class="card" aria-labelledby="job-title">
     <div class="card-body">
-      <div class="text-gray-600 fs-7 mb-2"><%= job.referenceCode || 'No reference' %></div>
+      <div class="text-gray-600 fs-7 mb-2"><%= jobView.job.referenceCode || 'No reference' %></div>
 
-      <h1 id="job-title" class="fs-2 fw-bold mb-4"><%= job.roleTitle || 'Untitled job' %></h1>
+      <h1 id="job-title" class="fs-2 fw-bold mb-4">
+        <%= jobView.job.roleTitle || 'Untitled job' %>
+      </h1>
 
       <div class="d-flex flex-wrap gap-5 mb-6">
         <div>
           <span class="text-gray-600 me-2">Recruitment</span>
 
-          <span class="badge <%= job.recruitmentStatusBadgeClass %>">
-            <%= job.recruitmentStatusLabel || 'Not recorded' %>
+          <span class="badge <%= jobView.job.recruitmentStatusBadgeClass %>">
+            <%= jobView.job.recruitmentStatusLabel || 'Not recorded' %>
           </span>
         </div>
 
         <div>
           <span class="text-gray-600 me-2">Publication</span>
 
-          <span class="badge <%= job.publicationStatusBadgeClass %>">
-            <%= job.publicationStatusLabel || 'Not recorded' %>
+          <span class="badge <%= jobView.job.publicationStatusBadgeClass %>">
+            <%= jobView.job.publicationStatusLabel || 'Not recorded' %>
           </span>
         </div>
       </div>
 
-      <% if (job.recruitmentStatus === 'draft') { %>
+      <% if (jobView.job.recruitmentStatus === 'draft') { %>
       <p class="text-gray-600">
         This is an unpublished draft. Missing details can be completed before publication.
       </p>
       <% } %>
 
       <dl class="row gy-4 mb-0">
-        <% [ ['Profession', job.professionalTypeLabel], ['Specialty', job.specialty], ['Department',
-        job.department], ['Employment type', job.employmentTypeLabel], ['Workplace type',
-        job.workplaceTypeLabel], ['Branch', job.branch?.name], ['Location', job.locationLabel],
-        ['Vacancies', job.vacancyCount], ['Minimum years of experience',
-        job.minimumYearsOfExperience], ['Expected start date', job.employmentStartDateDisplay], [
-        'Application deadline (UTC)', job.applicationDeadline ? job.applicationDeadlineDisplay :
-        'Not set' ], ['Created', job.createdAtDisplay], ['Last updated', job.updatedAtDisplay]
-        ].forEach(([label, value]) => { %>
+        <% jobView.detailFields.forEach((field) => { %>
         <div class="col-12 col-md-6 col-xl-4">
-          <dt class="text-gray-600 fw-normal fs-7 mb-1"><%= label %></dt>
+          <dt class="text-gray-600 fw-normal fs-7 mb-1"><%= field.label %></dt>
 
-          <dd class="fw-semibold mb-0 text-break">
-            <%= value === null || value === undefined || value === '' ? 'Not provided' : value %>
-          </dd>
+          <dd class="fw-semibold mb-0 text-break"><%= field.value %></dd>
         </div>
         <% }); %>
       </dl>
@@ -97,13 +88,13 @@
 
     <div class="card-body">
       <p class="fs-4 fw-bold mb-2">
-        <%= job.compensation ? job.compensation.display : 'Not provided' %>
+        <%= jobView.job.compensation ? jobView.job.compensation.display : 'Not provided' %>
       </p>
 
-      <% if (job.compensation?.available) { %>
+      <% if (jobView.job.compensation?.available) { %>
       <p class="text-gray-600 mb-0">
-        <%= job.compensation.currency %> · <%= job.compensation.negotiable ? 'Negotiable' : 'Not
-        marked as negotiable' %>
+        <%= jobView.job.compensation.currency %> · <%= jobView.job.compensation.negotiable ?
+        'Negotiable' : 'Not marked as negotiable' %>
       </p>
       <% } %>
     </div>
@@ -119,24 +110,21 @@
         These are the saved job details. Publication history below records listing periods.
       </p>
 
-      <% [ ['Summary', job.summary], ['Description', job.description], ['Education requirement',
-      job.educationRequirement] ].forEach(([label, text]) => { %>
+      <% jobView.textSections.forEach((section) => { %>
       <div class="mb-6">
-        <h3 class="fs-5 mb-3"><%= label %></h3>
+        <h3 class="fs-5 mb-3"><%= section.label %></h3>
 
         <div class="text-gray-700 text-break" style="white-space: pre-wrap">
-          <%= text || 'Not provided' %>
+          <%= section.text %>
         </div>
       </div>
-      <% }); %> <% [ ['Responsibilities', job.responsibilities], ['Requirements', job.requirements],
-      ['Preferred qualifications', job.preferredQualifications], ['Skills', job.skills],
-      ['Benefits', job.benefits] ].forEach(([label, items]) => { %>
+      <% }); %> <% jobView.listSections.forEach((section) => { %>
       <div class="mb-6">
-        <h3 class="fs-5 mb-3"><%= label %></h3>
+        <h3 class="fs-5 mb-3"><%= section.label %></h3>
 
-        <% if (items.length) { %>
+        <% if (section.items.length) { %>
         <ul class="ps-5 mb-0">
-          <% items.forEach((item) => { %>
+          <% section.items.forEach((item) => { %>
           <li class="text-gray-700 text-break mb-2"><%= item %></li>
           <% }); %>
         </ul>
@@ -154,7 +142,7 @@
     </div>
 
     <div class="card-body">
-      <% if (!job.screeningQuestions.length) { %>
+      <% if (!jobView.job.screeningQuestions.length) { %>
       <p class="text-gray-600 mb-0">No screening questions have been added.</p>
       <% } else { %>
       <p class="text-gray-600 mb-6">
@@ -162,7 +150,7 @@
         candidates.
       </p>
 
-      <% job.screeningQuestions.forEach((question, index) => { %>
+      <% jobView.job.screeningQuestions.forEach((question, index) => { %>
       <article class="border rounded p-5 mb-5">
         <h3 class="fs-5 text-break mb-3">
           <%= index + 1 %>. <%= question.prompt || 'Question not provided' %>
@@ -216,8 +204,10 @@
 
         <% if (question.type === 'multi_select') { %>
         <p class="text-gray-600 mb-0">
-          <%= question.requireAllOptions ? 'All qualifying options are required.' : 'At least one
-          qualifying option is required.' %>
+          <% if (question.requireAllOptions) { %> All qualifying options are required. <% } else {
+          %>
+          <!-- "At least one qualifying option is required." -->
+          <% } %>
         </p>
         <% } %> <% } %> <% if (question.type === 'short_text' && ['preferred',
         'required'].includes(question.requirementLevel)) { %>
@@ -266,7 +256,7 @@
             <tr>
               <th scope="row">
                 <%= publication.cycleNumber || 'Not recorded' %> <% if (publication.id &&
-                publication.id === job.currentPublication?.id) { %>
+                publication.id === jobView.job.currentPublication?.id) { %>
                 <span class="badge badge-light-primary ms-2"> Current </span>
                 <% } %>
               </th>

@@ -315,27 +315,59 @@ class ShiftCreationService {
     }
   }
 
-  static async assertCurrentBranchAccess({ userId, profile, branchId, session = null }) {
-    const actor = await User.findOne({
+  static async assertCurrentBranchAccess({
+    userId,
+    profile,
+    branchId,
+    session = null,
+    fence = false,
+  }) {
+    if (
+      fence &&
+      (!session || typeof session.inTransaction !== "function" || !session.inTransaction())
+    ) {
+      throw createShiftError({
+        message: "An active transaction is required for Shift posting authorization.",
+        code: "SHIFT_ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
+    const actorFilter = {
       _id: userId,
       role: "employer",
       accountStatus: "active",
       isVerified: true,
-    })
-      .session(session)
-      .lean();
+    };
 
+    const actorQuery = fence
+      ? User.findOneAndUpdate(
+          actorFilter,
+          { $inc: { __v: 1 } },
+          { session, new: true, timestamps: false }
+        )
+      : User.findOne(actorFilter).session(session);
+
+    const actor = await actorQuery.lean();
     let allowed = Boolean(actor && String(profile.user) === String(userId));
 
     if (actor && !allowed) {
-      const member = await EmployerMember.findOne({
+      const memberFilter = {
         user: userId,
         business: profile._id,
         accountStatus: "active",
         isCurrent: true,
-      })
-        .session(session)
-        .lean();
+      };
+
+      const memberQuery = fence
+        ? EmployerMember.findOneAndUpdate(
+            memberFilter,
+            { $inc: { __v: 1 } },
+            { session, new: true, timestamps: false }
+          )
+        : EmployerMember.findOne(memberFilter).session(session);
+
+      const member = await memberQuery.lean();
 
       allowed = Boolean(
         member &&
@@ -1259,8 +1291,11 @@ class ShiftCreationService {
           });
         }
 
-        const currentProfile = await EmployerProfile.findById(profile._id).session(
-          transactionSession
+        // Fence concurrent employer-account changes within this transaction.
+        const currentProfile = await EmployerProfile.findOneAndUpdate(
+          { _id: profile._id },
+          { $inc: { __v: 1 } },
+          { session: transactionSession, new: true, timestamps: false }
         );
 
         ShiftCreationService.assertBusinessCanPostShifts(currentProfile);
@@ -1290,6 +1325,7 @@ class ShiftCreationService {
           profile: currentProfile,
           branchId: branch._id,
           session: transactionSession,
+          fence: true,
         });
 
         await ShiftCreationService.assertBranchCanPostShifts({

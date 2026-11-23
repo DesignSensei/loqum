@@ -492,7 +492,9 @@ const employerSnapshotSchema = new mongoose.Schema(
 
     branchReadyAtPublication: {
       type: Boolean,
-      required: true,
+      required: function requiredForNewPublication() {
+        return this.ownerDocument().isNew;
+      },
     },
 
     branchName: {

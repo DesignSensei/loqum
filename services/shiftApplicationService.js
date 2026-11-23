@@ -167,16 +167,86 @@ class ShiftApplicationService {
     };
 
     if (!canManageAllBranches) {
-      const assignedBranchIds = (employerContext?.assignedBranchIds || [])
+      const managedBranchIds = (employerContext?.managedBranchIds || [])
         .filter((branchId) => mongoose.isValidObjectId(branchId))
         .map((branchId) => new mongoose.Types.ObjectId(String(branchId)));
 
       filter.branch = {
-        $in: assignedBranchIds,
+        $in: managedBranchIds,
       };
     }
 
     return filter;
+  }
+
+  static async assertCurrentEmployerReviewPermission({
+    shift,
+    actorUserId,
+    session,
+    business = null,
+  }) {
+    if (!session || typeof session.inTransaction !== "function" || !session.inTransaction()) {
+      throw this.createError({
+        message: "An active transaction is required for employer review authorization.",
+        code: "APPLICATION_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
+    const businessId = this.normalizeObjectId(shift.business, "business ID");
+    const branchId = this.normalizeObjectId(shift.branch, "branch ID");
+    const actorUserIdNormalized = this.normalizeObjectId(actorUserId, "reviewing user ID");
+    const employer = business || (await EmployerProfile.findById(businessId).session(session));
+
+    const actor = await User.findOneAndUpdate(
+      {
+        _id: actorUserIdNormalized,
+        role: "employer",
+        accountStatus: "active",
+        isVerified: true,
+      },
+      { $inc: { __v: 1 } },
+      { new: true, session, timestamps: false }
+    ).select("_id");
+
+    let allowed = Boolean(
+      actor && employer && String(employer.user) === String(actorUserIdNormalized)
+    );
+
+    if (actor && employer && !allowed) {
+      const member = await EmployerMember.findOneAndUpdate(
+        {
+          user: actorUserIdNormalized,
+          business: businessId,
+          accountStatus: "active",
+          isCurrent: true,
+          $or: [
+            { role: "admin" },
+            {
+              role: "branch_manager",
+              branches: {
+                $elemMatch: {
+                  branch: branchId,
+                  role: "branch_manager",
+                },
+              },
+            },
+          ],
+        },
+        { $inc: { __v: 1 } },
+        { new: true, session, timestamps: false }
+      ).select("_id");
+
+      allowed = Boolean(member);
+    }
+
+    if (!allowed) {
+      throw this.createError({
+        message: "Current assignment permission for this branch is required.",
+        code: "SHIFT_APPLICATION_BRANCH_PERMISSION_REQUIRED",
+        statusCode: 403,
+      });
+    }
   }
 
   static async assertBranchEligibleForApplication({ shift, session, actorUserId = null }) {
@@ -189,57 +259,40 @@ class ShiftApplicationService {
     }
     const businessId = this.normalizeObjectId(shift.business, "business ID");
     const branchId = this.normalizeObjectId(shift.branch, "branch ID");
+
     const branch = await Branch.findOne({
       _id: branchId,
       business: businessId,
       isActive: true,
     }).session(session);
-    const business = await EmployerProfile.findById(businessId).session(session);
-    if (
-      !branch ||
-      !business ||
-      business.accountStatus !== "active" ||
-      business.cacVerificationStatus !== "verified"
-    ) {
+
+    const business = await EmployerProfile.findOneAndUpdate(
+      {
+        _id: businessId,
+        accountStatus: "active",
+        cacVerificationStatus: "verified",
+      },
+      { $inc: { __v: 1 } },
+      { new: true, session, timestamps: false }
+    );
+
+    if (!branch || !business) {
       throw this.createError({
         message: "The employer branch is not eligible for new applications or assignments.",
         code: "SHIFT_APPLICATION_BRANCH_INELIGIBLE",
         statusCode: 403,
       });
     }
+
     if (actorUserId != null) {
-      const actor = await User.findOne({
-        _id: actorUserId,
-        role: "employer",
-        accountStatus: "active",
-        isVerified: true,
-      }).session(session);
-      let allowed = Boolean(actor && String(business.user) === String(actorUserId));
-      if (actor && !allowed) {
-        const member = await EmployerMember.findOne({
-          user: actorUserId,
-          business: businessId,
-          accountStatus: "active",
-          isCurrent: true,
-        }).session(session);
-        allowed = Boolean(
-          member &&
-          (member.role === "admin" ||
-            (member.role === "branch_manager" &&
-              Array.isArray(member.branches) &&
-              member.branches.some(
-                (a) => String(a.branch) === String(branchId) && a.role === "branch_manager"
-              )))
-        );
-      }
-      if (!allowed) {
-        throw this.createError({
-          message: "Current assignment permission for this branch is required.",
-          code: "SHIFT_APPLICATION_BRANCH_PERMISSION_REQUIRED",
-          statusCode: 403,
-        });
-      }
+      await this.assertCurrentEmployerReviewPermission({
+        shift,
+        actorUserId,
+        session,
+        business,
+      });
     }
+
     // Activation joins this transaction and fences the same branch document
     // written by permit reviews/revocations and branch edits.
     await FacilityPermitVerificationService.activateDuePermits({ businessId, branchId, session });
@@ -1705,6 +1758,12 @@ class ShiftApplicationService {
         session,
       });
 
+      await ShiftApplicationService.assertCurrentEmployerReviewPermission({
+        shift,
+        actorUserId: reviewedBy,
+        session,
+      });
+
       ShiftApplicationService.assertApplicationReviewable(application);
 
       if (application.status === "shortlisted") {
@@ -1768,6 +1827,12 @@ class ShiftApplicationService {
         applicationId,
         employerProfileId,
         employerContext,
+        session,
+      });
+
+      await ShiftApplicationService.assertCurrentEmployerReviewPermission({
+        shift,
+        actorUserId: reviewedBy,
         session,
       });
 

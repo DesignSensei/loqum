@@ -579,7 +579,7 @@ class CACVerificationService {
      */
 
     return {
-      registrationNumber,
+      registrationNumber: registration.submitted,
       entityName,
       entityType,
       entityStatus,

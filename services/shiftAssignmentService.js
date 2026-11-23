@@ -6,6 +6,10 @@ const Shift = require("../models/Shift");
 const ProfessionalProfile = require("../models/ProfessionalProfile");
 const Branch = require("../models/Branch");
 const EmployerProfile = require("../models/EmployerProfile");
+
+const EmployerMember = require("../models/EmployerMember");
+const User = require("../models/User");
+
 const FacilityPermitVerificationService = require("./facilityPermitVerificationService");
 const EmployerDelinquencyService = require("./employerDelinquencyService");
 const ShiftOccurrence = require("../models/ShiftOccurrence");
@@ -1092,6 +1096,63 @@ class ShiftAssignmentService {
     );
   }
 
+  // Confirm current employer authority before recording an assignment.
+  static async assertCurrentAssignmentActor({ shift, assignedByUserId, session }) {
+    if (!session || typeof session.inTransaction !== "function" || !session.inTransaction()) {
+      throw this.error(
+        "An active transaction is required for assignment authorization.",
+        "ASSIGNMENT_TRANSACTION_REQUIRED",
+        500
+      );
+    }
+
+    const actorId = this.objectId(assignedByUserId, "assigned-by user ID");
+    const businessId = this.objectId(shift.business, "business ID");
+    const branchId = this.objectId(shift.branch, "branch ID");
+
+    const actor = await User.findOne({
+      _id: actorId,
+      role: "employer",
+      accountStatus: "active",
+      isVerified: true,
+    }).session(session);
+
+    const employer = await EmployerProfile.findById(businessId).session(session);
+
+    if (actor && employer && String(employer.user) === String(actorId)) {
+      return;
+    }
+
+    if (actor && employer) {
+      const member = await EmployerMember.findOne({
+        user: actorId,
+        business: businessId,
+        accountStatus: "active",
+        isCurrent: true,
+      }).session(session);
+
+      if (
+        member &&
+        (member.role === "admin" ||
+          (member.role === "branch_manager" &&
+            Array.isArray(member.branches) &&
+            member.branches.some(
+              (assignment) =>
+                String(assignment.branch) === String(branchId) &&
+                assignment.role === "branch_manager"
+            )))
+      ) {
+        return;
+      }
+    }
+
+    throw this.error(
+      "You do not have current assignment permission for this branch.",
+      "ASSIGNMENT_ACTOR_NOT_AUTHORIZED",
+      403
+    );
+  }
+
   static async createRecord({
     shift,
     input,
@@ -1154,6 +1215,7 @@ class ShiftAssignmentService {
       activatedBy: status === "active" ? input.assignedBy : null,
     });
 
+    await this.assertCurrentAssignmentActor({ shift, assignedByUserId: input.assignedBy, session });
     await this.assertBranchAssignable({ shift, session });
     await assignment.save({
       session,

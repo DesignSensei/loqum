@@ -1040,7 +1040,10 @@ class EmployerViewService {
     const verificationView = {
       ...buildVerificationView(
         {
-          ...employerProfile,
+          cacRegistrationNumber: employerProfile.cacRegistrationNumber,
+          cacNameOnRecord: employerProfile.cacNameOnRecord,
+          cacVerifiedAt: employerProfile.cacVerifiedAt,
+          cacLastCheckedAt: employerProfile.cacLastCheckedAt,
           accountStatus: access.businessAccountStatus,
           cacVerificationStatus: access.cacVerificationStatus,
         },

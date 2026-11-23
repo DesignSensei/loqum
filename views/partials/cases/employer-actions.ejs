@@ -3,10 +3,8 @@
 <!-- Employer claim review -->
 
 <% if (issue.actions.review?.available) { %>
-  <% const reviewAction = issue.actions.review; %>
-
   <form
-    action="<%= reviewAction.url %>"
+    action="<%= issue.actions.review.url %>"
     method="post"
     data-case-action-form
     data-employer-claim-review
@@ -35,13 +33,13 @@
           name="decision"
           required
           data-employer-review-decision
-          data-counter-position-decision="<%= reviewAction.counterPositionDecision %>"
+          data-counter-position-decision="<%= issue.actions.review.counterPositionDecision %>"
         >
           <option value="">
             Choose a decision
           </option>
 
-          <% reviewAction.decisions.forEach((decision) => { %>
+          <% issue.actions.review.decisions.forEach((decision) => { %>
             <option value="<%= decision.value %>">
               <%= decision.label %>
             </option>
@@ -75,7 +73,7 @@
 
     <!-- Counter-position -->
 
-    <% if (reviewAction.counterPositionFields?.length) { %>
+    <% if (issue.actions.review.counterPositionFields?.length) { %>
       <div
         class="mb-4 d-none"
         data-employer-counter-position
@@ -89,7 +87,7 @@
         </div>
 
         <div class="row g-3">
-          <% reviewAction.counterPositionFields.forEach((field) => { %>
+          <% issue.actions.review.counterPositionFields.forEach((field) => { %>
             <div class="<%= field.columnClass || "col-12" %>">
               <label
                 class="form-label"
@@ -135,13 +133,11 @@
 
     <!-- Employer evidence -->
 
-    <% if (reviewAction.evidence?.allowed) { %>
-      <% const evidenceConfig = reviewAction.evidence; %>
-
+    <% if (issue.actions.review.evidence?.allowed) { %>
       <div
         class="mb-4"
         data-case-evidence
-        data-evidence-max-items="<%= evidenceConfig.maxItems %>"
+        data-evidence-max-items="<%= issue.actions.review.evidence.maxItems %>"
       >
         <div
           class="d-flex flex-wrap align-items-start justify-content-between gap-3 mb-3"
@@ -153,8 +149,8 @@
 
             <div class="text-gray-500 fs-7">
               Evidence is optional. Add up to
-              <%= evidenceConfig.maxItems %>
-              item<%= evidenceConfig.maxItems === 1 ? "" : "s" %>.
+              <%= issue.actions.review.evidence.maxItems %>
+              item<%= issue.actions.review.evidence.maxItems === 1 ? "" : "s" %>.
             </div>
           </div>
 
@@ -216,7 +212,7 @@
                     Select evidence type
                   </option>
 
-                  <% evidenceConfig.typeOptions.forEach((option) => { %>
+                  <% issue.actions.review.evidence.typeOptions.forEach((option) => { %>
                     <option value="<%= option.value %>">
                       <%= option.label %>
                     </option>
@@ -235,7 +231,7 @@
                   type="text"
                   class="form-control"
                   name="evidence[__INDEX__][reference]"
-                  maxlength="<%= evidenceConfig.referenceMaxLength %>"
+                  maxlength="<%= issue.actions.review.evidence.referenceMaxLength %>"
                   placeholder="URL, file reference, message reference, or other evidence reference"
                   data-evidence-reference
                   required
@@ -257,7 +253,7 @@
                   class="form-control"
                   name="evidence[__INDEX__][description]"
                   rows="2"
-                  maxlength="<%= evidenceConfig.descriptionMaxLength %>"
+                  maxlength="<%= issue.actions.review.evidence.descriptionMaxLength %>"
                   placeholder="Optional description of this evidence"
                   data-evidence-description
                 ></textarea>
@@ -273,8 +269,8 @@
           data-evidence-limit-message
         >
           You have reached the maximum of
-          <%= evidenceConfig.maxItems %>
-          evidence item<%= evidenceConfig.maxItems === 1 ? "" : "s" %>.
+          <%= issue.actions.review.evidence.maxItems %>
+          evidence item<%= issue.actions.review.evidence.maxItems === 1 ? "" : "s" %>.
         </div>
       </div>
     <% } %>
@@ -294,7 +290,7 @@
         type="submit"
         class="btn btn-sm btn-primary"
       >
-        <%= reviewAction.submitLabel %>
+        <%= issue.actions.review.submitLabel %>
       </button>
     </div>
 

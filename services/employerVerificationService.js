@@ -1,3 +1,5 @@
+// services/employerVerificationService.js
+
 const mongoose = require("mongoose");
 const crypto = require("crypto");
 
@@ -700,7 +702,7 @@ class EmployerVerificationService {
 
     if (
       kycData.status === "verified" &&
-      (kycData.nameOnRecord !== employerSnapshot.businessName ||
+      (!this.namesMatch(kycData.nameOnRecord, employerSnapshot.businessName) ||
         profileUpdates.cacNameOnRecord !== employerSnapshot.businessName)
     ) {
       throw this.createError({
@@ -1108,7 +1110,7 @@ class EmployerVerificationService {
     const registeredNameChanged = Boolean(
       registeredBusinessName &&
       previousAuthoritativeName &&
-      registeredBusinessName !== previousAuthoritativeName
+      !this.namesMatch(registeredBusinessName, previousAuthoritativeName)
     );
 
     const resolvedRequestReference = lookupResult.requestReference || requestReference;
@@ -1185,7 +1187,9 @@ class EmployerVerificationService {
       cacVerificationStatus: status,
       cacVerificationMethod: "api",
       cacVerificationSource: "provider",
-      cacNameOnRecord: registeredBusinessName,
+
+      cacNameOnRecord: verified ? employer.businessName : registeredBusinessName,
+
       cacLastCheckedAt: checkedAt,
       cacVerifiedAt: verified ? checkedAt : null,
       cacVerifiedBy: null,

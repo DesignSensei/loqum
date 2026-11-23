@@ -395,6 +395,73 @@ class JobApplicationService {
     };
   }
 
+  // Verify current employer authority within the review transaction.
+  static async assertCurrentEmployerReviewActor({ job, actorUserId, session }) {
+    if (!session || typeof session.inTransaction !== "function" || !session.inTransaction()) {
+      throw this.createError({
+        message: "Employer review authorization requires an active transaction.",
+        code: "JOB_APPLICATION_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
+    const actorId = this.normalizeObjectId(actorUserId, "employer actor user ID");
+    const fence = { $inc: { __v: 1 } };
+    const options = { session, new: true, timestamps: false };
+
+    const business = await EmployerProfile.findOneAndUpdate(
+      { _id: job.business, accountStatus: "active" },
+      fence,
+      options
+    );
+
+    const actor = await User.findOneAndUpdate(
+      { _id: actorId, role: "employer", accountStatus: "active", isVerified: true },
+      fence,
+      options
+    );
+
+    if (!business || !actor) {
+      throw this.createError({
+        message: "An active employer account is required to review Job applications.",
+        code: "JOB_APPLICATION_EMPLOYER_NOT_AUTHORIZED",
+        statusCode: 403,
+      });
+    }
+
+    if (String(business.user) === String(actorId)) {
+      return actorId;
+    }
+
+    const member = await EmployerMember.findOneAndUpdate(
+      { user: actorId, business: job.business, accountStatus: "active", isCurrent: true },
+      fence,
+      options
+    );
+
+    const permitted = Boolean(
+      member &&
+      (member.role === "admin" ||
+        (member.role === "branch_manager" &&
+          Array.isArray(member.branches) &&
+          member.branches.some(
+            (assignment) =>
+              String(assignment.branch) === String(job.branch) &&
+              assignment.role === "branch_manager"
+          )))
+    );
+
+    if (!permitted) {
+      throw this.createError({
+        message: "Current permission for this Job branch is required.",
+        code: "JOB_APPLICATION_EMPLOYER_NOT_AUTHORIZED",
+        statusCode: 403,
+      });
+    }
+
+    return actorId;
+  }
+
   /* ─────────────────────────────── ELIGIBILITY ─────────────────────────────── */
 
   static async assertPublicationAcceptsApplications({
@@ -2090,6 +2157,12 @@ class JobApplicationService {
         session,
       });
 
+      await this.assertCurrentEmployerReviewActor({
+        job,
+        actorUserId: changedByUserId,
+        session,
+      });
+
       if (job.recruitmentStatus !== "active") {
         throw this.createError({
           message: "Applications cannot be advanced after recruitment has closed.",
@@ -2253,6 +2326,12 @@ class JobApplicationService {
         applicationId,
         employerProfileId,
         employerContext,
+        session,
+      });
+
+      await this.assertCurrentEmployerReviewActor({
+        job,
+        actorUserId: rejectedByUserId,
         session,
       });
 

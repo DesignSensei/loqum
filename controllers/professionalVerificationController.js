@@ -1,4 +1,3 @@
-назар;
 // controllers/professionalVerificationController.js
 
 const mongoose = require("mongoose");

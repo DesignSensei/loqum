@@ -22,76 +22,74 @@
 
       <div class="row g-4">
         <% ["professional", "employer"].forEach((role) => { %>
-          <% const position = issue.positions[role]; %>
-
           <% if (
-            position &&
+            issue.positions[role] &&
             (
-              position.statement ||
-              position.decision ||
-              position.reason ||
-              position.position?.fields?.length ||
-              position.evidence?.length
+              issue.positions[role].statement ||
+              issue.positions[role].decision ||
+              issue.positions[role].reason ||
+              issue.positions[role].position?.fields?.length ||
+              issue.positions[role].evidence?.length
             )
           ) { %>
             <div class="col-lg-6">
               <div class="border border-gray-300 rounded p-4 h-100">
                 <div class="fw-bold text-gray-800 mb-3">
-                  <%= position.label %>
+                  <%= issue.positions[role].label %>
                 </div>
 
                 <!-- Party decision -->
 
-                <% if (position.decision) { %>
+                <% if (issue.positions[role].decision) { %>
                   <div class="mb-3">
                     <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">
                       Decision
                     </div>
 
                     <div class="text-gray-700">
-                      <%= position.decision.label %>
+                      <%= issue.positions[role].decision.label %>
                     </div>
                   </div>
                 <% } %>
 
                 <!-- Party statement -->
 
-                <% if (position.statement) { %>
+                <% if (issue.positions[role].statement) { %>
                   <div class="mb-3">
                     <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">
                       Statement
                     </div>
 
                     <div class="text-gray-700">
-                      <%= position.statement %>
+                      <%= issue.positions[role].statement %>
                     </div>
                   </div>
                 <% } %>
 
                 <!-- Party reason -->
 
-                <% if (position.reason) { %>
+                <% if (issue.positions[role].reason) { %>
                   <div class="mb-3">
                     <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-1">
                       Reason
                     </div>
 
                     <div class="text-gray-700">
-                      <%= position.reason %>
+                      <%= issue.positions[role].reason %>
                     </div>
                   </div>
                 <% } %>
 
                 <!-- Party position -->
 
-                <% if (position.position?.fields?.length) { %>
+                <% if (issue.positions[role].position?.fields?.length) { %>
                   <div class="mb-3">
                     <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-2">
                       Position
                     </div>
 
                     <div class="row g-3">
-                      <% position.position.fields.forEach((field) => { %>
+                      <% issue.positions[role].position.fields.forEach((field) => { %>
                         <div class="col-12">
                           <div class="text-gray-500 fs-8 mb-1">
                             <%= field.label %>
@@ -108,14 +106,14 @@
 
                 <!-- Party evidence -->
 
-                <% if (position.evidence?.length) { %>
+                <% if (issue.positions[role].evidence?.length) { %>
                   <div>
                     <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-2">
                       Evidence
                     </div>
 
                     <div class="d-flex flex-column gap-2">
-                      <% position.evidence.forEach((evidence) => { %>
+                      <% issue.positions[role].evidence.forEach((evidence) => { %>
                         <div class="bg-light rounded p-3">
                           <div
                             class="d-flex flex-wrap align-items-center gap-2 mb-1"
@@ -233,13 +231,11 @@
 
   <!-- Recorded admin adjudication -->
 
-  <% const adminPosition = issue.positions?.admin; %>
-
   <% if (
-    adminPosition &&
+    issue.positions?.admin &&
     (
-      adminPosition.position?.fields?.length ||
-      adminPosition.evidence?.length
+      issue.positions?.admin.position?.fields?.length ||
+      issue.positions?.admin.evidence?.length
     )
   ) { %>
     <div class="mb-5">
@@ -250,14 +246,14 @@
       <div class="border border-gray-300 rounded p-4">
         <!-- Final authoritative outcome -->
 
-        <% if (adminPosition.position?.fields?.length) { %>
-          <div class="<%= adminPosition.evidence?.length ? "mb-4" : "" %>">
+        <% if (issue.positions?.admin.position?.fields?.length) { %>
+          <div class="<%= issue.positions?.admin.evidence?.length ? "mb-4" : "" %>">
             <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-2">
               Final authoritative outcome
             </div>
 
             <div class="row g-3">
-              <% adminPosition.position.fields.forEach((field) => { %>
+              <% issue.positions?.admin.position.fields.forEach((field) => { %>
                 <div class="col-md-6">
                   <div class="text-gray-500 fs-8 mb-1">
                     <%= field.label %>
@@ -274,14 +270,14 @@
 
         <!-- Admin evidence -->
 
-        <% if (adminPosition.evidence?.length) { %>
+        <% if (issue.positions?.admin.evidence?.length) { %>
           <div>
             <div class="text-gray-500 fs-8 text-uppercase fw-bold mb-2">
               Admin evidence
             </div>
 
             <div class="d-flex flex-column gap-2">
-              <% adminPosition.evidence.forEach((evidence) => { %>
+              <% issue.positions?.admin.evidence.forEach((evidence) => { %>
                 <div class="bg-light rounded p-3">
                   <div
                     class="d-flex flex-wrap align-items-center gap-2 mb-1"

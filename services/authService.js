@@ -17,7 +17,11 @@ class AuthService {
       .toLowerCase()
       .trim();
 
-    if (!normalizedEmail || !password) {
+    if (
+      !normalizedEmail ||
+      normalizedEmail.endsWith("@closed.loqum.invalid") ||
+      !password
+    ) {
       throw new Error("Invalid email or password");
     }
 
@@ -27,7 +31,7 @@ class AuthService {
       throw new Error("Invalid email or password");
     }
 
-    if (user.authProvider === "google" && !user.password) {
+    if (user.authProvider === "google") {
       throw new Error("This account was created with Google. Please sign in with Google.");
     }
 
@@ -46,15 +50,16 @@ class AuthService {
      * NIN identity verification, professional
      * licensing and marketplace approval.
      *
-     * Suspended, deactivated and banned accounts
-     * must not complete ordinary password login.
+     * Only active and restricted accounts can complete
+     * ordinary password login. Other account statuses,
+     * including future closure states, are denied.
      *
-     * Restricted accounts may still authenticate
-     * where the application's access middleware
-     * permits limited account functionality.
+     * Restricted accounts may still authenticate,
+     * but protected application routes remain governed
+     * by their access middleware.
      */
 
-    if (["suspended", "deactivated", "banned"].includes(user.accountStatus)) {
+    if (!["active", "restricted"].includes(user.accountStatus)) {
       throw new Error("This account is not currently permitted to sign in.");
     }
 
@@ -159,7 +164,10 @@ class AuthService {
 
       const normalizedEmail = email.toLowerCase().trim();
 
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      if (
+        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail) ||
+        normalizedEmail.endsWith("@closed.loqum.invalid")
+      ) {
         throw new Error("Enter a valid email address.");
       }
 
@@ -495,10 +503,22 @@ class AuthService {
       .toLowerCase()
       .trim();
 
+    if (normalizedEmail.endsWith("@closed.loqum.invalid")) {
+      throw new Error("No account found with that email");
+    }
+
     const user = await User.findOne({ email: normalizedEmail });
 
     if (!user) {
       throw new Error("No account found with that email");
+    }
+
+    if (!["active", "restricted"].includes(user.accountStatus)) {
+      throw new Error("Password recovery is unavailable for this account.");
+    }
+
+    if (user.authProvider !== "local") {
+      throw new Error("This account uses Google login. Please sign in with Google.");
     }
 
     const resetToken = crypto.randomBytes(32).toString("hex");
@@ -541,7 +561,9 @@ class AuthService {
     const user = await User.findOne({
       resetPasswordToken: hashedToken,
       resetPasswordExpiry: { $gt: new Date() },
-    });
+      accountStatus: { $in: ["active", "restricted"] },
+      authProvider: "local",
+    }).select("+resetPasswordToken +resetPasswordExpiry");
 
     if (!user) {
       throw new Error("Invalid or expired reset link");

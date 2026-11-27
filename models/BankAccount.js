@@ -85,9 +85,10 @@ const bankAccountSchema = new mongoose.Schema(
       trim: true,
       default: null,
       select: false,
-      // Generated when a Paystack transfer recipient is created.
-      // May be absent before the first withdrawal because the Transfer service
-      // can create and persist the recipient when needed.
+      // Identifies a Paystack payout destination.
+      // May be shared by independently verified BankAccount records.
+      // Never used to establish withdrawal ownership.
+      // Created and persisted when required for a withdrawal.
     },
 
     // --- VERIFICATION ---
@@ -172,7 +173,7 @@ bankAccountSchema.index(
 bankAccountSchema.index(
   { paystackRecipientCode: 1 },
   {
-    unique: true,
+    name: "paystack_recipient_lookup",
     partialFilterExpression: {
       paystackRecipientCode: { $type: "string" },
     },

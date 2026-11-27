@@ -15,47 +15,20 @@ const {
 const { isNonNegativeSafeInteger, isPositiveSafeInteger } = require("./helpers/schemaValidators");
 
 /**
- * SUBSCRIPTION PAYMENT ARCHITECTURE
+ * Authoritative payment record for subscription purchases,
+ * plan changes and renewals.
  *
- * SubscriptionPayment is the authoritative commercial payment record for one
- * purchased subscription period or immediate plan-change purchase.
+ * initial_purchase: first purchased subscription period.
+ * plan_change: immediate replacement plan with a fresh period.
+ * renewal: next purchased period, applicable at the billing boundary.
  *
- * It is deliberately separate from Subscription lifecycle state.
+ * Plan changes forfeit unused value from the previous plan.
  *
- * PAYMENT KINDS:
+ * Renewals identify their purchased period before payment.
+ * Initial purchases and plan changes receive period identity on application.
  *
- * - initial_purchase:
- *   creates and pays for the first active period of a new Subscription;
- *
- * - plan_change:
- *   pays for an immediate replacement plan on the same continuing Subscription.
- *   The previous plan stops being effective when the paid plan change is applied,
- *   unused value/time from that previous plan is forfeited, and the target plan
- *   starts a fresh purchased billing period;
- *
- * - renewal:
- *   pays for the next period of the currently effective plan. A renewal may be
- *   paid early and remain unapplied until currentPeriodEnd.
- *
- * PERIOD IDENTITY:
- *
- * Renewal payments know their future billingCycleKey, periodStart and periodEnd
- * when the payment record is created. Initial purchases and plan changes do not
- * know their applied period until SubscriptionService successfully applies them;
- * their period fields are stamped together with appliedAt.
- *
- * Canonical receipt rule:
- *
- * - wallet purchase:
- *   Employer wallet -> Platform wallet
- *   SubscriptionPayment.paymentTransaction points to the platform credit.
- *
- * - Paystack purchase / plan change / renewal:
- *   Paystack -> Platform wallet
- *   SubscriptionPayment.paymentTransaction points to the platform credit.
- *
- * Therefore paymentTransaction always represents the canonical platform-side
- * receipt of subscription money.
+ * paymentTransaction always references the canonical platform-wallet credit,
+ * whether funded by an employer wallet or Paystack.
  */
 
 const SUBSCRIPTION_PAYMENT_KINDS = Object.freeze(["initial_purchase", "plan_change", "renewal"]);
@@ -704,8 +677,7 @@ subscriptionPaymentSchema.pre("validate", function validateSubscriptionPayment()
     }
   }
 
-  // Persist late verified money for reconciliation, but never represent it as
-  // applied renewal authority. This mirrors the payment service's boundary rule.
+  // Retain late renewal payments for reconciliation, not activation.
   if (this.paymentKind === "renewal" && this.appliedAt) {
     if (this.periodStart && this.appliedAt < this.periodStart) {
       this.invalidate(
@@ -720,9 +692,6 @@ subscriptionPaymentSchema.pre("validate", function validateSubscriptionPayment()
       );
     }
   }
-
-  // Early renewal is intentionally valid. paidAt may be before periodStart.
-  // Initial purchases and plan changes receive period identity only when applied.
 });
 
 subscriptionPaymentSchema.index(

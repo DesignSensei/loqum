@@ -73,6 +73,13 @@ router.get("/cases", employerShiftClaimController.getCases);
 
 router.get("/business-profile", employerController.getBusinessProfile);
 
+router.get(
+  "/business-profile/closure/eligibility",
+  employerController.getBusinessClosureEligibility
+);
+
+router.post("/business-profile/closure", employerController.postCloseBusiness);
+
 router.post(
   "/business-profile/business-details/update",
   employerController.postUpdateBusinessDetails

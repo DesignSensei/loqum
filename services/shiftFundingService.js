@@ -256,9 +256,22 @@ class ShiftFundingService {
 
   static async assertCurrentExistingObligationAuthority({ userId, businessId, session }) {
     const normalizedBusinessId = ShiftFundingService.validateObjectId(businessId, "business ID");
-    const business = await EmployerProfile.findById(normalizedBusinessId)
-      .select("_id user")
-      .session(session);
+    if (!session?.inTransaction()) {
+      throw ShiftFundingService.createFundingError({
+        message: "An active transaction is required for obligation payment authorization.",
+        code: "SHIFT_FUNDING_ACTIVE_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
+    const business = await EmployerProfile.findOneAndUpdate(
+      {
+        _id: normalizedBusinessId,
+        accountStatus: { $in: ["active", "restricted", "suspended"] },
+      },
+      { $inc: { __v: 1 } },
+      { session, new: true, timestamps: false }
+    ).select("_id user");
 
     if (!business) {
       throw ShiftFundingService.createFundingError({

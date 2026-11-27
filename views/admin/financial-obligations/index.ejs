@@ -1,0 +1,18 @@
+<!-- views/admin/financial-obligations/index.ejs -->
+
+<div id="adminFinancialObligations">
+
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-4 mb-8">
+    <div>
+      <h1 class="fw-bold fs-2 mb-2">Financial Obligations</h1>
+      <div class="text-muted">Manage historical financial liabilities and reconciliation.</div>
+    </div>
+    <a href="<%= firstUrl %>" class="btn btn-light-primary">Refresh</a>
+  </div>
+
+  <%- include("./partials/financial-summary") %>
+
+  <%- include("./partials/filters") %>
+
+  <%- include("./partials/obligations-table") %>
+</div>

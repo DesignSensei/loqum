@@ -1569,8 +1569,188 @@ var EmployerBusinessProfile = (function () {
 
   // ───────────────────── INITIALIZATION ─────────────────────
 
+
+  /* ---------- CLOSURE ---------- */
+
+  function bindClosurePanel() {
+    const panel = document.querySelector("[data-closure-panel]");
+    if (!panel) return;
+
+    const check = panel.querySelector("[data-closure-check]");
+    const submit = panel.querySelector("[data-closure-submit]");
+    const status = panel.querySelector("[data-closure-status]");
+    const blockers = panel.querySelector("[data-closure-blockers]");
+    const unavailable = panel.querySelector("[data-closure-unavailable]");
+    const csrf = panel.querySelector("[data-closure-csrf]").value;
+    const url = panel.dataset.closureUrl;
+    const enabled = panel.dataset.executionEnabled === "true";
+
+    let busy = false;
+    let ready = false;
+
+    unavailable.hidden = enabled;
+
+    function updateButtons() {
+      check.disabled = busy;
+      submit.disabled = busy || !enabled || !ready;
+    }
+
+    function displayEligibility(eligibility) {
+      ready = false;
+
+      blockers.replaceChildren();
+      blockers.hidden = true;
+
+      if (!eligibility ||
+          !Array.isArray(eligibility.blockers) ||
+          !Array.isArray(eligibility.pendingChecks)) {
+        status.textContent = "Eligibility could not be confirmed.";
+        return;
+      }
+
+      for (const blocker of eligibility.blockers) {
+        const item = document.createElement("li");
+
+        item.textContent = blocker?.message ||
+          "An outstanding commitment requires review.";
+
+        blockers.appendChild(item);
+      }
+
+      blockers.hidden = blockers.children.length === 0;
+
+      ready = eligibility.canClose === true &&
+        eligibility.blockers.length === 0 &&
+        eligibility.pendingChecks.length === 0;
+
+      status.textContent = ready
+        ? "No outstanding closure blockers were reported."
+        : eligibility.pendingChecks.length
+          ? "Further reconciliation is required before closure."
+          : "Resolve outstanding commitments before closure.";
+    }
+
+    async function checkEligibility() {
+      if (busy) return;
+
+      busy = true;
+      ready = false;
+
+      blockers.replaceChildren();
+      blockers.hidden = true;
+
+      status.textContent = "Checking eligibility...";
+
+      updateButtons();
+
+      try {
+        const response = await axios.get(url + "/eligibility");
+
+        if (response.data?.success !== true) {
+          throw new Error("Eligibility could not be confirmed.");
+        }
+
+        displayEligibility(response.data.eligibility);
+      } catch (error) {
+        status.textContent = error?.response?.data?.message ||
+          "Unable to check eligibility. Please try again.";
+      } finally {
+        busy = false;
+        updateButtons();
+      }
+    }
+
+    async function requestClosure() {
+      if (busy || !enabled || !ready) return;
+
+      busy = true;
+      updateButtons();
+
+      try {
+        const confirmation = panel.dataset.confirmation;
+
+        const result = await Swal.fire({
+          title: "Confirm permanent closure",
+          text: "Enter " + confirmation + " to continue.",
+          input: "text",
+
+          inputAttributes: {
+            autocomplete: "off",
+          },
+
+          showCancelButton: true,
+          confirmButtonText: "Close permanently",
+          cancelButtonText: "Cancel",
+          buttonsStyling: false,
+
+          customClass: {
+            confirmButton: "btn btn-danger",
+            cancelButton: "btn btn-light",
+          },
+
+          inputValidator: function (value) {
+            if (value !== confirmation) {
+              return "Enter the confirmation phrase exactly.";
+            }
+          },
+        });
+
+        if (!result.isConfirmed || result.value !== confirmation) return;
+
+        ready = false;
+
+        const response = await axios.post(url, {
+          confirmation: confirmation,
+          _csrf: csrf,
+        }, {
+          headers: {
+            "X-CSRF-Token": csrf,
+          },
+        });
+
+        if (response.data?.success !== true ||
+            response.data?.closed !== true) {
+          throw new Error("Closure was not confirmed.");
+        }
+
+        await Swal.fire({
+          icon: "success",
+          text: response.data.message ||
+            "Closure completed successfully.",
+        });
+
+        window.location.assign(panel.dataset.redirect);
+      } catch (error) {
+        ready = false;
+
+        const data = error?.response?.data;
+
+        if (data?.eligibility) {
+          displayEligibility(data.eligibility);
+        }
+
+        ready = false;
+
+        await Swal.fire({
+          icon: "error",
+          text: data?.message ||
+            "Closure could not be confirmed. Check eligibility before retrying.",
+        });
+      } finally {
+        busy = false;
+        updateButtons();
+      }
+    }
+
+    check.addEventListener("click", checkEligibility);
+    submit.addEventListener("click", requestClosure);
+
+    updateButtons();
+  }
+
   return {
     init: function () {
+      bindClosurePanel();
       initSelect2();
       initLocationPicker();
       setBusinessDetailsInitialSelectValues();

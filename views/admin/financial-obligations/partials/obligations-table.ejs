@@ -1,0 +1,64 @@
+<div class="card card-flush">
+    <div class="card-header">
+      <div class="card-title"><h3 class="fw-bold">Obligations Register</h3></div>
+      <div class="card-toolbar text-muted"><%= rows.length %> records on this page</div>
+    </div>
+
+    <div class="card-body">
+
+      <div class="table-responsive">
+        <table class="table table-row-dashed align-middle gy-5">
+          <thead>
+            <tr class="fw-bold text-muted text-uppercase fs-7">
+              <th>Reference / Owner</th>
+              <th>Type</th>
+              <th>Amount</th>
+              <th>Status</th>
+              <th>Execution</th>
+              <th>Recorded</th>
+              <th class="text-end">Action</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            <% rows.forEach(function(item) { %>
+              <tr>
+                <td class="min-w-175px">
+                  <a href="<%= item.url %>" class="fw-bold text-break">
+                    <%= item.reference %>
+                  </a>
+                  <div class="fw-semibold mt-1"><%= item.owner %></div>
+                  <div class="text-muted fs-8"><%= item.ownerType %></div>
+                </td>
+
+                <td><%= item.type %></td>
+                <td class="fw-bold text-nowrap"><%= item.amount %></td>
+
+                <td>
+                  <span class="badge <%= item.statusClass %>"><%= item.status %></span>
+                </td>
+
+                <td><%= item.execution %></td>
+                <td class="text-muted fs-7"><%= item.createdAt %></td>
+
+                <td class="text-end">
+                  <a href="<%= item.url %>" class="btn btn-sm btn-light-primary">View</a>
+                </td>
+              </tr>
+            <% }); %>
+
+            <% if (!rows.length) { %>
+              <tr>
+                <td colspan="7" class="text-center text-muted py-10">
+                  No obligations match the selected filters.
+                </td>
+              </tr>
+            <% } %>
+          </tbody>
+        </table>
+      </div>
+
+      <%- include("./pagination") %>
+
+    </div>
+  </div>

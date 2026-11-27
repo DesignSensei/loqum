@@ -509,12 +509,6 @@ exports.REFUND_REASONS = Object.freeze([
  */
 exports.EMPLOYER_REFUND_FUNDING_METHODS = Object.freeze(["wallet_balance", "paystack_checkout"]);
 
-exports.EMPLOYER_REFUND_EXECUTION_METHODS = Object.freeze([
-  "wallet_balance",
-  "paystack_refund",
-  "paystack_transfer",
-]);
-
 exports.EMPLOYER_REFUND_BATCH_EXECUTION_METHODS = Object.freeze([
   "wallet_balance",
   "paystack_refund",

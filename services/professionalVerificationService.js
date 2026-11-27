@@ -452,6 +452,8 @@ class ProfessionalVerificationService {
       throw new Error("Licence promotion requires an active transaction.");
     }
 
+    if (profile.accountStatus === "closed") return false;
+
     const upcoming = profile.upcomingLicence;
 
     if (!upcoming) {
@@ -737,6 +739,7 @@ class ProfessionalVerificationService {
         const current = await ProfessionalProfile.findOne({
           _id: snapshot._id,
           user: userId,
+          accountStatus: { $ne: "closed" },
           __v: snapshot.__v,
         })
           .select("+licenceDocumentUrl +licencePendingDocumentUrl +upcomingLicence.documentUrl")
@@ -976,6 +979,7 @@ class ProfessionalVerificationService {
     const profile = await ProfessionalProfile.findOne({
       _id: professionalProfileId,
       user: userId,
+      accountStatus: { $ne: "closed" },
     });
 
     if (!profile) {
@@ -1383,6 +1387,7 @@ class ProfessionalVerificationService {
         const profile = await ProfessionalProfile.findOne({
           _id: owned._id,
           user: userId,
+          accountStatus: { $ne: "closed" },
         })
           .select("+licenceDocumentUrl +licencePendingDocumentUrl +upcomingLicence.documentUrl")
           .session(session);
@@ -1519,6 +1524,7 @@ class ProfessionalVerificationService {
           _id: snapshot._id,
           user: userId,
           licenceNumber: snapshot.licenceNumber,
+          accountStatus: { $ne: "closed" },
           __v: snapshot.__v,
         })
           .select("+licenceDocumentUrl +licencePendingDocumentUrl +upcomingLicence.documentUrl")
@@ -1672,6 +1678,14 @@ class ProfessionalVerificationService {
 
     const snapshot = await this.getProfessional(professionalProfileId);
 
+    if (snapshot.accountStatus === "closed") {
+      throw this.createError({
+        message: "A closed professional profile cannot receive a licence review.",
+        code: "PROFESSIONAL_VERIFICATION_ACCOUNT_INELIGIBLE",
+        statusCode: 409,
+      });
+    }
+
     const pendingDocument = snapshot.licencePendingDocumentUrl;
 
     if (
@@ -1708,6 +1722,7 @@ class ProfessionalVerificationService {
         const current = await ProfessionalProfile.findOne({
           _id: snapshot._id,
           licenceNumber: snapshot.licenceNumber,
+          accountStatus: { $ne: "closed" },
           __v: snapshot.__v,
         })
           .select("+licenceDocumentUrl +licencePendingDocumentUrl +upcomingLicence.documentUrl")
@@ -1982,6 +1997,14 @@ class ProfessionalVerificationService {
             message: "Professional profile not found.",
             code: "PROFESSIONAL_VERIFICATION_PROFILE_NOT_FOUND",
             statusCode: 404,
+          });
+        }
+
+        if (profile.accountStatus === "closed") {
+          throw this.createError({
+            message: "A closed professional profile cannot receive an approval decision.",
+            code: "PROFESSIONAL_VERIFICATION_ACCOUNT_INELIGIBLE",
+            statusCode: 409,
           });
         }
 

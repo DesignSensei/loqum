@@ -254,6 +254,36 @@ class JobPublicationPaymentService {
 
   /* ─────────────────────────────── DATA LOADERS ─────────────────────────────── */
 
+  static async lockBusinessForPayment({ employerProfileId, session, historicalReceipt = false }) {
+    if (!session?.inTransaction?.()) {
+      throw this.createError({
+        message: "Job publication payment requires an active transaction.",
+        code: "JOB_PAYMENT_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
+    const statuses = historicalReceipt
+      ? ["active", "restricted", "suspended", "closing", "closed"]
+      : ["active", "restricted", "suspended"];
+
+    const result = await EmployerProfile.updateOne(
+      { _id: employerProfileId, accountStatus: { $in: statuses } },
+      { $inc: { __v: 1 } },
+      { session, timestamps: false }
+    );
+
+    if (result.modifiedCount !== 1) {
+      throw this.createError({
+        message: historicalReceipt
+          ? "The original business requires payment reconciliation."
+          : "Job publication purchases are unavailable during or after business closure.",
+        code: "JOB_PAYMENT_BUSINESS_UNAVAILABLE",
+        statusCode: 409,
+      });
+    }
+  }
+
   static async getEmployerProfile(employerProfileId, session = null) {
     const normalizedEmployerProfileId = this.normalizeObjectId(
       employerProfileId,
@@ -493,6 +523,11 @@ class JobPublicationPaymentService {
     const purchaseReference = this.buildPurchaseReference(idempotencyKey);
 
     return this.runWithOptionalTransaction(options, async (session) => {
+      await this.lockBusinessForPayment({
+        employerProfileId: normalizedEmployerProfileId,
+        session,
+      });
+
       const existingPayment = await this.getPaymentByPurchaseReference(purchaseReference, session);
 
       if (existingPayment) {
@@ -744,6 +779,11 @@ class JobPublicationPaymentService {
     const purchaseReference = this.buildPurchaseReference(idempotencyKey);
 
     const preparation = await this.runWithOptionalTransaction(options, async (session) => {
+      await this.lockBusinessForPayment({
+        employerProfileId: normalizedEmployerProfileId,
+        session,
+      });
+
       const existingPayment = await this.getPaymentByPurchaseReference(purchaseReference, session);
 
       if (existingPayment) {
@@ -1341,6 +1381,7 @@ class JobPublicationPaymentService {
   static async finalizePaystackPayment({
     reference,
     providerEventId = null,
+    providerEventRecordId = null,
     currentTime = new Date(),
   }) {
     const normalizedReference = String(reference || "").trim();
@@ -1365,7 +1406,9 @@ class JobPublicationPaymentService {
       };
     }
 
-    this.assertExistingPurchaseReusable(existingPayment);
+    if (existingPayment.paymentStatus === "refunded") {
+      this.assertExistingPurchaseReusable(existingPayment);
+    }
 
     const verifiedPayment = await PaystackService.verifyTransaction(normalizedReference);
 
@@ -1374,6 +1417,7 @@ class JobPublicationPaymentService {
       .toLowerCase();
 
     if (verifiedStatus !== "success") {
+      this.assertExistingPurchaseReusable(existingPayment);
       if (PAYSTACK_DEFINITIVE_FAILURE_STATUSES.includes(verifiedStatus)) {
         await this.runWithOptionalTransaction({}, async (session) => {
           const payment = await this.getPaymentByProviderReference(normalizedReference, session);
@@ -1442,7 +1486,7 @@ class JobPublicationPaymentService {
 
     const providerAmounts = this.getVerifiedProviderAmounts(verifiedPayment);
 
-    return this.runWithOptionalTransaction({}, async (session) => {
+    const financialResult = await this.runWithOptionalTransaction({}, async (session) => {
       const payment = await this.getPaymentByProviderReference(normalizedReference, session);
 
       if (payment.paymentStatus === "paid") {
@@ -1454,7 +1498,16 @@ class JobPublicationPaymentService {
         };
       }
 
-      this.assertExistingPurchaseReusable(payment);
+      if (payment.paymentStatus === "refunded") {
+        this.assertExistingPurchaseReusable(payment);
+      }
+
+      // Preserve verified receipts for the original business during closure.
+      await this.lockBusinessForPayment({
+        employerProfileId: payment.business,
+        session,
+        historicalReceipt: true,
+      });
 
       const currentTransaction = await this.getCanonicalPaystackReceipt(payment, session);
       this.validateVerifiedPaystackPayment({
@@ -1462,6 +1515,39 @@ class JobPublicationPaymentService {
         payment,
         transaction: currentTransaction,
       });
+
+      const business = await EmployerProfile.findById(payment.business)
+        .select("accountStatus")
+        .session(session);
+
+      if (
+        !business ||
+        ["closing", "closed"].includes(business.accountStatus) ||
+        payment.paymentStatus !== "pending"
+      ) {
+        // Record the independently verified liability in this transaction.
+        // Do not complete a platform credit or reactivate the original purchase.
+        const FinancialObligationService = require("./financialObligationService");
+        const result = await FinancialObligationService.recordHistoricalCommercialPayment(
+          {
+            kind: "job_publication",
+            paymentId: payment._id,
+            verifiedPayment,
+            providerEventId: providerEventRecordId,
+            currentTime: finalizedAt,
+          },
+          { session }
+        );
+
+        return {
+          payment,
+          paymentTransaction: currentTransaction,
+          financialObligation: result.obligation,
+          reconciliationRequired: true,
+          paid: false,
+          idempotent: result.idempotent === true,
+        };
+      }
 
       const completedCredit = await WalletService.completePendingExternalCredit(
         {
@@ -1506,6 +1592,33 @@ class JobPublicationPaymentService {
         idempotent: completedCredit.idempotent === true,
       };
     });
+
+    if (financialResult.financialObligation) {
+      // The obligation has committed. An internal provider-event processor
+      // can link the durable disposition without reporting a paid purchase.
+      if (providerEventRecordId) return financialResult;
+
+      const obligation = financialResult.financialObligation;
+      const error = this.createError({
+        message: "Verified payment recorded for financial reconciliation. No purchase entitlement was granted.",
+        code: "JOB_PAYMENT_HISTORICAL_RECEIPT_REVIEW_REQUIRED",
+        statusCode: 409,
+        details: {
+          reconciliationRequired: obligation.status !== "settled",
+          financialObligationId: String(obligation._id),
+          financialObligationStatus: obligation.status,
+          providerReference: normalizedReference,
+          paymentId: String(financialResult.payment._id),
+          businessId: String(obligation.employer),
+          amount: obligation.amount,
+          currency: obligation.currency,
+        },
+      });
+      error.retryable = false;
+      throw error;
+    }
+
+    return financialResult;
   }
 
   /* ─────────────────────────────── PURCHASE STATUS ─────────────────────────────── */
@@ -1593,6 +1706,11 @@ class JobPublicationPaymentService {
     );
 
     const normalizedJobId = this.normalizeObjectId(jobId, "Job ID");
+
+    await this.lockBusinessForPayment({
+      employerProfileId: normalizedEmployerProfileId,
+      session,
+    });
 
     const consumedAt = this.normalizeCurrentTime(currentTime);
 
@@ -1716,6 +1834,11 @@ class JobPublicationPaymentService {
         statusCode: 409,
       });
     }
+
+    await this.lockBusinessForPayment({
+      employerProfileId: payment.business,
+      session,
+    });
 
     payment.consumedByPublication = normalizedPublicationId;
 

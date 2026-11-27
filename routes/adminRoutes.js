@@ -343,4 +343,35 @@ router.post(
   adminShiftClaimController.resolveDispute
 );
 
+// Historical financial obligation reconciliation.
+const adminFinancialObligationController = require("../controllers/adminFinancialObligationController");
+router.get("/financial-obligations/data", adminFinancialObligationController.list);
+router.post("/financial-obligations/:obligationId/refund", adminFinancialObligationController.refund);
+router.post("/financial-obligations/:obligationId/reconcile", adminFinancialObligationController.reconcile);
+
+router.post(
+  "/financial-obligations/:obligationId/payout",
+  adminFinancialObligationController.payout
+);
+
+router.post(
+  "/financial-obligations/:obligationId/reconcile-payout",
+  adminFinancialObligationController.reconcilePayout
+);
+
+router.post("/financial-obligations/:obligationId/recover-refund", adminFinancialObligationController.recoverRefund);
+router.post("/financial-obligations/:obligationId/retry-payout", adminFinancialObligationController.retryPayout);
+router.post("/financial-obligations/:obligationId/payout-otp", adminFinancialObligationController.payoutOtp);
+
+
+router.get(
+  "/financial-obligations",
+  adminFinancialObligationController.getDashboardPage
+);
+
+router.get(
+  "/financial-obligations/:obligationId",
+  adminFinancialObligationController.getObligationPage
+);
+
 module.exports = router;

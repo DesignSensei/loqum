@@ -366,7 +366,7 @@ class JobPublicationEntitlementService {
     }
 
     const lock = await EmployerProfile.updateOne(
-      { _id: employerProfileId },
+      { _id: employerProfileId, accountStatus: "active" },
       { $inc: { __v: 1 } },
       { session, timestamps: false }
     );
@@ -1050,6 +1050,22 @@ class JobPublicationEntitlementService {
     const entitlementTime = this.normalizeCurrentTime(currentTime);
 
     const session = options.session || null;
+
+    this.assertCommercialConsumptionTransaction(session);
+
+    const businessLock = await EmployerProfile.updateOne(
+      { _id: employerId, accountStatus: "active" },
+      { $inc: { __v: 1 } },
+      { session, timestamps: false }
+    );
+
+    if (businessLock.modifiedCount !== 1) {
+      throw this.createError({
+        message: "The employer business is no longer available for publication.",
+        code: "JOB_PUBLICATION_EMPLOYER_NOT_AVAILABLE",
+        statusCode: 409,
+      });
+    }
 
     const policy = await this.getPublicationPolicy();
 

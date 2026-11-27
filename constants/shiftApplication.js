@@ -1,13 +1,9 @@
 // constants/shiftApplication.js
 
-/**
- * Initial applications use round 1.
- *
- * Replacement rounds are scoped to the assignment being replaced and,
- * for an isolated replacement, the targeted occurrence.
- *
- * They do not advance the parent Shift's initial application round.
- */
+/* ─────────────────────────────── APPLICATION TYPES ─────────────────────────────── */
+
+// Initial applications use round 1. Replacement rounds are scoped to the
+// replaced assignment and, where applicable, the targeted occurrence.
 exports.MAX_APPLICATION_ROUNDS = 99;
 
 exports.APPLICATION_TYPES = ["initial", "replacement"];
@@ -26,12 +22,8 @@ exports.APPLICATION_STATUSES = [
 
 exports.EMPLOYER_REVIEW_STATUSES = ["shortlisted", "accepted", "rejected"];
 
-/**
- * Acceptance completes the application workflow.
- *
- * The accepted application remains historical evidence of acceptance.
- * Subsequent activation, ending or cancellation belongs to its assignment.
- */
+// Accepted applications remain historical records. Subsequent lifecycle
+// changes belong to the associated assignment.
 exports.TERMINAL_APPLICATION_STATUSES = [
   "accepted",
   "rejected",
@@ -48,17 +40,8 @@ exports.INITIAL_APPLICATION_PAYMENT_STATUS = "funded";
 
 /* ─────────────────────────────── REPLACEMENT ELIGIBILITY ─────────────────────────────── */
 
-/**
- * An open parent may already contain accepted professional assignments
- * while other initial positions remain available.
- *
- * Replacement hiring operates independently within the affected slot.
- * It can therefore coexist with initial hiring.
- *
- * Parent status alone does not establish replacement eligibility.
- * Services must verify the replacement assignment, slot, occurrence range,
- * hiring opportunity and available funded allocation.
- */
+// Replacement and initial hiring may coexist.
+// Eligibility also requires valid assignment, slot, occurrence and funding.
 exports.REPLACEMENT_APPLICATION_PARENT_STATUSES = [
   "open",
   "assigned",
@@ -71,25 +54,13 @@ exports.REPLACEMENT_APPLICATION_PARENT_STATUSES = [
 
 exports.REPLACEMENT_APPLICATION_BLOCKED_PAYMENT_STATUSES = ["unpaid", "released", "refunded"];
 
-/**
- * These statuses identify assignments that may need replacement.
- *
- * A qualifying status alone does not authorize acceptance.
- * The assignment service applies the relevant case, cancellation and
- * remaining-occurrence rules.
- */
+// Replacement remains subject to assignment, case and cancellation rules.
 exports.REPLACEABLE_ASSIGNMENT_STATUSES = ["ending", "ended", "cancelled"];
 
 /* ─────────────────────────────── PROFESSIONAL AVAILABILITY ─────────────────────────────── */
 
-/**
- * An open single-date Shift may already have occupied positions.
- *
- * These parent statuses are only a preliminary filter.
- * Professional conflict checks must inspect that professional's actual
- * assignments and occurrence ownership, including occupied slots under
- * a partially filled parent.
- */
+// Parent statuses are preliminary filters.
+// Conflict checks must inspect actual assignments and occurrence ownership.
 exports.ACTIVE_SINGLE_SHIFT_STATUSES = [
   "open",
   "assigned",
@@ -105,10 +76,7 @@ exports.PROFESSIONAL_UNAVAILABLE_STATUSES = ["unavailable", "paused"];
 
 /* ─────────────────────────────── REPLACEMENT HIRING ─────────────────────────────── */
 
-/**
- * Status of an individual replacement hiring opportunity.
- * This is independent of the parent Shift's initial hiring status.
- */
+// Independent of the parent Shift's initial hiring status.
 exports.REPLACEMENT_HIRING_STATUSES = {
   OPEN: "open",
   CLOSED: "closed",
@@ -124,14 +92,6 @@ exports.MAX_REASON_LENGTH = 300;
 
 /* ─────────────────────────────── APPLICATION OUTCOME REASONS ─────────────────────────────── */
 
-/**
- * Retained export name for existing consumers.
- *
- * Use only after the relevant hiring capacity is filled.
- * Accepting one professional must not reject remaining applicants while
- * other initial positions are still available.
- *
- * Replacement capacity is evaluated within its own hiring opportunity.
- */
+// Use only when the relevant hiring opportunity has no remaining capacity.
 exports.OTHER_APPLICANT_SELECTED_REASON =
   "All available positions for this application round have been filled.";

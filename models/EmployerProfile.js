@@ -312,9 +312,19 @@ const employerProfileSchema = new mongoose.Schema(
 
     accountStatus: {
       type: String,
-      enum: ["active", "restricted", "suspended"],
+      enum: ["active", "restricted", "suspended", "closing", "closed"],
       default: "active",
       required: true,
+    },
+
+    closureStartedAt: {
+      type: Date,
+      default: null,
+    },
+
+    closedAt: {
+      type: Date,
+      default: null,
     },
 
     accountStatusReason: {
@@ -404,7 +414,13 @@ employerProfileSchema.index(
     cacRegistrationNumber: 1,
   },
   {
+    name: "unique_open_cac_registration",
     unique: true,
+    partialFilterExpression: {
+      accountStatus: {
+        $in: ["active", "restricted", "suspended", "closing"],
+      },
+    },
   }
 );
 
@@ -496,6 +512,29 @@ employerProfileSchema.pre("validate", function validateEmployerProfile() {
   if (this.user && this.cacVerifiedBy && String(this.user) === String(this.cacVerifiedBy)) {
     this.invalidate("cacVerifiedBy", "An employer cannot verify their own CAC registration.");
   }
+  if (this.isNew && ["closing", "closed"].includes(this.accountStatus)) {
+    this.invalidate("accountStatus", "New businesses cannot start in closure.");
+  }
+
+  if (this.accountStatus === "closing" && !this.closureStartedAt) {
+    this.invalidate("closureStartedAt", "Closing businesses require a start timestamp.");
+  }
+
+  if (this.closureStartedAt && !["closing", "closed"].includes(this.accountStatus)) {
+    this.invalidate("closureStartedAt", "Closure history cannot exist on an operating business.");
+  }
+
+  if (this.closureStartedAt && this.closedAt && this.closedAt < this.closureStartedAt) {
+    this.invalidate("closedAt", "Closure cannot precede its start timestamp.");
+  }
+
+  if (this.accountStatus === "closed" && !this.closedAt) {
+    this.invalidate("closedAt", "A closed business must have a closure timestamp.");
+  }
+
+  if (this.accountStatus !== "closed" && this.closedAt) {
+    this.invalidate("closedAt", "A closure timestamp is only permitted for closed businesses.");
+  }
 
   // ───────── Account-status audit ─────────
   // Restrictions require a reason, actor and timestamp.
@@ -537,6 +576,77 @@ employerProfileSchema.pre("validate", function validateEmployerProfile() {
     );
   }
 });
+
+// ───────── Closure transition protection ─────────
+
+employerProfileSchema.pre("save", async function () {
+  if (this.isNew || !["accountStatus", "closureStartedAt", "closedAt"]
+    .some((path) => this.isModified(path))) return;
+
+  const previous = await this.constructor.findById(this._id)
+    .select("accountStatus closureStartedAt closedAt")
+    .session(this.$session()).lean();
+
+  if (!previous) throw new Error("Business profile no longer exists.");
+
+  const closureTransition =
+    ["closing", "closed"].includes(previous.accountStatus) ||
+    ["closing", "closed"].includes(this.accountStatus) ||
+    this.isModified("closureStartedAt") || this.isModified("closedAt");
+
+  if (!closureTransition) return;
+
+  const starting = previous.accountStatus === "active" &&
+    this.accountStatus === "closing" && !previous.closureStartedAt;
+
+  const finishing = previous.accountStatus === "closing" &&
+    this.accountStatus === "closed" &&
+    previous.closureStartedAt &&
+    this.closureStartedAt &&
+    previous.closureStartedAt.getTime() === this.closureStartedAt.getTime();
+
+  if (
+    this.$locals.businessClosureTransition !== true ||
+    !this.$session()?.inTransaction?.() ||
+    (!starting && !finishing)
+  ) {
+    throw new Error("Business closure requires an authorized transactional transition.");
+  }
+});
+
+function isAccountStatusUpdate(update) {
+  let changesStatus = false;
+
+  function inspect(path, value, operator) {
+    const root = String(path).split(".")[0];
+    const target = operator === "$rename" ? String(value).split(".")[0] : null;
+
+    if (["closureStartedAt", "closedAt"].includes(root) ||
+        ["closureStartedAt", "closedAt", "accountStatus"].includes(target)) {
+      throw new Error("Closure fields require the business closure service.");
+    }
+
+    if (root === "accountStatus") {
+      if (operator !== "$set" ||
+          !["active", "restricted", "suspended"].includes(value)) {
+        throw new Error("Closure status requires the business closure service.");
+      }
+      changesStatus = true;
+    }
+  }
+
+  for (const [operator, values] of Object.entries(update || {})) {
+    if (!operator.startsWith("$")) {
+      inspect(operator, values, "$set");
+    } else {
+      for (const [path, value] of Object.entries(values || {})) {
+        inspect(path, value, operator);
+      }
+    }
+  }
+
+  return changesStatus;
+}
 
 // ───────── Established legal name ─────────
 // Routine saves cannot replace the trusted CAC business name.
@@ -600,6 +710,15 @@ employerProfileSchema.pre(
   ["updateOne", "updateMany", "findOneAndUpdate", "replaceOne", "findOneAndReplace"],
   function () {
     assertSafeIdentityUpdate(this.getUpdate(), this.getOptions(), this.op);
+
+    if (isAccountStatusUpdate(this.getUpdate())) {
+      this.setQuery({
+        $and: [
+          this.getFilter(),
+          { accountStatus: { $nin: ["closing", "closed"] } },
+        ],
+      });
+    }
   }
 );
 
@@ -612,6 +731,15 @@ employerProfileSchema.pre("bulkWrite", function (operations) {
     for (const name of ["updateOne", "updateMany"]) {
       if (operation[name]) {
         assertSafeIdentityUpdate(operation[name].update, operation[name], name);
+
+        if (isAccountStatusUpdate(operation[name].update)) {
+          operation[name].filter = {
+            $and: [
+              operation[name].filter,
+              { accountStatus: { $nin: ["closing", "closed"] } },
+            ],
+          };
+        }
       }
     }
   }

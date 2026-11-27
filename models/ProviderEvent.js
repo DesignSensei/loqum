@@ -3,69 +3,15 @@
 const mongoose = require("mongoose");
 
 /**
- * PROVIDER EVENT MODEL:
- *
- * Stores raw and normalized payment-provider events before they affect wallets,
- * transactions, Shifts, employer commercial payments, withdrawals or employer refund execution.
- *
- * This model is provider-facing.
+ * Stores provider events before financial execution.
  * Transaction.js remains the wallet ledger.
  *
- * Why this exists:
- * - Prevent duplicate provider events from being processed twice.
- * - Store raw provider payloads for audit/debugging.
- * - Track whether an event was processed, failed or ignored.
- * - Preserve first and latest processing-attempt timestamps.
- * - Fence each active processing attempt with a unique ownership claim.
- * - Keep provider webhook logic separate from wallet ledger logic.
- * - Preserve provider-side refund state independently from Loqum refund obligations.
- * - Track Paystack dedicated-account assignment events before DVA activation.
+ * Events are reconciled against their original financial records.
+ * Refund events link to execution batch lines.
+ * DVA assignment events manage account setup, not funding.
  *
- * EMPLOYER COMMERCIAL PAYMENT FLOW:
- *
- * Paystack charge.success webhook received
- * → signature verified and event normalized
- * → PAYG Job publication or Subscription payment category recorded
- * → ProviderEventProcessorService delegates to the authoritative payment service
- * → payment service re-verifies Paystack and completes the canonical platform receipt
- * → subscription lifecycle application, where applicable, remains service-owned
- * → ProviderEvent is marked processed only after the delegated workflow reaches
- *   its durable terminal state.
- *
- * EMPLOYER REFUND FLOW:
- *
- * Paystack refund webhook received
- * → signature verified and refund event normalized
- * → ProviderEvent recorded independently
- * → employer refund batch/line resolved
- * → EmployerRefundBatchService synchronizes provider refund state
- * → escrow ledger movement is written only when the provider refund is processed
- * → ProviderEvent marked processed
- *
- * IMPORTANT:
- *
- * EmployerRefund is the occurrence-level refund obligation.
- * EmployerRefundBatch is the execution container.
- *
- * A Paystack refund provider event belongs to the batch execution line, not to
- * one individual EmployerRefund allocation, because one external refund can
- * aggregate multiple occurrence-level refund obligations from the same Shift
- * payment.
- *
- * PROCESSING OWNERSHIP:
- *
- * processingStartedAt
- * → first-ever processing attempt.
- *
- * lastProcessingStartedAt
- * → latest successful processing claim.
- *
- * processingClaimId
- * → current processing attempt's ownership token.
- *
- * processingClaimId exists only while status is processing. A worker must
- * present the same claim when attempting to complete, fail or ignore that
- * processing attempt. Once the event leaves processing, the claim is cleared.
+ * Processing claims protect individual processing attempts.
+ * First and latest attempt timestamps preserve processing history.
  */
 
 const isNonNegativeInteger = (value) => Number.isSafeInteger(value) && value >= 0;
@@ -96,56 +42,44 @@ const PAYSTACK_DVA_ASSIGNMENT_EVENT_NAMES = Object.freeze([
 
 const providerEventSchema = new mongoose.Schema(
   {
-    // --- PROVIDER IDENTITY ---
+    /* ---------- PROVIDER IDENTITY ---------- */
 
     provider: {
       type: String,
       required: true,
       trim: true,
       lowercase: true,
-      // Example: paystack.
     },
 
     eventKey: {
       type: String,
       required: true,
       trim: true,
-      // Internal unique key used for idempotency.
-      //
-      // Example:
-      // paystack:event:123456
-      //
-      // Example:
-      // paystack:charge.success:reference:trx_xxxxx
+      // Unique internal event idempotency key.
     },
 
     providerEventId: {
       type: String,
       trim: true,
       default: null,
-      // Provider's own webhook/event ID if available.
     },
 
     providerReference: {
       type: String,
       trim: true,
       default: null,
-      // Provider payment/transfer/reference used for general event lookup.
     },
 
     providerRefundId: {
       type: String,
       trim: true,
       default: null,
-      // Provider refund ID when available.
-      // Example: Paystack refund ID returned by the Refund API.
     },
 
     providerRefundReference: {
       type: String,
       trim: true,
       default: null,
-      // Provider refund reference from refund webhook/API payload when available.
     },
 
     eventName: {
@@ -153,16 +87,6 @@ const providerEventSchema = new mongoose.Schema(
       required: true,
       trim: true,
       lowercase: true,
-      // Examples:
-      // charge.success
-      // transfer.success
-      // refund.pending
-      // refund.processing
-      // refund.needs-attention
-      // refund.failed
-      // refund.processed
-      // dedicatedaccount.assign.success
-      // dedicatedaccount.assign.failed
     },
 
     eventCategory: {
@@ -174,6 +98,8 @@ const providerEventSchema = new mongoose.Schema(
         "subscription_payment",
         "employer_refund",
         "dva_assignment",
+        "transfer_unresolved",
+        "financial_obligation_payout",
         "employer_withdrawal_payout",
         "employer_withdrawal_reversal",
         "professional_withdrawal_payout",
@@ -186,13 +112,12 @@ const providerEventSchema = new mongoose.Schema(
       lowercase: true,
     },
 
-    // --- VERIFICATION ---
+    /* ---------- VERIFICATION ---------- */
 
     isVerified: {
       type: Boolean,
       default: false,
       required: true,
-      // True after provider signature verification.
     },
 
     verifiedAt: {
@@ -200,7 +125,7 @@ const providerEventSchema = new mongoose.Schema(
       default: null,
     },
 
-    // --- PROCESSING STATUS ---
+    /* ---------- PROCESSING LIFECYCLE ---------- */
 
     status: {
       type: String,
@@ -219,15 +144,13 @@ const providerEventSchema = new mongoose.Schema(
     processingStartedAt: {
       type: Date,
       default: null,
-      // First time this ProviderEvent ever entered processing.
-      // Preserved permanently as audit history.
+      // First processing attempt.
     },
 
     lastProcessingStartedAt: {
       type: Date,
       default: null,
-      // Most recent successful processing claim.
-      // Updated on each retry attempt.
+      // Latest processing attempt.
     },
 
     processingClaimId: {
@@ -235,10 +158,7 @@ const providerEventSchema = new mongoose.Schema(
       trim: true,
       maxlength: 100,
       default: null,
-      // Current processing attempt's ownership token.
-      //
-      // Generated by ProviderEventService.markProcessing().
-      // Cleared whenever status leaves processing.
+      // Ownership token for the active attempt.
     },
 
     processedAt: {
@@ -287,8 +207,9 @@ const providerEventSchema = new mongoose.Schema(
       default: null,
     },
 
-    // --- MONEY DETAILS ---
-    // Stored in minor units where available.
+    /* ---------- MONEY ---------- */
+
+    // Amounts are stored in minor units.
 
     amount: {
       type: Number,
@@ -341,7 +262,7 @@ const providerEventSchema = new mongoose.Schema(
       trim: true,
     },
 
-    // --- LINKED RECORDS ---
+    /* ---------- LINKED RECORDS ---------- */
 
     user: {
       type: mongoose.Schema.Types.ObjectId,
@@ -371,7 +292,12 @@ const providerEventSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Transaction",
       default: null,
-      // Ledger transaction created/affected after provider-event processing.
+    },
+
+    financialObligation: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "FinancialObligation",
+      default: null,
     },
 
     dva: {
@@ -402,16 +328,15 @@ const providerEventSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "EmployerRefundBatch",
       default: null,
-      // External provider refund execution belongs to the batch line.
     },
 
     employerRefundBatchLineId: {
       type: mongoose.Schema.Types.ObjectId,
       default: null,
-      // _id of the embedded EmployerRefundBatch.lines subdocument.
+      // Embedded refund execution line ID.
     },
 
-    // --- RAW / NORMALIZED PAYLOADS ---
+    /* ---------- PROVIDER PAYLOADS ---------- */
 
     rawHeaders: {
       type: mongoose.Schema.Types.Mixed,
@@ -438,7 +363,9 @@ const providerEventSchema = new mongoose.Schema(
   }
 );
 
-// --- INDEXES ---
+/* ---------- INDEXES ---------- */
+
+// Event idempotency.
 
 providerEventSchema.index(
   {
@@ -463,6 +390,8 @@ providerEventSchema.index(
     },
   }
 );
+
+// Provider reference lookups.
 
 providerEventSchema.index({
   provider: 1,
@@ -489,6 +418,8 @@ providerEventSchema.index({
   eventCategory: 1,
 });
 
+// Processing and recovery.
+
 providerEventSchema.index({
   status: 1,
   receivedAt: -1,
@@ -503,6 +434,8 @@ providerEventSchema.index({
   isVerified: 1,
   status: 1,
 });
+
+// Historical ownership.
 
 providerEventSchema.index({
   employer: 1,
@@ -525,6 +458,18 @@ providerEventSchema.index(
   },
   {
     sparse: true,
+  }
+);
+
+// Multiple verified deliveries may resolve to the same obligation.
+providerEventSchema.index(
+  {
+    financialObligation: 1,
+  },
+  {
+    partialFilterExpression: {
+      financialObligation: { $type: "objectId" },
+    },
   }
 );
 
@@ -555,6 +500,8 @@ providerEventSchema.index(
   }
 );
 
+// Refund execution.
+
 providerEventSchema.index(
   {
     employerRefundBatch: 1,
@@ -576,6 +523,8 @@ providerEventSchema.index(
   }
 );
 
+// Market and processing history.
+
 providerEventSchema.index({
   countryCode: 1,
   currency: 1,
@@ -590,8 +539,7 @@ providerEventSchema.index({
   lastProcessingStartedAt: 1,
 });
 
-// Equality prefix and ID order used by bounded recovery sweeps.
-// Date deadlines remain query filters; deployment must build this index.
+// Supports bounded recovery sweeps.
 
 providerEventSchema.index(
   {
@@ -604,9 +552,11 @@ providerEventSchema.index(
   }
 );
 
-// --- VALIDATION / NORMALIZATION ---
+/* ---------- VALIDATION ---------- */
 
 providerEventSchema.pre("validate", function () {
+  /* ---------- Identity normalization ---------- */
+
   if (this.provider) {
     this.provider = String(this.provider).toLowerCase().trim();
   }
@@ -647,15 +597,7 @@ providerEventSchema.pre("validate", function () {
     }
   }
 
-  if (!this.countryCode || !/^[A-Z]{2}$/.test(this.countryCode)) {
-    throw new Error("Provider event requires an explicit two-letter country code.");
-  }
-
-  if (!this.currency || !/^[A-Z]{3}$/.test(this.currency)) {
-    throw new Error("Provider event requires an explicit three-letter currency.");
-  }
-
-  // Empty optional IDs must not occupy the partial unique provider-event-ID index.
+  // Empty IDs must not occupy partial unique indexes.
 
   for (const field of [
     "providerEventId",
@@ -680,27 +622,27 @@ providerEventSchema.pre("validate", function () {
     throw new Error("Provider event name is required.");
   }
 
-  /*
-   * ProviderEvent must be recordable before an
-   * employer refund execution line is resolved.
-   *
-   * Once either execution link exists, both are
-   * required because one provider refund belongs
-   * to one exact embedded batch line.
-   */
+  /* ---------- Country and currency ---------- */
+
+  if (!this.countryCode || !/^[A-Z]{2}$/.test(this.countryCode)) {
+    throw new Error("Provider event requires an explicit two-letter country code.");
+  }
+
+  if (!this.currency || !/^[A-Z]{3}$/.test(this.currency)) {
+    throw new Error("Provider event requires an explicit three-letter currency.");
+  }
+
+  /* ---------- Employer refund events ---------- */
 
   const hasEmployerRefundBatch = Boolean(this.employerRefundBatch);
 
   const hasEmployerRefundBatchLineId = Boolean(this.employerRefundBatchLineId);
 
+  // Refund execution links must be supplied together.
+
   if (hasEmployerRefundBatch !== hasEmployerRefundBatchLineId) {
     throw new Error("Provider event employer refund batch and batch line must be linked together.");
   }
-
-  /*
-   * Only documented Paystack refund lifecycle
-   * webhooks may be classified as employer_refund.
-   */
 
   if (
     this.eventCategory === "employer_refund" &&
@@ -718,10 +660,9 @@ providerEventSchema.pre("validate", function () {
     throw new Error("Paystack refund lifecycle events must use employer_refund category.");
   }
 
-  /*
-   * Paystack DVA assignment webhooks change account setup state only.
-   * They do not credit the employer wallet or escrow.
-   */
+  /* ---------- DVA assignment events ---------- */
+
+  // Assignment events manage account setup, not funding.
 
   if (
     this.eventCategory === "dva_assignment" &&
@@ -738,11 +679,94 @@ providerEventSchema.pre("validate", function () {
     throw new Error("Paystack DVA assignment events must use dva_assignment category.");
   }
 
-  /*
-   * PAYG Job-publication and subscription payments currently enter through
-   * Paystack charge.success. The normalized metadata may distinguish the exact
-   * commercial payment kind, but lifecycle semantics remain service-owned.
-   */
+  /* ---------- DVA funding events ---------- */
+
+  if (this.eventCategory === "employer_wallet_funding") {
+    if (this.provider !== "paystack" || this.eventName !== "charge.success") {
+      throw new Error("DVA funding requires a successful Paystack charge event.");
+    }
+
+    if (this.countryCode !== "NG" || this.currency !== "NGN") {
+      throw new Error("Paystack DVA funding requires NG/NGN.");
+    }
+
+    if (!this.providerReference) {
+      throw new Error("DVA funding requires its provider payment reference.");
+    }
+
+    if (!Number.isSafeInteger(this.amount) || this.amount <= 0) {
+      throw new Error("DVA funding requires a positive payment amount.");
+    }
+
+    if (
+      this.professional ||
+      this.bankAccount ||
+      this.shift ||
+      this.shiftApplication ||
+      this.employerRefundBatch ||
+      this.employerRefundBatchLineId
+    ) {
+      throw new Error("DVA funding contains unrelated financial links.");
+    }
+
+    // Ownership may be unresolved at ingestion.
+
+    const ownershipLinks = [this.employer, this.wallet, this.dva];
+
+    const hasOwnership = ownershipLinks.some(Boolean);
+
+    const hasCompleteOwnership = ownershipLinks.every(Boolean);
+
+    if (hasOwnership && !hasCompleteOwnership) {
+      throw new Error("DVA funding requires its employer, wallet and DVA to be linked together.");
+    }
+
+    const hasTransaction = Boolean(this.transaction);
+
+    const hasFinancialObligation = Boolean(this.financialObligation);
+
+    if ((hasTransaction || hasFinancialObligation) && !hasCompleteOwnership) {
+      throw new Error("DVA funding disposition requires its original ownership links.");
+    }
+
+    // A DVA payment must have only one financial disposition.
+
+    if (hasTransaction && hasFinancialObligation) {
+      throw new Error(
+        "DVA funding cannot have both a wallet transaction and a financial obligation."
+      );
+    }
+
+    if (this.status === "ignored") {
+      throw new Error("A successful DVA payment cannot be ignored.");
+    }
+
+    const identityConflicts = this.normalizedPayload?.dvaFundingIdentityConflicts;
+
+    if (identityConflicts != null && !Array.isArray(identityConflicts)) {
+      throw new Error("DVA funding identity conflicts must be an array.");
+    }
+
+    // Completion requires resolved ownership and exactly one financial outcome.
+
+    if (this.status === "processed") {
+      if (identityConflicts?.length) {
+        throw new Error("DVA funding cannot be processed with unresolved identity conflicts.");
+      }
+
+      if (!hasCompleteOwnership) {
+        throw new Error("Processed DVA funding requires its original employer, wallet and DVA.");
+      }
+
+      if (hasTransaction === hasFinancialObligation) {
+        throw new Error(
+          "Processed DVA funding requires exactly one financial outcome: a wallet transaction or a historical financial obligation."
+        );
+      }
+    }
+  }
+
+  /* ---------- Commercial payment events ---------- */
 
   if (
     this.provider === "paystack" &&
@@ -752,7 +776,221 @@ providerEventSchema.pre("validate", function () {
     throw new Error(`Paystack ${this.eventCategory} events must use charge.success.`);
   }
 
-  // Services supply audit facts at the transition; validation never invents them.
+  /* ---------- Withdrawal events ---------- */
+
+  const transferEvent =
+    this.provider === "paystack" &&
+    ["transfer.success", "transfer.failed", "transfer.reversed"].includes(this.eventName);
+
+  const withdrawalCategories = [
+    "employer_withdrawal_payout",
+    "professional_withdrawal_payout",
+    "employer_withdrawal_reversal",
+    "professional_withdrawal_reversal",
+  ];
+
+  if (transferEvent) {
+    const allowed =
+      this.eventName === "transfer.success"
+        ? ["employer_withdrawal_payout", "professional_withdrawal_payout"]
+        : ["employer_withdrawal_reversal", "professional_withdrawal_reversal"];
+
+    // Preserve unresolved transfers for reconciliation.
+
+    if (this.eventCategory === "transfer_unresolved") {
+      if (["processed", "ignored"].includes(this.status)) {
+        throw new Error("An unresolved Transfer cannot be processed or ignored.");
+      }
+    } else if (this.eventCategory === "financial_obligation_payout") {
+      if (
+        this.status !== "processed" ||
+        !this.financialObligation ||
+        !this.wallet ||
+        !this.transaction ||
+        !this.bankAccount ||
+        Boolean(this.employer) === Boolean(this.professional)
+      ) {
+        throw new Error("Historical payout requires its verified financial obligation and owner.");
+      }
+    } else if (!allowed.includes(this.eventCategory)) {
+      throw new Error("Paystack Transfer event category does not match its outcome.");
+    } else {
+      const employerWithdrawal = this.eventCategory.startsWith("employer_");
+
+      if (
+        !this.wallet ||
+        !this.transaction ||
+        !this.bankAccount ||
+        (employerWithdrawal
+          ? !this.employer || Boolean(this.professional)
+          : !this.professional || Boolean(this.employer))
+      ) {
+        throw new Error(
+          "A classified withdrawal requires its original wallet, transaction, bank account and owner."
+        );
+      }
+    }
+
+    if (!this.providerReference) {
+      throw new Error("Paystack Transfer event requires its provider reference.");
+    }
+  } else if (
+    this.eventCategory === "transfer_unresolved" ||
+    this.eventCategory === "financial_obligation_payout" ||
+    withdrawalCategories.includes(this.eventCategory)
+  ) {
+    throw new Error("Transfer category requires a supported Paystack Transfer event.");
+  }
+
+  /* ---------- HISTORICAL FINANCIAL OBLIGATIONS ---------- */
+
+  if (this.financialObligation) {
+    const isHistoricalDVAFunding =
+      this.provider === "paystack" &&
+      this.eventName === "charge.success" &&
+      this.eventCategory === "employer_wallet_funding";
+
+    const isHistoricalWithdrawalReversal =
+      this.provider === "paystack" &&
+      this.eventName === "transfer.reversed" &&
+      ["employer_withdrawal_reversal", "professional_withdrawal_reversal"].includes(
+        this.eventCategory
+      );
+
+    const isHistoricalCommercialPayment =
+      this.provider === "paystack" &&
+      this.eventName === "charge.success" &&
+      ["subscription_payment", "job_publication_purchase"].includes(this.eventCategory);
+
+    const isHistoricalRefund = this.provider === "paystack" &&
+      this.eventCategory === "employer_refund" && PAYSTACK_REFUND_EVENT_NAMES.includes(this.eventName);
+
+    const isHistoricalPayout =
+      transferEvent &&
+      this.eventCategory === "financial_obligation_payout";
+
+    if (!isHistoricalDVAFunding && !isHistoricalWithdrawalReversal && !isHistoricalCommercialPayment && !isHistoricalRefund && !isHistoricalPayout) {
+      throw new Error("Unsupported provider event financial obligation.");
+    }
+
+    if (this.isVerified !== true || this.status !== "processed") {
+      throw new Error(
+        "A provider event financial obligation requires a verified processed financial outcome."
+      );
+    }
+
+    if (
+      !this.wallet ||
+      !this.providerReference ||
+      !Number.isSafeInteger(this.amount) ||
+      this.amount <= 0
+    ) {
+      throw new Error(
+        "A provider event financial obligation requires complete financial identity."
+      );
+    }
+
+    const payload = this.normalizedPayload || {};
+
+    if (String(payload.financialObligationId || "") !== String(this.financialObligation)) {
+      throw new Error(
+        "Normalized financial obligation identity does not match the linked obligation."
+      );
+    }
+
+    if (isHistoricalDVAFunding) {
+      if (
+        !this.employer ||
+        !this.dva ||
+        this.transaction ||
+        this.professional ||
+        this.bankAccount
+      ) {
+        throw new Error(
+          "Historical DVA funding requires its original employer, wallet and DVA without a wallet credit transaction."
+        );
+      }
+    }
+
+    if (isHistoricalPayout) {
+      if (
+        this.dva ||
+        this.shift ||
+        this.shiftApplication ||
+        this.employerRefundBatch ||
+        this.employerRefundBatchLineId ||
+        this.providerRefundId ||
+        this.providerRefundReference ||
+        payload.historicalPayoutVerified !== true ||
+        !["success", "failed", "reversed"].includes(payload.verifiedPayoutStatus) ||
+        payload.payoutReference !== this.providerReference
+      ) {
+        throw new Error("Invalid verified historical payout disposition.");
+      }
+    }
+
+    if (isHistoricalRefund) {
+      if (!this.employer || !this.providerRefundId || this.professional || this.bankAccount ||
+          this.shift || this.shiftApplication || this.employerRefundBatch ||
+          this.employerRefundBatchLineId ||
+          payload.historicalRefundVerified !== true ||
+          !["pending", "processing", "needs_attention", "failed", "processed"]
+            .includes(payload.verifiedRefundStatus)) {
+        throw new Error("Historical refund requires its verified financial obligation disposition.");
+      }
+    }
+
+    if (isHistoricalCommercialPayment) {
+      if (
+        !this.employer || !this.transaction || this.professional || this.dva ||
+        this.bankAccount || this.shift || this.shiftApplication ||
+        this.employerRefundBatch || this.employerRefundBatchLineId ||
+        this.providerRefundId || this.providerRefundReference ||
+        payload.paymentFinalized !== false ||
+        payload.commercialReceiptCredited !== false ||
+        String(payload.paymentTransactionId || "") !== String(this.transaction)
+      ) {
+        throw new Error("Historical commercial receipt requires its original uncredited payment disposition.");
+      }
+    }
+
+    if (isHistoricalWithdrawalReversal) {
+      const employerWithdrawal = this.eventCategory === "employer_withdrawal_reversal";
+
+      if (
+        !this.transaction ||
+        !this.bankAccount ||
+        this.dva ||
+        (employerWithdrawal
+          ? !this.employer || Boolean(this.professional)
+          : !this.professional || Boolean(this.employer))
+      ) {
+        throw new Error(
+          "Historical withdrawal reversal requires its original withdrawal, wallet, bank account and owner."
+        );
+      }
+
+      if (
+        payload.withdrawalStatus !== "completed" ||
+        payload.withdrawalReservationReleased !== false ||
+        payload.withdrawalReversalCredited !== false ||
+        payload.reversalTransactionId != null ||
+        String(payload.withdrawalTransactionId || "") !== String(this.transaction)
+      ) {
+        throw new Error(
+          "Historical withdrawal reversal contains an inconsistent financial disposition."
+        );
+      }
+    }
+  } else if (this.normalizedPayload?.financialObligationId != null) {
+    throw new Error(
+      "Normalized financial obligation identity requires its corresponding financial obligation relationship."
+    );
+  }
+
+  /* ---------- Verification ---------- */
+
+  // Services supply audit timestamps; validation never invents them.
 
   if (this.isVerified && !this.verifiedAt) {
     throw new Error("Verified provider event requires its verification time.");
@@ -762,9 +1000,13 @@ providerEventSchema.pre("validate", function () {
     throw new Error("Unverified provider event cannot have a verification time.");
   }
 
-  if (["processing", "processed"].includes(this.status) && this.isVerified !== true) {
-    throw new Error("Only verified provider events may enter processing or processed status.");
+  if (["processing", "processed", "ignored"].includes(this.status) && this.isVerified !== true) {
+    throw new Error(
+      "Only verified provider events may enter processing, processed or ignored status."
+    );
   }
+
+  /* ---------- Processing history ---------- */
 
   const hasFirstAttempt = Boolean(this.processingStartedAt);
 
@@ -774,41 +1016,13 @@ providerEventSchema.pre("validate", function () {
     throw new Error("First and latest provider processing timestamps must be supplied together.");
   }
 
-  /*
-   * A ProviderEvent that has never entered processing
-   * must not contain processing history.
-   */
-
   if (this.status === "received" && hasFirstAttempt) {
     throw new Error("Received provider event cannot already contain processing history.");
   }
 
-  /*
-   * Unverified events never enter processing.
-   *
-   * The only supported terminal state for an unverified
-   * event is failed, representing rejection before
-   * processing begins.
-   */
-
   if (!this.isVerified && hasFirstAttempt) {
     throw new Error("Unverified provider event cannot contain processing history.");
   }
-
-  if (["processing", "processed", "ignored"].includes(this.status) && this.isVerified !== true) {
-    throw new Error(
-      "Only verified provider events may enter processing, processed or ignored status."
-    );
-  }
-
-  /*
-   * These states can only be reached after a successful
-   * processing claim.
-   *
-   * A verified failed event also represents a failed
-   * processing attempt and must therefore retain its
-   * processing history.
-   */
 
   const requiresProcessingHistory =
     ["processing", "processed", "ignored"].includes(this.status) ||
@@ -818,6 +1032,8 @@ providerEventSchema.pre("validate", function () {
     throw new Error("Provider event status requires processing history.");
   }
 
+  /* ---------- Processing ownership ---------- */
+
   if (this.status === "processing" && !this.processingClaimId) {
     throw new Error("Processing provider event requires a processing claim ID.");
   }
@@ -825,6 +1041,8 @@ providerEventSchema.pre("validate", function () {
   if (this.status !== "processing" && this.processingClaimId) {
     throw new Error("A processing claim must be cleared when its attempt ends.");
   }
+
+  /* ---------- Terminal states ---------- */
 
   const terminalFields = {
     processed: ["processedAt", null],
@@ -843,6 +1061,8 @@ providerEventSchema.pre("validate", function () {
       );
     }
   }
+
+  /* ---------- Retry state ---------- */
 
   if (this.nextRetryAt && this.status !== "failed") {
     throw new Error("Only failed provider events may have a next retry time.");
@@ -863,6 +1083,8 @@ providerEventSchema.pre("validate", function () {
   if (!this.isVerified && this.nextRetryAt) {
     throw new Error("Unverified provider event cannot be scheduled for processing retry.");
   }
+
+  /* ---------- Timestamp integrity ---------- */
 
   const dateFields = [
     "receivedAt",
@@ -889,7 +1111,7 @@ providerEventSchema.pre("validate", function () {
     }
   };
 
-  // Verification may precede recording. Processing must follow both.
+  // Processing must follow receipt and verification.
 
   assertOrder("receivedAt", "processingStartedAt");
 
@@ -904,6 +1126,8 @@ providerEventSchema.pre("validate", function () {
   }
 
   assertOrder("failedAt", "nextRetryAt");
+
+  /* ---------- Financial integrity ---------- */
 
   for (const field of ["amount", "providerFee", "netAmount"]) {
     if (!isOptionalNonNegativeInteger(this[field])) {

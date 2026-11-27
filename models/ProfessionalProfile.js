@@ -53,6 +53,7 @@ const PROTECTED_QUERY_PATHS = new Set([
   "rejectionReason",
 
   "accountStatus",
+  "closedAt",
   "accountStatusReason",
   "accountStatusUpdatedAt",
   "accountStatusUpdatedBy",
@@ -609,7 +610,7 @@ const professionalProfileSchema = new mongoose.Schema(
 
     accountStatus: {
       type: String,
-      enum: ["active", "restricted", "suspended"],
+      enum: ["active", "restricted", "suspended", "closed"],
       default: "active",
       required: true,
     },
@@ -629,6 +630,11 @@ const professionalProfileSchema = new mongoose.Schema(
     accountStatusUpdatedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
+      default: null,
+    },
+
+    closedAt: {
+      type: Date,
       default: null,
     },
 
@@ -784,7 +790,13 @@ professionalProfileSchema.index(
     licenceNumber: 1,
   },
   {
+    name: "unique_open_professional_licence",
     unique: true,
+    partialFilterExpression: {
+      accountStatus: {
+        $in: ["active", "restricted", "suspended"],
+      },
+    },
   }
 );
 
@@ -1198,6 +1210,29 @@ professionalProfileSchema.pre("validate", function () {
     }
   } else if (this.rejectionReason) {
     this.invalidate("rejectionReason", "Only rejected approval may retain a rejection reason.");
+  }
+
+  // ───────────────────────── ACCOUNT CLOSURE ─────────────────────────
+
+  if (this.accountStatus === "closed") {
+    if (!isValidDate(this.closedAt)) {
+      this.invalidate(
+        "closedAt",
+        "A closed professional profile must have a valid closure timestamp."
+      );
+    }
+
+    this.marketplaceStatus = "hidden";
+    this.availabilityStatus = "unavailable";
+  } else if (this.closedAt) {
+    this.invalidate(
+      "closedAt",
+      "A closure timestamp is only permitted for closed professional profiles."
+    );
+  }
+
+  if (isValidDate(this.closedAt) && isValidDate(this.createdAt) && this.closedAt < this.createdAt) {
+    this.invalidate("closedAt", "Closure cannot precede professional profile creation.");
   }
 
   // ───────────────────────── MARKETPLACE READINESS ─────────────────────────

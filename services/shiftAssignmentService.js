@@ -1058,7 +1058,11 @@ class ShiftAssignmentService {
       business: businessId,
       isActive: true,
     }).session(session);
-    const business = await EmployerProfile.findById(businessId).session(session);
+    const business = await EmployerProfile.findOneAndUpdate(
+      { _id: businessId, accountStatus: "active", cacVerificationStatus: "verified" },
+      { $inc: { __v: 1 } },
+      { session, new: true, timestamps: false }
+    );
     if (
       !branch ||
       !business ||
@@ -1110,12 +1114,16 @@ class ShiftAssignmentService {
     const businessId = this.objectId(shift.business, "business ID");
     const branchId = this.objectId(shift.branch, "branch ID");
 
-    const actor = await User.findOne({
-      _id: actorId,
-      role: "employer",
-      accountStatus: "active",
-      isVerified: true,
-    }).session(session);
+    const actor = await User.findOneAndUpdate(
+      {
+        _id: actorId,
+        role: "employer",
+        accountStatus: "active",
+        isVerified: true,
+      },
+      { $inc: { __v: 1 } },
+      { session, new: true, timestamps: false }
+    );
 
     const employer = await EmployerProfile.findById(businessId).session(session);
 
@@ -1124,12 +1132,16 @@ class ShiftAssignmentService {
     }
 
     if (actor && employer) {
-      const member = await EmployerMember.findOne({
-        user: actorId,
-        business: businessId,
-        accountStatus: "active",
-        isCurrent: true,
-      }).session(session);
+      const member = await EmployerMember.findOneAndUpdate(
+        {
+          user: actorId,
+          business: businessId,
+          accountStatus: "active",
+          isCurrent: true,
+        },
+        { $inc: { __v: 1 } },
+        { session, new: true, timestamps: false }
+      );
 
       if (
         member &&
@@ -1715,12 +1727,17 @@ class ShiftAssignmentService {
     if (!shift) throw this.error("Shift was not found.", "SHIFT_NOT_FOUND", 404);
     if (professionalId) {
       const professional = await ProfessionalProfile.findOneAndUpdate(
-        { _id: professionalId },
+        { _id: professionalId, accountStatus: "active" },
         { $inc: { __v: 1 } },
-        { new: true, session }
+        { new: true, session, timestamps: false }
       );
-      if (!professional)
-        throw this.error("Professional was not found.", "PROFESSIONAL_PROFILE_NOT_FOUND", 404);
+      if (!professional) {
+        throw this.error(
+          "The professional is not available for new applications or assignments.",
+          "PROFESSIONAL_NOT_ELIGIBLE_FOR_ASSIGNMENT",
+          403
+        );
+      }
     }
     return shift;
   }

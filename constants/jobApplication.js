@@ -1,13 +1,9 @@
 // constants/jobApplication.js
 
-/**
- * Job applications belong to permanent recruitment.
- *
- * They do not use Shift acceptance, assignment, attendance, settlement,
- * replacement or occurrence semantics.
- *
- * Publication expiry does not expire existing Job applications.
- */
+/* ─────────────────────────────── APPLICATION STATUSES ─────────────────────────────── */
+
+// Permanent recruitment is independent of Shift workflows.
+// Publication expiry does not expire existing applications.
 exports.JOB_APPLICATION_STATUSES = [
   "submitted",
   "under_review",
@@ -21,13 +17,7 @@ exports.JOB_APPLICATION_STATUSES = [
 
 /* ─────────────────────────────── ACTIVE / TERMINAL STATUSES ─────────────────────────────── */
 
-/**
- * Active statuses represent professionals who remain in the employer's
- * recruitment pipeline.
- *
- * Interview is a recruitment stage. Individual interview meetings belong
- * to Appointment records.
- */
+// Interview is a recruitment stage. Individual meetings belong to Appointment.
 exports.ACTIVE_JOB_APPLICATION_STATUSES = [
   "submitted",
   "under_review",
@@ -38,11 +28,7 @@ exports.ACTIVE_JOB_APPLICATION_STATUSES = [
 
 exports.TERMINAL_JOB_APPLICATION_STATUSES = ["hired", "rejected", "withdrawn"];
 
-/**
- * A professional may withdraw while their candidacy remains active.
- *
- * Terminal applications cannot be withdrawn through the ordinary workflow.
- */
+// Only active applications may be withdrawn.
 exports.WITHDRAWABLE_JOB_APPLICATION_STATUSES = [
   "submitted",
   "under_review",
@@ -64,22 +50,8 @@ exports.EMPLOYER_JOB_APPLICATION_REVIEW_STATUSES = [
 
 /* ─────────────────────────────── STATUS TRANSITIONS ─────────────────────────────── */
 
-/**
- * The normal recruitment path is:
- *
- * submitted
- * → under_review
- * → shortlisted
- * → interview
- * → offered
- * → hired
- *
- * Employers are not required to manufacture stages that did not actually
- * occur. A candidate may therefore move directly between certain later
- * recruitment stages where appropriate.
- *
- * Terminal outcomes do not transition through the ordinary workflow.
- */
+// Intermediate stages may be skipped where appropriate.
+// Terminal outcomes cannot transition through ordinary workflows.
 exports.JOB_APPLICATION_ALLOWED_TRANSITIONS = {
   submitted: ["under_review", "shortlisted", "interview", "rejected", "withdrawn"],
 
@@ -98,12 +70,7 @@ exports.JOB_APPLICATION_ALLOWED_TRANSITIONS = {
 
 /* ─────────────────────────────── SCREENING ─────────────────────────────── */
 
-/**
- * Screening outcomes assist employer review.
- *
- * A professional who does not meet a required screening criterion is flagged
- * rather than automatically rejected.
- */
+// Screening flags candidates without automatically rejecting them.
 exports.JOB_APPLICATION_SCREENING_OUTCOMES = [
   "not_evaluated",
   "meets_required_criteria",
@@ -138,17 +105,10 @@ exports.JOB_APPLICATION_WITHDRAWAL_REASONS = [
 
 /* ─────────────────────────────── ACTORS ─────────────────────────────── */
 
-/**
- * Job application actors are limited to:
- *
- * - professional: candidate-owned actions such as submission and withdrawal;
- * - employer: recruitment decisions and pipeline transitions;
- * - system: automatic lifecycle consequences such as rejecting remaining
- *   active applications when recruitment closes or all vacancies are filled.
- *
- * Platform admins may inspect Job applications but do not act as recruitment
- * decision-makers on behalf of employers.
- */
+// Professional: submission and withdrawal.
+// Employer: recruitment decisions.
+// System: automatic lifecycle outcomes.
+// Platform administrators have read-only oversight.
 exports.JOB_APPLICATION_ACTOR_ROLES = ["professional", "employer", "system"];
 
 /* ─────────────────────────────── TEXT LIMITS ─────────────────────────────── */

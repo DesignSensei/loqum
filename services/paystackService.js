@@ -1953,6 +1953,169 @@ class PaystackService {
     return response.data;
   }
 
+  static normalizeDedicatedAccountId(value) {
+    const id = PaystackService.normalizeProviderId(value);
+
+    if (!id) {
+      throw PaystackService.createPaystackError({
+        message: "A valid Paystack dedicated account ID is required.",
+        code: "PAYSTACK_DVA_ID_REQUIRED",
+        statusCode: 400,
+      });
+    }
+
+    return id;
+  }
+
+  static async fetchDedicatedVirtualAccount(dedicatedAccountId) {
+    const id = PaystackService.normalizeDedicatedAccountId(dedicatedAccountId);
+
+    const response = await PaystackService.request({
+      method: "get",
+      path: `/dedicated_account/${encodeURIComponent(id)}`,
+    });
+
+    const account = response.data;
+
+    if (
+      !account ||
+      typeof account !== "object" ||
+      Array.isArray(account) ||
+      PaystackService.normalizeProviderId(account.id) !== id ||
+      typeof account.assigned !== "boolean" ||
+      typeof account.active !== "boolean"
+    ) {
+      throw PaystackService.createPaystackError({
+        message: "Paystack returned an invalid dedicated account response.",
+        code: "INVALID_PAYSTACK_DVA_RESPONSE",
+        statusCode: 502,
+        providerResponse: account || null,
+      });
+    }
+
+    return account;
+  }
+
+  static async deactivateDedicatedVirtualAccount({
+    dedicatedAccountId,
+    expectedCustomerId,
+    expectedCustomerCode,
+    expectedAccountNumber,
+    expectedCurrency,
+    expectedMode,
+  } = {}) {
+    const id = PaystackService.normalizeDedicatedAccountId(dedicatedAccountId);
+
+    const customerId = PaystackService.normalizeProviderId(expectedCustomerId);
+    const customerCode = PaystackService.cleanString(expectedCustomerCode);
+    const accountNumber = PaystackService.cleanString(expectedAccountNumber);
+    const currency = PaystackService.cleanString(expectedCurrency)?.toUpperCase();
+
+    if (
+      !customerId ||
+      !customerCode ||
+      !accountNumber ||
+      !currency ||
+      !/^[A-Z]{3}$/.test(currency) ||
+      !["test", "live"].includes(expectedMode)
+    ) {
+      throw PaystackService.createPaystackError({
+        message: "Complete DVA ownership details are required for deactivation.",
+        code: "PAYSTACK_DVA_DEACTIVATION_IDENTITY_REQUIRED",
+        statusCode: 400,
+      });
+    }
+
+    if (PaystackService.getMode() !== expectedMode) {
+      throw PaystackService.createPaystackError({
+        message: "The DVA belongs to a different Paystack environment.",
+        code: "PAYSTACK_DVA_DEACTIVATION_MODE_MISMATCH",
+        statusCode: 409,
+      });
+    }
+
+    const assertAccountIdentity = (account, requireCustomer = false) => {
+      if (
+        !account ||
+        typeof account !== "object" ||
+        Array.isArray(account) ||
+        PaystackService.normalizeProviderId(account.id) !== id ||
+        PaystackService.cleanString(account.account_number) !== accountNumber ||
+        PaystackService.cleanString(account.currency)?.toUpperCase() !== currency ||
+        typeof account.assigned !== "boolean" ||
+        typeof account.active !== "boolean"
+      ) {
+        throw PaystackService.createPaystackError({
+          message: "Dedicated account identity could not be verified.",
+          code: "PAYSTACK_DVA_DEACTIVATION_IDENTITY_MISMATCH",
+          statusCode: 409,
+          providerResponse: account || null,
+        });
+      }
+
+      const returnedCustomerId = PaystackService.normalizeProviderId(account.customer?.id);
+
+      const returnedCustomerCode = PaystackService.cleanString(account.customer?.customer_code);
+
+      if (
+        (requireCustomer && (!returnedCustomerId || !returnedCustomerCode)) ||
+        (returnedCustomerId && returnedCustomerId !== customerId) ||
+        (returnedCustomerCode && returnedCustomerCode !== customerCode)
+      ) {
+        throw PaystackService.createPaystackError({
+          message: "Dedicated account customer identity does not match.",
+          code: "PAYSTACK_DVA_DEACTIVATION_CUSTOMER_MISMATCH",
+          statusCode: 409,
+          providerResponse: account,
+        });
+      }
+    };
+
+    const buildConfirmation = (account, alreadyUnassigned) => ({
+      dedicatedAccountId: id,
+      customerId,
+      customerCode,
+      accountNumber,
+      currency,
+      assigned: false,
+      active: account.active,
+      mode: expectedMode,
+      alreadyUnassigned,
+      confirmationSource: alreadyUnassigned ? "provider_fetch" : "provider_deactivation",
+      raw: account,
+    });
+
+    // Reconcile before submitting a deactivation request.
+    const existing = await PaystackService.fetchDedicatedVirtualAccount(id);
+
+    assertAccountIdentity(existing, existing.assigned === true);
+
+    // Recover an earlier successful unassignment without repeating it.
+    if (existing.assigned === false) {
+      return buildConfirmation(existing, true);
+    }
+
+    const response = await PaystackService.request({
+      method: "delete",
+      path: `/dedicated_account/${encodeURIComponent(id)}`,
+    });
+
+    const account = response.data;
+
+    assertAccountIdentity(account);
+
+    if (account.assigned !== false) {
+      throw PaystackService.createPaystackError({
+        message: "Paystack DVA unassignment remains unconfirmed.",
+        code: "PAYSTACK_DVA_DEACTIVATION_UNCONFIRMED",
+        statusCode: 502,
+        providerResponse: account,
+      });
+    }
+
+    return buildConfirmation(account, false);
+  }
+
   static async fetchDedicatedAccountProviders() {
     const response = await PaystackService.request({
       method: "get",

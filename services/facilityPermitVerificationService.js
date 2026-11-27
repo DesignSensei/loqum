@@ -336,13 +336,31 @@ class FacilityPermitVerificationService {
    * Incrementing __v guarantees a write even when two transactions
    * have identical timestamps. This is retained for real writes.
    */
-  static async fenceBranch({ businessId, branchId, session }) {
+  static async fenceBranch({ businessId, branchId, session, allowHistoricalRevocation = false }) {
     if (!session || typeof session.inTransaction !== "function" || !session.inTransaction()) {
       throw this.error(
         "An active transaction is required for branch fencing.",
         "FACILITY_PERMIT_TRANSACTION_REQUIRED",
         500
       );
+    }
+
+    // Coordinate permit writes with the business closure transaction.
+    // Historical administrative revocation remains separately permitted.
+    if (!allowHistoricalRevocation) {
+      const business = await EmployerProfile.findOneAndUpdate(
+        { _id: businessId, accountStatus: { $in: ["active", "restricted", "suspended"] } },
+        { $inc: { __v: 1 } },
+        { session, new: true }
+      ).select("_id");
+
+      if (!business) {
+        throw this.error(
+          "This business cannot change facility permits.",
+          "FACILITY_PERMIT_BUSINESS_INELIGIBLE",
+          409
+        );
+      }
     }
 
     const branch = await Branch.findOneAndUpdate(
@@ -860,6 +878,7 @@ class FacilityPermitVerificationService {
           businessId,
           branchId,
           session,
+          allowHistoricalRevocation: true,
         });
 
         const permit = await FacilityPermit.findOne({
@@ -1136,6 +1155,10 @@ class FacilityPermitVerificationService {
           );
         }
 
+        if (business.accountStatus === "closed") {
+          return { activatedPermitIds: [] };
+        }
+
         this.getRequirementsForBranch({
           business,
           branch,
@@ -1151,17 +1174,22 @@ class FacilityPermitVerificationService {
       // Results remain local to this transaction attempt.
       const activated = [];
 
-      const branch = await this.fenceBranch({
-        businessId,
-        branchId,
-        session: transactionSession,
-      });
-
       const business = await EmployerProfile.findById(businessId).session(transactionSession);
 
       if (!business) {
         throw this.error("Employer business not found.", "FACILITY_PERMIT_BUSINESS_NOT_FOUND", 404);
       }
+
+      // Closed businesses must never acquire a current permit again.
+      if (business.accountStatus === "closed") {
+        return { activatedPermitIds: [] };
+      }
+
+      const branch = await this.fenceBranch({
+        businessId,
+        branchId,
+        session: transactionSession,
+      });
 
       const requirements = this.getRequirementsForBranch({
         business,

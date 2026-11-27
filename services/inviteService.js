@@ -408,11 +408,14 @@ class InviteService {
 
     const normalizedEmail = InviteService.normalizeEmail(email);
 
-    if (!normalizedEmail) {
-      throw new Error("Email is required.");
+    if (!normalizedEmail || normalizedEmail.endsWith("@closed.loqum.invalid")) {
+      throw new Error("A valid invitation email is required.");
     }
 
-    const business = await EmployerProfile.findById(businessId).select("businessName");
+    const business = await EmployerProfile.findOne({
+      _id: businessId,
+      accountStatus: "active",
+    }).select("businessName");
 
     if (!business) {
       throw new Error("Business profile not found.");
@@ -578,8 +581,12 @@ class InviteService {
 
     InviteService.validateRole(invite.role);
 
-    if (!invite.business) {
-      throw new Error("The business associated with this invite no longer exists.");
+    if (!invite.business || invite.business.accountStatus !== "active") {
+      throw new Error("The business associated with this invite is not active.");
+    }
+
+    if (InviteService.normalizeEmail(invite.email).endsWith("@closed.loqum.invalid")) {
+      throw new Error("This invitation has an invalid email address.");
     }
 
     if (InviteService.isAdminRole(invite.role) && invite.branch) {
@@ -906,6 +913,18 @@ class InviteService {
 
     try {
       await session.withTransaction(async () => {
+        // Coordinate acceptance with final business closure through a
+        // write to the same EmployerProfile document.
+        const activeBusiness = await EmployerProfile.findOneAndUpdate(
+          { _id: businessId, accountStatus: "active" },
+          { $inc: { __v: 1 } },
+          { session, new: true }
+        ).select("_id");
+
+        if (!activeBusiness) {
+          throw new Error("The business is no longer eligible to accept invitations.");
+        }
+
         const acceptedInvite = await Invite.findOneAndUpdate(
           {
             _id: invite._id,
@@ -1100,7 +1119,10 @@ class InviteService {
 
     InviteService.validateRole(invite.role);
 
-    const business = await EmployerProfile.findById(businessId).select("businessName");
+    const business = await EmployerProfile.findOne({
+      _id: businessId,
+      accountStatus: "active",
+    }).select("businessName");
 
     if (!business) {
       throw new Error("Business profile not found.");
@@ -1188,11 +1210,14 @@ class InviteService {
 
     const normalizedEmail = InviteService.normalizeEmail(email);
 
-    if (!normalizedEmail) {
-      throw new Error("Email is required.");
+    if (!normalizedEmail || normalizedEmail.endsWith("@closed.loqum.invalid")) {
+      throw new Error("A valid invitation email is required.");
     }
 
-    const business = await EmployerProfile.findById(businessId).select("businessName");
+    const business = await EmployerProfile.findOne({
+      _id: businessId,
+      accountStatus: "active",
+    }).select("businessName");
 
     if (!business) {
       throw new Error("Business profile not found.");
@@ -1269,6 +1294,38 @@ class InviteService {
   }
 
   // ───────────────────── REVOKE INVITE ─────────────────────
+
+  /* ---------- Business closure offboarding ---------- */
+
+  static async revokeForBusinessClosure({ businessId, actorUserId, session }) {
+    if (
+      !session?.inTransaction?.() ||
+      !mongoose.isValidObjectId(businessId) ||
+      !mongoose.isValidObjectId(actorUserId)
+    ) {
+      throw new Error("Business closure requires valid ownership and an active transaction.");
+    }
+
+    const business = await EmployerProfile.findOne({
+      _id: businessId,
+      user: actorUserId,
+      accountStatus: "closed",
+    }).select("_id closedAt").session(session);
+
+    if (!business?.closedAt) {
+      throw new Error("The business must be marked closed within the final closure transaction.");
+    }
+
+    // Expired invitations are also revocable because they can otherwise
+    // be resent. Accepted invitations remain historical records.
+    const result = await Invite.updateMany(
+      { business: businessId, status: { $in: ["pending", "expired"] } },
+      { $set: { status: "revoked", revokedAt: new Date() } },
+      { session, runValidators: true }
+    );
+
+    return { invitationsRevoked: result.modifiedCount };
+  }
 
   static async revokeInvite({ inviteId, businessId }) {
     const invite = await InviteService.getInviteForBusiness({

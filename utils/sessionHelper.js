@@ -1,5 +1,12 @@
 // utils/sessionHelper.js
 
+const User = require("../models/User");
+
+const SIGN_IN_PERMITTED_STATUSES = new Set([
+  "active",
+  "restricted",
+]);
+
 exports.saveSession = (req) => {
   return new Promise((resolve, reject) => {
     req.session.save((err) => {
@@ -10,9 +17,25 @@ exports.saveSession = (req) => {
   });
 };
 
-exports.loginUserToRequest = (req, user) => {
+exports.loginUserToRequest = async (req, user) => {
+  if (!req || !user?._id || !user.email) {
+    throw new Error("A valid account is required to establish a session.");
+  }
+
+  const currentUser = await User.findById(user._id)
+    .select("-password");
+
+  if (
+    !currentUser ||
+    !SIGN_IN_PERMITTED_STATUSES.has(currentUser.accountStatus) ||
+    currentUser.email !== user.email ||
+    currentUser.email.endsWith("@closed.loqum.invalid")
+  ) {
+    throw new Error("This account is not currently permitted to sign in.");
+  }
+
   return new Promise((resolve, reject) => {
-    req.login(user, (err) => {
+    req.login(currentUser, (err) => {
       if (err) return reject(err);
 
       return resolve();
@@ -40,6 +63,10 @@ exports.destroySessionAndRedirect = (req, res, next, redirectTo) => {
 };
 
 exports.getSessionUser = (user) => {
+  if (!user || user.accountStatus === "closed") {
+    return null;
+  }
+
   return {
     _id: user._id,
     firstName: user.firstName,
@@ -60,27 +87,68 @@ exports.getSessionUser = (user) => {
 };
 
 exports.getCurrentUser = (req) => {
-  return req.user || req.session.user || null;
+  if (
+    !req ||
+    typeof req.isAuthenticated !== "function" ||
+    !req.isAuthenticated() ||
+    !req.user ||
+    req.user.accountStatus === "closed"
+  ) {
+    return null;
+  }
+
+  return req.user;
 };
 
 exports.refreshSessionUser = async (req, user) => {
-  if (!req || !user) return;
+  if (!req?.session || !user?._id || !req.user?._id) {
+    return;
+  }
+
+  if (
+    typeof req.isAuthenticated !== "function" ||
+    !req.isAuthenticated()
+  ) {
+    return;
+  }
+
+  if (String(req.user._id) !== String(user._id)) {
+    throw new Error("Session identity cannot be replaced.");
+  }
+
+  // A closed account cannot retain a usable session snapshot.
+
+  if (user.accountStatus === "closed") {
+    delete req.session.user;
+    delete req.session.otpContext;
+
+    req.user.accountStatus = "closed";
+
+    await exports.saveSession(req);
+
+    return;
+  }
+
+  if (req.user.accountStatus === "closed") {
+    throw new Error("A closed session cannot be restored.");
+  }
 
   req.session.user = exports.getSessionUser(user);
 
-  if (req.user) {
-    req.user.firstName = user.firstName;
-    req.user.lastName = user.lastName;
-    req.user.displayName = user.displayName;
-    req.user.legalNameSource = user.legalNameSource;
-    req.user.email = user.email;
-    req.user.photo = user.photo;
-    req.user.authProvider = user.authProvider;
-    req.user.accountStatus = user.accountStatus;
-    req.user.isVerified = user.isVerified;
-    req.user.isOnboarded = user.isOnboarded;
-    req.user.twoFactorEnabled = user.twoFactorEnabled;
-  }
+  req.user.firstName = user.firstName;
+  req.user.lastName = user.lastName;
+  req.user.displayName = user.displayName;
+  req.user.legalNameSource = user.legalNameSource;
+  req.user.email = user.email;
+  req.user.photo = user.photo;
+  req.user.authProvider = user.authProvider;
+  req.user.accountStatus = user.accountStatus;
+  req.user.isVerified = user.isVerified;
+  req.user.isOnboarded = user.isOnboarded;
+  req.user.twoFactorEnabled = user.twoFactorEnabled;
+  req.user.role = user.role;
+  req.user.professionalProfile = user.professionalProfile;
+  req.user.employerProfile = user.employerProfile;
 
   await exports.saveSession(req);
 };

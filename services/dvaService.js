@@ -3,8 +3,13 @@
 const DVA = require("../models/DVA");
 const EmployerProfile = require("../models/EmployerProfile");
 const User = require("../models/User");
+const Wallet = require("../models/Wallet");
+
 const PaystackService = require("./paystackService");
 const WalletService = require("./walletService");
+
+const { createServiceError } = require("./helpers/serviceErrorHelper");
+
 const logger = require("../utils/logger");
 
 const DVA_USER_RETRY_WAIT_HOURS = 24;
@@ -31,15 +36,20 @@ class DVAService {
     return String(message || "DVA creation failed.").slice(0, 300);
   }
 
-  static createAssignmentError(message, code, { retryable = false, statusCode = 409 } = {}) {
-    const error = new Error(message);
-
-    error.name = "DVAAssignmentError";
-    error.code = code;
-    error.retryable = retryable;
-    error.statusCode = statusCode;
-
-    return error;
+  static createAssignmentError(
+    message,
+    code,
+    { retryable = false, statusCode = 409, details = null, cause = null } = {}
+  ) {
+    return createServiceError({
+      name: "DVAAssignmentError",
+      message,
+      code,
+      statusCode,
+      retryable,
+      details,
+      cause,
+    });
   }
 
   /* ---------- Retry helpers ---------- */
@@ -58,27 +68,57 @@ class DVAService {
     return Date.now() - new Date(anchor).getTime() >= DVA_USER_RETRY_WAIT_MS;
   }
 
+  static isNeverDispatchedAssignment(dva) {
+    if (!dva) {
+      return false;
+    }
+
+    const metadata = dva.metadata || {};
+
+    return (
+      metadata.assignmentDispatchState === "prepared" &&
+      metadata.assignmentDispatchStartedAt == null &&
+      metadata.assignmentAcknowledgedAt == null &&
+      metadata.submitUncertainAt == null &&
+      metadata.lastAssignmentEventId == null &&
+      metadata.assignmentSubmissionOutcome == null &&
+      dva.activatedAt == null &&
+      dva.paystackDedicatedAccountId == null &&
+      dva.paystackCustomerId == null &&
+      dva.paystackCustomerCode == null &&
+      dva.accountNumber == null
+    );
+  }
+
   static canRetryDVA(dva) {
     if (!dva) {
       return true;
     }
 
-    if (dva.status === "active" || dva.status === "deactivated") {
+    if (dva.retirementStartedAt || !["pending", "failed"].includes(dva.status)) {
       return false;
     }
 
-    if (DVAService.hasUserRetryWindowPassed(dva)) {
+    // A locally prepared instruction has never reached Paystack.
+    if (DVAService.isNeverDispatchedAssignment(dva)) {
       return true;
     }
 
-    return (
-      ["failed", "pending"].includes(dva.status) &&
-      process.env.NODE_ENV === "development" &&
-      PaystackService.isTestMode() &&
-      process.env.ALLOW_DVA_IMMEDIATE_TEST_RETRY === "true"
-    );
-  }
+    // Previously submitted pending instructions may be reconciled,
+    // but must never be automatically resubmitted.
+    if (dva.status === "pending") {
+      return (
+        DVAService.hasUserRetryWindowPassed(dva) ||
+        (process.env.NODE_ENV === "development" &&
+          PaystackService.isTestMode() &&
+          process.env.ALLOW_DVA_IMMEDIATE_TEST_RETRY === "true")
+      );
+    }
 
+    // A failed status does not establish that an earlier provider
+    // submission created no dedicated account.
+    return false;
+  }
   static getRetryAvailableAt(dva) {
     const anchor = DVAService.getRetryAnchorDate(dva);
 
@@ -104,7 +144,7 @@ class DVAService {
   }
 
   static getProviderUnavailableMessage() {
-    return "Wallet bank account setup is not available for this business yet. We will complete setup once the payment provider activates this feature.";
+    return "Dedicated virtual account setup is not available for this business yet. We will complete setup once the payment provider activates this feature.";
   }
 
   static getPreferredProviderSlug() {
@@ -119,6 +159,91 @@ class DVAService {
     }
 
     return preferred.toLowerCase();
+  }
+
+  static async claimEmployerDVAAssignmentDispatch({
+    dvaId,
+    userId,
+    employerProfileId,
+    walletId,
+    requestedAt,
+    assignmentEmail,
+    assignmentMode,
+  } = {}) {
+    if (
+      !dvaId ||
+      !userId ||
+      !employerProfileId ||
+      !walletId ||
+      !requestedAt ||
+      !assignmentEmail ||
+      !["test", "live"].includes(assignmentMode)
+    ) {
+      throw DVAService.createAssignmentError(
+        "Complete assignment identity is required before provider submission.",
+        "DVA_ASSIGNMENT_DISPATCH_IDENTITY_REQUIRED",
+        { statusCode: 400 }
+      );
+    }
+
+    if (PaystackService.getMode() !== assignmentMode) {
+      throw DVAService.createAssignmentError(
+        "Paystack environment changed before assignment submission.",
+        "DVA_ASSIGNMENT_DISPATCH_MODE_MISMATCH"
+      );
+    }
+
+    const dispatchStartedAt = new Date();
+
+    const claimed = await DVA.findOneAndUpdate(
+      {
+        _id: dvaId,
+        ownerUser: userId,
+        employer: employerProfileId,
+        wallet: walletId,
+        provider: "paystack",
+
+        status: "pending",
+        requestedAt,
+
+        retirementStartedAt: null,
+        retirementConfirmedAt: null,
+        retirementResolution: null,
+
+        activatedAt: null,
+        paystackDedicatedAccountId: null,
+        paystackCustomerId: null,
+        paystackCustomerCode: null,
+        accountNumber: null,
+
+        "metadata.assignmentEmail": assignmentEmail,
+        "metadata.assignmentMode": assignmentMode,
+
+        "metadata.assignmentDispatchState": "prepared",
+        "metadata.assignmentDispatchStartedAt": null,
+        "metadata.assignmentAcknowledgedAt": null,
+        "metadata.assignmentSubmissionOutcome": null,
+        "metadata.submitUncertainAt": null,
+        "metadata.lastAssignmentEventId": null,
+      },
+      {
+        $set: {
+          "metadata.assignmentDispatchState": "dispatch_started",
+
+          "metadata.assignmentDispatchStartedAt": dispatchStartedAt,
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
+
+    return {
+      dva: claimed,
+      claimed: Boolean(claimed),
+      dispatchStartedAt: claimed ? dispatchStartedAt : null,
+    };
   }
 
   /* ---------- Extract provider account details ---------- */
@@ -163,6 +288,7 @@ class DVAService {
 
   static validateDVAData(data) {
     if (
+      !data.paystackCustomerId ||
       !data.paystackCustomerCode ||
       !data.paystackDedicatedAccountId ||
       !data.accountNumber ||
@@ -198,6 +324,153 @@ class DVAService {
     return null;
   }
 
+  /* ---------- Re-registration customer identity ---------- */
+
+  static historicalIdentityScope(email, employerProfileId) {
+    return {
+      provider: "paystack",
+      employer: { $ne: employerProfileId },
+      $or: [
+        { "metadata.assignmentEmail": email },
+        { "metadata.requestedWith.email": email },
+      ],
+    };
+  }
+
+  static customerMatchesAssignment(customer, dva) {
+    const metadata = DVAService.parsePaystackMetadata(customer?.metadata);
+    const requested = dva.metadata?.requestedWith || {};
+
+    return Boolean(
+      metadata &&
+      DVAService.cleanNumber(customer.id) &&
+      DVAService.cleanString(customer.customer_code) &&
+      DVAService.cleanString(customer.email)?.toLowerCase() ===
+        dva.metadata?.assignmentEmail &&
+      DVAService.cleanString(customer.domain)?.toLowerCase() ===
+        dva.metadata?.assignmentMode &&
+      String(metadata.userId) === String(dva.ownerUser) &&
+      String(metadata.employerProfileId) === String(dva.employer) &&
+      String(metadata.walletId) === String(dva.wallet) &&
+      String(requested.userId) === String(dva.ownerUser) &&
+      String(requested.employerProfileId) === String(dva.employer) &&
+      String(requested.walletId) === String(dva.wallet) &&
+      metadata.countryCode === dva.countryCode &&
+      metadata.currency === dva.currency
+    );
+  }
+
+  static async assertHistoricalIdentityRetired(
+    email,
+    employerProfileId,
+    session = null
+  ) {
+    const scope = DVAService.historicalIdentityScope(
+      email,
+      employerProfileId
+    );
+
+    const unsafe = await DVA.exists({
+      $and: [
+        scope,
+        {
+          $or: [
+            { status: { $ne: "deactivated" } },
+            { retirementStartedAt: null },
+            { retirementConfirmedAt: null },
+            { deactivatedAt: null },
+            {
+              retirementResolution: {
+                $nin: [
+                  "provider_unassigned",
+                  "assignment_never_created",
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    }).session(session);
+
+    if (unsafe) {
+      throw DVAService.createAssignmentError(
+        "A previous dedicated account requires provider reconciliation before setup can continue.",
+        "DVA_ASSIGNMENT_HISTORICAL_IDENTITY_CONFLICT"
+      );
+    }
+
+    return Boolean(
+      await DVA.exists(scope).session(session)
+    );
+  }
+
+  static async verifyFreshCustomerIdentity(dva) {
+    const email = dva.metadata?.assignmentEmail;
+    const mode = dva.metadata?.assignmentMode;
+
+    if (!email || mode !== PaystackService.getMode()) {
+      throw DVAService.createAssignmentError(
+        "Dedicated account environment or email changed.",
+        "DVA_ASSIGNMENT_PREPARED_IDENTITY_MISMATCH"
+      );
+    }
+
+    let customer;
+
+    try {
+      customer = await PaystackService.fetchPaystackCustomer(email);
+    } catch (error) {
+      // Only an explicit provider customer-not-found response
+      // is accepted. A generic 404, timeout, authorization failure
+      // or provider outage is not proof of customer absence.
+
+      const message = String(
+        error.providerResponse?.message || ""
+      ).trim();
+
+      if (
+        error.providerStatusCode === 404 &&
+        error.providerResponse?.status === false &&
+        /^customer (?:not found|does not exist)[.!]?$/i.test(message)
+      ) {
+        return;
+      }
+
+      throw DVAService.createAssignmentError(
+        "Paystack customer identity could not be confirmed. Retry after provider reconciliation.",
+        "DVA_ASSIGNMENT_CUSTOMER_VERIFICATION_UNAVAILABLE",
+        {
+          statusCode: 503,
+          retryable: true,
+        }
+      );
+    }
+
+    const customerId = DVAService.cleanNumber(customer?.id);
+    const customerCode = DVAService.cleanString(
+      customer?.customer_code
+    );
+
+    if (
+      !DVAService.customerMatchesAssignment(customer, dva) ||
+      customer.dedicated_account != null ||
+      customer.dedicatedAccount != null ||
+      await DVA.exists({
+        provider: "paystack",
+        _id: { $ne: dva._id },
+        $or: [
+          { paystackCustomerId: customerId },
+          { paystackCustomerCode: customerCode },
+        ],
+      })
+    ) {
+      throw DVAService.createAssignmentError(
+        "Paystack customer identity requires support reconciliation before a new account can be assigned.",
+        "DVA_ASSIGNMENT_HISTORICAL_IDENTITY_CONFLICT"
+      );
+    }
+  }
+
   /* ---------- Reconcile an existing pending DVA ---------- */
 
   static async reconcilePendingEmployerDVA({ userId, employerProfileId }) {
@@ -223,13 +496,21 @@ class DVAService {
       return DVAService.getEmployerDVA({ employerProfileId });
     }
 
-    const email = PaystackService.normalizeEmail(user.email);
+    if (
+      DVAService.isNeverDispatchedAssignment(dva) ||
+      dva.retirementStartedAt
+    ) {
+      return dva;
+    }
+
+    const email = DVAService.cleanString(dva.metadata?.assignmentEmail)?.toLowerCase();
     const mode = PaystackService.getMode();
     const requested = dva.metadata?.requestedWith || {};
 
     // Verify the original Loqum assignment.
     if (
-      DVAService.cleanString(dva.metadata?.assignmentEmail)?.toLowerCase() !== email ||
+      !email ||
+      DVAService.cleanString(requested.email)?.toLowerCase() !== email ||
       dva.metadata?.assignmentMode !== mode ||
       String(requested.userId) !== String(user._id) ||
       String(requested.employerProfileId) !== String(employer._id) ||
@@ -394,7 +675,6 @@ class DVAService {
           lastSyncedAt: now,
           failedAt: null,
           failureReason: null,
-          deactivatedAt: null,
           "metadata.lastReconciledAt": now,
           "metadata.reconciliationSource": "verified_paystack_api",
         },
@@ -413,6 +693,753 @@ class DVAService {
     logger.info(`Paystack DVA reconciled for employer profile: ${employer._id}`);
 
     return updated;
+  }
+
+  /* ---------- DVA retirement ---------- */
+
+  static async beginEmployerDVARetirement({ dvaId, employerProfileId, walletId, session } = {}) {
+    if (!session?.inTransaction?.()) {
+      throw DVAService.createAssignmentError(
+        "DVA retirement requires an active database transaction.",
+        "DVA_RETIREMENT_TRANSACTION_REQUIRED"
+      );
+    }
+
+    if (!dvaId || !employerProfileId || !walletId) {
+      throw DVAService.createAssignmentError(
+        "Complete DVA ownership details are required.",
+        "DVA_RETIREMENT_IDENTITY_REQUIRED",
+        { statusCode: 400 }
+      );
+    }
+
+    const selector = {
+      _id: dvaId,
+      employer: employerProfileId,
+      wallet: walletId,
+      provider: "paystack",
+    };
+
+    const dva = await DVA.findOne(selector).session(session);
+
+    if (!dva) {
+      throw DVAService.createAssignmentError(
+        "Employer DVA not found.",
+        "DVA_RETIREMENT_NOT_FOUND",
+        { statusCode: 404 }
+      );
+    }
+
+    if (["retiring", "deactivated"].includes(dva.status)) {
+      return {
+        dva,
+        idempotent: true,
+      };
+    }
+
+    if (
+      !["pending", "active", "failed"].includes(dva.status) ||
+      dva.retirementStartedAt ||
+      dva.retirementConfirmedAt ||
+      dva.retirementResolution
+    ) {
+      throw DVAService.createAssignmentError(
+        "DVA is not eligible for retirement.",
+        "DVA_RETIREMENT_STATUS_INVALID"
+      );
+    }
+
+    const wallet = await Wallet.findOne({
+      _id: walletId,
+      ownerType: "employer",
+      employer: employerProfileId,
+      countryCode: dva.countryCode,
+      currency: dva.currency,
+    }).session(session);
+
+    if (!wallet) {
+      throw DVAService.createAssignmentError(
+        "DVA does not belong to the original employer wallet.",
+        "DVA_RETIREMENT_WALLET_MISMATCH"
+      );
+    }
+
+    const now = new Date();
+
+    const neverDispatched =
+      ["pending", "failed"].includes(dva.status) && DVAService.isNeverDispatchedAssignment(dva);
+
+    const retirementFilter = {
+      ...selector,
+
+      status: dva.status,
+
+      retirementStartedAt: null,
+      retirementConfirmedAt: null,
+      retirementResolution: null,
+    };
+
+    const retirementUpdate = {
+      status: "retiring",
+
+      isDefault: false,
+
+      retirementStartedAt: now,
+
+      "metadata.retirementPreviousStatus": dva.status,
+    };
+
+    // Assignment never created
+
+    if (neverDispatched) {
+      Object.assign(retirementFilter, {
+        requestedAt: dva.requestedAt,
+
+        activatedAt: null,
+
+        paystackDedicatedAccountId: null,
+
+        paystackCustomerId: null,
+
+        paystackCustomerCode: null,
+
+        accountNumber: null,
+
+        "metadata.assignmentDispatchState": "prepared",
+
+        "metadata.assignmentDispatchStartedAt": null,
+
+        "metadata.assignmentAcknowledgedAt": null,
+
+        "metadata.assignmentSubmissionOutcome": null,
+
+        "metadata.submitUncertainAt": null,
+
+        "metadata.lastAssignmentEventId": null,
+      });
+
+      Object.assign(retirementUpdate, {
+        retirementResolution: "assignment_never_created",
+
+        retirementConfirmedAt: now,
+
+        "metadata.retirementConfirmation": {
+          source: "verified_local_never_dispatched",
+
+          assignmentDispatchState: "prepared",
+
+          assignmentDispatchStartedAt: null,
+
+          providerRequestSubmitted: false,
+
+          confirmedAt: now,
+        },
+      });
+    }
+
+    // Atomic retirement initiation
+
+    const updated = await DVA.findOneAndUpdate(
+      retirementFilter,
+      {
+        $set: retirementUpdate,
+      },
+      {
+        new: true,
+        runValidators: true,
+        session,
+      }
+    );
+
+    if (!updated) {
+      throw DVAService.createAssignmentError(
+        "DVA changed during retirement initiation.",
+        "DVA_RETIREMENT_CONCURRENT_UPDATE",
+        { retryable: true }
+      );
+    }
+
+    return {
+      dva: updated,
+      idempotent: false,
+    };
+  }
+
+  static async reconcileRetiringDVAAssignment(dva) {
+    if (
+      !dva ||
+      dva.status !== "retiring" ||
+      !dva.retirementStartedAt ||
+      dva.retirementResolution ||
+      dva.retirementConfirmedAt
+    ) {
+      throw DVAService.createAssignmentError(
+        "DVA is not eligible for assignment retirement reconciliation.",
+        "DVA_RETIREMENT_RECONCILIATION_STATE_INVALID"
+      );
+    }
+
+    const metadata = dva.metadata || {};
+    const requested = metadata.requestedWith || {};
+
+    const mode = metadata.assignmentMode;
+
+    const email = DVAService.cleanString(metadata.assignmentEmail)?.toLowerCase();
+
+    if (
+      !["test", "live"].includes(mode) ||
+      PaystackService.getMode() !== mode ||
+      !email ||
+      !requested.userId ||
+      String(requested.employerProfileId) !== String(dva.employer) ||
+      String(requested.walletId) !== String(dva.wallet) ||
+      requested.countryCode !== dva.countryCode ||
+      requested.currency !== dva.currency ||
+      DVAService.cleanString(requested.email)?.toLowerCase() !== email
+    ) {
+      throw DVAService.createAssignmentError(
+        "Historical DVA assignment identity is incomplete or inconsistent.",
+        "DVA_RETIREMENT_ASSIGNMENT_IDENTITY_MISMATCH"
+      );
+    }
+
+    const customer = await PaystackService.fetchPaystackCustomer(dva.paystackCustomerCode || email);
+
+    const customerId = DVAService.cleanNumber(customer?.id);
+
+    const customerCode = DVAService.cleanString(customer?.customer_code);
+
+    const customerMetadata = DVAService.parsePaystackMetadata(customer?.metadata);
+
+    if (
+      !customerId ||
+      !customerCode ||
+      DVAService.cleanString(customer.domain)?.toLowerCase() !== mode ||
+      DVAService.cleanString(customer.email)?.toLowerCase() !== email ||
+      !customerMetadata ||
+      String(customerMetadata.userId) !== String(requested.userId) ||
+      String(customerMetadata.employerProfileId) !== String(dva.employer) ||
+      String(customerMetadata.walletId) !== String(dva.wallet) ||
+      customerMetadata.countryCode !== dva.countryCode ||
+      customerMetadata.currency !== dva.currency ||
+      (dva.paystackCustomerId && dva.paystackCustomerId !== customerId) ||
+      (dva.paystackCustomerCode && dva.paystackCustomerCode !== customerCode)
+    ) {
+      throw DVAService.createAssignmentError(
+        "Paystack customer does not match the original DVA assignment.",
+        "DVA_RETIREMENT_CUSTOMER_MISMATCH"
+      );
+    }
+
+    const assignedAccount = customer.dedicated_account || customer.dedicatedAccount;
+
+    const assignedAccountId = DVAService.cleanNumber(assignedAccount?.id);
+
+    if (
+      assignedAccountId &&
+      dva.paystackDedicatedAccountId &&
+      assignedAccountId !== dva.paystackDedicatedAccountId
+    ) {
+      throw DVAService.createAssignmentError(
+        "Paystack customer contains a conflicting dedicated account.",
+        "DVA_RETIREMENT_ACCOUNT_ID_CONFLICT"
+      );
+    }
+
+    const accountId = dva.paystackDedicatedAccountId || assignedAccountId;
+
+    if (!accountId) {
+      throw DVAService.createAssignmentError(
+        "Paystack has not conclusively resolved the original assignment.",
+        "DVA_RETIREMENT_ASSIGNMENT_UNRESOLVED",
+        { retryable: true }
+      );
+    }
+
+    const account = await PaystackService.fetchDedicatedVirtualAccount(accountId);
+
+    const linkedCustomerId = DVAService.cleanNumber(
+      typeof account.customer === "object" ? account.customer?.id : account.customer
+    );
+
+    const linkedCustomerCode = DVAService.cleanString(account.customer?.customer_code);
+
+    if (
+      DVAService.cleanNumber(account.id) !== accountId ||
+      account.assigned !== true ||
+      linkedCustomerId !== customerId ||
+      (linkedCustomerCode && linkedCustomerCode !== customerCode) ||
+      DVAService.cleanString(account.currency)?.toUpperCase() !== dva.currency
+    ) {
+      throw DVAService.createAssignmentError(
+        "The dedicated account cannot be conclusively linked to the historical assignment.",
+        "DVA_RETIREMENT_ACCOUNT_OWNERSHIP_UNCONFIRMED",
+        { retryable: true }
+      );
+    }
+
+    const fields = DVAService.extractDVAData(
+      {
+        ...account,
+        customer,
+      },
+      dva.providerSlug
+    );
+
+    DVAService.validateDVAData(fields);
+
+    if (
+      fields.paystackDedicatedAccountId !== accountId ||
+      fields.paystackCustomerId !== customerId ||
+      fields.paystackCustomerCode !== customerCode
+    ) {
+      throw DVAService.createAssignmentError(
+        "Recovered dedicated account identifiers are inconsistent.",
+        "DVA_RETIREMENT_RECOVERED_IDENTITY_MISMATCH"
+      );
+    }
+
+    for (const field of [
+      "paystackDedicatedAccountId",
+      "paystackCustomerId",
+      "paystackCustomerCode",
+      "paystackReference",
+      "accountNumber",
+      "bankId",
+      "bankCode",
+      "bankSlug",
+      "providerSlug",
+    ]) {
+      if (dva[field] != null && dva[field] !== "" && fields[field] !== dva[field]) {
+        throw DVAService.createAssignmentError(
+          `Recovered DVA identity conflicts with ${field}.`,
+          "DVA_RETIREMENT_HISTORICAL_IDENTITY_CONFLICT"
+        );
+      }
+    }
+
+    const conflictConditions = [
+      { paystackDedicatedAccountId: accountId },
+      { paystackCustomerId: customerId },
+      { paystackCustomerCode: customerCode },
+    ];
+
+    if (fields.bankId && fields.accountNumber) {
+      conflictConditions.push({
+        bankId: fields.bankId,
+        accountNumber: fields.accountNumber,
+      });
+    }
+
+    if (fields.providerSlug && fields.accountNumber) {
+      conflictConditions.push({
+        providerSlug: fields.providerSlug,
+        accountNumber: fields.accountNumber,
+      });
+    }
+
+    const conflict = await DVA.exists({
+      _id: { $ne: dva._id },
+      provider: "paystack",
+      $or: conflictConditions,
+    });
+
+    if (conflict) {
+      throw DVAService.createAssignmentError(
+        "Recovered provider identity belongs to another DVA.",
+        "DVA_RETIREMENT_ACCOUNT_ALREADY_CLAIMED"
+      );
+    }
+
+    const now = new Date();
+
+    const updated = await DVA.findOneAndUpdate(
+      {
+        _id: dva._id,
+        employer: dva.employer,
+        wallet: dva.wallet,
+        provider: "paystack",
+        status: "retiring",
+        retirementStartedAt: dva.retirementStartedAt,
+        retirementResolution: null,
+        retirementConfirmedAt: null,
+
+        paystackDedicatedAccountId: dva.paystackDedicatedAccountId ?? null,
+
+        paystackCustomerId: dva.paystackCustomerId ?? null,
+
+        paystackCustomerCode: dva.paystackCustomerCode ?? null,
+
+        accountNumber: dva.accountNumber ?? null,
+
+        "metadata.assignmentMode": mode,
+      },
+      {
+        $set: {
+          ...fields,
+
+          isDefault: false,
+
+          lastSyncedAt: now,
+
+          "metadata.retirementAssignmentReconciledAt": now,
+
+          "metadata.retirementAssignmentReconciliation": {
+            source: "verified_paystack_customer_and_account",
+            customerId,
+            customerCode,
+            dedicatedAccountId: accountId,
+            reconciledAt: now,
+          },
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
+
+    if (!updated) {
+      throw DVAService.createAssignmentError(
+        "DVA changed during assignment retirement reconciliation.",
+        "DVA_RETIREMENT_CONCURRENT_UPDATE",
+        { retryable: true }
+      );
+    }
+
+    return updated;
+  }
+
+  static async confirmEmployerDVARetirement({ dvaId, employerProfileId, walletId } = {}) {
+    if (!dvaId || !employerProfileId || !walletId) {
+      throw DVAService.createAssignmentError(
+        "Complete DVA ownership details are required.",
+        "DVA_RETIREMENT_IDENTITY_REQUIRED",
+        { statusCode: 400 }
+      );
+    }
+
+    const selector = {
+      _id: dvaId,
+      employer: employerProfileId,
+      wallet: walletId,
+      provider: "paystack",
+    };
+
+    let dva = await DVA.findOne(selector);
+
+    if (!dva) {
+      throw DVAService.createAssignmentError(
+        "Employer DVA not found.",
+        "DVA_RETIREMENT_NOT_FOUND",
+        { statusCode: 404 }
+      );
+    }
+
+    if (!["retiring", "deactivated"].includes(dva.status)) {
+      throw DVAService.createAssignmentError(
+        "DVA retirement has not been initiated.",
+        "DVA_RETIREMENT_NOT_STARTED"
+      );
+    }
+
+    if (dva.retirementResolution && dva.retirementConfirmedAt) {
+      return {
+        dva,
+        idempotent: true,
+      };
+    }
+
+    if (dva.status !== "retiring" || !dva.retirementStartedAt) {
+      throw DVAService.createAssignmentError(
+        "DVA retirement state is invalid.",
+        "DVA_RETIREMENT_STATE_INVALID"
+      );
+    }
+
+    if (
+      dva.metadata?.retirementPreviousStatus !== "active" &&
+      !dva.metadata?.retirementAssignmentReconciledAt
+    ) {
+      dva = await DVAService.reconcileRetiringDVAAssignment(dva);
+    }
+
+    const expectedMode = dva.metadata?.assignmentMode;
+
+    if (
+      !dva.paystackDedicatedAccountId ||
+      !dva.paystackCustomerId ||
+      !dva.paystackCustomerCode ||
+      !dva.accountNumber ||
+      !dva.currency ||
+      !["test", "live"].includes(expectedMode)
+    ) {
+      throw DVAService.createAssignmentError(
+        "Historical DVA identity is incomplete.",
+        "DVA_RETIREMENT_PROVIDER_IDENTITY_INCOMPLETE"
+      );
+    }
+
+    const confirmation = await PaystackService.deactivateDedicatedVirtualAccount({
+      dedicatedAccountId: dva.paystackDedicatedAccountId,
+      expectedCustomerId: dva.paystackCustomerId,
+      expectedCustomerCode: dva.paystackCustomerCode,
+      expectedAccountNumber: dva.accountNumber,
+      expectedCurrency: dva.currency,
+      expectedMode,
+    });
+
+    if (
+      confirmation.assigned !== false ||
+      String(confirmation.dedicatedAccountId) !== String(dva.paystackDedicatedAccountId) ||
+      String(confirmation.customerId) !== String(dva.paystackCustomerId) ||
+      confirmation.customerCode !== dva.paystackCustomerCode ||
+      confirmation.accountNumber !== dva.accountNumber ||
+      confirmation.currency !== dva.currency ||
+      confirmation.mode !== expectedMode
+    ) {
+      throw DVAService.createAssignmentError(
+        "Paystack DVA retirement could not be confirmed.",
+        "DVA_RETIREMENT_PROVIDER_UNCONFIRMED",
+        { retryable: true }
+      );
+    }
+
+    const now = new Date();
+
+    const updated = await DVA.findOneAndUpdate(
+      {
+        ...selector,
+        status: "retiring",
+        retirementStartedAt: dva.retirementStartedAt,
+        retirementResolution: null,
+        retirementConfirmedAt: null,
+        paystackDedicatedAccountId: dva.paystackDedicatedAccountId,
+        paystackCustomerId: dva.paystackCustomerId,
+        paystackCustomerCode: dva.paystackCustomerCode,
+        accountNumber: dva.accountNumber,
+        currency: dva.currency,
+        "metadata.assignmentMode": expectedMode,
+      },
+      {
+        $set: {
+          retirementResolution: "provider_unassigned",
+          retirementConfirmedAt: now,
+          lastSyncedAt: now,
+
+          "metadata.retirementConfirmation": {
+            source: confirmation.confirmationSource,
+            alreadyUnassigned: confirmation.alreadyUnassigned,
+            assigned: false,
+            active: confirmation.active,
+            mode: confirmation.mode,
+            confirmedAt: now,
+          },
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
+
+    if (!updated) {
+      const latest = await DVA.findOne(selector);
+
+      if (
+        latest?.retirementResolution === "provider_unassigned" &&
+        latest.retirementConfirmedAt &&
+        ["retiring", "deactivated"].includes(latest.status)
+      ) {
+        return {
+          dva: latest,
+          idempotent: true,
+        };
+      }
+
+      throw DVAService.createAssignmentError(
+        "DVA changed during provider retirement.",
+        "DVA_RETIREMENT_CONCURRENT_UPDATE",
+        { retryable: true }
+      );
+    }
+
+    return {
+      dva: updated,
+      idempotent: false,
+    };
+  }
+
+  /* ---------- FINALIZE DVA RETIREMENT ---------- */
+
+  static async finalizeEmployerDVARetirement({
+    dvaId,
+    employerProfileId,
+    walletId,
+    currentTime = new Date(),
+    session,
+  } = {}) {
+    // Transaction requirement
+
+    if (!session?.inTransaction?.()) {
+      throw DVAService.createAssignmentError(
+        "Final DVA retirement requires an active database transaction.",
+        "DVA_RETIREMENT_TRANSACTION_REQUIRED"
+      );
+    }
+
+    if (!dvaId || !employerProfileId || !walletId) {
+      throw DVAService.createAssignmentError(
+        "Complete DVA ownership details are required.",
+        "DVA_RETIREMENT_IDENTITY_REQUIRED"
+      );
+    }
+
+    const at =
+      currentTime instanceof Date ? new Date(currentTime.getTime()) : new Date(currentTime);
+
+    if (Number.isNaN(at.getTime())) {
+      throw DVAService.createAssignmentError(
+        "Invalid DVA retirement finalization time.",
+        "DVA_RETIREMENT_TIME_INVALID"
+      );
+    }
+
+    // Load original DVA
+
+    const dva = await DVA.findOne({
+      _id: dvaId,
+      employer: employerProfileId,
+      wallet: walletId,
+      provider: "paystack",
+    }).session(session);
+
+    if (!dva) {
+      throw DVAService.createAssignmentError(
+        "Original employer DVA was not found.",
+        "DVA_RETIREMENT_NOT_FOUND"
+      );
+    }
+
+    // Verify original wallet
+
+    const wallet = await Wallet.findById(walletId).session(session);
+
+    if (
+      !wallet ||
+      wallet.ownerType !== "employer" ||
+      String(wallet.employer) !== String(employerProfileId) ||
+      wallet.countryCode !== dva.countryCode ||
+      wallet.currency !== dva.currency
+    ) {
+      throw DVAService.createAssignmentError(
+        "DVA does not match its original employer wallet.",
+        "DVA_RETIREMENT_WALLET_MISMATCH"
+      );
+    }
+
+    // Require confirmed provider resolution
+
+    if (
+      !dva.retirementStartedAt ||
+      !dva.retirementConfirmedAt ||
+      !["provider_unassigned", "assignment_never_created"].includes(dva.retirementResolution)
+    ) {
+      throw DVAService.createAssignmentError(
+        "Provider retirement must be resolved before finalization.",
+        "DVA_RETIREMENT_PROVIDER_UNCONFIRMED"
+      );
+    }
+
+    if (dva.retirementResolution === "provider_unassigned" && !dva.paystackDedicatedAccountId) {
+      throw DVAService.createAssignmentError(
+        "Provider retirement requires its historical dedicated account ID.",
+        "DVA_RETIREMENT_PROVIDER_IDENTITY_INCOMPLETE"
+      );
+    }
+
+    if (
+      dva.retirementResolution === "assignment_never_created" &&
+      (dva.activatedAt || dva.paystackDedicatedAccountId || dva.accountNumber)
+    ) {
+      throw DVAService.createAssignmentError(
+        "Existing dedicated account identity requires provider unassignment.",
+        "DVA_RETIREMENT_RESOLUTION_CONFLICT"
+      );
+    }
+
+    // Require closed original wallet
+
+    if (
+      wallet.status !== "closed" ||
+      !wallet.closedAt ||
+      wallet.availableBalance !== 0 ||
+      wallet.pendingBalance !== 0 ||
+      wallet.outstandingBalance !== 0
+    ) {
+      throw DVAService.createAssignmentError(
+        "The original employer wallet must be closed with zero balances.",
+        "DVA_RETIREMENT_WALLET_NOT_CLOSED"
+      );
+    }
+
+    // Idempotent finalization
+
+    if (dva.status === "deactivated") {
+      if (!dva.deactivatedAt || dva.isDefault || dva.deactivatedAt < dva.retirementConfirmedAt) {
+        throw DVAService.createAssignmentError(
+          "Existing DVA retirement state is inconsistent.",
+          "DVA_RETIREMENT_STATE_INVALID"
+        );
+      }
+
+      return {
+        dva,
+        idempotent: true,
+      };
+    }
+
+    // Validate final transition
+
+    if (
+      dva.status !== "retiring" ||
+      dva.deactivatedAt ||
+      dva.retirementConfirmedAt < dva.retirementStartedAt ||
+      at < dva.retirementConfirmedAt ||
+      at < wallet.closedAt
+    ) {
+      throw DVAService.createAssignmentError(
+        "DVA retirement cannot be finalized in its current state.",
+        "DVA_RETIREMENT_FINALIZATION_INVALID"
+      );
+    }
+
+    // Finalize without altering ownership
+
+    dva.status = "deactivated";
+    dva.isDefault = false;
+    dva.deactivatedAt = at;
+
+    dva.metadata = {
+      ...(dva.metadata || {}),
+
+      retirementFinalization: {
+        source: "business_closure",
+        finalizedAt: at,
+        employerProfileId: String(dva.employer),
+        walletId: String(dva.wallet),
+        resolution: dva.retirementResolution,
+      },
+    };
+
+    dva.markModified("metadata");
+
+    await dva.save({ session });
+
+    return {
+      dva,
+      idempotent: false,
+    };
   }
 
   /* ---------- Employer-facing DVA methods ---------- */
@@ -434,63 +1461,153 @@ class DVAService {
     if (!dva) {
       return {
         status: "not_started",
+
         rawStatus: "not_started",
-        message: "Your wallet bank account has not been set up yet.",
+
+        message: "Your dedicated virtual account has not been set up yet.",
+
         canRetrySetup: true,
+
+        canReconcile: false,
+
+        requiresReconciliation: false,
+
         retryAvailableAt: null,
+
         dva: null,
       };
     }
 
     const rawStatus = dva.status;
 
-    const canRetrySetup = ["failed", "pending"].includes(rawStatus) && DVAService.canRetryDVA(dva);
+    // Retirement states
 
-    const retryAvailableAt = canRetrySetup ? null : DVAService.getRetryAvailableAt(dva);
+    if (dva.retirementStartedAt || ["retiring", "deactivated"].includes(rawStatus)) {
+      const retiredStatus = rawStatus === "deactivated" ? "deactivated" : "retiring";
+
+      return {
+        status: retiredStatus,
+
+        rawStatus,
+
+        message:
+          retiredStatus === "retiring"
+            ? "Your dedicated virtual account is being retired. Do not send further payments."
+            : "Your dedicated virtual account has been deactivated.",
+
+        canRetrySetup: false,
+
+        canReconcile: false,
+
+        requiresReconciliation: false,
+
+        retryAvailableAt: null,
+
+        dva: null,
+      };
+    }
+
+    // Active DVA
 
     if (rawStatus === "active") {
       return {
         status: "active",
+
         rawStatus,
-        message: "Your wallet bank account is ready.",
+
+        message: "Your dedicated virtual account is ready.",
+
         canRetrySetup: false,
+
+        canReconcile: false,
+
+        requiresReconciliation: false,
+
         retryAvailableAt: null,
+
         dva,
       };
     }
+
+    // Never-dispatched assignment
+
+    if (DVAService.isNeverDispatchedAssignment(dva)) {
+      return {
+        status: "setup_pending",
+
+        rawStatus,
+
+        message: "Your dedicated virtual account setup is ready to continue.",
+
+        canRetrySetup: true,
+
+        canReconcile: false,
+
+        requiresReconciliation: false,
+
+        retryAvailableAt: null,
+
+        dva,
+      };
+    }
+
+    // Previously submitted assignment
+
+    if (rawStatus === "pending") {
+      const canReconcile = DVAService.canRetryDVA(dva);
+
+      return {
+        status: "setup_pending",
+
+        rawStatus,
+
+        message:
+          "Your dedicated virtual account assignment is awaiting confirmation from the payment provider.",
+
+        // Preserve the existing frontend retry contract.
+        // Calling setup again will reconcile the existing
+        // assignment, not submit another provider request.
+
+        canRetrySetup: canReconcile,
+
+        canReconcile,
+
+        requiresReconciliation: true,
+
+        retryAvailableAt: canReconcile ? null : DVAService.getRetryAvailableAt(dva),
+
+        dva,
+      };
+    }
+
+    // Failed provider assignment
 
     if (rawStatus === "failed") {
       return {
         status: "setup_pending",
+
         rawStatus,
+
         message:
           dva.failureReason ||
-          "Your wallet bank account could not be completed automatically. Please allow up to 24 hours while we review it.",
-        canRetrySetup,
-        retryAvailableAt,
-        dva,
-      };
-    }
+          "Your dedicated virtual account requires reconciliation before setup can continue.",
 
-    if (rawStatus === "deactivated") {
-      return {
-        status: "deactivated",
-        rawStatus,
-        message: "Your wallet bank account is currently unavailable. Please contact support.",
         canRetrySetup: false,
+
+        canReconcile: false,
+
+        requiresReconciliation: true,
+
         retryAvailableAt: null,
+
         dva,
       };
     }
 
-    return {
-      status: "setup_pending",
-      rawStatus,
-      message: "Your wallet bank account is being set up. Please allow up to 24 hours.",
-      canRetrySetup,
-      retryAvailableAt,
-      dva,
-    };
+    throw DVAService.createAssignmentError(
+      "Dedicated virtual account has an unsupported status.",
+      "DVA_STATUS_UNSUPPORTED"
+    );
   }
 
   /* ---------- Resolve Paystack assignment identity ---------- */
@@ -514,49 +1631,35 @@ class DVAService {
 
     const accountId = DVAService.cleanNumber(normalizedPayload.paystackDedicatedAccountId);
 
-    const keys = [];
+    const identityKeys = [];
 
     if (accountId) {
-      keys.push({
+      identityKeys.push({
         paystackDedicatedAccountId: accountId,
       });
     }
 
     if (customerCode) {
-      keys.push({
+      identityKeys.push({
         paystackCustomerCode: customerCode,
       });
     }
 
     if (customerId) {
-      keys.push({
+      identityKeys.push({
         paystackCustomerId: customerId,
       });
     }
 
-    if (customerEmail) {
-      keys.push({
-        "metadata.assignmentEmail": customerEmail,
-      });
+    const scope = {
+      provider: "paystack",
+      countryCode: "NG",
+      currency: "NGN",
+    };
 
-      keys.push({
-        "metadata.requestedWith.email": customerEmail,
-      });
-
-      const user = await User.findOne({
-        email: customerEmail,
-      });
-
-      if (user) {
-        keys.push({
-          ownerUser: user._id,
-        });
-      }
-    }
-
-    if (!keys.length) {
+    if (!identityKeys.length && !customerEmail) {
       throw DVAService.createAssignmentError(
-        "Paystack assignment event has no usable customer identity.",
+        "Paystack assignment event has no usable identity.",
         "PAYSTACK_DVA_ASSIGNMENT_IDENTITY_REQUIRED",
         {
           retryable: false,
@@ -565,15 +1668,97 @@ class DVAService {
       );
     }
 
-    const candidates = await DVA.find({
-      provider: "paystack",
-      countryCode: "NG",
-      currency: "NGN",
-      status: {
-        $in: ["pending", "active", "failed"],
-      },
-      $or: keys,
-    }).limit(20);
+    // Provider identifiers take precedence over email.
+    let candidates = identityKeys.length
+      ? await DVA.find({
+          ...scope,
+          $or: identityKeys,
+        }).limit(2)
+      : [];
+
+    const matchedByProviderIdentity = candidates.length > 0;
+
+    if (!candidates.length && customerEmail) {
+      candidates = await DVA.find({
+        ...scope,
+        $or: [
+          { "metadata.assignmentEmail": customerEmail },
+          { "metadata.requestedWith.email": customerEmail },
+        ],
+      }).limit(2);
+    }
+
+    if (
+      candidates.length > 1 &&
+      !matchedByProviderIdentity
+    ) {
+      // A reused email cannot establish ownership of
+      // an assignment. Verify the provider customer and
+      // its exact employer-wallet metadata independently.
+
+      if (!customerId && !customerCode) {
+        throw DVAService.createAssignmentError(
+          "Paystack assignment matches multiple historical DVA records.",
+          "PAYSTACK_DVA_ASSIGNMENT_AMBIGUOUS"
+        );
+      }
+
+      const customer = await PaystackService.fetchPaystackCustomer(
+        customerCode || customerEmail
+      );
+
+      const metadata = DVAService.parsePaystackMetadata(
+        customer?.metadata
+      );
+
+      if (
+        !metadata ||
+        (
+          customerId &&
+          DVAService.cleanNumber(customer.id) !== customerId
+        ) ||
+        (
+          customerCode &&
+          DVAService.cleanString(customer.customer_code) !== customerCode
+        )
+      ) {
+        throw DVAService.createAssignmentError(
+          "Paystack assignment customer could not be verified.",
+          "PAYSTACK_DVA_ASSIGNMENT_AMBIGUOUS"
+        );
+      }
+
+      const selected = await DVA.findOne({
+        ...scope,
+        status: "pending",
+        retirementStartedAt: null,
+        "metadata.assignmentEmail": customerEmail,
+        "metadata.assignmentMode": PaystackService.getMode(),
+        "metadata.requestedWith.userId": String(metadata.userId),
+        "metadata.requestedWith.employerProfileId": String(metadata.employerProfileId),
+        "metadata.requestedWith.walletId": String(metadata.walletId),
+      });
+
+      if (
+        !selected ||
+        DVAService.isNeverDispatchedAssignment(selected) ||
+        !DVAService.customerMatchesAssignment(customer, selected)
+      ) {
+        throw DVAService.createAssignmentError(
+          "Paystack assignment cannot be matched to a new employer wallet.",
+          "PAYSTACK_DVA_ASSIGNMENT_AMBIGUOUS"
+        );
+      }
+
+      candidates = [selected];
+    }
+
+    if (candidates.length > 1) {
+      throw DVAService.createAssignmentError(
+        "Paystack assignment matches multiple historical DVA records.",
+        "PAYSTACK_DVA_ASSIGNMENT_AMBIGUOUS"
+      );
+    }
 
     const compatible = candidates.filter((dva) => {
       if (
@@ -674,14 +1859,320 @@ class DVAService {
 
   /* ---------- Apply verified assignment webhook ---------- */
 
-  /*
-   * Only the signed webhook pipeline may call this method.
-   * ProviderEventProcessorService must first claim
-   * a verified provider event.
-   *
-   * Assignment never credits the wallet.
-   * Only the payment funding workflow may do that.
-   */
+  static async reconcileHistoricalAssignmentEvent({
+    identity,
+    eventName,
+    normalizedPayload = {},
+    rawPayload = {},
+    providerEventRecordId,
+    providerEventMarker,
+  } = {}) {
+    let dva = identity?.dva;
+
+    // Validate the historical DVA and its retirement state.
+
+    if (
+      !dva?._id ||
+      !dva.employer ||
+      !dva.wallet ||
+      !["retiring", "deactivated"].includes(dva.status) ||
+      !dva.retirementStartedAt
+    ) {
+      throw DVAService.createAssignmentError(
+        "Historical assignment requires a retiring or deactivated DVA.",
+        "DVA_HISTORICAL_ASSIGNMENT_STATE_INVALID"
+      );
+    }
+
+    if (
+      !["dedicatedaccount.assign.success", "dedicatedaccount.assign.failed"].includes(eventName) ||
+      !providerEventRecordId ||
+      !providerEventMarker
+    ) {
+      throw DVAService.createAssignmentError(
+        "Verified historical assignment event identity is required.",
+        "DVA_HISTORICAL_ASSIGNMENT_EVENT_INVALID"
+      );
+    }
+
+    DVAService.assertAssignmentMode(dva, normalizedPayload, rawPayload);
+
+    const mode = dva.metadata?.assignmentMode;
+
+    if (!["test", "live"].includes(mode) || PaystackService.getMode() !== mode) {
+      throw DVAService.createAssignmentError(
+        "Historical assignment belongs to a different provider environment.",
+        "DVA_HISTORICAL_ASSIGNMENT_MODE_MISMATCH"
+      );
+    }
+
+    // An email address alone cannot establish historical provider identity.
+
+    const eventAccountId = DVAService.cleanNumber(identity.accountId);
+
+    const eventCustomerId = DVAService.cleanNumber(identity.customerId);
+
+    const eventCustomerCode = DVAService.cleanString(identity.customerCode);
+
+    const eventAccountNumber = DVAService.cleanString(normalizedPayload.accountNumber);
+
+    if (!eventAccountId && !eventCustomerId && !eventCustomerCode) {
+      throw DVAService.createAssignmentError(
+        "Historical assignment cannot be reconciled using email alone.",
+        "DVA_HISTORICAL_ASSIGNMENT_IDENTITY_INSUFFICIENT"
+      );
+    }
+
+    // Do not overwrite an established never-created retirement resolution.
+
+    if (dva.retirementResolution === "assignment_never_created") {
+      throw DVAService.createAssignmentError(
+        "Provider assignment conflicts with the recorded never-created retirement resolution.",
+        "DVA_HISTORICAL_ASSIGNMENT_RESOLUTION_CONFLICT"
+      );
+    }
+
+    // Validate the event against the original DVA's provider identity.
+
+    const assertMatchingIdentity = (historicalDVA, requireComplete = false) => {
+      const storedAccountId = DVAService.cleanNumber(historicalDVA.paystackDedicatedAccountId);
+
+      const storedCustomerId = DVAService.cleanNumber(historicalDVA.paystackCustomerId);
+
+      const storedCustomerCode = DVAService.cleanString(historicalDVA.paystackCustomerCode);
+
+      const storedAccountNumber = DVAService.cleanString(historicalDVA.accountNumber);
+
+      const storedEmail = DVAService.cleanString(
+        historicalDVA.metadata?.assignmentEmail
+      )?.toLowerCase();
+
+      const eventEmail = DVAService.cleanString(identity.customerEmail)?.toLowerCase();
+
+      if (
+        (eventAccountId && storedAccountId && eventAccountId !== storedAccountId) ||
+        (eventCustomerId && storedCustomerId && eventCustomerId !== storedCustomerId) ||
+        (eventCustomerCode && storedCustomerCode && eventCustomerCode !== storedCustomerCode) ||
+        (eventAccountNumber && storedAccountNumber && eventAccountNumber !== storedAccountNumber) ||
+        (eventEmail && storedEmail && eventEmail !== storedEmail)
+      ) {
+        throw DVAService.createAssignmentError(
+          "Provider assignment conflicts with the historical DVA identity.",
+          "DVA_HISTORICAL_ASSIGNMENT_IDENTITY_CONFLICT"
+        );
+      }
+
+      if (requireComplete) {
+        if (
+          !storedAccountId ||
+          !storedCustomerId ||
+          !storedCustomerCode ||
+          !storedAccountNumber ||
+          !storedEmail
+        ) {
+          throw DVAService.createAssignmentError(
+            "Historical DVA provider identity remains incomplete.",
+            "DVA_HISTORICAL_ASSIGNMENT_IDENTITY_INCOMPLETE",
+            { retryable: true }
+          );
+        }
+
+        if (
+          (eventAccountId && eventAccountId !== storedAccountId) ||
+          (eventCustomerId && eventCustomerId !== storedCustomerId) ||
+          (eventCustomerCode && eventCustomerCode !== storedCustomerCode) ||
+          (eventAccountNumber && eventAccountNumber !== storedAccountNumber)
+        ) {
+          throw DVAService.createAssignmentError(
+            "Historical assignment event could not be conclusively matched.",
+            "DVA_HISTORICAL_ASSIGNMENT_MATCH_UNCONFIRMED"
+          );
+        }
+      }
+
+      return true;
+    };
+
+    assertMatchingIdentity(dva);
+
+    const originalDvaId = String(dva._id);
+
+    const originalEmployerId = String(dva.employer);
+
+    const originalWalletId = String(dva.wallet);
+
+    let idempotent = Boolean(dva.retirementResolution && dva.retirementConfirmedAt);
+
+    // Reconcile retirement if provider unassignment remains unconfirmed.
+
+    if (!dva.retirementResolution || !dva.retirementConfirmedAt) {
+      if (dva.status !== "retiring") {
+        throw DVAService.createAssignmentError(
+          "A deactivated DVA must already have a confirmed retirement resolution.",
+          "DVA_HISTORICAL_ASSIGNMENT_RETIREMENT_INVALID"
+        );
+      }
+
+      // Recover the original account without restoring the DVA to active.
+
+      if (
+        dva.metadata?.retirementPreviousStatus !== "active" &&
+        !dva.metadata?.retirementAssignmentReconciledAt
+      ) {
+        dva = await DVAService.reconcileRetiringDVAAssignment(dva);
+      }
+
+      // Verify the signed event against the recovered provider identity.
+
+      assertMatchingIdentity(dva, true);
+
+      const confirmation = await DVAService.confirmEmployerDVARetirement({
+        dvaId: dva._id,
+        employerProfileId: dva.employer,
+        walletId: dva.wallet,
+      });
+
+      dva = confirmation?.dva;
+
+      if (!dva) {
+        throw DVAService.createAssignmentError(
+          "Historical DVA retirement returned no confirmed record.",
+          "DVA_HISTORICAL_ASSIGNMENT_RETIREMENT_UNCONFIRMED",
+          { retryable: true }
+        );
+      }
+
+      idempotent = confirmation.idempotent === true;
+    }
+
+    // Confirm that retirement preserved the original ownership and status.
+
+    if (
+      String(dva._id) !== originalDvaId ||
+      String(dva.employer) !== originalEmployerId ||
+      String(dva.wallet) !== originalWalletId ||
+      !["retiring", "deactivated"].includes(dva.status) ||
+      !dva.retirementStartedAt ||
+      dva.retirementResolution !== "provider_unassigned" ||
+      !dva.retirementConfirmedAt ||
+      dva.retirementConfirmedAt < dva.retirementStartedAt ||
+      dva.isDefault === true
+    ) {
+      throw DVAService.createAssignmentError(
+        "Historical assignment requires confirmed provider unassignment.",
+        "DVA_HISTORICAL_ASSIGNMENT_RETIREMENT_UNCONFIRMED",
+        { retryable: true }
+      );
+    }
+
+    assertMatchingIdentity(dva, true);
+
+    const retirementConfirmation = dva.metadata?.retirementConfirmation;
+
+    if (
+      !retirementConfirmation ||
+      retirementConfirmation.assigned !== false ||
+      retirementConfirmation.mode !== mode
+    ) {
+      throw DVAService.createAssignmentError(
+        "Historical DVA retirement evidence is incomplete.",
+        "DVA_HISTORICAL_ASSIGNMENT_EVIDENCE_INVALID"
+      );
+    }
+
+    // Independently verify the current provider account state.
+
+    const account = await PaystackService.fetchDedicatedVirtualAccount(
+      dva.paystackDedicatedAccountId
+    );
+
+    const accountId = DVAService.cleanNumber(account?.id);
+
+    const accountNumber = DVAService.cleanString(account?.account_number);
+
+    const currency = DVAService.cleanString(account?.currency)?.toUpperCase();
+
+    if (
+      accountId !== DVAService.cleanNumber(dva.paystackDedicatedAccountId) ||
+      accountNumber !== dva.accountNumber ||
+      currency !== dva.currency ||
+      typeof account.assigned !== "boolean" ||
+      typeof account.active !== "boolean"
+    ) {
+      throw DVAService.createAssignmentError(
+        "Provider account does not match the historical DVA.",
+        "DVA_HISTORICAL_ASSIGNMENT_ACCOUNT_MISMATCH"
+      );
+    }
+
+    const returnedCustomerId = DVAService.cleanNumber(
+      typeof account.customer === "object" ? account.customer?.id : account.customer
+    );
+
+    const returnedCustomerCode = DVAService.cleanString(account.customer?.customer_code);
+
+    if (
+      (returnedCustomerId &&
+        returnedCustomerId !== DVAService.cleanNumber(dva.paystackCustomerId)) ||
+      (returnedCustomerCode && returnedCustomerCode !== dva.paystackCustomerCode)
+    ) {
+      throw DVAService.createAssignmentError(
+        "Provider account is associated with a conflicting customer.",
+        "DVA_HISTORICAL_ASSIGNMENT_CUSTOMER_CONFLICT"
+      );
+    }
+
+    // Never automatically unassign an account reported as reassigned
+    // after retirement. It may now belong to another provider customer.
+
+    if (account.assigned !== false) {
+      throw DVAService.createAssignmentError(
+        "Provider reports an assigned account after confirmed retirement.",
+        "DVA_HISTORICAL_ASSIGNMENT_REASSIGNED",
+        { retryable: true }
+      );
+    }
+
+    // Return the verified historical outcome without changing DVA status.
+
+    return {
+      dva,
+
+      idempotent,
+
+      historicalAssignmentReconciled: true,
+
+      assignmentOutcome: eventName === "dedicatedaccount.assign.success" ? "success" : "failed",
+
+      retirementResolution: dva.retirementResolution,
+
+      retirementConfirmedAt: dva.retirementConfirmedAt,
+
+      resolutionSource: "verified_historical_provider_unassignment",
+
+      historicalReconciliation: {
+        providerEventRecordId: String(providerEventRecordId),
+
+        providerEventMarker: String(providerEventMarker),
+
+        dedicatedAccountId: String(dva.paystackDedicatedAccountId),
+
+        customerId: String(dva.paystackCustomerId),
+
+        customerCode: dva.paystackCustomerCode,
+
+        accountNumber: dva.accountNumber,
+
+        providerMode: mode,
+
+        assigned: false,
+
+        active: account.active,
+
+        verifiedAt: new Date(),
+      },
+    };
+  }
 
   static async applyPaystackAssignmentEvent({
     eventName,
@@ -689,8 +2180,11 @@ class DVAService {
     rawPayload = {},
     providerEventRecordId,
     providerEventMarker,
+    expectedOwnership = {},
     currentTime = new Date(),
-  }) {
+  } = {}) {
+    // Validate the verified assignment event.
+
     const allowedEvents = ["dedicatedaccount.assign.success", "dedicatedaccount.assign.failed"];
 
     if (!allowedEvents.includes(eventName)) {
@@ -715,7 +2209,8 @@ class DVAService {
       );
     }
 
-    const at = currentTime instanceof Date ? currentTime : new Date(currentTime);
+    const at =
+      currentTime instanceof Date ? new Date(currentTime.getTime()) : new Date(currentTime);
 
     if (Number.isNaN(at.getTime())) {
       throw DVAService.createAssignmentError(
@@ -728,6 +2223,8 @@ class DVAService {
       );
     }
 
+    // Resolve the original DVA and validate its provider environment.
+
     const identity = await DVAService.resolveAssignmentDVA({
       normalizedPayload,
       rawPayload,
@@ -735,33 +2232,104 @@ class DVAService {
 
     const dva = identity.dva;
 
+    if (!dva?._id || !dva.employer || !dva.wallet) {
+      throw DVAService.createAssignmentError(
+        "DVA assignment could not resolve its original ownership.",
+        "PAYSTACK_DVA_ASSIGNMENT_OWNERSHIP_REQUIRED"
+      );
+    }
+
     DVAService.assertAssignmentMode(dva, normalizedPayload, rawPayload);
+
+    // Preserve any previously established provider event relationships.
+
+    const assertExpectedOwnership = (record) => {
+      for (const [field, actual] of Object.entries({
+        dva: record._id,
+        employer: record.employer,
+        wallet: record.wallet,
+      })) {
+        const expected = expectedOwnership[field];
+
+        if (expected != null && String(expected) !== String(actual)) {
+          throw DVAService.createAssignmentError(
+            `DVA assignment conflicts with its established ${field} relationship.`,
+            "PAYSTACK_DVA_ASSIGNMENT_OWNERSHIP_CONFLICT"
+          );
+        }
+      }
+    };
+
+    assertExpectedOwnership(dva);
+
+    // Historical assignments must not reverse or finalize DVA retirement.
+
+    if (dva.retirementStartedAt || ["retiring", "deactivated"].includes(dva.status)) {
+      return DVAService.reconcileHistoricalAssignmentEvent({
+        identity,
+
+        eventName,
+
+        normalizedPayload,
+
+        rawPayload,
+
+        providerEventRecordId,
+
+        providerEventMarker,
+      });
+    }
+
+    // Determine the expected normal assignment outcome.
 
     const success = eventName === "dedicatedaccount.assign.success";
 
     const desiredStatus = success ? "active" : "failed";
 
-    /*
-     * Duplicate delivery must not repeat activation.
-     * A conflicting terminal status must not be overwritten.
-     */
+    const eventAccountNumber = DVAService.cleanString(normalizedPayload.accountNumber);
 
-    if (dva.status === desiredStatus) {
-      if (success) {
+    const assertEventIdentity = (record, requireComplete = false) => {
+      const comparisons = [
+        [identity.accountId, DVAService.cleanNumber(record.paystackDedicatedAccountId)],
+
+        [identity.customerId, DVAService.cleanNumber(record.paystackCustomerId)],
+
+        [identity.customerCode, DVAService.cleanString(record.paystackCustomerCode)],
+
+        [eventAccountNumber, DVAService.cleanString(record.accountNumber)],
+      ];
+
+      for (const [incoming, stored] of comparisons) {
         if (
-          (identity.accountId && Number(dva.paystackDedicatedAccountId) !== identity.accountId) ||
-          (identity.customerCode && dva.paystackCustomerCode !== identity.customerCode)
+          incoming != null &&
+          ((stored != null && incoming !== stored) || (requireComplete && stored == null))
         ) {
           throw DVAService.createAssignmentError(
-            "Existing active DVA conflicts with Paystack assignment details.",
-            "PAYSTACK_DVA_ACTIVE_IDENTITY_CONFLICT"
+            "Provider assignment conflicts with the established DVA identity.",
+            "PAYSTACK_DVA_ASSIGNMENT_IDENTITY_CONFLICT"
           );
         }
       }
 
+      return true;
+    };
+
+    assertEventIdentity(dva);
+
+    // A duplicate terminal assignment must not repeat the state transition.
+
+    if (dva.status === desiredStatus) {
+      assertEventIdentity(dva, success);
+
       return {
         dva,
+
         idempotent: true,
+
+        historicalAssignmentReconciled: false,
+
+        assignmentOutcome: success ? "success" : "failed",
+
         resolutionSource: "existing_terminal_state",
       };
     }
@@ -773,6 +2341,18 @@ class DVAService {
       );
     }
 
+    // A locally prepared assignment has not reached Paystack.
+    // A provider event must not activate or fail that record.
+
+    if (DVAService.isNeverDispatchedAssignment(dva)) {
+      throw DVAService.createAssignmentError(
+        "Provider assignment conflicts with an instruction that has not been dispatched.",
+        "PAYSTACK_DVA_ASSIGNMENT_NOT_DISPATCHED"
+      );
+    }
+
+    // Preserve the verified assignment event audit.
+
     const audit = {
       "metadata.lastAssignmentEventId": String(providerEventRecordId),
 
@@ -781,21 +2361,36 @@ class DVAService {
       "metadata.lastAssignmentEventName": eventName,
 
       "metadata.lastAssignmentEventAt": at,
+
+      "metadata.initialReconciliationPending": false,
     };
 
     let update;
 
     if (success) {
-      /*
-       * Confirm account details directly with Paystack.
-       * Do not activate from an incomplete webhook payload.
-       */
+      // Verify the original Paystack customer and assignment identity.
 
-      const lookupKey = identity.customerEmail || identity.customerCode;
+      const requested = dva.metadata?.requestedWith || {};
 
-      if (!lookupKey) {
+      const expectedEmail = DVAService.cleanString(dva.metadata?.assignmentEmail)?.toLowerCase();
+
+      const expectedMode = dva.metadata?.assignmentMode;
+
+      const lookupKey = dva.paystackCustomerCode || identity.customerCode || expectedEmail;
+
+      if (
+        !lookupKey ||
+        !expectedEmail ||
+        !requested.userId ||
+        !["test", "live"].includes(expectedMode) ||
+        PaystackService.getMode() !== expectedMode ||
+        String(requested.employerProfileId) !== String(dva.employer) ||
+        String(requested.walletId) !== String(dva.wallet) ||
+        requested.countryCode !== dva.countryCode ||
+        requested.currency !== dva.currency
+      ) {
         throw DVAService.createAssignmentError(
-          "A customer email or code is needed to verify Paystack DVA assignment.",
+          "Original DVA assignment identity is incomplete.",
           "PAYSTACK_DVA_CUSTOMER_LOOKUP_REQUIRED",
           {
             retryable: true,
@@ -806,48 +2401,55 @@ class DVAService {
 
       const customer = await PaystackService.fetchPaystackCustomer(lookupKey);
 
-      const verifiedEmail = DVAService.cleanString(customer.email)?.toLowerCase();
+      const customerMetadata = DVAService.parsePaystackMetadata(customer.metadata);
 
-      const verifiedMode = DVAService.cleanString(customer.domain)?.toLowerCase();
+      const customerId = DVAService.cleanNumber(customer.id);
 
-      const expectedEmail = DVAService.cleanString(
-        dva.metadata?.assignmentEmail ||
-          dva.metadata?.requestedWith?.email ||
-          identity.customerEmail
-      )?.toLowerCase();
+      const customerCode = DVAService.cleanString(customer.customer_code);
 
-      if (!expectedEmail || !verifiedEmail || verifiedEmail !== expectedEmail) {
+      const customerEmail = DVAService.cleanString(customer.email)?.toLowerCase();
+
+      const customerMode = DVAService.cleanString(customer.domain)?.toLowerCase();
+
+      if (
+        !customerId ||
+        !customerCode ||
+        customerEmail !== expectedEmail ||
+        customerMode !== expectedMode ||
+        !customerMetadata ||
+        String(customerMetadata.userId) !== String(requested.userId) ||
+        String(customerMetadata.employerProfileId) !== String(dva.employer) ||
+        String(customerMetadata.walletId) !== String(dva.wallet) ||
+        String(customerMetadata.countryCode || "").toUpperCase() !== dva.countryCode ||
+        String(customerMetadata.currency || "").toUpperCase() !== dva.currency
+      ) {
         throw DVAService.createAssignmentError(
-          "Paystack customer email does not match the employer's DVA assignment.",
-          "PAYSTACK_DVA_CUSTOMER_EMAIL_MISMATCH",
-          {
-            retryable: false,
-          }
-        );
-      }
-
-      if (verifiedMode && verifiedMode !== PaystackService.getMode()) {
-        throw DVAService.createAssignmentError(
-          "Paystack customer belongs to a different environment.",
-          "PAYSTACK_DVA_CUSTOMER_MODE_MISMATCH"
+          "Paystack customer does not match the original employer wallet assignment.",
+          "PAYSTACK_DVA_CUSTOMER_OWNERSHIP_MISMATCH"
         );
       }
 
       if (
-        (identity.customerCode && customer.customer_code !== identity.customerCode) ||
-        (identity.customerId && Number(customer.id) !== identity.customerId)
+        (identity.customerId && identity.customerId !== customerId) ||
+        (identity.customerCode && identity.customerCode !== customerCode) ||
+        (dva.paystackCustomerId && DVAService.cleanNumber(dva.paystackCustomerId) !== customerId) ||
+        (dva.paystackCustomerCode && dva.paystackCustomerCode !== customerCode)
       ) {
         throw DVAService.createAssignmentError(
-          "Paystack customer identity does not match the assignment webhook.",
+          "Paystack customer conflicts with the signed assignment event.",
           "PAYSTACK_DVA_CUSTOMER_IDENTITY_MISMATCH"
         );
       }
 
-      const account = customer.dedicated_account || customer.dedicatedAccount;
+      // Resolve the dedicated account associated with the verified customer.
 
-      if (!account || account.active !== true || account.assigned !== true) {
+      const assignedAccount = customer.dedicated_account || customer.dedicatedAccount;
+
+      const accountId = DVAService.cleanNumber(assignedAccount?.id);
+
+      if (!accountId || assignedAccount.assigned !== true || assignedAccount.active !== true) {
         throw DVAService.createAssignmentError(
-          "Paystack has not yet returned an active assigned account for this customer.",
+          "Paystack has not confirmed an active assigned account.",
           "PAYSTACK_DVA_CUSTOMER_ACCOUNT_PENDING",
           {
             retryable: true,
@@ -856,12 +2458,35 @@ class DVAService {
         );
       }
 
-      const accountCurrency = DVAService.cleanString(account.currency)?.toUpperCase();
-
-      if (accountCurrency && accountCurrency !== dva.currency) {
+      if (identity.accountId && identity.accountId !== accountId) {
         throw DVAService.createAssignmentError(
-          "Paystack account currency does not match the employer wallet.",
-          "PAYSTACK_DVA_ACCOUNT_CURRENCY_MISMATCH"
+          "Paystack account ID conflicts with the assignment event.",
+          "PAYSTACK_DVA_ACCOUNT_IDENTITY_MISMATCH"
+        );
+      }
+
+      // Independently verify account ownership and assignment status.
+
+      const account = await PaystackService.fetchDedicatedVirtualAccount(accountId);
+
+      const linkedCustomerId = DVAService.cleanNumber(
+        typeof account.customer === "object" ? account.customer?.id : account.customer
+      );
+
+      const linkedCustomerCode = DVAService.cleanString(account.customer?.customer_code);
+
+      if (
+        DVAService.cleanNumber(account.id) !== accountId ||
+        account.assigned !== true ||
+        account.active !== true ||
+        linkedCustomerId !== customerId ||
+        (linkedCustomerCode && linkedCustomerCode !== customerCode) ||
+        DVAService.cleanString(account.currency)?.toUpperCase() !== dva.currency
+      ) {
+        throw DVAService.createAssignmentError(
+          "Independent Paystack verification did not confirm the assigned account.",
+          "PAYSTACK_DVA_ACCOUNT_OWNERSHIP_MISMATCH",
+          { retryable: true }
         );
       }
 
@@ -877,7 +2502,7 @@ class DVAService {
         DVAService.validateDVAData(fields);
       } catch {
         throw DVAService.createAssignmentError(
-          "Paystack customer lookup returned incomplete assigned-account details.",
+          "Paystack returned incomplete assigned-account details.",
           "PAYSTACK_DVA_CUSTOMER_ACCOUNT_INCOMPLETE",
           {
             retryable: true,
@@ -887,35 +2512,103 @@ class DVAService {
       }
 
       if (
-        (identity.accountId && fields.paystackDedicatedAccountId !== identity.accountId) ||
-        (identity.customerCode && fields.paystackCustomerCode !== identity.customerCode) ||
-        (identity.customerId && fields.paystackCustomerId !== identity.customerId) ||
-        (normalizedPayload.accountNumber &&
-          fields.accountNumber !== String(normalizedPayload.accountNumber))
+        fields.paystackDedicatedAccountId !== accountId ||
+        fields.paystackCustomerId !== customerId ||
+        fields.paystackCustomerCode !== customerCode
       ) {
         throw DVAService.createAssignmentError(
-          "Fetched Paystack account does not match the signed assignment webhook.",
+          "Verified provider identifiers are inconsistent.",
           "PAYSTACK_DVA_ACCOUNT_IDENTITY_MISMATCH"
         );
       }
+
+      assertEventIdentity(fields, true);
+
+      // Preserve provider identifiers already recorded on the DVA.
+
+      const protectedIdentityFields = [
+        "paystackDedicatedAccountId",
+        "paystackCustomerId",
+        "paystackCustomerCode",
+        "paystackReference",
+        "accountNumber",
+        "bankId",
+        "bankCode",
+        "bankSlug",
+        "providerSlug",
+      ];
+
+      for (const field of protectedIdentityFields) {
+        if (dva[field] != null && dva[field] !== "" && fields[field] !== dva[field]) {
+          throw DVAService.createAssignmentError(
+            `Verified assignment conflicts with existing ${field}.`,
+            "PAYSTACK_DVA_EXISTING_IDENTITY_CONFLICT"
+          );
+        }
+      }
+
+      // Prevent another DVA's current or historical identity from being claimed.
+
+      const conflictConditions = [
+        { paystackDedicatedAccountId: accountId },
+
+        { paystackCustomerId: customerId },
+
+        { paystackCustomerCode: customerCode },
+      ];
+
+      if (fields.bankId && fields.accountNumber) {
+        conflictConditions.push({
+          bankId: fields.bankId,
+          accountNumber: fields.accountNumber,
+        });
+      }
+
+      if (fields.providerSlug && fields.accountNumber) {
+        conflictConditions.push({
+          providerSlug: fields.providerSlug,
+          accountNumber: fields.accountNumber,
+        });
+      }
+
+      const conflict = await DVA.exists({
+        _id: { $ne: dva._id },
+
+        provider: "paystack",
+
+        $or: conflictConditions,
+      });
+
+      if (conflict) {
+        throw DVAService.createAssignmentError(
+          "Paystack account identity is already associated with another DVA.",
+          "PAYSTACK_DVA_ACCOUNT_ALREADY_CLAIMED"
+        );
+      }
+
+      // Prepare the verified activation.
 
       update = {
         ...fields,
 
         status: "active",
+
         activatedAt: at,
+
         failedAt: null,
+
         failureReason: null,
-        deactivatedAt: null,
+
         lastSyncedAt: at,
+
+        "metadata.assignmentSubmissionOutcome": "confirmed_success",
 
         ...audit,
       };
     } else {
-      /*
-       * Failure events may not have an account number.
-       * Only an identified, pending assignment can fail.
-       */
+      // Record the reported failure without resetting the dispatch marker.
+      // A reported failure does not prove that no assignment was created
+      // and must not authorize automatic provider resubmission.
 
       update = {
         status: "failed",
@@ -925,26 +2618,59 @@ class DVAService {
         failureReason: DVAService.shortenErrorMessage(
           normalizedPayload.dvaFailureReason ||
             rawPayload?.data?.reason ||
-            "Paystack could not assign the wallet bank account."
+            "Paystack could not assign the dedicated virtual account."
         ),
 
         lastSyncedAt: at,
+
+        "metadata.assignmentSubmissionOutcome": "reported_failed",
 
         ...audit,
       };
     }
 
-    /*
-     * Atomic update prevents a delayed webhook from
-     * overwriting an already completed assignment.
-     */
+    // Commit only if the original pending assignment remains unchanged.
+
+    const assignmentFilter = {
+      _id: dva._id,
+
+      ownerUser: dva.ownerUser,
+
+      employer: dva.employer,
+
+      wallet: dva.wallet,
+
+      provider: "paystack",
+
+      status: "pending",
+
+      requestedAt: dva.requestedAt,
+
+      retirementStartedAt: null,
+
+      retirementConfirmedAt: null,
+
+      retirementResolution: null,
+
+      paystackDedicatedAccountId: dva.paystackDedicatedAccountId ?? null,
+
+      paystackCustomerId: dva.paystackCustomerId ?? null,
+
+      paystackCustomerCode: dva.paystackCustomerCode ?? null,
+
+      accountNumber: dva.accountNumber ?? null,
+
+      "metadata.assignmentEmail": dva.metadata?.assignmentEmail,
+
+      "metadata.assignmentMode": dva.metadata?.assignmentMode,
+
+      "metadata.assignmentDispatchState": dva.metadata?.assignmentDispatchState ?? null,
+
+      "metadata.assignmentDispatchStartedAt": dva.metadata?.assignmentDispatchStartedAt ?? null,
+    };
 
     const committed = await DVA.findOneAndUpdate(
-      {
-        _id: dva._id,
-        status: "pending",
-        provider: "paystack",
-      },
+      assignmentFilter,
       {
         $set: update,
       },
@@ -959,416 +2685,744 @@ class DVAService {
 
       return {
         dva: committed,
+
         idempotent: false,
+
+        historicalAssignmentReconciled: false,
+
+        assignmentOutcome: success ? "success" : "failed",
+
         resolutionSource: "verified_webhook",
       };
     }
 
-    /*
-     * Another worker may have completed the assignment
-     * before this update. Re-read instead of overwriting.
-     */
+    // Reload the record if another operation changed its state.
 
     const latest = await DVA.findById(dva._id);
 
-    if (latest?.status === desiredStatus) {
+    if (!latest) {
+      throw DVAService.createAssignmentError(
+        "DVA disappeared during assignment processing.",
+        "PAYSTACK_DVA_ASSIGNMENT_NOT_FOUND",
+        {
+          retryable: true,
+          statusCode: 404,
+        }
+      );
+    }
+
+    assertExpectedOwnership(latest);
+
+    if (
+      String(latest.employer) !== String(dva.employer) ||
+      String(latest.wallet) !== String(dva.wallet)
+    ) {
+      throw DVAService.createAssignmentError(
+        "Original DVA ownership changed during assignment processing.",
+        "PAYSTACK_DVA_ASSIGNMENT_OWNERSHIP_CONFLICT"
+      );
+    }
+
+    // If reti  rement won the concurrent update, reconcile the event
+    // historically instead of attempting another activation.
+
+    if (latest.retirementStartedAt || ["retiring", "deactivated"].includes(latest.status)) {
+      return DVAService.reconcileHistoricalAssignmentEvent({
+        identity: {
+          ...identity,
+          dva: latest,
+        },
+
+        eventName,
+
+        normalizedPayload,
+
+        rawPayload,
+
+        providerEventRecordId,
+
+        providerEventMarker,
+      });
+    }
+
+    // Accept a matching outcome committed by another worker.
+
+    if (latest.status === desiredStatus) {
+      assertEventIdentity(latest, success);
+
       return {
         dva: latest,
+
         idempotent: true,
+
+        historicalAssignmentReconciled: false,
+
+        assignmentOutcome: success ? "success" : "failed",
+
         resolutionSource: "concurrent_terminal_state",
       };
     }
 
     throw DVAService.createAssignmentError(
-      "DVA status changed while processing the assignment webhook.",
+      "DVA status changed while processing the assignment event.",
       "PAYSTACK_DVA_ASSIGNMENT_CONCURRENT_UPDATE",
-      {
-        retryable: true,
-        statusCode: 409,
-      }
+      { retryable: true }
     );
   }
 
   /* ---------- Create employer DVA through Paystack ---------- */
 
   static async createEmployerDVA({ userId, employerProfileId }) {
-    const user = await User.findById(userId);
+    // Prepare assignment transactionally
 
-    if (!user) {
-      throw new Error("User not found.");
-    }
+    const preparation = await WalletService.runWithOptionalTransaction({}, async (session) => {
+      const user = await User.findById(userId).session(session);
 
-    const employerProfile = await EmployerProfile.findById(employerProfileId);
-
-    if (!employerProfile) {
-      throw new Error("Employer profile not found.");
-    }
-
-    if (String(employerProfile.user) !== String(user._id)) {
-      throw new Error("Employer profile does not belong to this user.");
-    }
-
-    const wallet = await WalletService.createEmployerWalletIfMissing(employerProfile);
-
-    const selector = {
-      wallet: wallet._id,
-      provider: "paystack",
-      countryCode: wallet.countryCode,
-      currency: wallet.currency,
-    };
-
-    const existing = await DVA.findOne(selector);
-
-    if (existing?.status === "active") {
-      return existing;
-    }
-
-    if (existing?.status === "deactivated") {
-      throw new Error("Your wallet bank account is deactivated. Please contact support.");
-    }
-
-    /*
-     * Reconciliation is not an assignment retry.
-     *
-     * An existing pending DVA may be checked against Paystack
-     * without waiting for the 24-hour retry window.
-     *
-     * Never submit another assignment while the existing
-     * request remains pending.
-     */
-    if (existing?.status === "pending") {
-      try {
-        const reconciled = await DVAService.reconcilePendingEmployerDVA({
-          userId,
-          employerProfileId,
-        });
-
-        return reconciled || existing;
-      } catch (error) {
-        logger.warn(
-          `Paystack DVA reconciliation failed for ${employerProfileId}: ${error.message}`
-        );
-
-        // A failed reconciliation does not authorize another assignment.
-        return (await DVA.findById(existing._id)) || existing;
+      if (!user) {
+        throw new Error("User not found.");
       }
-    }
 
-    if (existing && !DVAService.canRetryDVA(existing)) {
-      throw new Error(
-        "Your wallet bank account is being set up. Please allow up to 24 hours before trying again."
+      const employerProfile = await EmployerProfile.findById(employerProfileId).session(session);
+
+      if (!employerProfile) {
+        throw new Error("Employer profile not found.");
+      }
+
+      if (String(employerProfile.user) !== String(user._id)) {
+        throw new Error("Employer profile does not belong to this user.");
+      }
+
+      if (user.role !== "employer" || user.accountStatus !== "active") {
+        throw new Error("This user account is not eligible to create a dedicated virtual account.");
+      }
+
+      if (employerProfile.accountStatus !== "active") {
+        throw new Error("This business is not eligible to create a dedicated virtual account.");
+      }
+
+      // Serialize new DVA preparation with business closure.
+      const lockedEmployer = await EmployerProfile.findOneAndUpdate(
+        { _id: employerProfile._id, user: user._id, accountStatus: "active" },
+        { $inc: { __v: 1 } },
+        { session, new: true }
       );
-    }
 
-    const email = PaystackService.normalizeEmail(user.email);
+      if (!lockedEmployer) {
+        throw DVAService.createAssignmentError(
+          "Business closure prevents new DVA setup.",
+          "DVA_ASSIGNMENT_BUSINESS_UNAVAILABLE"
+        );
+      }
 
-    const assignmentMode = PaystackService.getMode();
+      const wallet = await WalletService.createEmployerWalletIfMissing(lockedEmployer, {
+        session,
+      });
 
-    const preferredProviderSlug = DVAService.getPreferredProviderSlug();
+      if (!wallet || wallet.status !== "active") {
+        throw new Error("An active employer wallet is required for DVA creation.");
+      }
 
-    const phone = DVAService.formatPhone(
-      employerProfile.contactPhoneCode,
-      employerProfile.contactPhone
-    );
-
-    const requestedAt = new Date();
-
-    /*
-     * Persist the identity of the intended assignment
-     * before calling Paystack.
-     *
-     * This allows asynchronous webhooks and subsequent
-     * reconciliation to resolve the correct employer wallet.
-     */
-    const metadata = {
-      requestedWith: {
-        userId: String(user._id),
-        employerProfileId: String(employerProfile._id),
-        walletId: String(wallet._id),
-        email,
-        businessName: employerProfile.businessName,
-        employerType: employerProfile.type,
-        preferredProviderSlug,
+      const selector = {
+        wallet: wallet._id,
+        provider: "paystack",
         countryCode: wallet.countryCode,
         currency: wallet.currency,
-      },
+      };
 
-      assignmentEmail: email,
-      assignmentMode,
-    };
+      const existing = await DVA.findOne(selector).session(session);
 
-    /* ---------- Persist pending assignment ---------- */
+      // Existing active DVA
 
-    let pendingDVA;
+      if (existing?.status === "active") {
+        return {
+          action: "return_existing",
+          dva: existing,
+        };
+      }
 
-    if (existing?.status === "failed") {
-      pendingDVA = await DVA.findOneAndUpdate(
+      // Retirement protection
+
+      if (existing?.retirementStartedAt || ["retiring", "deactivated"].includes(existing?.status)) {
+        throw DVAService.createAssignmentError(
+          "This dedicated virtual account is no longer available for setup.",
+          "DVA_RETIREMENT_SETUP_BLOCKED"
+        );
+      }
+
+      // Previously submitted assignment
+
+      if (existing?.status === "pending" && !DVAService.isNeverDispatchedAssignment(existing)) {
+        return {
+          action: "reconcile_existing",
+          dva: existing,
+        };
+      }
+
+      // A failed record without definitive evidence that
+      // it was never dispatched must not be resubmitted.
+
+      if (existing?.status === "failed" && !DVAService.isNeverDispatchedAssignment(existing)) {
+        throw DVAService.createAssignmentError(
+          "The previous dedicated account assignment requires reconciliation before another assignment can be submitted.",
+          "DVA_ASSIGNMENT_RECONCILIATION_REQUIRED"
+        );
+      }
+
+      if (existing && !["pending", "failed"].includes(existing.status)) {
+        throw DVAService.createAssignmentError(
+          "The existing DVA is not eligible for setup.",
+          "DVA_ASSIGNMENT_STATE_INVALID"
+        );
+      }
+
+      // Validate provider configuration
+
+      PaystackService.assertConfigured();
+
+      const email = existing
+        ? PaystackService.normalizeEmail(existing.metadata?.assignmentEmail)
+        : PaystackService.normalizeEmail(user.email);
+
+      // Confirm historical DVA retirement before preparing
+      // a new assignment using a previously registered email.
+
+      await DVAService.assertHistoricalIdentityRetired(
+        email,
+        employerProfile._id,
+        session
+      );
+
+      const assignmentMode = PaystackService.getMode();
+
+      const preferredProviderSlug = DVAService.getPreferredProviderSlug();
+
+      const firstName = DVAService.cleanString(employerProfile.contactFirstName);
+
+      const lastName = DVAService.cleanString(employerProfile.contactLastName);
+
+      const phone = DVAService.formatPhone(
+        employerProfile.contactPhoneCode,
+        employerProfile.contactPhone
+      );
+
+      if (!firstName || !lastName || !phone || !["test", "live"].includes(assignmentMode)) {
+        throw DVAService.createAssignmentError(
+          "Complete employer contact details and provider configuration are required.",
+          "DVA_ASSIGNMENT_DETAILS_INCOMPLETE",
+          { statusCode: 400 }
+        );
+      }
+
+      if (wallet.countryCode !== "NG" || wallet.currency !== "NGN") {
+        throw DVAService.createAssignmentError(
+          "Paystack DVA provisioning requires an NG/NGN employer wallet.",
+          "DVA_ASSIGNMENT_MARKET_UNSUPPORTED",
+          { statusCode: 400 }
+        );
+      }
+
+      // Provider assignment metadata
+
+      const providerMetadata = {
+        userId: String(user._id),
+
+        employerProfileId: String(employerProfile._id),
+
+        walletId: String(wallet._id),
+
+        businessName: employerProfile.businessName,
+
+        employerType: employerProfile.type,
+
+        countryCode: wallet.countryCode,
+
+        currency: wallet.currency,
+      };
+
+      const requestedWith = {
+        ...providerMetadata,
+        email,
+        preferredProviderSlug,
+      };
+
+      // Resume an unsent assignment
+
+      if (existing) {
+        const stored = existing.metadata || {};
+        const requested = stored.requestedWith || {};
+
+        if (
+          String(existing.ownerUser) !== String(user._id) ||
+          String(existing.employer) !== String(employerProfile._id) ||
+          String(existing.wallet) !== String(wallet._id) ||
+          stored.assignmentEmail !== email ||
+          stored.assignmentMode !== assignmentMode ||
+          String(requested.userId) !== String(user._id) ||
+          String(requested.employerProfileId) !== String(employerProfile._id) ||
+          String(requested.walletId) !== String(wallet._id) ||
+          requested.countryCode !== wallet.countryCode ||
+          requested.currency !== wallet.currency ||
+          requested.preferredProviderSlug !== preferredProviderSlug
+        ) {
+          throw DVAService.createAssignmentError(
+            "Prepared assignment identity no longer matches the employer wallet.",
+            "DVA_ASSIGNMENT_PREPARED_IDENTITY_MISMATCH"
+          );
+        }
+
+        if (existing.status === "failed") {
+          const resumed = await DVA.findOneAndUpdate(
+            {
+              _id: existing._id,
+              status: "failed",
+
+              requestedAt: existing.requestedAt,
+
+              retirementStartedAt: null,
+
+              "metadata.assignmentDispatchState": "prepared",
+
+              "metadata.assignmentDispatchStartedAt": null,
+
+              "metadata.assignmentAcknowledgedAt": null,
+
+              "metadata.assignmentSubmissionOutcome": null,
+
+              "metadata.submitUncertainAt": null,
+
+              "metadata.lastAssignmentEventId": null,
+            },
+            {
+              $set: {
+                status: "pending",
+                failedAt: null,
+                failureReason: null,
+              },
+            },
+            {
+              new: true,
+              runValidators: true,
+              session,
+            }
+          );
+
+          if (!resumed) {
+            throw DVAService.createAssignmentError(
+              "DVA changed during assignment preparation.",
+              "DVA_ASSIGNMENT_CONCURRENT_UPDATE",
+              { retryable: true }
+            );
+          }
+
+          return {
+            action: "submit_prepared",
+            dva: resumed,
+
+            assignment: {
+              email,
+              firstName,
+              lastName,
+              phone,
+
+              preferredBank: preferredProviderSlug,
+
+              countryCode: wallet.countryCode,
+
+              metadata: requested,
+            },
+
+            assignmentMode,
+          };
+        }
+
+        return {
+          action: "submit_prepared",
+          dva: existing,
+
+          assignment: {
+            email,
+            firstName,
+            lastName,
+            phone,
+
+            preferredBank: preferredProviderSlug,
+
+            countryCode: wallet.countryCode,
+
+            metadata: requested,
+          },
+
+          assignmentMode,
+        };
+      }
+
+      // Coordinate with wallet closure
+
+      // Creating a new DVA must conflict with a concurrent
+      // transaction that closes the original wallet.
+      //
+      // Incrementing the wallet document version establishes
+      // a write dependency without changing financial balances.
+
+      const lockedWallet = await Wallet.findOneAndUpdate(
         {
-          _id: existing._id,
-          status: "failed",
-          requestedAt: existing.requestedAt,
+          _id: wallet._id,
+
+          ownerType: "employer",
+
+          employer: employerProfile._id,
+
+          countryCode: wallet.countryCode,
+
+          currency: wallet.currency,
+
+          status: "active",
+          closedAt: null,
         },
         {
-          $set: {
-            ownerUser: user._id,
-            employer: employerProfile._id,
-
-            status: "pending",
-            requestedAt,
-
-            failedAt: null,
-            failureReason: null,
-            deactivatedAt: null,
-
-            providerSlug: preferredProviderSlug,
-            metadata,
+          $inc: {
+            __v: 1,
           },
         },
         {
           new: true,
           runValidators: true,
+          session,
         }
       );
 
-      if (!pendingDVA) {
-        return DVA.findOne(selector);
+      if (!lockedWallet) {
+        throw DVAService.createAssignmentError(
+          "The original employer wallet is no longer available for DVA creation.",
+          "DVA_ASSIGNMENT_WALLET_UNAVAILABLE"
+        );
       }
-    } else {
-      try {
-        pendingDVA = await DVA.create({
-          ...selector,
 
-          ownerUser: user._id,
-          employer: employerProfile._id,
+      // Create local prepared instruction
 
-          isDefault: true,
-          status: "pending",
+      const requestedAt = new Date();
 
-          requestedAt,
-          providerSlug: preferredProviderSlug,
+      const [pendingDVA] = await DVA.create(
+        [
+          {
+            ...selector,
 
-          metadata,
-        });
-      } catch (error) {
-        if (error.code === 11000) {
-          return DVA.findOne(selector);
-        }
+            ownerUser: user._id,
 
-        throw error;
-      }
-    }
+            employer: employerProfile._id,
 
-    /* ---------- Submit assignment to Paystack ---------- */
+            isDefault: true,
 
-    try {
-      logger.info(`Creating Paystack DVA for employer profile: ${employerProfile._id}`);
+            status: "pending",
 
-      const response = await PaystackService.assignDedicatedVirtualAccount({
-        email,
+            requestedAt,
 
-        firstName: employerProfile.contactFirstName,
-        lastName: employerProfile.contactLastName,
+            providerSlug: preferredProviderSlug,
 
-        phone,
-        preferredBank: preferredProviderSlug,
+            metadata: {
+              requestedWith,
 
-        countryCode: wallet.countryCode,
+              assignmentEmail: email,
 
-        metadata: {
-          userId: String(user._id),
-          employerProfileId: String(employerProfile._id),
-          walletId: String(wallet._id),
+              assignmentMode,
 
-          businessName: employerProfile.businessName,
-          employerType: employerProfile.type,
+              assignmentDispatchState: "prepared",
+
+              assignmentDispatchStartedAt: null,
+
+              assignmentSubmissionOutcome: null,
+
+              assignmentPreparedAt: requestedAt,
+            },
+          },
+        ],
+        { session }
+      );
+
+      return {
+        action: "submit_prepared",
+        dva: pendingDVA,
+
+        assignment: {
+          email,
+          firstName,
+          lastName,
+          phone,
+
+          preferredBank: preferredProviderSlug,
 
           countryCode: wallet.countryCode,
-          currency: wallet.currency,
+
+          metadata: providerMetadata,
         },
-      });
 
-      /*
-       * An asynchronous acknowledgement means Paystack
-       * accepted the assignment request.
-       *
-       * It does not mean a dedicated account is already
-       * assigned or active.
-       *
-       * Leave the DVA pending for webhook completion
-       * or subsequent reconciliation.
-       */
-      if (response?.pending === true) {
-        await DVA.updateOne(
-          {
-            _id: pendingDVA._id,
-            status: "pending",
-          },
-          {
-            $set: {
-              "metadata.assignmentAcknowledgedAt": new Date(),
-              "metadata.assignmentMessage": response.message || null,
-            },
-          }
-        );
+        assignmentMode,
+      };
+    });
 
-        return (await DVA.findById(pendingDVA._id)) || pendingDVA;
-      }
+    // Return existing account
 
-      /* ---------- Verify immediate account response ---------- */
+    if (preparation.action === "return_existing") {
+      return preparation.dva;
+    }
 
-      /*
-       * A provider response containing account details
-       * is not sufficient on its own to activate the DVA.
-       *
-       * Use the existing reconciliation service to:
-       *
-       * - verify the Paystack customer;
-       * - match the original employer and wallet;
-       * - confirm the assignment environment;
-       * - verify the dedicated account independently;
-       * - require active and assigned account flags;
-       * - reject conflicting provider identities.
-       *
-       * This avoids maintaining separate activation rules
-       * for immediate responses and delayed webhooks.
-       */
+    // Reconcile previous submission
+
+    if (preparation.action === "reconcile_existing") {
       try {
         const reconciled = await DVAService.reconcilePendingEmployerDVA({
           userId,
           employerProfileId,
         });
 
-        if (reconciled?.status === "active") {
-          logger.info(
-            `Paystack DVA independently verified and activated for employer profile: ${employerProfile._id}`
-          );
-
-          return reconciled;
-        }
-
-        /*
-         * The assignment was accepted, but independent
-         * confirmation has not completed.
-         *
-         * Keep the account pending. Do not submit another
-         * assignment or infer that the request failed.
-         */
-        await DVA.updateOne(
-          {
-            _id: pendingDVA._id,
-            status: "pending",
-          },
-          {
-            $set: {
-              "metadata.initialReconciliationPending": true,
-              "metadata.initialReconciliationCheckedAt": new Date(),
-            },
-          }
-        );
-
-        return (await DVA.findById(pendingDVA._id)) || pendingDVA;
-      } catch (reconciliationError) {
-        /*
-         * A reconciliation error after Paystack has accepted
-         * the request does not prove the assignment failed.
-         *
-         * Preserve the pending state and allow subsequent
-         * reconciliation or the verified webhook to finish.
-         */
+        return reconciled || preparation.dva;
+      } catch (error) {
         logger.warn(
-          `Paystack DVA immediate reconciliation pending for ${employerProfile._id}: ${reconciliationError.message}`
+          `Paystack DVA reconciliation failed for ${employerProfileId}: ${error.message}`
         );
 
-        await DVA.updateOne(
-          {
-            _id: pendingDVA._id,
-            status: "pending",
-          },
-          {
-            $set: {
-              "metadata.initialReconciliationPending": true,
-              "metadata.initialReconciliationCheckedAt": new Date(),
-              "metadata.initialReconciliationReason": DVAService.shortenErrorMessage(
-                reconciliationError.message
-              ),
-            },
-          }
-        );
-
-        return (await DVA.findById(pendingDVA._id)) || pendingDVA;
+        return (await DVA.findById(preparation.dva._id)) || preparation.dva;
       }
-    } catch (error) {
-      /* ---------- Paystack submission failure ---------- */
+    }
 
+    if (preparation.action !== "submit_prepared" || !preparation.dva?._id) {
+      throw DVAService.createAssignmentError(
+        "DVA assignment preparation returned an invalid result.",
+        "DVA_ASSIGNMENT_PREPARATION_INVALID"
+      );
+    }
+
+    const pendingDVA = preparation.dva;
+
+    // Verify historical provider identity before crossing
+    // the durable dispatch boundary.
+    //
+    // These provider reads happen outside the preparation
+    // transaction. A failed identity check does not mark
+    // the assignment as dispatched.
+
+    const hasHistory = await DVAService.assertHistoricalIdentityRetired(
+      preparation.assignment.email,
+      employerProfileId
+    );
+
+    if (hasHistory) {
+      await DVAService.verifyFreshCustomerIdentity(pendingDVA);
+    }
+
+    // Acquire durable dispatch claim
+
+    const dispatch = await DVAService.claimEmployerDVAAssignmentDispatch({
+      dvaId: pendingDVA._id,
+
+      userId,
+
+      employerProfileId,
+
+      walletId: pendingDVA.wallet,
+
+      requestedAt: pendingDVA.requestedAt,
+
+      assignmentEmail: preparation.assignment.email,
+
+      assignmentMode: preparation.assignmentMode,
+    });
+
+    if (!dispatch.claimed) {
+      return DVA.findById(pendingDVA._id);
+    }
+
+    // From this point forward, the assignment must be treated
+    // as potentially submitted to Paystack.
+    //
+    // Never reset the dispatch marker merely because a request
+    // timed out, returned an error or failed to return a response.
+
+    const submissionFilter = {
+      _id: pendingDVA._id,
+
+      ownerUser: pendingDVA.ownerUser,
+
+      employer: pendingDVA.employer,
+
+      wallet: pendingDVA.wallet,
+
+      requestedAt: pendingDVA.requestedAt,
+
+      status: {
+        $in: ["pending", "retiring"],
+      },
+
+      retirementResolution: null,
+      retirementConfirmedAt: null,
+
+      "metadata.assignmentDispatchState": "dispatch_started",
+
+      "metadata.assignmentDispatchStartedAt": dispatch.dispatchStartedAt,
+    };
+
+    let response;
+
+    // External provider submission
+
+    try {
+      logger.info(`Creating Paystack DVA for employer profile: ${employerProfileId}`);
+
+      response = await PaystackService.assignDedicatedVirtualAccount(preparation.assignment);
+    } catch (error) {
       const failedAt = new Date();
 
       const providerUnavailable = DVAService.isProviderUnavailableError(error);
 
       const failureReason = providerUnavailable
         ? DVAService.getProviderUnavailableMessage()
-        : error.message;
+        : DVAService.shortenErrorMessage(error.message);
 
-      /*
-       * A timeout or server-side failure after submission
-       * does not establish whether Paystack accepted the
-       * assignment.
-       *
-       * Keep the existing DVA pending so that a delayed
-       * webhook or subsequent reconciliation can complete it.
-       */
-      const uncertain =
-        error.code === "PAYSTACK_REQUEST_TIMEOUT" ||
-        (error.code === "PAYSTACK_REQUEST_FAILED" &&
-          (!error.providerStatusCode || error.providerStatusCode >= 500));
+      // The request has crossed the durable dispatch boundary.
+      //
+      // Even a provider rejection is not automatically proof
+      // that no assignment exists unless the provider contract
+      // establishes that fact conclusively.
 
-      const update = uncertain
-        ? {
+      await DVA.updateOne(
+        submissionFilter,
+        {
+          $set: {
+            "metadata.assignmentSubmissionOutcome": "uncertain",
+
             "metadata.submitUncertainAt": failedAt,
 
-            "metadata.submitUncertainReason": DVAService.shortenErrorMessage(failureReason),
-          }
-        : {
-            status: "failed",
-            failedAt,
-
-            failureReason: DVAService.shortenErrorMessage(failureReason),
+            "metadata.submitUncertainReason": failureReason,
 
             "metadata.lastFailure": {
-              message: DVAService.shortenErrorMessage(error.message),
+              message: failureReason,
+
+              code: error.code || null,
+
+              providerStatusCode: error.providerStatusCode || null,
+
               providerUnavailable,
+
               failedAt,
             },
-          };
-
-      /*
-       * Only update a record that is still pending.
-       *
-       * Never overwrite a DVA that has already been
-       * activated or failed through an independent webhook.
-       */
-      const savedDVA = await DVA.findOneAndUpdate(
-        {
-          _id: pendingDVA._id,
-          status: "pending",
+          },
         },
         {
-          $set: update,
-        },
-        {
-          new: true,
           runValidators: true,
         }
       );
 
-      const latest = savedDVA || (await DVA.findById(pendingDVA._id));
+      logger.warn(
+        `Paystack DVA submission requires reconciliation for ${employerProfileId}: ${failureReason}`
+      );
 
-      logger.error(`DVA assignment request failed for ${employerProfile._id}: ${error.message}`);
+      return DVA.findById(pendingDVA._id);
+    }
 
-      if (providerUnavailable || uncertain || latest?.status === "active") {
-        return latest;
+    // Provider acknowledgement
+
+    const acknowledgedAt = new Date();
+
+    await DVA.updateOne(
+      submissionFilter,
+      {
+        $set: {
+          "metadata.assignmentSubmissionOutcome": "acknowledged",
+
+          "metadata.assignmentAcknowledgedAt": acknowledgedAt,
+
+          "metadata.assignmentMessage":
+            response?.pending === true ? response.message || null : null,
+
+          "metadata.initialReconciliationPending": true,
+        },
+      },
+      {
+        runValidators: true,
+      }
+    );
+
+    const latest = await DVA.findById(pendingDVA._id);
+
+    if (!latest) {
+      throw DVAService.createAssignmentError(
+        "Submitted DVA record could not be reloaded.",
+        "DVA_ASSIGNMENT_RECORD_NOT_FOUND",
+        { retryable: true }
+      );
+    }
+
+    // Do not reactivate retiring accounts
+
+    if (latest.retirementStartedAt || ["retiring", "deactivated"].includes(latest.status)) {
+      return latest;
+    }
+
+    if (latest.status !== "pending") {
+      return latest;
+    }
+
+    // Asynchronous provider acceptance
+
+    if (response?.pending === true) {
+      return latest;
+    }
+
+    // Independent account reconciliation
+
+    try {
+      const reconciled = await DVAService.reconcilePendingEmployerDVA({
+        userId,
+        employerProfileId,
+      });
+
+      if (
+        reconciled?.status === "active" ||
+        reconciled?.retirementStartedAt ||
+        ["retiring", "deactivated"].includes(reconciled?.status)
+      ) {
+        return reconciled;
       }
 
-      throw error;
+      await DVA.updateOne(
+        {
+          ...submissionFilter,
+          status: "pending",
+        },
+        {
+          $set: {
+            "metadata.initialReconciliationPending": true,
+
+            "metadata.initialReconciliationCheckedAt": new Date(),
+          },
+        }
+      );
+
+      return DVA.findById(pendingDVA._id);
+    } catch (reconciliationError) {
+      logger.warn(
+        `Paystack DVA immediate reconciliation pending for ${employerProfileId}: ${reconciliationError.message}`
+      );
+
+      await DVA.updateOne(
+        {
+          ...submissionFilter,
+          status: "pending",
+        },
+        {
+          $set: {
+            "metadata.initialReconciliationPending": true,
+
+            "metadata.initialReconciliationCheckedAt": new Date(),
+
+            "metadata.initialReconciliationReason": DVAService.shortenErrorMessage(
+              reconciliationError.message
+            ),
+          },
+        }
+      );
+
+      return DVA.findById(pendingDVA._id);
     }
   }
 }

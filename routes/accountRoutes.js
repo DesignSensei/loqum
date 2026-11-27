@@ -91,4 +91,20 @@ router.post(
   accountController.postDisableTwoFactor
 );
 
+router.get(
+  "/account/settings/closure/eligibility",
+  isAuthenticated,
+  isAccountAllowed,
+  isVerified,
+  accountController.getAccountClosureEligibility
+);
+
+router.post(
+  "/account/settings/closure",
+  isAuthenticated,
+  isAccountAllowed,
+  isVerified,
+  accountController.postCloseAccount
+);
+
 module.exports = router;

@@ -1,0 +1,12 @@
+<div id="timeline" class="tab-pane fade">
+      <div class="card card-flush">
+        <div class="card-body">
+          <% timeline.forEach(function(event) { %>
+          <div class="border-bottom py-5">
+            <div class="fw-bold"><%= event.title %></div>
+            <div class="text-muted mt-2"><%= event.at %></div>
+          </div>
+          <% }); %>
+        </div>
+      </div>
+    </div>

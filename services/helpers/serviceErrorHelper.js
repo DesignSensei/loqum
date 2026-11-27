@@ -6,6 +6,8 @@ exports.createServiceError = function createServiceError({
   code,
   statusCode = 400,
   details = null,
+  retryable = null,
+  cause = null,
 }) {
   const error = new Error(message);
 
@@ -15,6 +17,14 @@ exports.createServiceError = function createServiceError({
 
   if (details && typeof details === "object" && !Array.isArray(details)) {
     error.details = details;
+  }
+
+  if (typeof retryable === "boolean") {
+    error.retryable = retryable;
+  }
+
+  if (cause !== null && cause !== undefined) {
+    error.cause = cause;
   }
 
   return error;

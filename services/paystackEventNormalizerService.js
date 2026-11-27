@@ -68,9 +68,11 @@ class PaystackEventNormalizerService {
     normalize = PaystackEventNormalizerService.cleanString
   ) {
     const identities = values.map((value) => normalize(value)).filter((value) => value !== null);
+
     if (new Set(identities).size > 1) {
       throw new Error(`Provider event contains conflicting ${label}.`);
     }
+
     return identities[0] || null;
   }
 
@@ -109,30 +111,6 @@ class PaystackEventNormalizerService {
     }
 
     return metadata;
-  }
-
-  static getTransferRecipientMetadata(payload = {}) {
-    const data = PaystackEventNormalizerService.getData(payload);
-
-    const recipient =
-      data.recipient && typeof data.recipient === "object" && !Array.isArray(data.recipient)
-        ? data.recipient
-        : {};
-
-    // Apply the same object/JSON-text validation used for payment metadata.
-    return PaystackEventNormalizerService.getPaystackMetadata({
-      data: { metadata: recipient.metadata },
-    });
-  }
-
-  static getWithdrawalMetadata(payload = {}) {
-    const eventName = PaystackEventNormalizerService.getEventName(payload);
-
-    if (!["transfer.success", "transfer.failed", "transfer.reversed"].includes(eventName)) {
-      return {};
-    }
-
-    return PaystackEventNormalizerService.getTransferRecipientMetadata(payload);
   }
 
   // ───────────────────────── PROVIDER EVENT IDENTITY ─────────────────────────
@@ -251,6 +229,147 @@ class PaystackEventNormalizerService {
     };
   }
 
+  static getDVAFundingDetails(payload = {}) {
+    if (!PaystackEventNormalizerService.isEmployerWalletFundingEvent(payload)) {
+      return null;
+    }
+
+    const data = PaystackEventNormalizerService.getData(payload);
+
+    const authorization = data.authorization || {};
+    const customer = data.customer || {};
+    const dedicatedAccount = data.dedicated_account || {};
+    const dedicatedAccountCamel = data.dedicatedAccount || {};
+
+    const normalizeId = PaystackEventNormalizerService.normalizeOptionalProviderId;
+
+    const cleanString = PaystackEventNormalizerService.cleanString;
+    const cleanLowerString = PaystackEventNormalizerService.cleanLowerString;
+
+    const identityConflicts = [];
+
+    // Preserve the event when provider identifiers conflict.
+    const resolveIdentity = (values, label, normalize = cleanString) => {
+      try {
+        return PaystackEventNormalizerService.resolveConsistentIdentity(values, label, normalize);
+      } catch {
+        identityConflicts.push(label);
+        return null;
+      }
+    };
+
+    const normalizeAccountNumber = (value) => {
+      if (value === null || value === undefined) {
+        return null;
+      }
+
+      if (typeof value !== "string" || !/^\d+$/.test(value.trim())) {
+        throw new Error("Invalid receiving account number.");
+      }
+
+      return value.trim();
+    };
+
+    return {
+      paystackTransactionId: resolveIdentity([data.id], "payment transaction ID", normalizeId),
+
+      paystackCustomerId: resolveIdentity(
+        [
+          customer.id,
+          data.customer_id,
+          data.customerId,
+          dedicatedAccount.customer?.id,
+          dedicatedAccountCamel.customer?.id,
+        ],
+        "Paystack customer IDs",
+        normalizeId
+      ),
+
+      paystackCustomerCode: resolveIdentity(
+        [
+          customer.customer_code,
+          customer.customerCode,
+          data.customer_code,
+          data.customerCode,
+          dedicatedAccount.customer?.customer_code,
+          dedicatedAccountCamel.customer?.customer_code,
+        ],
+        "Paystack customer codes"
+      ),
+
+      customerEmail: resolveIdentity(
+        [customer.email, data.email],
+        "customer email addresses",
+        cleanLowerString
+      ),
+
+      paystackDedicatedAccountId: resolveIdentity(
+        [
+          dedicatedAccount.id,
+          dedicatedAccountCamel.id,
+          data.dedicated_account_id,
+          data.dedicatedAccountId,
+        ],
+        "dedicated account IDs",
+        normalizeId
+      ),
+
+      accountNumber: resolveIdentity(
+        [
+          authorization.receiver_bank_account_number,
+          dedicatedAccount.account_number,
+          dedicatedAccount.accountNumber,
+          dedicatedAccountCamel.account_number,
+          dedicatedAccountCamel.accountNumber,
+        ],
+        "receiving account numbers",
+        normalizeAccountNumber
+      ),
+
+      bankName:
+        cleanString(authorization.receiver_bank) ||
+        cleanString(dedicatedAccount.bank?.name) ||
+        cleanString(dedicatedAccountCamel.bank?.name),
+
+      bankId: resolveIdentity(
+        [
+          dedicatedAccount.bank?.id,
+          dedicatedAccount.bank_id,
+          dedicatedAccountCamel.bank?.id,
+          dedicatedAccountCamel.bank_id,
+        ],
+        "receiving bank IDs",
+        normalizeId
+      ),
+
+      bankCode: resolveIdentity(
+        [dedicatedAccount.bank?.code, dedicatedAccountCamel.bank?.code],
+        "receiving bank codes"
+      ),
+
+      bankSlug: resolveIdentity(
+        [dedicatedAccount.bank?.slug, dedicatedAccountCamel.bank?.slug],
+        "receiving bank slugs",
+        cleanLowerString
+      ),
+
+      providerSlug: resolveIdentity(
+        [
+          dedicatedAccount.provider_slug,
+          dedicatedAccountCamel.provider_slug,
+          dedicatedAccount.bank?.provider_slug,
+          dedicatedAccountCamel.bank?.provider_slug,
+        ],
+        "DVA provider slugs",
+        cleanLowerString
+      ),
+
+      authorizationChannel: cleanLowerString(authorization.channel),
+
+      identityConflicts,
+    };
+  }
+
   // ───────────────────────── REFUND IDENTIFICATION ─────────────────────────
 
   static isRefundLifecycleEvent(payload = {}) {
@@ -322,6 +441,7 @@ class PaystackEventNormalizerService {
       transaction && typeof transaction === "object" && !Array.isArray(transaction)
         ? transaction.id
         : null;
+
     const scalarId =
       typeof transaction === "number" ||
       (typeof transaction === "string" && /^\d+$/.test(transaction.trim()))
@@ -509,6 +629,7 @@ class PaystackEventNormalizerService {
 
   static getRefundProcessor(payload = {}) {
     const data = PaystackEventNormalizerService.getData(payload);
+
     return PaystackEventNormalizerService.cleanString(data.processor);
   }
 
@@ -645,11 +766,29 @@ class PaystackEventNormalizerService {
     return paymentKind;
   }
 
+  static hasDedicatedNubanChannel(payload = {}) {
+    if (PaystackEventNormalizerService.getEventName(payload) !== "charge.success") {
+      return false;
+    }
+
+    const data = PaystackEventNormalizerService.getData(payload);
+
+    return (
+      PaystackEventNormalizerService.cleanLowerString(data.channel) === "dedicated_nuban" ||
+      PaystackEventNormalizerService.cleanLowerString(data.authorization?.channel) ===
+        "dedicated_nuban"
+    );
+  }
+
   static isEmployerWalletFundingEvent(payload = {}) {
     const eventName = PaystackEventNormalizerService.getEventName(payload);
     const data = PaystackEventNormalizerService.getData(payload);
 
     if (eventName !== "charge.success") return false;
+
+    if (PaystackEventNormalizerService.hasDedicatedNubanChannel(payload)) {
+      return true;
+    }
 
     if (
       PaystackEventNormalizerService.isShiftCheckoutPaymentEvent(payload) ||
@@ -681,47 +820,7 @@ class PaystackEventNormalizerService {
       return true;
     }
 
-    return PaystackEventNormalizerService.cleanLowerString(data.channel) === "dedicated_nuban";
-  }
-
-  static getWithdrawalOwnerType(payload = {}) {
-    const metadata = PaystackEventNormalizerService.getWithdrawalMetadata(payload);
-
-    const declaredOwnerType = PaystackEventNormalizerService.cleanLowerString(metadata.ownerType);
-
-    const employerProfileId = PaystackEventNormalizerService.cleanString(
-      metadata.employerProfileId
-    );
-
-    const professionalProfileId = PaystackEventNormalizerService.cleanString(
-      metadata.professionalProfileId
-    );
-
-    if (declaredOwnerType && !["employer", "professional"].includes(declaredOwnerType)) {
-      throw new Error("Withdrawal transfer contains an invalid owner type.");
-    }
-
-    if (employerProfileId && professionalProfileId) {
-      throw new Error("Withdrawal transfer cannot belong to both an employer and a professional.");
-    }
-
-    if (declaredOwnerType === "employer" && professionalProfileId) {
-      throw new Error("Employer withdrawal cannot contain a professional profile ID.");
-    }
-
-    if (declaredOwnerType === "professional" && employerProfileId) {
-      throw new Error("Professional withdrawal cannot contain an employer profile ID.");
-    }
-
-    const ownerType =
-      declaredOwnerType ||
-      (employerProfileId ? "employer" : professionalProfileId ? "professional" : null);
-
-    if (!ownerType) {
-      throw new Error("Withdrawal transfer requires an employer or professional owner.");
-    }
-
-    return ownerType;
+    return false;
   }
 
   static isWithdrawalPayoutEvent(payload = {}) {
@@ -741,6 +840,10 @@ class PaystackEventNormalizerService {
 
     if (PaystackEventNormalizerService.isRefundLifecycleEvent(payload)) {
       return "employer_refund";
+    }
+
+    if (PaystackEventNormalizerService.hasDedicatedNubanChannel(payload)) {
+      return "employer_wallet_funding";
     }
 
     if (PaystackEventNormalizerService.isShiftCheckoutPaymentEvent(payload)) {
@@ -763,16 +866,11 @@ class PaystackEventNormalizerService {
       return "employer_wallet_funding";
     }
 
-    if (PaystackEventNormalizerService.isWithdrawalPayoutEvent(payload)) {
-      return PaystackEventNormalizerService.getWithdrawalOwnerType(payload) === "employer"
-        ? "employer_withdrawal_payout"
-        : "professional_withdrawal_payout";
-    }
-
-    if (PaystackEventNormalizerService.isWithdrawalReversalEvent(payload)) {
-      return PaystackEventNormalizerService.getWithdrawalOwnerType(payload) === "employer"
-        ? "employer_withdrawal_reversal"
-        : "professional_withdrawal_reversal";
+    if (
+      PaystackEventNormalizerService.isWithdrawalPayoutEvent(payload) ||
+      PaystackEventNormalizerService.isWithdrawalReversalEvent(payload)
+    ) {
+      return "transfer_unresolved";
     }
 
     return "other";
@@ -782,10 +880,20 @@ class PaystackEventNormalizerService {
 
   static normalizeMetadata(payload = {}) {
     const data = PaystackEventNormalizerService.getData(payload);
-    const metadata = PaystackEventNormalizerService.getPaystackMetadata(payload);
+
+    const isTransfer =
+      PaystackEventNormalizerService.isWithdrawalPayoutEvent(payload) ||
+      PaystackEventNormalizerService.isWithdrawalReversalEvent(payload);
+
+    const dvaFunding = PaystackEventNormalizerService.getDVAFundingDetails(payload);
+
+    const metadata =
+      isTransfer || dvaFunding ? {} : PaystackEventNormalizerService.getPaystackMetadata(payload);
+
     const dvaAssignment = PaystackEventNormalizerService.getDVAAssignmentDetails(payload);
 
     const providerRefundId = PaystackEventNormalizerService.getProviderRefundId(payload);
+
     const providerRefundReference =
       PaystackEventNormalizerService.getProviderRefundReference(payload);
 
@@ -796,58 +904,83 @@ class PaystackEventNormalizerService {
       PaystackEventNormalizerService.getOriginalTransactionProviderId(payload);
 
     return {
-      paystackCustomerCode:
-        dvaAssignment?.paystackCustomerCode ||
-        PaystackEventNormalizerService.cleanString(data.customer?.customer_code) ||
-        PaystackEventNormalizerService.cleanString(data.customer_code),
+      paystackCustomerCode: dvaFunding
+        ? dvaFunding.paystackCustomerCode
+        : dvaAssignment?.paystackCustomerCode ||
+          PaystackEventNormalizerService.cleanString(data.customer?.customer_code) ||
+          PaystackEventNormalizerService.cleanString(data.customer_code),
 
-      paystackCustomerId: PaystackEventNormalizerService.normalizeOptionalProviderId(
-        dvaAssignment?.paystackCustomerId ?? data.customer?.id ?? data.customer_id
-      ),
+      paystackCustomerId: dvaFunding
+        ? dvaFunding.paystackCustomerId
+        : PaystackEventNormalizerService.normalizeOptionalProviderId(
+            dvaAssignment?.paystackCustomerId ?? data.customer?.id ?? data.customer_id
+          ),
 
-      customerEmail:
-        dvaAssignment?.customerEmail ||
-        PaystackEventNormalizerService.cleanLowerString(data.customer?.email) ||
-        PaystackEventNormalizerService.cleanLowerString(data.email),
+      customerEmail: dvaFunding
+        ? dvaFunding.customerEmail
+        : dvaAssignment?.customerEmail ||
+          PaystackEventNormalizerService.cleanLowerString(data.customer?.email) ||
+          PaystackEventNormalizerService.cleanLowerString(data.email),
 
-      paystackDedicatedAccountId: PaystackEventNormalizerService.normalizeOptionalProviderId(
-        dvaAssignment?.paystackDedicatedAccountId ??
-          data.dedicated_account?.id ??
-          data.dedicatedAccount?.id
-      ),
+      paystackDedicatedAccountId: dvaFunding
+        ? dvaFunding.paystackDedicatedAccountId
+        : PaystackEventNormalizerService.normalizeOptionalProviderId(
+            dvaAssignment?.paystackDedicatedAccountId ??
+              data.dedicated_account?.id ??
+              data.dedicatedAccount?.id
+          ),
 
-      bankName:
-        dvaAssignment?.bankName ||
-        PaystackEventNormalizerService.cleanString(data.authorization?.receiver_bank) ||
-        PaystackEventNormalizerService.cleanString(data.dedicated_account?.bank?.name) ||
-        PaystackEventNormalizerService.cleanString(data.dedicatedAccount?.bank?.name),
+      bankName: dvaFunding
+        ? dvaFunding.bankName
+        : dvaAssignment?.bankName ||
+          PaystackEventNormalizerService.cleanString(data.authorization?.receiver_bank) ||
+          PaystackEventNormalizerService.cleanString(data.dedicated_account?.bank?.name) ||
+          PaystackEventNormalizerService.cleanString(data.dedicatedAccount?.bank?.name),
 
-      accountNumber:
-        dvaAssignment?.accountNumber ||
-        PaystackEventNormalizerService.cleanString(
-          data.authorization?.receiver_bank_account_number
-        ) ||
-        PaystackEventNormalizerService.cleanString(data.dedicated_account?.account_number) ||
-        PaystackEventNormalizerService.cleanString(data.dedicatedAccount?.account_number),
+      accountNumber: dvaFunding
+        ? dvaFunding.accountNumber
+        : dvaAssignment?.accountNumber ||
+          PaystackEventNormalizerService.cleanString(
+            data.authorization?.receiver_bank_account_number
+          ) ||
+          PaystackEventNormalizerService.cleanString(data.dedicated_account?.account_number) ||
+          PaystackEventNormalizerService.cleanString(data.dedicatedAccount?.account_number),
 
       accountName: dvaAssignment?.accountName || null,
-      bankId: dvaAssignment?.bankId || null,
-      bankCode: dvaAssignment?.bankCode || null,
-      bankSlug: dvaAssignment?.bankSlug || null,
-      providerSlug: dvaAssignment?.providerSlug || null,
+
+      bankId: dvaFunding ? dvaFunding.bankId : dvaAssignment?.bankId || null,
+
+      bankCode: dvaFunding ? dvaFunding.bankCode : dvaAssignment?.bankCode || null,
+
+      bankSlug: dvaFunding ? dvaFunding.bankSlug : dvaAssignment?.bankSlug || null,
+
+      providerSlug: dvaFunding ? dvaFunding.providerSlug : dvaAssignment?.providerSlug || null,
+
+      dvaFundingTransactionId: dvaFunding?.paystackTransactionId || null,
+
+      dvaFundingIdentityConflicts: dvaFunding?.identityConflicts || [],
+
+      authorizationChannel: dvaFunding?.authorizationChannel || null,
+
       dvaAssigned: dvaAssignment?.assigned ?? null,
+
       dvaActive: dvaAssignment?.active ?? null,
+
       dvaFailureReason: dvaAssignment?.failureReason || null,
 
       transferCode: PaystackEventNormalizerService.cleanString(data.transfer_code),
+
       transferReference: PaystackEventNormalizerService.cleanString(data.reference),
 
-      recipientCode:
-        PaystackEventNormalizerService.cleanString(data.recipient?.recipient_code) ||
-        PaystackEventNormalizerService.cleanString(data.recipient_code),
+      recipientCode: PaystackEventNormalizerService.resolveConsistentIdentity(
+        [data.recipient?.recipient_code, data.recipient_code],
+        "transfer recipient codes"
+      ),
 
       status: PaystackEventNormalizerService.cleanLowerString(data.status),
+
       domain: PaystackEventNormalizerService.cleanLowerString(data.domain),
+
       channel: PaystackEventNormalizerService.cleanLowerString(data.channel),
 
       paidAt:
@@ -861,18 +994,24 @@ class PaystackEventNormalizerService {
         PaystackEventNormalizerService.cleanString(data.failure_reason),
 
       purpose: PaystackEventNormalizerService.cleanLowerString(metadata.purpose),
+
       fundingType: PaystackEventNormalizerService.cleanLowerString(metadata.fundingType),
+
       paymentRail: PaystackEventNormalizerService.cleanLowerString(metadata.paymentRail),
+
       paymentReference: PaystackEventNormalizerService.cleanString(metadata.paymentReference),
 
-      paymentKind: PaystackEventNormalizerService.isSubscriptionPaymentEvent(payload)
-        ? PaystackEventNormalizerService.getSubscriptionPaymentKind(payload, {
-            required: true,
-          })
-        : PaystackEventNormalizerService.cleanLowerString(metadata.paymentKind),
+      paymentKind:
+        !dvaFunding && PaystackEventNormalizerService.isSubscriptionPaymentEvent(payload)
+          ? PaystackEventNormalizerService.getSubscriptionPaymentKind(payload, {
+              required: true,
+            })
+          : PaystackEventNormalizerService.cleanLowerString(metadata.paymentKind),
 
       paymentMethod: PaystackEventNormalizerService.cleanLowerString(metadata.paymentMethod),
+
       jobPaymentId: PaystackEventNormalizerService.cleanString(metadata.jobPaymentId),
+
       jobPostingPlanId: PaystackEventNormalizerService.cleanString(metadata.jobPostingPlanId),
 
       subscriptionPaymentId: PaystackEventNormalizerService.cleanString(
@@ -880,9 +1019,13 @@ class PaystackEventNormalizerService {
       ),
 
       subscriptionId: PaystackEventNormalizerService.cleanString(metadata.subscriptionId),
+
       subscriptionPlanId: PaystackEventNormalizerService.cleanString(metadata.subscriptionPlanId),
+
       billingCycleKey: PaystackEventNormalizerService.cleanString(metadata.billingCycleKey),
+
       planCode: PaystackEventNormalizerService.cleanString(metadata.planCode),
+
       planVersion: PaystackEventNormalizerService.cleanString(metadata.planVersion),
 
       providerRefundId,
@@ -892,13 +1035,21 @@ class PaystackEventNormalizerService {
       originalTransactionProviderId,
 
       refundMerchantNote: PaystackEventNormalizerService.getRefundMerchantNote(payload),
+
       refundCustomerNote: PaystackEventNormalizerService.getRefundCustomerNote(payload),
+
       refundTraceKey: PaystackEventNormalizerService.getRefundTraceKey(payload),
+
       refundProcessor: PaystackEventNormalizerService.getRefundProcessor(payload),
+
       refundReason: PaystackEventNormalizerService.getRefundReason(payload),
+
       refundDeductedAmount: PaystackEventNormalizerService.getRefundDeductedAmount(payload),
+
       refundFullyDeducted: PaystackEventNormalizerService.getRefundFullyDeducted(payload),
+
       refundExpectedAt: PaystackEventNormalizerService.getRefundExpectedAt(payload),
+
       refundedAt: PaystackEventNormalizerService.getRefundedAt(payload),
 
       metadata,
@@ -922,20 +1073,30 @@ class PaystackEventNormalizerService {
     }
 
     const eventName = PaystackEventNormalizerService.getEventName(payload);
+
     const eventCategory = PaystackEventNormalizerService.getEventCategory(payload);
+
     const providerEventId = PaystackEventNormalizerService.getProviderEventId(payload);
+
     const providerReference = PaystackEventNormalizerService.getProviderReference(payload);
+
     const providerRefundId = PaystackEventNormalizerService.getProviderRefundId(payload);
 
     const providerRefundReference =
       PaystackEventNormalizerService.getProviderRefundReference(payload);
 
     const amount = PaystackEventNormalizerService.getAmount(payload);
+
     const providerFee = PaystackEventNormalizerService.getProviderFee(payload);
+
     const netAmount = PaystackEventNormalizerService.getNetAmount(payload);
+
     const currency = PaystackEventNormalizerService.getCurrency(payload, options);
+
     const countryCode = PaystackEventNormalizerService.getCountryCode(payload, options);
+
     const metadata = PaystackEventNormalizerService.normalizeMetadata(payload);
+
     const dvaAssignment = PaystackEventNormalizerService.getDVAAssignmentDetails(payload);
 
     const isTransfer = ["transfer.success", "transfer.failed", "transfer.reversed"].includes(
@@ -957,9 +1118,10 @@ class PaystackEventNormalizerService {
       throw new Error("Successful charge requires its transaction reference.");
     }
 
-    const paystackMetadata = isTransfer
-      ? PaystackEventNormalizerService.getWithdrawalMetadata(payload)
-      : metadata.metadata || {};
+    const isDvaFunding = eventCategory === "employer_wallet_funding";
+
+    // Financial ownership is resolved from historical records.
+    const paystackMetadata = isTransfer || isDvaFunding ? {} : metadata.metadata || {};
 
     const employerProfileId =
       PaystackEventNormalizerService.cleanString(paystackMetadata.employerProfileId) || null;
@@ -989,17 +1151,29 @@ class PaystackEventNormalizerService {
         null;
 
     const paymentReference = metadata.paymentReference || null;
+
     const paymentKind = metadata.paymentKind || null;
+
     const paymentMethod = metadata.paymentMethod || null;
+
     const jobPaymentId = metadata.jobPaymentId || null;
+
     const jobPostingPlanId = metadata.jobPostingPlanId || null;
+
     const subscriptionPaymentId = metadata.subscriptionPaymentId || null;
+
     const subscriptionId = metadata.subscriptionId || null;
+
     const subscriptionPlanId = metadata.subscriptionPlanId || null;
+
     const billingCycleKey = metadata.billingCycleKey || null;
+
     const planCode = metadata.planCode || null;
+
     const planVersion = metadata.planVersion || null;
+
     const originalTransactionReference = metadata.originalTransactionReference || null;
+
     const originalTransactionProviderId = metadata.originalTransactionProviderId || null;
 
     return {
@@ -1091,8 +1265,12 @@ class PaystackEventNormalizerService {
         transactionId,
 
         transferCode: metadata.transferCode,
+
         paystackTransferCode: metadata.transferCode,
+
         transferReference: metadata.transferReference,
+
+        recipientCode: metadata.recipientCode,
 
         paystackTransferReference: isTransfer ? metadata.transferReference : null,
 
@@ -1115,7 +1293,13 @@ class PaystackEventNormalizerService {
         refundExpectedAt: metadata.refundExpectedAt,
         refundedAt: metadata.refundedAt,
 
-        // DVA assignment lifecycle
+        // DVA identity and funding evidence
+        dvaFundingTransactionId: metadata.dvaFundingTransactionId,
+
+        dvaFundingIdentityConflicts: metadata.dvaFundingIdentityConflicts,
+
+        authorizationChannel: metadata.authorizationChannel,
+
         paystackCustomerId: dvaAssignment?.paystackCustomerId || metadata.paystackCustomerId,
 
         paystackCustomerCode: dvaAssignment?.paystackCustomerCode || metadata.paystackCustomerCode,
@@ -1138,7 +1322,9 @@ class PaystackEventNormalizerService {
         providerSlug: dvaAssignment?.providerSlug || metadata.providerSlug,
 
         dvaAssigned: dvaAssignment?.assigned ?? null,
+
         dvaActive: dvaAssignment?.active ?? null,
+
         dvaFailureReason: dvaAssignment?.failureReason || null,
 
         metadata,

@@ -127,6 +127,10 @@ async function assertCanManageTeamMembers(req) {
     throw createTeamMemberError("Employer business profile not found.", 404);
   }
 
+  if (!["active", "restricted", "suspended"].includes(employerProfile.accountStatus)) {
+    throw createTeamMemberError("This business cannot access team management.", 403);
+  }
+
   /*
    * Primary employer ownership is established
    * by EmployerProfile.user.

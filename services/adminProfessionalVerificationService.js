@@ -228,6 +228,10 @@ class AdminProfessionalVerificationService {
 
     if (normalizedType) filter.type = normalizedType;
 
+    if (["awaiting_review", "licence_review", "pending", "needs_review"].includes(normalizedStatus)) {
+      filter.accountStatus = { $ne: "closed" };
+    }
+
     switch (normalizedStatus) {
       case "awaiting_review":
         // Include pending final approvals AND renewal uploads from professionals

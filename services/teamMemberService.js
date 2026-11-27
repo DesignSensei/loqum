@@ -225,7 +225,7 @@ async function assertCanManageTeam({ actorUserId, businessId, session }) {
     isVerified: true,
   }).select("_id");
 
-  const businessQuery = EmployerProfile.findById(businessId).select("_id user");
+  const businessQuery = EmployerProfile.findById(businessId).select("_id user accountStatus");
 
   if (session) {
     actorQuery.session(session);
@@ -235,8 +235,23 @@ async function assertCanManageTeam({ actorUserId, businessId, session }) {
   const actor = await actorQuery;
   const business = await businessQuery;
 
-  if (!actor || !business) {
+  if (!actor || !business || !["active", "restricted", "suspended"].includes(business.accountStatus)) {
     throw new Error("An active employer account and business are required.");
+  }
+
+  // Coordinate team mutations with final business closure.
+  if (!session?.inTransaction?.()) {
+    throw new Error("Team management requires an active transaction.");
+  }
+
+  const lockedBusiness = await EmployerProfile.findOneAndUpdate(
+    { _id: business._id, accountStatus: { $in: ["active", "restricted", "suspended"] } },
+    { $inc: { __v: 1 } },
+    { session, new: true }
+  ).select("_id");
+
+  if (!lockedBusiness) {
+    throw new Error("The business is no longer eligible for team management.");
   }
 
   if (normalizeId(business.user) === normalizeId(actor._id)) {
@@ -405,6 +420,57 @@ async function demoteExistingBranchManagers({
 /* ─────────────────────────────── TEAM MEMBER SERVICE ─────────────────────────────── */
 
 class TeamMemberService {
+  /* ---------- Business closure offboarding ---------- */
+
+  static async removeForBusinessClosure({ businessId, actorUserId, session }) {
+    assertValidObjectId(businessId, "Valid employer business ID is required.");
+    assertValidObjectId(actorUserId, "Valid actor ID is required.");
+
+    if (!session?.inTransaction?.()) {
+      throw new Error("Business closure requires an active transaction.");
+    }
+
+    const business = await EmployerProfile.findOne({
+      _id: businessId,
+      user: actorUserId,
+      accountStatus: "closed",
+    }).select("_id closedAt").session(session);
+
+    if (!business?.closedAt) {
+      throw new Error("The business must be marked closed in the final closure transaction.");
+    }
+
+    // Preserve roles, branch assignments and original ownership as history.
+    const result = await EmployerMember.updateMany(
+      {
+        business: business._id,
+        isCurrent: true,
+        accountStatus: { $in: ["active", "restricted", "suspended"] },
+      },
+      {
+        $set: {
+          accountStatus: "removed",
+          isCurrent: false,
+          removedAt: business.closedAt,
+          removedBy: actorUserId,
+          removalReason: "Business closure",
+          updatedBy: actorUserId,
+        },
+        $inc: { __v: 1 },
+      },
+      { session, runValidators: true }
+    );
+
+    if (await EmployerMember.exists({
+      business: business._id,
+      isCurrent: true,
+    }).session(session)) {
+      throw new Error("Unresolved current membership requires reconciliation.");
+    }
+
+    return { membershipsRemoved: result.modifiedCount };
+  }
+
   static async getTeamMember({ memberId, businessId }) {
     const member = await getMemberForBusiness({
       memberId,

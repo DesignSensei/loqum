@@ -556,19 +556,49 @@
     </div>
 
     <!-- Finance -->
-    <a
-      href="/admin/finance"
-      class="loqum-sidebar-link"
-      data-bs-toggle="tooltip"
-      data-bs-placement="right"
-      title="Finance"
+    <div
+      class="menu menu-item loqum-sidebar-menu-item"
+      data-kt-menu-trigger="{default: 'click', lg: 'hover'}"
+      data-kt-menu-placement="right-start"
+      data-kt-menu-attach="parent"
     >
-      <i class="ki-duotone ki-dollar fs-1">
-        <span class="path1"></span>
-        <span class="path2"></span>
-        <span class="path3"></span>
-      </i>
-    </a>
+      <span class="menu-link menu-center loqum-sidebar-link" aria-label="Finance">
+        <span class="menu-icon me-0">
+          <i class="ki-duotone ki-dollar fs-1">
+            <span class="path1"></span>
+            <span class="path2"></span>
+            <span class="path3"></span>
+          </i>
+        </span>
+      </span>
+
+      <div class="menu-sub menu-sub-dropdown menu-sub-indention px-2 py-4 w-225px"
+           data-kt-menu="true">
+
+        <div class="menu-item">
+          <div class="menu-content">
+            <span class="menu-section fs-5 fw-bolder ps-1 py-1">Finance</span>
+          </div>
+        </div>
+
+        <div class="separator my-2"></div>
+
+        <div class="menu-item">
+          <a class="menu-link" href="/admin/finance">
+            <span class="menu-bullet"><span class="bullet bullet-dot"></span></span>
+            <span class="menu-title">Overview</span>
+          </a>
+        </div>
+
+        <div class="menu-item">
+          <a class="menu-link" href="/admin/financial-obligations">
+            <span class="menu-bullet"><span class="bullet bullet-dot"></span></span>
+            <span class="menu-title">Financial Obligations</span>
+          </a>
+        </div>
+
+      </div>
+    </div>
     <% } %>
   </div>
 

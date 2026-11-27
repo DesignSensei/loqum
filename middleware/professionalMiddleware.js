@@ -111,6 +111,16 @@ exports.attachProfessionalProfile = async (req, res, next) => {
       });
     }
 
+    if (req.user.accountStatus !== "active" || req.user.isVerified !== true) {
+      return next(
+        createError(
+          "Professional account access is not permitted.",
+          403,
+          "PROFESSIONAL_ACCOUNT_INELIGIBLE"
+        )
+      );
+    }
+
     const profile = await ProfessionalProfile.findOne({
       user: req.user._id,
     });
@@ -121,6 +131,16 @@ exports.attachProfessionalProfile = async (req, res, next) => {
           "Your professional profile could not be found. Please contact Loqum Support.",
           409,
           "PROFESSIONAL_PROFILE_MISSING"
+        )
+      );
+    }
+
+    if (profile.accountStatus === "closed") {
+      return next(
+        createError(
+          "This professional profile has been closed.",
+          403,
+          "PROFESSIONAL_PROFILE_CLOSED"
         )
       );
     }

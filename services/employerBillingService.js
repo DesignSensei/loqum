@@ -61,32 +61,29 @@ class EmployerBillingService {
       throw new Error("User ID is required.");
     }
 
-    /*
-     * A supplied/preloaded profile is only a lookup hint.
-     * Do not trust it until its ownership is verified.
-     */
-    if (employerProfile?._id) {
-      const verifiedEmployerProfile = await EmployerProfile.findOne({
-        _id: employerProfile._id,
-        user: userId,
-      });
-
-      if (!verifiedEmployerProfile) {
-        throw new Error("Employer profile does not belong to the current user.");
-      }
-
-      return verifiedEmployerProfile;
-    }
-
-    const foundEmployerProfile = await EmployerProfile.findOne({
+    const filter = {
       user: userId,
-    });
+    };
 
-    if (!foundEmployerProfile) {
-      throw new Error("Employer profile not found.");
+    if (employerProfile?._id) {
+      filter._id = employerProfile._id;
     }
 
-    return foundEmployerProfile;
+    const profile = await EmployerProfile.findOne(filter);
+
+    if (!profile) {
+      throw new Error(
+        employerProfile?._id
+          ? "Employer profile does not belong to the current user."
+          : "Employer profile not found."
+      );
+    }
+
+    if (profile.accountStatus === "closed") {
+      throw new Error("This business account has been closed.");
+    }
+
+    return profile;
   }
 
   /* ---------- Format date for display ---------- */
@@ -794,7 +791,7 @@ class EmployerBillingService {
     };
   }
 
-  /* ---------- Build wallet bank account display view ---------- */
+  /* ---------- Build dedicated virtual account display view ---------- */
 
   static buildDVAView(dvaStatus) {
     const dva = dvaStatus?.dva || null;
@@ -805,10 +802,11 @@ class EmployerBillingService {
 
     const hasAccountDetails = Boolean(dva && dva.accountNumber && dva.accountName && dva.bankName);
 
-    const canRetrySetup = Boolean(dvaStatus?.canRetrySetup);
+    const canRetrySetup =
+      !["retiring", "deactivated"].includes(rawStatus) && Boolean(dvaStatus?.canRetrySetup);
 
     const setupButtonLabel =
-      rawStatus === "not_started" ? "Set up wallet bank account" : "Try setup again";
+      rawStatus === "not_started" ? "Set up dedicated virtual account" : "Try setup again";
 
     return {
       status,
@@ -819,9 +817,10 @@ class EmployerBillingService {
 
       statusBadgeClass: badgeClass[status] || "badge-light-secondary",
 
-      message: dvaStatus?.message || "Your wallet bank account is being set up.",
+      message: dvaStatus?.message || "Your dedicated virtual account is being set up.",
 
-      supportMessage: "Please allow up to 24 hours for your wallet bank account to be completed.",
+      supportMessage:
+        "Please allow up to 24 hours for your dedicated virtual account to be completed.",
 
       hasDVA: Boolean(dva),
 
@@ -2218,7 +2217,7 @@ class EmployerBillingService {
 
         dvaStatus: dva.status,
 
-        message: "Wallet bank account is ready.",
+        message: "dedicated virtual account is ready.",
       };
     }
 
@@ -2229,7 +2228,7 @@ class EmployerBillingService {
 
       message:
         dva.failureReason ||
-        "Wallet bank account setup has been received. Please allow up to 24 hours.",
+        "dedicated virtual account setup has been received. Please allow up to 24 hours.",
     };
   }
 

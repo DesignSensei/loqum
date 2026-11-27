@@ -901,6 +901,7 @@ class ProfessionalProfileService {
 
     const profile = await ProfessionalProfile.findOne({
       user: actorUser._id,
+      accountStatus: { $ne: "closed" },
     });
 
     if (!profile) {

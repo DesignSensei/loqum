@@ -1,10 +1,39 @@
 // services/accountService.js
 
 const crypto = require("crypto");
+const mongoose = require("mongoose");
 
 const User = require("../models/User");
+const EmployerProfile = require("../models/EmployerProfile");
+const EmployerMember = require("../models/EmployerMember");
+const ProfessionalProfile = require("../models/ProfessionalProfile");
+const ShiftApplication = require("../models/ShiftApplication");
+const JobApplication = require("../models/JobApplication");
+const Appointment = require("../models/Appointment");
+const ShiftAssignment = require("../models/ShiftAssignment");
+const ShiftOccurrence = require("../models/ShiftOccurrence");
+const ShiftAssignmentCase = require("../models/ShiftAssignmentCase");
+const ShiftOccurrenceClaim = require("../models/ShiftOccurrenceClaim");
+const ShiftOccurrenceDispute = require("../models/ShiftOccurrenceDispute");
+const ShiftSettlementBatch = require("../models/ShiftSettlementBatch");
+const ProviderEvent = require("../models/ProviderEvent");
+const Wallet = require("../models/Wallet");
+const Transaction = require("../models/Transaction");
+const FinancialObligationService = require("./financialObligationService");
 const AuthService = require("./authService");
 const EmailService = require("./emailService");
+
+const WalletService = require("./walletService");
+const { createServiceError } = require("./helpers/serviceErrorHelper");
+const { TERMINAL_APPLICATION_STATUSES } = require("../constants/shiftApplication");
+const { TERMINAL_JOB_APPLICATION_STATUSES } = require("../constants/jobApplication");
+
+async function readClosureQueries(session, queries) {
+  if (!session) return Promise.all(queries);
+  const results = [];
+  for (const query of queries) results.push(await query.session(session));
+  return results;
+}
 
 class AccountService {
   static normalizeEmail(email) {
@@ -14,7 +43,12 @@ class AccountService {
   }
 
   static isValidEmail(email) {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
+    const value = this.normalizeEmail(email);
+
+    return (
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) &&
+      !value.endsWith("@closed.loqum.invalid")
+    );
   }
 
   static isValidUrl(value) {
@@ -181,6 +215,484 @@ class AccountService {
     };
   }
 
+  /* ---------- ACCOUNT CLOSURE ELIGIBILITY ---------- */
+  static async getAccountClosureEligibility({ userId, session = null } = {}) {
+    if (!mongoose.isValidObjectId(userId)) {
+      throw new Error("A valid user is required.");
+    }
+
+    const user = await User.findById(userId)
+      .select("_id role accountStatus isVerified isOnboarded professionalProfile")
+      .session(session)
+      .lean();
+
+    if (!user) {
+      throw new Error("User not found.");
+    }
+
+    const blockers = [];
+    const pendingChecks = [];
+
+    const addBlocker = (code, message) => blockers.push({ code, message });
+
+    let professionalProfileId = null;
+    let ownedBusinessCount = 0;
+    let currentMembership = null;
+    let walletCount = 0;
+
+    if (!["professional", "employer", "admin"].includes(user.role)) {
+      addBlocker("ACCOUNT_CLOSURE_ROLE_UNSUPPORTED", "This account type requires manual review.");
+    }
+
+    if (user.accountStatus !== "active" || user.isVerified !== true) {
+      addBlocker(
+        "ACCOUNT_CLOSURE_ACCOUNT_INELIGIBLE",
+        "This account cannot use the standard closure process in its current status."
+      );
+    }
+
+    if (user.role === "professional") {
+      const profile = await ProfessionalProfile.findOne({ user: user._id })
+        .select("_id accountStatus")
+        .session(session).lean();
+
+      if (profile) {
+        professionalProfileId = String(profile._id);
+
+        if (
+          user.professionalProfile &&
+          String(user.professionalProfile) !== professionalProfileId
+        ) {
+          addBlocker(
+            "ACCOUNT_CLOSURE_PROFESSIONAL_PROFILE_MISMATCH",
+            "Your professional profile linkage requires reconciliation before closure."
+          );
+        }
+
+        if (profile.accountStatus !== "active") {
+          addBlocker(
+            "ACCOUNT_CLOSURE_PROFESSIONAL_REVIEW",
+            "Resolve the professional account restriction or review before closure."
+          );
+        }
+
+        const [openShiftApplication, activeJobApplication, scheduledAppointment] =
+          await readClosureQueries(session, [
+            ShiftApplication.exists({
+              professional: profile._id,
+              status: { $nin: TERMINAL_APPLICATION_STATUSES },
+            }),
+            JobApplication.exists({
+              professional: profile._id,
+              status: { $nin: TERMINAL_JOB_APPLICATION_STATUSES },
+            }),
+            Appointment.exists({ professional: profile._id, status: "scheduled" }),
+          ]);
+
+        if (openShiftApplication) {
+          addBlocker("ACCOUNT_CLOSURE_OPEN_SHIFT_APPLICATIONS",
+            "Resolve outstanding shift applications before account closure.");
+        }
+        if (activeJobApplication) {
+          addBlocker("ACCOUNT_CLOSURE_OPEN_JOB_APPLICATIONS",
+            "Resolve outstanding permanent job applications before account closure.");
+        }
+        if (scheduledAppointment) {
+          addBlocker("ACCOUNT_CLOSURE_OPEN_JOB_APPOINTMENTS",
+            "Resolve outstanding scheduled interviews before account closure.");
+        }
+
+        const now = new Date();
+        const [
+          ongoingAssignment,
+          openAssignmentCase,
+          activeClaim,
+          activeDispute,
+          unresolvedOccurrence,
+          wallets,
+        ] = await readClosureQueries(session, [
+          ShiftAssignment.exists({
+            professional: profile._id,
+            status: { $in: ["scheduled", "active", "ending"] },
+          }),
+          ShiftAssignmentCase.exists({ professional: profile._id, isOpen: true }),
+          ShiftOccurrenceClaim.exists({ professional: profile._id, status: "active" }),
+          ShiftOccurrenceDispute.exists({ professional: profile._id, status: "active" }),
+          ShiftOccurrence.exists({
+            assignedProfessional: profile._id,
+            $or: [
+              { status: { $nin: ["completed", "cancelled", "no_show", "expired_unfilled"] } },
+              { activeClaim: { $ne: null } },
+              { activeDispute: { $ne: null } },
+              {
+                challengeDeadlineAt: { $gt: now },
+                challengeWindowClosedAt: null,
+              },
+              {
+                baseProfessionalPay: { $gt: 0 },
+                "baseSettlement.status": { $ne: "released" },
+              },
+              {
+                overtimeProfessionalPay: { $gt: 0 },
+                "overtimeSettlement.status": { $ne: "released" },
+              },
+              { "overtime.status": { $in: ["pending", "disputed"] } },
+            ],
+          }),
+          Wallet.find({ ownerType: "professional", professional: profile._id })
+            .select("_id status availableBalance pendingBalance outstandingBalance")
+            .lean(),
+        ]);
+
+        if (ongoingAssignment) {
+          addBlocker(
+            "ACCOUNT_CLOSURE_ACTIVE_ASSIGNMENTS",
+            "Resolve scheduled, active or ending shift assignments before closure."
+          );
+        }
+
+        if (openAssignmentCase) {
+          addBlocker(
+            "ACCOUNT_CLOSURE_OPEN_ASSIGNMENT_CASE",
+            "An assignment exit or employer issue case is still open."
+          );
+        }
+
+        if (activeClaim || activeDispute) {
+          addBlocker(
+            "ACCOUNT_CLOSURE_OPEN_FINANCIAL_CASE",
+            "Resolve outstanding professional claims or employer disputes before closure."
+          );
+        }
+
+        if (unresolvedOccurrence) {
+          addBlocker(
+            "ACCOUNT_CLOSURE_UNRESOLVED_OCCURRENCES",
+            "An assigned occurrence still has work, challenge or payout obligations."
+          );
+        }
+
+        const unresolvedSettlementBatch = await ShiftSettlementBatch.exists({
+          professional: profile._id,
+          status: {
+            $nin: ["released", "cancelled"],
+          },
+        }).session(session);
+
+        if (unresolvedSettlementBatch) {
+          addBlocker(
+            "ACCOUNT_CLOSURE_UNRESOLVED_SETTLEMENT_BATCH",
+            "Resolve all scheduled, processing or failed professional settlement batches before closure."
+          );
+        }
+
+        if (
+          await FinancialObligationService.hasOutstandingObligations({
+            professionalProfileId: profile._id,
+          }, { session })
+        ) {
+          addBlocker(
+            "ACCOUNT_CLOSURE_OUTSTANDING_FINANCIAL_OBLIGATIONS",
+            "Resolve outstanding financial obligations before closing this account."
+          );
+        }
+
+        walletCount = wallets.length;
+
+        const providerEventScopes = [
+          {
+            professional: profile._id,
+          },
+        ];
+
+        if (wallets.length > 0) {
+          providerEventScopes.push({
+            wallet: {
+              $in: wallets.map((wallet) => wallet._id),
+            },
+          });
+        }
+
+        if (wallets.length > 0) {
+          const withdrawalReferences = await Transaction.distinct("paystackTransferReference", {
+            wallet: { $in: wallets.map((wallet) => wallet._id) },
+            type: "withdrawal",
+            provider: "paystack",
+            paymentRail: "paystack_transfer",
+            paystackTransferReference: { $type: "string" },
+          }).session(session);
+
+          if (withdrawalReferences.length > 0) {
+            providerEventScopes.push({
+              provider: "paystack",
+              providerReference: { $in: withdrawalReferences },
+            });
+          }
+        }
+
+        const unresolvedProviderEvent = await ProviderEvent.exists({
+          isVerified: true,
+          eventCategory: {
+            $in: [
+              "transfer_unresolved",
+              "professional_withdrawal_payout",
+              "professional_withdrawal_reversal",
+            ],
+          },
+          status: {
+            $nin: ["processed"],
+          },
+          $or: providerEventScopes,
+        }).session(session);
+
+        if (unresolvedProviderEvent) {
+          addBlocker(
+            "ACCOUNT_CLOSURE_UNRECONCILED_PROVIDER_EVENTS",
+            "Resolve outstanding withdrawal provider events before closing this account."
+          );
+        }
+
+        if (
+          wallets.some(
+            (wallet) =>
+              wallet.availableBalance !== 0 ||
+              wallet.pendingBalance !== 0 ||
+              wallet.outstandingBalance !== 0
+          )
+        ) {
+          addBlocker(
+            "ACCOUNT_CLOSURE_WALLET_BALANCE",
+            "Clear available, pending and outstanding wallet balances before closure."
+          );
+        }
+
+        if (wallets.some((wallet) => wallet.status === "frozen")) {
+          addBlocker(
+            "ACCOUNT_CLOSURE_FROZEN_WALLET",
+            "A frozen wallet requires financial review before closure."
+          );
+        }
+
+        if (wallets.length) {
+          const walletIds = wallets.map((wallet) => wallet._id);
+
+          const pendingWalletTransaction = await Transaction.exists({
+            status: { $in: ["pending", "processing"] },
+            $or: [{ wallet: { $in: walletIds } }, { counterpartyWallet: { $in: walletIds } }],
+          }).session(session);
+
+          if (pendingWalletTransaction) {
+            addBlocker(
+              "ACCOUNT_CLOSURE_PENDING_TRANSACTIONS",
+              "Financial transactions are still pending or processing."
+            );
+          }
+        }
+      } else if (user.isOnboarded === true || user.professionalProfile) {
+        addBlocker(
+          "ACCOUNT_CLOSURE_PROFESSIONAL_PROFILE_MISSING",
+          "Your professional profile requires reconciliation before closure."
+        );
+      }
+    }
+
+    if (user.role === "employer") {
+      const [businessCount, membership] = await readClosureQueries(session, [
+        EmployerProfile.countDocuments({ user: user._id, accountStatus: { $ne: "closed" } }),
+
+        EmployerMember.findOne({ user: user._id, isCurrent: true })
+          .select("_id role business accountStatus")
+          .lean(),
+      ]);
+
+      ownedBusinessCount = businessCount;
+      currentMembership = membership;
+
+      if (ownedBusinessCount > 0) {
+        addBlocker(
+          "ACCOUNT_CLOSURE_BUSINESS_OWNERSHIP",
+          "Close each owned business before closing this account."
+        );
+      }
+
+
+
+      // Business wallets, protected funding, refunds and DVAs belong to the
+      // business closure workflow, not to an invited member's personal closure.
+    }
+
+    if (user.role === "admin") {
+      const otherActiveAdmins = await User.countDocuments({
+        _id: { $ne: user._id },
+        role: "admin",
+        accountStatus: "active",
+      }).session(session);
+
+      if (otherActiveAdmins === 0) {
+        addBlocker(
+          "ACCOUNT_CLOSURE_LAST_ACTIVE_ADMIN",
+          "The last active platform administrator cannot close their account."
+        );
+      }
+
+      pendingChecks.push("independent_admin_approval", "admin_case_and_access_handover");
+    }
+
+    return {
+      userId: String(user._id),
+      role: user.role,
+      accountStatus: user.accountStatus,
+      professionalProfileId,
+      ownedBusinessCount,
+      currentMembershipId: currentMembership ? String(currentMembership._id) : null,
+      currentMembershipRole: currentMembership?.role || null,
+      walletCount,
+      blockers,
+      pendingChecks,
+      canClose: blockers.length === 0 && pendingChecks.length === 0,
+    };
+  }
+
+  /* ---------- ACCOUNT CLOSURE ---------- */
+
+  static async closeAccount({ userId, confirmed = false } = {}) {
+    if (confirmed !== true || !mongoose.isValidObjectId(userId)) {
+      throw createServiceError({
+        name: "AccountServiceError", code: "ACCOUNT_CLOSURE_CONFIRMATION_REQUIRED",
+        message: "Explicit account closure confirmation is required.", statusCode: 400,
+      });
+    }
+
+    return WalletService.runWithOptionalTransaction({}, async (session) => {
+      const existing = await User.findById(userId)
+        .select("_id accountStatus closedAt")
+        .session(session);
+
+      if (existing?.accountStatus === "closed") {
+        return {
+          userId: String(userId),
+          closed: true,
+          idempotent: true,
+          closedAt: existing.closedAt
+        };
+      }
+
+      const user = await User.findOneAndUpdate({
+        _id: userId, accountStatus: "active", isVerified: true,
+        role: { $in: ["professional", "employer"] },
+      }, { $inc: { __v: 1 } }, { session, new: true }).select("_id role");
+
+      if (!user) throw createServiceError({
+        name: "AccountServiceError", code: "ACCOUNT_CLOSURE_FORBIDDEN",
+        message: "This account requires manual closure review.", statusCode: 403,
+      });
+
+      // Coordinate closure with professional commitment-creating transactions.
+      const professionalProfile = user.role === "professional"
+        ? await ProfessionalProfile.findOneAndUpdate(
+            { user: user._id },
+            { $inc: { __v: 1 } },
+            { session, new: true, timestamps: false }
+          ).select("+licenceDocumentUrl +upcomingLicence.documentUrl")
+        : null;
+
+      const eligibility = await this.getAccountClosureEligibility({ userId, session });
+
+      if (!eligibility.canClose) throw createServiceError({
+        name: "AccountServiceError", code: "ACCOUNT_CLOSURE_BLOCKED",
+        message: "Resolve outstanding commitments before account closure.",
+        statusCode: 409, details: { eligibility },
+      });
+
+      const closedAt = new Date();
+
+      if (user.role === "professional") {
+        const profile = professionalProfile;
+
+        if (profile) {
+          const wallets = await Wallet.find({
+            ownerType: "professional",
+            professional: profile._id
+          }).session(session);
+
+          for (const wallet of wallets) {
+            await WalletService.closeWalletForAccountClosure({
+              walletId: wallet._id,
+              ownerType: "professional",
+              ownerProfileId: profile._id,
+            }, { session });
+          }
+
+          if (profile.accountStatus !== "closed") {
+            profile.accountStatus = "closed";
+            profile.closedAt = closedAt;
+            profile.accountStatusReason = "Account holder requested closure";
+            profile.accountStatusUpdatedAt = closedAt;
+            profile.accountStatusUpdatedBy = user._id;
+            profile.marketplaceStatus = "hidden";
+            profile.availabilityStatus = "unavailable";
+
+            await profile.save({ session });
+          }
+        }
+      } else {
+        const member = await EmployerMember.findOne({
+          user: user._id,
+          isCurrent: true
+        }).session(session);
+
+        if (member) {
+          const business = await EmployerProfile.findOneAndUpdate(
+            { _id: member.business },
+            { $inc: { __v: 1 } },
+            { session, new: true }
+          ).select("_id user");
+
+          if (!business || String(business.user) === String(user._id)) {
+            throw createServiceError({
+              name: "AccountServiceError", code: "ACCOUNT_CLOSURE_MEMBERSHIP_CONFLICT",
+              message: "The current membership requires reconciliation.", statusCode: 409,
+            });
+          }
+
+          const removed = await EmployerMember.updateOne({
+            _id: member._id,
+            user: user._id,
+            business: member.business,
+            isCurrent: true,
+            accountStatus: { $in: ["active", "restricted", "suspended"] },
+          }, {
+            $set: {
+              accountStatus: "removed",
+              isCurrent: false,
+              removedAt: closedAt,
+              removedBy: user._id,
+              removalReason: "Personal account closure",
+              updatedBy: user._id,
+            },
+            $inc: { __v: 1 }
+          }, { session, runValidators: true });
+
+          if (removed.modifiedCount !== 1) {
+            throw new Error("Membership changed during closure.");
+          }
+        }
+      }
+
+      await User.closeForAccountClosure({
+        userId: user._id,
+        currentTime: closedAt
+      }, { session });
+
+      return {
+        userId: String(user._id),
+        closed: true,
+        idempotent: false,
+        closedAt
+      };
+    });
+  }
+
   static async updateProfile({ userId, data = {} }) {
     if (!userId) {
       throw new Error("User is required.");
@@ -188,8 +700,8 @@ class AccountService {
 
     const user = await User.findById(userId);
 
-    if (!user) {
-      throw new Error("User not found.");
+    if (!user || user.accountStatus === "closed") {
+      throw new Error("User not found or account is closed.");
     }
 
     const legalNameIsProtected =
@@ -248,8 +760,8 @@ class AccountService {
 
     const user = await User.findById(userId);
 
-    if (!user) {
-      throw new Error("User not found.");
+    if (!user || user.accountStatus === "closed") {
+      throw new Error("User not found or account is closed.");
     }
 
     user.photo = photo;
@@ -292,8 +804,8 @@ class AccountService {
 
     const user = await User.findById(userId).select("+password");
 
-    if (!user) {
-      throw new Error("User not found.");
+    if (!user || user.accountStatus === "closed") {
+      throw new Error("User not found or account is closed.");
     }
 
     if (user.authProvider === "google") {
@@ -508,8 +1020,8 @@ class AccountService {
 
     const user = await User.findById(userId);
 
-    if (!user) {
-      throw new Error("User not found.");
+    if (!user || user.accountStatus === "closed") {
+      throw new Error("User not found or account is closed.");
     }
 
     if (!user.twoFactorEnabled) {
@@ -532,8 +1044,8 @@ class AccountService {
 
     const existingUser = await User.findById(userId);
 
-    if (!existingUser) {
-      throw new Error("User not found.");
+    if (!existingUser || existingUser.accountStatus === "closed") {
+      throw new Error("User not found or account is closed.");
     }
 
     if (!existingUser.twoFactorEnabled) {
@@ -553,8 +1065,8 @@ class AccountService {
 
     const user = await User.findById(userId);
 
-    if (!user) {
-      throw new Error("User not found.");
+    if (!user || user.accountStatus === "closed") {
+      throw new Error("User not found or account is closed.");
     }
 
     if (user.twoFactorEnabled) {
@@ -577,8 +1089,8 @@ class AccountService {
 
     const existingUser = await User.findById(userId);
 
-    if (!existingUser) {
-      throw new Error("User not found.");
+    if (!existingUser || existingUser.accountStatus === "closed") {
+      throw new Error("User not found or account is closed.");
     }
 
     if (existingUser.twoFactorEnabled) {

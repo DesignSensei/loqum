@@ -1,0 +1,12 @@
+<div id="overview" class="tab-pane fade show active">
+      <div class="card card-flush">
+        <div class="card-body">
+          <dl class="row g-4">
+            <% overview.forEach(function(field) { %>
+            <dt class="col-md-4 text-muted"><%= field.title %></dt>
+            <dd class="col-md-8 text-break"><%= field.value %></dd>
+            <% }); %>
+          </dl>
+        </div>
+      </div>
+    </div>

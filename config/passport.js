@@ -26,7 +26,11 @@ module.exports = function (passport) {
           .toLowerCase()
           .trim();
 
-        if (!normalizedEmail || !password) {
+        if (
+          !normalizedEmail ||
+          normalizedEmail.endsWith("@closed.loqum.invalid") ||
+          !password
+        ) {
           return done(null, false, { message: "Invalid credentials" });
         }
 
@@ -102,7 +106,7 @@ module.exports = function (passport) {
             });
           }
 
-          if (!email) {
+          if (!email || email.endsWith("@closed.loqum.invalid")) {
             return done(null, false, {
               message: "Google account does not have an email address.",
             });
@@ -338,7 +342,11 @@ module.exports = function (passport) {
   /* --------------------------- Session Handling --------------------------- */
 
   passport.serializeUser((user, done) => {
-    done(null, user.id);
+    if (!user || !isPermittedSignInStatus(user.accountStatus)) {
+      return done(new Error("This account is not permitted to sign in."));
+    }
+
+    return done(null, user.id);
   });
 
   passport.deserializeUser(async (id, done) => {
@@ -346,6 +354,11 @@ module.exports = function (passport) {
       // Reload each request so accountStatus, role and isVerified stay current.
       // Password remains excluded from the request user document.
       const user = await User.findById(id).select("-password");
+
+      if (!user || user.accountStatus === "closed") {
+        return done(null, false);
+      }
+
       return done(null, user);
     } catch (err) {
       return done(err);

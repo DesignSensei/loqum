@@ -1,0 +1,53 @@
+<div id="executions" class="tab-pane fade">
+      <div class="card card-flush mb-6">
+        <div class="card-body">
+          <h3 class="fw-bold mb-5">Current Execution</h3>
+
+          <% if (!execution.length) { %>
+          <div class="text-muted">No execution authorized.</div>
+          <% } %>
+
+          <dl class="row g-3">
+            <% execution.forEach(function(field) { %>
+            <dt class="col-md-4 text-muted"><%= field.title %></dt>
+            <dd class="col-md-8 text-break"><%= field.value %></dd>
+            <% }); %>
+          </dl>
+
+          <% if (previousSettlement.length) { %>
+          <h4 class="fw-bold mt-6">Reversed Settlement</h4>
+          <dl class="row g-3">
+            <% previousSettlement.forEach(function(field) { %>
+            <dt class="col-md-4 text-muted"><%= field.title %></dt>
+            <dd class="col-md-8 text-break"><%= field.value %></dd>
+            <% }); %>
+          </dl>
+          <% } %>
+        </div>
+      </div>
+
+      <% history.forEach(function(attempt) { %>
+      <div class="card card-flush border mb-6">
+        <div class="card-body">
+          <h4 class="fw-bold mb-5"><%= attempt.title %></h4>
+
+          <dl class="row g-3">
+            <% attempt.fields.forEach(function(field) { %>
+            <dt class="col-md-4 text-muted"><%= field.title %></dt>
+            <dd class="col-md-8 text-break"><%= field.value %></dd>
+            <% }); %>
+          </dl>
+
+          <% if (attempt.settlement.length) { %>
+          <h5 class="fw-bold mt-5">Previous Settlement</h5>
+          <dl class="row g-3">
+            <% attempt.settlement.forEach(function(field) { %>
+            <dt class="col-md-4 text-muted"><%= field.title %></dt>
+            <dd class="col-md-8 text-break"><%= field.value %></dd>
+            <% }); %>
+          </dl>
+          <% } %>
+        </div>
+      </div>
+      <% }); %>
+    </div>

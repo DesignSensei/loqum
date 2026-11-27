@@ -714,6 +714,40 @@ class JobApplicationService {
   }
 
   static async assertCurrentCandidate({ professional, user, publication, session }) {
+    if (!session?.inTransaction()) {
+      throw this.createError({
+        message: "An active transaction is required for candidate authorization.",
+        code: "JOB_APPLICATION_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
+    const profileLock = await ProfessionalProfile.updateOne(
+      { _id: professional._id, user: user._id, accountStatus: "active" },
+      { $inc: { __v: 1 } },
+      { session, timestamps: false }
+    );
+
+    const userLock = await User.updateOne(
+      {
+        _id: user._id,
+        role: "professional",
+        accountStatus: "active",
+        isVerified: true,
+        isOnboarded: true,
+      },
+      { $inc: { __v: 1 } },
+      { session, timestamps: false }
+    );
+
+    if (profileLock.modifiedCount !== 1 || userLock.modifiedCount !== 1) {
+      throw this.createError({
+        message: "The professional account is no longer eligible.",
+        code: "JOB_PROFESSIONAL_USER_INELIGIBLE",
+        statusCode: 403,
+      });
+    }
+
     const trusted = await ProfessionalVerificationService.getTrustedOnboardingNIN({
       profile: professional,
       session,
@@ -747,7 +781,11 @@ class JobApplicationService {
         statusCode: 403,
       });
     }
-    const business = await EmployerProfile.findById(job.business).session(session);
+    const business = await EmployerProfile.findOneAndUpdate(
+      { _id: job.business, accountStatus: "active", cacVerificationStatus: "verified" },
+      { $inc: { __v: 1 } },
+      { session, new: true, timestamps: false }
+    );
     if (
       !business ||
       business.accountStatus !== "active" ||

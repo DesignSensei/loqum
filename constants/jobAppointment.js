@@ -1,76 +1,28 @@
 // constants/jobAppointment.js
 
-/**
- * JOB APPOINTMENT FORMATS:
- *
- * Defines how an interview appointment takes place.
- */
+/* ─────────────────────────────── APPOINTMENT FORMATS ─────────────────────────────── */
+
 exports.JOB_APPOINTMENT_FORMATS = ["onsite", "video", "phone"];
 
-/**
- * JOB APPOINTMENT STATUSES:
- *
- * These describe the meeting itself, not the JobApplication pipeline.
- *
- * scheduled:
- * - the appointment is expected to take place at its current scheduled time.
- *
- * completed:
- * - an authorized employer user explicitly recorded that the meeting occurred.
- *
- * cancelled:
- * - the appointment will not take place.
- *
- * no_show:
- * - an authorized employer user explicitly recorded that one or both parties
- *   failed to attend.
- *
- * Time passing alone must never automatically mark an appointment completed
- * or no_show.
- */
+/* ─────────────────────────────── APPOINTMENT STATUSES ─────────────────────────────── */
+
+// Completion and no-show require explicit employer action.
+// Elapsed time alone does not change appointment status.
 exports.JOB_APPOINTMENT_STATUSES = ["scheduled", "completed", "cancelled", "no_show"];
 
-/**
- * PROFESSIONAL RESPONSE:
- *
- * The professional's response to the current appointment schedule.
- */
+/* ─────────────────────────────── PROFESSIONAL RESPONSE ─────────────────────────────── */
+
 exports.JOB_APPOINTMENT_RESPONSE_STATUSES = ["pending", "confirmed", "declined"];
 
-/**
- * ACTOR ROLES:
- *
- * Used for appointment lifecycle and scheduling audit entries.
- *
- * Platform admins have read-only appointment oversight and are intentionally
- * excluded from appointment lifecycle mutation actors.
- */
+/* ─────────────────────────────── ACTOR ROLES ─────────────────────────────── */
+
+// Platform administrators have read-only appointment oversight.
 exports.JOB_APPOINTMENT_ACTOR_ROLES = ["professional", "employer", "system"];
 
-/**
- * CANCELLATION REASONS:
- *
- * candidate_declined:
- * - the professional declined the appointment schedule.
- *
- * employer_cancelled:
- * - the employer no longer wants this specific meeting to proceed.
- *
- * scheduling_conflict:
- * - the appointment cannot proceed because of a scheduling conflict.
- *
- * recruitment_closed:
- * - the recruitment exercise has been closed.
- *
- * position_filled:
- * - the relevant recruitment capacity has been filled.
- *
- * administrative:
- * - a system/platform operational lifecycle action ended the appointment.
- *
- * other:
- * - requires explanatory details.
- */
+/* ─────────────────────────────── CANCELLATION REASONS ─────────────────────────────── */
+
+// Administrative cancellation covers system lifecycle actions.
+// The "other" reason requires explanatory details.
 exports.JOB_APPOINTMENT_CANCELLATION_REASONS = [
   "candidate_declined",
   "employer_cancelled",
@@ -81,11 +33,8 @@ exports.JOB_APPOINTMENT_CANCELLATION_REASONS = [
   "other",
 ];
 
-/**
- * NO-SHOW PARTY:
- *
- * Identifies who failed to attend when status is no_show.
- */
+/* ─────────────────────────────── NO-SHOW PARTIES ─────────────────────────────── */
+
 exports.JOB_APPOINTMENT_NO_SHOW_PARTIES = ["professional", "employer", "both"];
 
 /* ─────────────────────────────── TEXT LIMITS ─────────────────────────────── */

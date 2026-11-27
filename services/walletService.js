@@ -3,6 +3,8 @@
 const Wallet = require("../models/Wallet");
 const Transaction = require("../models/Transaction");
 const PlatformSettings = require("../models/PlatformSettings");
+const DVA = require("../models/DVA");
+const FinancialObligation = require("../models/FinancialObligation");
 
 const {
   INTERNAL_PAYMENT_RAILS,
@@ -93,16 +95,20 @@ class WalletService {
 
   static assertExternalCredit(transaction) {
     if (
+      !transaction ||
       transaction.direction !== "credit" ||
       transaction.provider !== "paystack" ||
-      !["paystack_checkout", "paystack_dva"].includes(transaction.paymentRail) ||
+      transaction.paymentRail !== "paystack_checkout" ||
+      transaction.dva ||
       typeof transaction.paystackReference !== "string" ||
       !transaction.paystackReference.trim()
     ) {
-      throw new Error("Transaction is not a Paystack external credit instruction.");
+      throw new Error("Transaction is not a valid Paystack Checkout credit instruction.");
     }
 
     WalletService.normalizePositiveMinorUnitAmount(transaction.amount, "External credit amount");
+
+    return true;
   }
 
   static assertExternalDebit(transaction) {
@@ -115,6 +121,207 @@ class WalletService {
     }
 
     WalletService.normalizePositiveMinorUnitAmount(transaction.amount, "External debit amount");
+  }
+
+  static async assertDVALedgerCredit({
+    wallet,
+    dvaId,
+    provider,
+    providerReference,
+    idempotencyKey,
+    type,
+    purpose,
+    direction,
+    status,
+    paystackStatus,
+    metadata,
+    session,
+  }) {
+    WalletService.assertActiveTransaction(session);
+
+    if (
+      !wallet ||
+      wallet.ownerType !== "employer" ||
+      !wallet.employer ||
+      wallet.professional ||
+      !dvaId ||
+      provider !== "paystack" ||
+      type !== "wallet_funding" ||
+      purpose !== "wallet_topup" ||
+      direction !== "credit" ||
+      status !== "completed" ||
+      paystackStatus !== "success"
+    ) {
+      throw new Error("Invalid Paystack DVA ledger credit.");
+    }
+
+    const WalletFundingService = require("./walletFundingService");
+
+    const expectedKey = WalletFundingService.buildFundingIdempotencyKey({
+      provider,
+      providerReference,
+    });
+
+    if (idempotencyKey !== expectedKey) {
+      throw new Error("DVA funding requires its canonical idempotency key.");
+    }
+
+    await WalletFundingService.lockDVAFundingDisposition(
+      {
+        dvaId,
+        employerProfileId: wallet.employer,
+      },
+      session
+    );
+
+    await WalletFundingService.assertNoHistoricalFundingObligation(
+      {
+        provider,
+        providerReference,
+      },
+      session
+    );
+
+    const dva = await DVA.findById(dvaId).session(session);
+
+    if (
+      !dva ||
+      dva.provider !== "paystack" ||
+      String(dva.wallet) !== String(wallet._id) ||
+      String(dva.employer) !== String(wallet.employer) ||
+      dva.countryCode !== wallet.countryCode ||
+      dva.currency !== wallet.currency
+    ) {
+      throw new Error("DVA funding does not match its original wallet.");
+    }
+
+    const mode = metadata?.verifiedProviderMode;
+
+    if (!["test", "live"].includes(mode) || dva.metadata?.assignmentMode !== mode) {
+      throw new Error("DVA funding has no matching verified provider environment.");
+    }
+
+    WalletFundingService.assertDvaAcceptsNewFunding({
+      dva,
+      wallet,
+      providerReference,
+    });
+
+    return true;
+  }
+
+  static assertNoWithdrawalDispositionMetadata(metadata = {}) {
+    for (const field of [
+      "financialObligationId",
+      "providerReversalDisposition",
+      "providerReversalStatus",
+      "providerReversalVerifiedAt",
+      "reversalTransactionId",
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(metadata || {}, field)) {
+        throw new Error(`Withdrawal metadata cannot supply ${field}.`);
+      }
+    }
+  }
+
+  static async assertWithdrawalLifecycleIntegrity(
+    transaction,
+    metadata,
+    session,
+    { enteringProcessing = false } = {}
+  ) {
+    if (transaction.type !== "withdrawal") {
+      return true;
+    }
+
+    WalletService.assertActiveTransaction(session);
+
+    WalletService.assertNoWithdrawalDispositionMetadata(metadata);
+
+    const WalletWithdrawalService = require("./walletWithdrawalService");
+
+    await WalletWithdrawalService.assertNoHistoricalWithdrawalObligation(transaction, session);
+
+    const stored = transaction.metadata || {};
+    const incoming = metadata || {};
+
+    const providerBound = ["processing", "completed", "failed", "reversed"].includes(
+      transaction.status
+    );
+
+    for (const field of [
+      "ownerType",
+      "employerProfileId",
+      "professionalProfileId",
+      "recipientUserId",
+      "bankAccountId",
+      "requestReference",
+    ]) {
+      if (
+        Object.prototype.hasOwnProperty.call(incoming, field) &&
+        String(incoming[field] ?? "") !== String(stored[field] ?? "")
+      ) {
+        throw new Error(`Withdrawal metadata cannot change ${field}.`);
+      }
+    }
+
+    if (
+      incoming.withdrawalTransactionId != null &&
+      String(incoming.withdrawalTransactionId) !== String(transaction._id)
+    ) {
+      throw new Error("Withdrawal transaction identity cannot change.");
+    }
+
+    for (const reference of [
+      stored.paystackTransferReference,
+      incoming.paystackTransferReference,
+    ]) {
+      if (reference != null && reference !== transaction.paystackTransferReference) {
+        throw new Error("Withdrawal Paystack Transfer reference cannot change.");
+      }
+    }
+
+    for (const field of ["paystackMode", "paystackRecipientCode", "paystackTransferReason"]) {
+      if (
+        Object.prototype.hasOwnProperty.call(incoming, field) &&
+        (providerBound || stored[field] != null) &&
+        incoming[field] !== stored[field]
+      ) {
+        throw new Error(`Withdrawal provider identity cannot change ${field}.`);
+      }
+    }
+
+    if (providerBound || enteringProcessing) {
+      const mode = providerBound ? stored.paystackMode : incoming.paystackMode;
+
+      const recipientCode = providerBound
+        ? stored.paystackRecipientCode
+        : incoming.paystackRecipientCode;
+
+      if (!["test", "live"].includes(mode)) {
+        throw new Error("Provider-bound withdrawal requires its original Paystack environment.");
+      }
+
+      if (
+        typeof recipientCode !== "string" ||
+        !recipientCode.trim() ||
+        recipientCode !== recipientCode.trim()
+      ) {
+        throw new Error("Provider-bound withdrawal requires its original Paystack recipient.");
+      }
+
+      if (incoming.domain != null && incoming.domain !== mode) {
+        throw new Error("Withdrawal provider environment conflicts with the original instruction.");
+      }
+    } else {
+      for (const field of ["paystackMode", "paystackRecipientCode", "paystackTransferReason"]) {
+        if (Object.prototype.hasOwnProperty.call(incoming, field)) {
+          throw new Error(`${field} can only be established at the provider processing boundary.`);
+        }
+      }
+    }
+
+    return true;
   }
 
   static assertTransferCode(transaction, transferCode, required = false) {
@@ -335,6 +542,82 @@ class WalletService {
         wallet.outstandingBalance ?? 0,
         "Outstanding balance"
       ),
+    };
+  }
+
+  static async closeWalletForAccountClosure({ walletId, ownerType, ownerProfileId }, options = {}) {
+    const session = options.session;
+
+    WalletService.assertActiveTransaction(session);
+
+    if (!walletId || !ownerProfileId || !["employer", "professional"].includes(ownerType)) {
+      throw new Error("Valid wallet ownership details are required.");
+    }
+
+    const wallet = await Wallet.findOne({
+      _id: walletId,
+      ownerType,
+      [ownerType]: ownerProfileId,
+    }).session(session);
+
+    if (!wallet) {
+      throw new Error("Wallet does not belong to the specified profile.");
+    }
+
+    const balances = WalletService.getBalanceSnapshot(wallet);
+
+    if (
+      balances.availableBalance !== 0 ||
+      balances.pendingBalance !== 0 ||
+      balances.outstandingBalance !== 0
+    ) {
+      throw new Error("Wallet balances must be zero before closure.");
+    }
+
+    const pendingTransaction = await Transaction.exists({
+      status: {
+        $in: ["pending", "processing"],
+      },
+
+      $or: [{ wallet: wallet._id }, { counterpartyWallet: wallet._id }],
+    }).session(session);
+
+    if (pendingTransaction) {
+      throw new Error("Wallet has unresolved financial transactions.");
+    }
+
+    if (wallet.status === "closed") {
+      return {
+        wallet,
+        idempotent: true,
+      };
+    }
+
+    const outstandingObligation = await FinancialObligation.exists({
+      wallet: wallet._id,
+
+      status: {
+        $in: ["open", "review_required"],
+      },
+    }).session(session);
+
+    if (outstandingObligation) {
+      throw new Error("Wallet has outstanding historical financial obligations.");
+    }
+
+    if (wallet.status !== "active") {
+      throw new Error("Wallet requires financial review before closure.");
+    }
+
+    wallet.status = "closed";
+
+    wallet.closedAt = new Date();
+
+    await wallet.save({ session });
+
+    return {
+      wallet,
+      idempotent: false,
     };
   }
 
@@ -651,6 +934,10 @@ class WalletService {
       throw new Error("Employer profile is required to create employer wallet.");
     }
 
+    if (employerProfile.accountStatus === "closed") {
+      throw new Error("A closed employer profile cannot create a wallet.");
+    }
+
     const settings = await WalletService.getPlatformSettings({
       session: options.session,
     });
@@ -725,6 +1012,10 @@ class WalletService {
   static async createProfessionalWalletIfMissing(professionalProfile, options = {}) {
     if (!professionalProfile || !professionalProfile._id) {
       throw new Error("Professional profile is required to create professional wallet.");
+    }
+
+    if (professionalProfile.accountStatus === "closed") {
+      throw new Error("A closed professional profile cannot create a wallet.");
     }
 
     const settings = await WalletService.getPlatformSettings({
@@ -1137,6 +1428,56 @@ class WalletService {
     WalletService.assertActiveTransaction(session);
     WalletService.assertWalletIsActive(wallet);
 
+    if (type === "withdrawal_reversal" || purpose === "withdrawal_reversal") {
+      throw new Error(
+        "Withdrawal reversal credits must use the dedicated withdrawal reconciliation workflow."
+      );
+    }
+
+    if (paymentRail === "paystack_dva") {
+      await WalletService.assertDVALedgerCredit({
+        wallet,
+        dvaId: dva,
+        provider,
+        providerReference: paystackReference,
+        idempotencyKey,
+        type,
+        purpose,
+        direction,
+        status,
+        paystackStatus,
+        metadata,
+        session,
+      });
+
+      const normalizedFundingAmount = WalletService.normalizePositiveMinorUnitAmount(
+        amount,
+        "DVA funding amount"
+      );
+
+      if (
+        balanceDelta?.availableBalance !== normalizedFundingAmount ||
+        (balanceDelta?.pendingBalance ?? 0) !== 0 ||
+        (balanceDelta?.outstandingBalance ?? 0) !== 0
+      ) {
+        throw new Error("DVA funding must credit the original gross payment amount.");
+      }
+
+      const confirmedFee = WalletService.normalizeMinorUnitAmount(providerFee, "DVA provider fee");
+
+      const confirmedNetAmount = WalletService.normalizeMinorUnitAmount(
+        netAmount,
+        "DVA net amount"
+      );
+
+      if (
+        confirmedFee > normalizedFundingAmount ||
+        confirmedNetAmount !== normalizedFundingAmount - confirmedFee
+      ) {
+        throw new Error("DVA funding contains inconsistent provider amounts.");
+      }
+    }
+
     if (
       status !== "completed" &&
       !(status === "processing" && INTERNAL_PAYMENT_RAILS.includes(paymentRail))
@@ -1393,6 +1734,26 @@ class WalletService {
     options = {}
   ) {
     return WalletService.runWithOptionalTransaction(options, async (session) => {
+      const cleanProvider = String(provider || "")
+        .trim()
+        .toLowerCase();
+
+      const cleanPaymentRail = String(paymentRail || "")
+        .trim()
+        .toLowerCase();
+
+      if (cleanProvider !== "paystack") {
+        throw new Error("Pending external credits require Paystack as provider.");
+      }
+
+      if (cleanPaymentRail !== "paystack_checkout") {
+        throw new Error("Pending external credits support Paystack Checkout only.");
+      }
+
+      if (dva != null) {
+        throw new Error("DVA funding must use the dedicated wallet funding workflow.");
+      }
+
       WalletService.assertIdempotencyKey(idempotencyKey);
 
       WalletService.normalizePositiveMinorUnitAmount(amount, "Pending external credit amount");
@@ -1467,22 +1828,6 @@ class WalletService {
         "Pending external credit amount"
       );
 
-      const cleanProvider = String(provider || "")
-        .trim()
-        .toLowerCase();
-
-      const cleanPaymentRail = String(paymentRail || "")
-        .trim()
-        .toLowerCase();
-
-      if (!cleanProvider) {
-        throw new Error("Provider is required for a pending external credit.");
-      }
-
-      if (!cleanPaymentRail) {
-        throw new Error("Payment rail is required for a pending external credit.");
-      }
-
       WalletService.assertTransactionBusinessContext({
         type,
         purpose,
@@ -1492,31 +1837,8 @@ class WalletService {
         settlementBatch,
       });
 
-      if (
-        ["paystack_checkout", "paystack_dva"].includes(cleanPaymentRail) &&
-        cleanProvider !== "paystack"
-      ) {
-        throw new Error("Paystack payment rails must use paystack as provider.");
-      }
-
-      if (["paystack_checkout", "paystack_dva"].includes(cleanPaymentRail) && !paystackReference) {
-        throw new Error("Paystack reference is required for a Paystack external credit.");
-      }
-
-      if (cleanPaymentRail === "paystack_dva") {
-        if (wallet.ownerType !== "employer") {
-          throw new Error("Paystack DVA can only credit an employer wallet.");
-        }
-
-        if (type !== "wallet_funding" || purpose !== "wallet_topup") {
-          throw new Error(
-            "Paystack DVA credits must use wallet_funding type and wallet_topup purpose."
-          );
-        }
-
-        if (!dva) {
-          throw new Error("DVA reference is required for a Paystack DVA credit.");
-        }
+      if (typeof paystackReference !== "string" || !paystackReference.trim()) {
+        throw new Error("Paystack reference is required for a Checkout credit.");
       }
 
       WalletService.assertExternalCredit({
@@ -1679,15 +2001,10 @@ class WalletService {
   static async completePendingExternalCredit(
     {
       transactionId = null,
-
       paystackReference = null,
-
       providerEventId = null,
-
       providerFee = 0,
-
       netAmount = null,
-
       metadata = {},
     },
     options = {}
@@ -1699,16 +2016,10 @@ class WalletService {
 
       const identifierFilter = {
         ...(transactionId ? { _id: transactionId } : {}),
-
         ...(paystackReference ? { paystackReference } : {}),
       };
 
-      /**
-       * Claim the pending transaction for processing.
-       *
-       * This prevents callback and webhook processing from both
-       * crediting the wallet for the same provider payment.
-       */
+      // Claim the instruction before applying the wallet credit.
       const transaction = await Transaction.findOneAndUpdate(
         {
           ...identifierFilter,
@@ -1717,9 +2028,7 @@ class WalletService {
 
           provider: "paystack",
 
-          paymentRail: {
-            $in: ["paystack_checkout", "paystack_dva"],
-          },
+          paymentRail: "paystack_checkout",
 
           status: {
             $in: ["pending", "failed"],
@@ -1732,7 +2041,6 @@ class WalletService {
         },
         {
           new: true,
-
           session,
         }
       );
@@ -1753,9 +2061,7 @@ class WalletService {
 
           return {
             wallet: existingWallet,
-
             transaction: existingTransaction,
-
             idempotent: true,
           };
         }
@@ -1815,28 +2121,6 @@ class WalletService {
         outstandingBalance: balanceBefore.outstandingBalance,
       };
 
-      const isEmployerExternalTopup =
-        wallet.ownerType === "employer" &&
-        transaction.type === "wallet_funding" &&
-        transaction.purpose === "wallet_topup" &&
-        transaction.paymentRail === "paystack_dva";
-
-      const hasExternalTopupLimit =
-        wallet.maximumExternalTopupBalance !== null &&
-        wallet.maximumExternalTopupBalance !== undefined &&
-        WalletService.normalizeMinorUnitAmount(
-          wallet.maximumExternalTopupBalance,
-          "External top-up limit"
-        ) > 0;
-
-      if (
-        isEmployerExternalTopup &&
-        hasExternalTopupLimit &&
-        balanceAfter.availableBalance > wallet.maximumExternalTopupBalance
-      ) {
-        throw new Error("Employer wallet external top-up balance limit exceeded.");
-      }
-
       wallet.availableBalance = balanceAfter.availableBalance;
 
       wallet.pendingBalance = balanceAfter.pendingBalance;
@@ -1853,9 +2137,7 @@ class WalletService {
 
       wallet.lastTransactionAt = new Date();
 
-      await wallet.save({
-        session,
-      });
+      await wallet.save({ session });
 
       transaction.balanceBefore = balanceBefore;
 
@@ -1863,9 +2145,7 @@ class WalletService {
 
       transaction.balanceDelta = {
         availableBalance: normalizedAmount,
-
         pendingBalance: 0,
-
         outstandingBalance: 0,
       };
 
@@ -1891,19 +2171,14 @@ class WalletService {
 
       transaction.metadata = {
         ...(transaction.metadata || {}),
-
         ...metadata,
       };
 
-      await transaction.save({
-        session,
-      });
+      await transaction.save({ session });
 
       return {
         wallet,
-
         transaction,
-
         idempotent: false,
       };
     });
@@ -2090,6 +2365,22 @@ class WalletService {
 
       if (!bankAccount) {
         throw new Error("Bank account is required for a Paystack external debit.");
+      }
+
+      if (type === "withdrawal") {
+        WalletService.assertNoWithdrawalDispositionMetadata(metadata);
+
+        for (const field of [
+          "paystackMode",
+          "paystackRecipientCode",
+          "paystackTransferReference",
+          "paystackTransferCode",
+          "paystackTransferReason",
+        ]) {
+          if (Object.prototype.hasOwnProperty.call(metadata || {}, field)) {
+            throw new Error(`Initial withdrawal metadata cannot supply ${field}.`);
+          }
+        }
       }
 
       const normalizedPaystackTransferReference = paystackTransferReference
@@ -2422,6 +2713,10 @@ class WalletService {
 
       WalletService.assertExternalDebit(transaction);
 
+      await WalletService.assertWithdrawalLifecycleIntegrity(transaction, metadata, session, {
+        enteringProcessing: transaction.status === "pending",
+      });
+
       const paystackTransferReference = String(transaction.paystackTransferReference || "")
         .trim()
         .toLowerCase();
@@ -2553,6 +2848,8 @@ class WalletService {
       }
 
       WalletService.assertExternalDebit(transaction);
+
+      await WalletService.assertWithdrawalLifecycleIntegrity(transaction, metadata, session);
 
       if (transaction.status === "cancelled") {
         const wallet = await Wallet.findById(transaction.wallet).session(session);
@@ -2687,17 +2984,11 @@ class WalletService {
   static async completePendingExternalDebit(
     {
       transactionId,
-
       paystackTransferCode,
-
       providerEventId = null,
-
       providerFee = null,
-
       netAmount = null,
-
       metadata = {},
-
       currentTime = new Date(),
     },
     options = {}
@@ -2715,6 +3006,8 @@ class WalletService {
 
       WalletService.assertExternalDebit(transaction);
 
+      await WalletService.assertWithdrawalLifecycleIntegrity(transaction, metadata, session);
+
       WalletService.assertTransferCode(transaction, paystackTransferCode, true);
 
       if (transaction.status === "completed") {
@@ -2724,9 +3017,7 @@ class WalletService {
 
         return {
           wallet,
-
           transaction,
-
           idempotent: true,
         };
       }
@@ -2822,9 +3113,6 @@ class WalletService {
 
       wallet.outstandingBalance = balanceAfter.outstandingBalance;
 
-      /*
-       * This is the moment the external debit becomes real.
-       */
       wallet.lifetimeDebit = WalletService.normalizeMinorUnitAmount(
         WalletService.normalizeMinorUnitAmount(
           wallet.lifetimeDebit ?? 0,
@@ -2835,25 +3123,16 @@ class WalletService {
 
       wallet.lastTransactionAt = normalizedCurrentTime;
 
-      await wallet.save({
-        session,
-      });
+      await wallet.save({ session });
 
       transaction.balanceBefore = balanceBefore;
 
       transaction.balanceAfter = balanceAfter;
 
-      /*
-       * The reservation already removed amount from availableBalance.
-       *
-       * Provider success now removes that reserved amount from
-       * pendingBalance. The final movement therefore has net -amount.
-       */
+      // Provider success consumes the reserved funds.
       transaction.balanceDelta = {
         availableBalance: 0,
-
         pendingBalance: -normalizedAmount,
-
         outstandingBalance: 0,
       };
 
@@ -2879,21 +3158,15 @@ class WalletService {
 
       transaction.metadata = {
         ...(transaction.metadata || {}),
-
         ...metadata,
-
         providerCompletedAt: normalizedCurrentTime,
       };
 
-      await transaction.save({
-        session,
-      });
+      await transaction.save({ session });
 
       return {
         wallet,
-
         transaction,
-
         idempotent: false,
       };
     });
@@ -2929,6 +3202,8 @@ class WalletService {
       }
 
       WalletService.assertExternalDebit(transaction);
+
+      await WalletService.assertWithdrawalLifecycleIntegrity(transaction, metadata, session);
 
       WalletService.assertTransferCode(transaction, paystackTransferCode);
 
@@ -3120,6 +3395,18 @@ class WalletService {
       );
 
       if (existingTransaction) {
+        if (existingTransaction.paymentRail === "paystack_dva") {
+          const obligation = await FinancialObligation.exists({
+            type: "retired_dva_funding",
+            provider: "paystack",
+            providerReference: existingTransaction.paystackReference,
+          }).session(session);
+
+          if (obligation) {
+            throw new Error("DVA payment has conflicting ledger and financial obligation records.");
+          }
+        }
+
         WalletService.assertExistingImmediateMovement(existingTransaction, payload, "credit");
 
         const wallet = await Wallet.findById(existingTransaction.wallet).session(session);
@@ -3128,9 +3415,7 @@ class WalletService {
 
         return {
           wallet,
-
           transaction: existingTransaction,
-
           idempotent: true,
         };
       }
@@ -3150,9 +3435,7 @@ class WalletService {
 
         balanceDelta: payload.balanceDelta || {
           availableBalance: payload.amount,
-
           pendingBalance: 0,
-
           outstandingBalance: 0,
         },
 

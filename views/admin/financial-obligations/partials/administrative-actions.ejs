@@ -1,0 +1,76 @@
+<div id="actions" class="tab-pane fade">
+      <div class="alert alert-light-warning mb-6">
+        A missing provider response does not establish payment failure. Reconcile existing
+        executions before attempting another payment.
+      </div>
+
+      <% if (!actions.length) { %>
+      <div class="card card-flush">
+        <div class="card-body text-muted">No financial actions available.</div>
+      </div>
+      <% } %> <% actions.forEach(function(action) { %>
+      <div class="card card-flush border mb-6">
+        <div class="card-body">
+          <h4 class="fw-bold mb-5"><%= action.title %></h4>
+
+          <form action="<%= action.url %>" method="POST" data-financial-action autocomplete="off">
+            <% if (action.inputs.includes("reason")) { %>
+            <label class="form-label d-block mb-5">
+              Authorization Reason
+              <textarea
+                name="reason"
+                class="form-control mt-2"
+                rows="3"
+                maxlength="1000"
+                required
+              ></textarea>
+            </label>
+            <% } %> <% if (action.inputs.includes("refundId")) { %>
+            <label class="form-label d-block mb-5">
+              Paystack Refund ID
+              <input
+                type="text"
+                name="refundId"
+                class="form-control mt-2"
+                inputmode="numeric"
+                pattern="[1-9][0-9]*"
+                maxlength="30"
+                required
+              />
+            </label>
+            <% } %> <% if (action.inputs.includes("otp")) { %>
+            <label class="form-label d-block mb-5">
+              Paystack Authorization OTP
+              <input
+                type="password"
+                name="otp"
+                class="form-control mt-2"
+                inputmode="numeric"
+                pattern="[0-9]{4,10}"
+                maxlength="10"
+                autocomplete="off"
+                required
+              />
+            </label>
+            <% } %> <% if (action.confirmation) { %>
+            <label class="form-label d-block mb-5">
+              Type "<%= action.confirmation %>" to confirm.
+              <input
+                type="text"
+                name="confirmation"
+                data-confirmation="<%= action.confirmation %>"
+                class="form-control mt-2"
+                maxlength="40"
+                required
+              />
+            </label>
+            <% } %>
+
+            <button type="submit" class="btn btn-primary" disabled><%= action.title %></button>
+          </form>
+        </div>
+      </div>
+      <% }); %>
+
+      <noscript>JavaScript is required for financial actions.</noscript>
+    </div>

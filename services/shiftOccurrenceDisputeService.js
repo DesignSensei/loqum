@@ -8,6 +8,7 @@ const ShiftOccurrenceClaim = require("../models/ShiftOccurrenceClaim");
 const ShiftOccurrenceDispute = require("../models/ShiftOccurrenceDispute");
 const PlatformSettings = require("../models/PlatformSettings");
 const ProfessionalProfile = require("../models/ProfessionalProfile");
+const EmployerProfile = require("../models/EmployerProfile");
 
 const ShiftSettlementService = require("./shiftSettlementService");
 const ShiftRefundService = require("./shiftRefundService");
@@ -1724,6 +1725,34 @@ class ShiftOccurrenceDisputeService {
       const submittedIssueTypes = normalizedIssues.map((issue) => issue.type);
 
       const lifecycleSnapshot = this.buildLifecycleSnapshot(occurrence);
+
+      if (!session?.inTransaction()) {
+        throw this.createError({
+          message: "An active transaction is required to open a case.",
+          code: "ACTIVE_TRANSACTION_REQUIRED",
+          statusCode: 500,
+        });
+      }
+
+      const businessLock = await EmployerProfile.updateOne(
+        { _id: occurrence.business, accountStatus: { $in: ["active", "restricted", "suspended"] } },
+        { $inc: { __v: 1 } },
+        { session, timestamps: false }
+      );
+
+      const professionalLock = await ProfessionalProfile.updateOne(
+        { _id: occurrence.assignedProfessional, accountStatus: { $ne: "closed" } },
+        { $inc: { __v: 1 } },
+        { session, timestamps: false }
+      );
+
+      if (businessLock.modifiedCount !== 1 || professionalLock.modifiedCount !== 1) {
+        throw this.createError({
+          message: "The case requires support review because an account is unavailable.",
+          code: "OCCURRENCE_CASE_PARTY_UNAVAILABLE",
+          statusCode: 409,
+        });
+      }
 
       const [dispute] = await ShiftOccurrenceDispute.create(
         [

@@ -297,3 +297,144 @@ exports.postEnableTwoFactor = async (req, res) => {
     return sendBadRequest(res, error.message || "Unable to turn on two-factor authentication.");
   }
 };
+
+/* ---------- ACCOUNT CLOSURE ---------- */
+
+exports.getAccountClosureEligibility = async (req, res, next) => {
+  res.set("Cache-Control", "no-store");
+
+  try {
+    const user = getCurrentUser(req);
+
+    if (!user?._id) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication is required.",
+      });
+    }
+
+    if (
+      user.accountStatus !== "active" ||
+      user.isVerified !== true ||
+      !["professional", "employer"].includes(user.role)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "This account is not eligible for closure.",
+      });
+    }
+
+    const eligibility = await AccountService.getAccountClosureEligibility({
+      userId: user._id,
+    });
+
+    return res.json({
+      success: true,
+      eligibility,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+exports.postCloseAccount = async (req, res, next) => {
+  res.set("Cache-Control", "no-store");
+
+  try {
+    const user = getCurrentUser(req);
+
+    if (!user?._id) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication is required.",
+      });
+    }
+
+    if (
+      user.accountStatus !== "active" ||
+      user.isVerified !== true ||
+      !["employer", "professional"].includes(user.role)
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "This account is not eligible for standard closure.",
+      });
+    }
+
+    if (req.body?.confirmation !== "CLOSE MY ACCOUNT") {
+      return res.status(400).json({
+        success: false,
+        message: "Enter CLOSE MY ACCOUNT to confirm account closure.",
+      });
+    }
+
+    const result = await AccountService.closeAccount({
+      userId: user._id,
+      confirmed: true,
+    });
+
+    if (result?.closed !== true) {
+      return res.status(409).json({
+        success: false,
+        message: "Account closure has not been completed.",
+      });
+    }
+
+    // Closure has committed. Session cleanup must not reverse its outcome.
+    try {
+      if (typeof req.logout === "function") {
+        await new Promise((resolve, reject) => {
+          req.logout((error) => {
+            if (error) return reject(error);
+            resolve();
+          });
+        });
+      }
+    } catch (error) {
+      logger.error("Closed account logout error:", error);
+    }
+
+    try {
+      if (req.session) {
+        await new Promise((resolve, reject) => {
+          req.session.destroy((error) => {
+            if (error) return reject(error);
+            resolve();
+          });
+        });
+      }
+    } catch (error) {
+      logger.error("Closed account session destruction error:", error);
+    }
+
+    res.clearCookie("connect.sid", {
+      path: "/",
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+    });
+
+    return res.json({
+      success: true,
+      closed: true,
+      message: "Your account has been closed successfully.",
+      redirectUrl: "/login",
+    });
+  } catch (error) {
+    logger.error("Account closure error:", error);
+
+    const statusCode = error?.statusCode;
+
+    if ([400, 401, 403, 404, 409, 429].includes(statusCode)) {
+      return res.status(statusCode).json({
+        success: false,
+        code: error.code || "ACCOUNT_CLOSURE_FAILED",
+        message: error.message,
+        eligibility: error.details?.eligibility || null,
+        retryable: error.retryable === true,
+      });
+    }
+
+    return next(error);
+  }
+};

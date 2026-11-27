@@ -21,6 +21,55 @@
     <% } %> <% if (businessProfilePage.showTeamMembers) { %> <%- include("./partials/team-members")
     %> <% } %> <% if (businessProfilePage.showInvites) { %> <%- include("./partials/invites") %> <%
     } %>
+    <% if (businessProfilePage.showClosure) { %>
+    <section id="businessClosure" class="card mb-5 mb-xl-10"
+      data-closure-panel
+      data-closure-url="/employer/business-profile/closure"
+      data-confirmation="CLOSE MY BUSINESS"
+      data-redirect="/account/settings"
+      data-execution-enabled="true">
+      <input type="hidden" data-closure-csrf value="<%= csrfToken %>" />
+
+      <div class="card-header border-0">
+        <div class="card-title m-0">
+          <h3 class="fw-bold m-0">Business Closure</h3>
+        </div>
+      </div>
+
+      <div class="card-body border-top p-9">
+        <p class="text-gray-700">Closing your business ends its Loqum operations without closing your personal account.</p>
+
+        <p class="text-muted mb-6">
+          Outstanding commitments and payments must be resolved.
+          Required historical records will be retained.
+          Closure is permanent.
+        </p>
+
+        <div class="border rounded p-6 mb-6" aria-live="polite">
+          <div class="fw-semibold mb-2" data-closure-status>
+            Check your eligibility before requesting closure.
+          </div>
+
+          <ul class="mb-0 text-gray-700"
+            data-closure-blockers hidden></ul>
+        </div>
+
+        <p class="text-muted" data-closure-unavailable>
+          Eligibility checks are available. Closure execution is not yet available.
+        </p>
+
+        <div class="d-flex flex-wrap gap-3">
+          <button type="button"
+            class="btn btn-light-primary fw-bold"
+            data-closure-check>Check Eligibility</button>
+
+          <button type="button"
+            class="btn btn-light-danger fw-bold"
+            data-closure-submit disabled>Close Business</button>
+        </div>
+      </div>
+    </section>
+    <% } %>
   </div>
 </div>
 

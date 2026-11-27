@@ -28,7 +28,7 @@ class PaystackWebhookService {
     "dedicatedaccount.assign.failed",
   ]);
 
-  /* ─────────────────────────────── NORMALIZATION ─────────────────────────────── */
+  /* ---------- NORMALIZATION ---------- */
 
   static cleanString(value) {
     if (typeof value !== "string") return null;
@@ -66,7 +66,7 @@ class PaystackWebhookService {
     return currentTime;
   }
 
-  /* ─────────────────────────────── CONFIGURATION ─────────────────────────────── */
+  /* ---------- CONFIGURATION ---------- */
 
   static getSecretKey() {
     const secretKey = PaystackWebhookService.cleanString(process.env.PAYSTACK_SECRET_KEY);
@@ -78,7 +78,7 @@ class PaystackWebhookService {
     return secretKey;
   }
 
-  /* ─────────────────────────────── SIGNATURE VERIFICATION ─────────────────────────────── */
+  /* ---------- SIGNATURE VERIFICATION ---------- */
 
   static getSignature(headers = {}) {
     if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
@@ -103,10 +103,7 @@ class PaystackWebhookService {
 
     const normalizedSignature = signature.toLowerCase();
 
-    /*
-     * SHA-512 produces 64 bytes, represented as
-     * 128 hexadecimal characters.
-     */
+    // SHA-512 produces 128 hexadecimal characters.
     if (!/^[a-f0-9]{128}$/.test(normalizedSignature)) {
       return null;
     }
@@ -196,7 +193,7 @@ class PaystackWebhookService {
     return PaystackWebhookService.signaturesMatch(expectedSignature, receivedSignature);
   }
 
-  /* ─────────────────────────────── PLATFORM SETTINGS ─────────────────────────────── */
+  /* ---------- PLATFORM SETTINGS ---------- */
 
   static async getPlatformSettings(options = {}) {
     const query = PlatformSettings.findOne({
@@ -243,7 +240,7 @@ class PaystackWebhookService {
     return currencyCountryMap;
   }
 
-  /* ─────────────────────────────── COUNTRY / CURRENCY VALIDATION ─────────────────────────────── */
+  /* ---------- COUNTRY / CURRENCY VALIDATION ---------- */
 
   static validateNormalizedEventCountryCurrency({ normalizedEvent, settings }) {
     const countryCode = PaystackWebhookService.cleanUpperString(normalizedEvent.countryCode);
@@ -297,7 +294,7 @@ class PaystackWebhookService {
     };
   }
 
-  /* ─────────────────────────────── PROVIDER EVENT COMPATIBILITY ─────────────────────────────── */
+  /* ---------- EVENT COMPATIBILITY ---------- */
 
   static isRefundLifecycleEvent(eventName) {
     const normalizedEventName = PaystackWebhookService.cleanLowerString(eventName);
@@ -353,11 +350,19 @@ class PaystackWebhookService {
     const normalizedEventName = PaystackWebhookService.cleanLowerString(eventName);
 
     if (normalizedEventName === "transfer.success") {
-      return ["employer_withdrawal_payout", "professional_withdrawal_payout"];
+      return [
+        "transfer_unresolved",
+        "employer_withdrawal_payout",
+        "professional_withdrawal_payout",
+      ];
     }
 
     if (["transfer.failed", "transfer.reversed"].includes(normalizedEventName)) {
-      return ["employer_withdrawal_reversal", "professional_withdrawal_reversal"];
+      return [
+        "transfer_unresolved",
+        "employer_withdrawal_reversal",
+        "professional_withdrawal_reversal",
+      ];
     }
 
     return [];
@@ -386,11 +391,8 @@ class PaystackWebhookService {
       throw new Error("Normalized Paystack event category is required.");
     }
 
+    // Refund events must use the refund category.
     if (PaystackWebhookService.isRefundLifecycleEvent(eventName)) {
-      /*
-       * Fail closed instead of recording a refund webhook
-       * under the wrong category.
-       */
       if (eventCategory !== "employer_refund") {
         throw new Error(
           `Paystack refund event ${eventName} was not normalized as employer_refund.`
@@ -405,12 +407,44 @@ class PaystackWebhookService {
       throw new Error(`Unexpected Paystack refund category for event ${eventName}.`);
     }
 
+    // DVA funding ownership is resolved during processing.
+    if (eventCategory === "employer_wallet_funding") {
+      if (eventName !== "charge.success") {
+        throw new Error("DVA wallet funding requires a successful Paystack charge event.");
+      }
+
+      const payload = normalizedEvent.normalizedPayload || {};
+
+      const ownershipFields = [
+        normalizedEvent.employer,
+        normalizedEvent.professional,
+        normalizedEvent.wallet,
+        normalizedEvent.dva,
+        normalizedEvent.transaction,
+        normalizedEvent.shift,
+        payload.employerProfileId,
+        payload.professionalProfileId,
+        payload.walletId,
+        payload.dvaId,
+        payload.transactionId,
+        payload.withdrawalTransactionId,
+        payload.shiftId,
+      ];
+
+      if (ownershipFields.some((value) => value != null)) {
+        throw new Error("DVA funding ownership must be resolved from historical records.");
+      }
+    }
+
+    // Withdrawal categories require a Transfer lifecycle event.
     const withdrawalCategories = [
+      "transfer_unresolved",
       "employer_withdrawal_payout",
       "professional_withdrawal_payout",
       "employer_withdrawal_reversal",
       "professional_withdrawal_reversal",
     ];
+
     if (
       withdrawalCategories.includes(eventCategory) &&
       !PaystackWebhookService.isTransferLifecycleEvent(eventName)
@@ -418,10 +452,7 @@ class PaystackWebhookService {
       throw new Error(`Unexpected Paystack withdrawal category for event ${eventName}.`);
     }
 
-    /*
-     * Dedicated-account assignment events are not payments.
-     * They must never enter the wallet-funding route.
-     */
+    // DVA assignment events never enter the funding workflow.
     if (PaystackWebhookService.isDVAAssignmentEvent(eventName)) {
       if (eventCategory !== "dva_assignment") {
         throw new Error(
@@ -459,21 +490,38 @@ class PaystackWebhookService {
     };
   }
 
-  /* ─────────────────────────────── EVENT NORMALIZATION ─────────────────────────────── */
+  /* ---------- EVENT NORMALIZATION ---------- */
 
   static async normalizePaystackEvent({ payload, rawHeaders = {} }, options = {}) {
+    // Preserve DVA payments independently of market availability.
+    if (PaystackEventNormalizerService.isEmployerWalletFundingEvent(payload)) {
+      const normalizedEvent = PaystackEventNormalizerService.normalize(payload, rawHeaders, {
+        countryCode: "NG",
+        currencyCountryMap: {
+          NGN: "NG",
+        },
+      });
+
+      const compatibility = PaystackWebhookService.assertNormalizedEventCompatibility({
+        normalizedEvent,
+      });
+
+      if (
+        compatibility.eventCategory !== "employer_wallet_funding" ||
+        normalizedEvent.countryCode !== "NG" ||
+        normalizedEvent.currency !== "NGN"
+      ) {
+        throw new Error("Unsupported Paystack DVA funding event.");
+      }
+
+      return normalizedEvent;
+    }
+
     const settings = await PaystackWebhookService.getPlatformSettings(options);
 
     const isDVAAssignment = PaystackWebhookService.isDVAAssignmentEvent(payload?.event);
 
-    /*
-     * Paystack Dedicated Virtual Accounts are Nigerian NGN accounts.
-     * Assignment webhooks may omit currency/country; use NG/NGN only
-     * for this event type, rather than the platform's default country.
-     *
-     * The normalizer still rejects an explicitly conflicting currency
-     * or country, and platform settings must allow NG/NGN.
-     */
+    // DVA assignment defaults to NG/NGN when omitted by Paystack.
     const normalizedEvent = PaystackEventNormalizerService.normalize(payload, rawHeaders, {
       defaultCountryCode: isDVAAssignment ? "NG" : settings.defaultCountryCode,
 
@@ -521,10 +569,47 @@ class PaystackWebhookService {
       normalizedEvent: finalNormalizedEvent,
     });
 
+    // Resolve withdrawal ownership from the original transaction.
+    if (PaystackWebhookService.isTransferLifecycleEvent(finalNormalizedEvent.eventName)) {
+      try {
+        const { routing } = await ProviderEventProcessorService.resolveWithdrawalRouting(
+          finalNormalizedEvent,
+          options
+        );
+
+        const resolvedEvent = {
+          ...finalNormalizedEvent,
+          ...routing,
+
+          normalizedPayload: {
+            ...finalNormalizedEvent.normalizedPayload,
+            ...routing.normalizedPayload,
+          },
+        };
+
+        PaystackWebhookService.assertNormalizedEventCompatibility({
+          normalizedEvent: resolvedEvent,
+        });
+
+        return resolvedEvent;
+      } catch (error) {
+        // Preserve verified events when routing is unresolved.
+        return {
+          ...finalNormalizedEvent,
+
+          metadata: {
+            ...finalNormalizedEvent.metadata,
+
+            withdrawalRoutingErrorCode: error.code || "TRANSFER_ROUTING_UNAVAILABLE",
+          },
+        };
+      }
+    }
+
     return finalNormalizedEvent;
   }
 
-  /* ─────────────────────────────── WEBHOOK RECORDING ─────────────────────────────── */
+  /* ---------- WEBHOOK RECORDING ---------- */
 
   static async recordPaystackWebhookEvent(
     {
@@ -548,20 +633,12 @@ class PaystackWebhookService {
 
     const normalizedCurrentTime = PaystackWebhookService.normalizeCurrentTime(currentTime);
 
-    // Keep verification and normalization tied to the same immutable byte snapshot.
+    // Verify and parse the same raw request body.
     const signaturePayload = PaystackWebhookService.getSignaturePayload({
       rawBody,
     });
 
-    /*
-     * SECURITY BOUNDARY:
-     *
-     * Never create a ProviderEvent for an unverified request.
-     * ProviderEvent.eventKey is an idempotency key.
-     *
-     * Allowing an unsigned request to claim that key could
-     * prevent a later legitimate Paystack webhook from being recorded.
-     */
+    // Unverified requests must not claim provider event keys.
     const isVerified = PaystackWebhookService.verifySignature({
       rawBody: signaturePayload,
       rawHeaders,
@@ -579,11 +656,6 @@ class PaystackWebhookService {
       };
     }
 
-    /*
-     * Only verified provider requests may trigger
-     * platform-setting lookups, normalization,
-     * and ProviderEvent persistence.
-     */
     const verifiedPayload = PaystackWebhookService.parseVerifiedPayload(signaturePayload);
 
     const normalizedEvent = await PaystackWebhookService.normalizePaystackEvent(
@@ -594,12 +666,7 @@ class PaystackWebhookService {
       options
     );
 
-    /*
-     * Record the provider event through its own transaction boundary.
-     *
-     * Do not wrap recording and downstream financial processing
-     * inside a single broad webhook transaction.
-     */
+    // Persist the verified event before financial processing.
     const recordResult = await ProviderEventService.recordProviderEvent(
       {
         ...normalizedEvent,

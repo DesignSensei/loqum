@@ -53,6 +53,7 @@ async function resolveEmployerProfileAndMember(user) {
 
   const ownedProfile = await EmployerProfile.findOne({
     user: user._id,
+    accountStatus: { $ne: "closed" },
   });
 
   if (ownedProfile) {
@@ -81,7 +82,10 @@ async function resolveEmployerProfileAndMember(user) {
       };
     }
 
-    const profile = await EmployerProfile.findById(businessId);
+    const profile = await EmployerProfile.findOne({
+      _id: businessId,
+      accountStatus: { $ne: "closed" },
+    });
 
     if (!profile) {
       return {
@@ -106,6 +110,7 @@ async function buildEmployerContext({ user, profile, currentTime = new Date() })
   if (
     !user?._id ||
     !profile?._id ||
+    profile.accountStatus === "closed" ||
     user.role !== "employer" ||
     user.accountStatus !== "active" ||
     user.isVerified !== true
@@ -127,7 +132,7 @@ async function buildEmployerContext({ user, profile, currentTime = new Date() })
 
   const isPrimaryEmployer = getId(profile.user) === userId;
 
-  if (!isPrimaryEmployer && !resolvedEmployerMember) {
+  if (!isPrimaryEmployer && (!resolvedEmployerMember || profile.accountStatus === "closing")) {
     return {
       employerMember: null,
       employerContext: null,
@@ -333,6 +338,21 @@ exports.attachEmployerContext = async (req, res, next) => {
 
     res.locals.employerMember = employerMember;
     res.locals.employerContext = employerContext;
+
+    // Preserve owner closure retries while blocking other mutations.
+    if (
+      req.employerProfile.accountStatus === "closing" &&
+      !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
+      !(req.method === "POST" &&
+        req.baseUrl === "/employer" &&
+        req.path === "/business-profile/closure")
+    ) {
+      return res.status(409).json({
+        success: false,
+        code: "BUSINESS_CLOSURE_IN_PROGRESS",
+        message: "Business closure is in progress.",
+      });
+    }
 
     return next();
   } catch (error) {

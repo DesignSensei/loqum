@@ -666,6 +666,63 @@ class BranchService {
     }
   }
 
+  /* ---------- Business closure offboarding ---------- */
+
+  static async deactivateForBusinessClosure({ businessId, actorUserId, session }) {
+    if (
+      !session?.inTransaction?.() ||
+      !mongoose.isValidObjectId(businessId) ||
+      !mongoose.isValidObjectId(actorUserId)
+    ) {
+      throw new Error("Business closure requires valid ownership and an active transaction.");
+    }
+
+    const business = await EmployerProfile.findOne({
+      _id: businessId,
+      user: actorUserId,
+      accountStatus: "closed",
+    }).select("_id closedAt").session(session);
+
+    if (!business?.closedAt) {
+      throw new Error("The business must be marked closed within the final closure transaction.");
+    }
+
+    const branches = await Branch.find({ business: businessId }).session(session);
+    const permits = await FacilityPermit.find({
+      business: businessId,
+      isCurrent: true,
+    }).session(session);
+
+    const branchIds = new Set(branches.map((branch) => String(branch._id)));
+    const now = new Date();
+
+    let branchesDeactivated = 0;
+
+    for (const permit of permits) {
+      if (!branchIds.has(String(permit.branch))) {
+        throw new Error("Facility permit ownership requires reconciliation.");
+      }
+
+      // Preserve regulatory verification and original premises evidence.
+      permit.isCurrent = false;
+      permit.deactivatedAt = now;
+      await permit.save({ session });
+    }
+
+    for (const branch of branches) {
+      if (branch.isActive !== true) continue;
+
+      branch.isActive = false;
+      await branch.save({ session });
+      branchesDeactivated++;
+    }
+
+    return {
+      branchesDeactivated,
+      permitsDeactivated: permits.length,
+    };
+  }
+
   static async getBranchMembers({ branchId, businessId }) {
     await BranchService.getBranchForBusiness({ branchId, businessId });
 

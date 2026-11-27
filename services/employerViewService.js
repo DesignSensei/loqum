@@ -643,6 +643,12 @@ class EmployerViewService {
     );
 
     const showOverview = activeTab === "overview";
+
+    const showClosureLink =
+      employerContext?.isPrimaryEmployer === true &&
+      ["active", "closing"].includes(employerProfile.accountStatus);
+
+    const showClosure = showOverview && showClosureLink;
     const showBusinessDetails = activeTab === "business-details";
     const showVerification = activeTab === "verification";
 
@@ -658,6 +664,8 @@ class EmployerViewService {
         .toLowerCase(),
 
       showOverview,
+      showClosureLink,
+      showClosure,
       showBusinessDetails,
       showVerification,
       showBranches,

@@ -1,6 +1,7 @@
 // controllers/employerController.js
 
 const EmployerService = require("../services/employerService");
+const BusinessClosureService = require("../services/businessClosureService");
 const EmployerViewService = require("../services/employerViewService");
 const locations = require("../config/locations");
 const logger = require("../utils/logger");
@@ -343,5 +344,104 @@ exports.postUpdateBusinessDetails = async (req, res, next) => {
     logger.error("Update business details error:", error);
 
     return handleBusinessDetailsUpdateError(error, res, next);
+  }
+};
+
+/* ---------- BUSINESS CLOSURE ---------- */
+
+exports.getBusinessClosureEligibility = async (req, res, next) => {
+  res.set("Cache-Control", "no-store");
+
+  try {
+    const user = req.user;
+    const business = req.employerProfile;
+
+    if (!user?._id) {
+      return sendUnauthorized(res);
+    }
+
+    if (
+      user.role !== "employer" ||
+      user.accountStatus !== "active" ||
+      user.isVerified !== true ||
+      !business?._id ||
+      req.employerContext?.isPrimaryEmployer !== true ||
+      String(business.user) !== String(user._id)
+    ) {
+      return sendForbidden(res, "Only the business owner may request closure eligibility.");
+    }
+
+    const eligibility = await BusinessClosureService.getBusinessClosureEligibility({
+      businessId: business._id,
+      requestingUserId: user._id,
+    });
+
+    return res.json({
+      success: true,
+      eligibility,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+exports.postCloseBusiness = async (req, res, next) => {
+  res.set("Cache-Control", "no-store");
+
+  try {
+    const user = req.user;
+    const business = req.employerProfile;
+
+    if (!user?._id) {
+      return sendUnauthorized(res);
+    }
+
+    if (
+      user.role !== "employer" ||
+      user.accountStatus !== "active" ||
+      user.isVerified !== true ||
+      !business?._id ||
+      req.employerContext?.isPrimaryEmployer !== true ||
+      String(business.user) !== String(user._id)
+    ) {
+      return sendForbidden(res, "Only the business owner may close this business.");
+    }
+
+    if (req.body?.confirmation !== "CLOSE MY BUSINESS") {
+      return sendBadRequest(res, "Enter CLOSE MY BUSINESS to confirm business closure.");
+    }
+
+    const result = await BusinessClosureService.closeBusiness({
+      businessId: business._id,
+      requestingUserId: user._id,
+      confirmed: true,
+    });
+
+    if (result?.closed !== true) {
+      return sendConflict(res, "Business closure has not been completed.");
+    }
+
+    return res.json({
+      success: true,
+      closed: true,
+      message: "Your business has been closed successfully.",
+      redirectUrl: "/account/settings",
+    });
+  } catch (error) {
+    logger.error("Business closure error:", error);
+
+    const statusCode = error?.statusCode;
+
+    if ([400, 401, 403, 404, 409, 429].includes(statusCode)) {
+      return res.status(statusCode).json({
+        success: false,
+        code: error.code || "BUSINESS_CLOSURE_FAILED",
+        message: error.message,
+        eligibility: error.details?.eligibility || null,
+        retryable: error.retryable === true,
+      });
+    }
+
+    return next(error);
   }
 };

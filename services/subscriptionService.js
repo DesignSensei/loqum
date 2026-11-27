@@ -460,6 +460,33 @@ class SubscriptionService {
 
   /* ─────────────────────────────── DATA LOADERS ─────────────────────────────── */
 
+  static async lockBusinessOutsideClosure({ employerProfileId, session }) {
+    if (!session?.inTransaction?.()) {
+      throw this.createError({
+        message: "Subscription changes require an active transaction.",
+        code: "SUBSCRIPTION_TRANSACTION_REQUIRED",
+        statusCode: 500,
+      });
+    }
+
+    const result = await EmployerProfile.updateOne(
+      {
+        _id: employerProfileId,
+        accountStatus: { $in: ["active", "restricted", "suspended"] },
+      },
+      { $inc: { __v: 1 } },
+      { session, timestamps: false }
+    );
+
+    if (result.modifiedCount !== 1) {
+      throw this.createError({
+        message: "Subscription changes are unavailable during or after business closure.",
+        code: "SUBSCRIPTION_BUSINESS_UNAVAILABLE",
+        statusCode: 409,
+      });
+    }
+  }
+
   static async getEmployerProfile(employerProfileId, session = null) {
     const normalizedEmployerProfileId = this.normalizeObjectId(
       employerProfileId,
@@ -643,7 +670,10 @@ class SubscriptionService {
        * Do not change profile timestamps or business fields for coordination.
        */
       const creationGuard = await EmployerProfile.updateOne(
-        { _id: normalizedEmployerProfileId },
+        {
+          _id: normalizedEmployerProfileId,
+          accountStatus: { $in: ["active", "restricted", "suspended"] },
+        },
         { $inc: { __v: 1 } },
         { session, timestamps: false }
       );
@@ -848,6 +878,11 @@ class SubscriptionService {
           statusCode: 409,
         });
       }
+
+      await this.lockBusinessOutsideClosure({
+        employerProfileId: subscription.business,
+        session,
+      });
 
       const employerProfile = await this.getEmployerProfile(subscription.business, session);
       const targetPlan = await this.getPlan(normalizedTargetPlanId, session);
@@ -1068,6 +1103,11 @@ class SubscriptionService {
         });
       }
 
+      await this.lockBusinessOutsideClosure({
+        employerProfileId: subscription.business,
+        session,
+      });
+
       const targetPlanSnapshot = this.clonePlanSnapshot(pending.targetPlanSnapshot);
       const billingCycle = this.assertBillingCycleSupported(targetPlanSnapshot.billingCycle);
 
@@ -1274,6 +1314,11 @@ class SubscriptionService {
 
       const billingCycle = this.assertBillingCycleSupported(subscription.planSnapshot.billingCycle);
 
+      await this.lockBusinessOutsideClosure({
+        employerProfileId: subscription.business,
+        session,
+      });
+
       const periodStart = activatedAt;
 
       const periodEnd = this.getBillingPeriodEnd({
@@ -1352,6 +1397,11 @@ class SubscriptionService {
           },
         });
       }
+
+      await this.lockBusinessOutsideClosure({
+        employerProfileId: subscription.business,
+        session,
+      });
 
       const currentPeriodEnd = this.cloneDate(subscription.currentPeriodEnd);
 

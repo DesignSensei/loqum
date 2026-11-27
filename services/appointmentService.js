@@ -2,6 +2,8 @@ const mongoose = require("mongoose");
 
 const Appointment = require("../models/Appointment");
 const JobApplication = require("../models/JobApplication");
+const ProfessionalProfile = require("../models/ProfessionalProfile");
+const EmployerProfile = require("../models/EmployerProfile");
 
 const JobService = require("./jobService");
 const JobApplicationService = require("./jobApplicationService");
@@ -345,6 +347,40 @@ async function loadProfessionalAppointment({ appointmentId, professionalProfileI
   return appointment;
 }
 
+async function lockAppointmentParties({ application, userId = null, session }) {
+  if (!session?.inTransaction()) {
+    throw createAppointmentError({
+      message: "An active transaction is required for appointment authorization.",
+      code: "APPOINTMENT_TRANSACTION_REQUIRED",
+      statusCode: 500,
+    });
+  }
+
+  const business = await EmployerProfile.updateOne(
+    { _id: application.business, accountStatus: { $in: ["active", "restricted", "suspended"] } },
+    { $inc: { __v: 1 } },
+    { session, timestamps: false }
+  );
+
+  const professional = await ProfessionalProfile.updateOne(
+    {
+      _id: application.professional,
+      accountStatus: { $ne: "closed" },
+      ...(userId ? { user: userId } : {}),
+    },
+    { $inc: { __v: 1 } },
+    { session, timestamps: false }
+  );
+
+  if (business.modifiedCount !== 1 || professional.modifiedCount !== 1) {
+    throw createAppointmentError({
+      message: "An appointment party is no longer available.",
+      code: "APPOINTMENT_PARTY_UNAVAILABLE",
+      statusCode: 409,
+    });
+  }
+}
+
 class AppointmentService {
   static async inviteApplicationToInterview(
     {
@@ -380,6 +416,11 @@ class AppointmentService {
           jobId: application.job,
           employerProfileId: normalizedEmployerProfileId,
           employerContext,
+          session: transactionSession,
+        });
+
+        await lockAppointmentParties({
+          application,
           session: transactionSession,
         });
 
@@ -571,6 +612,8 @@ class AppointmentService {
 
       assertApplicationCanInterview(application);
 
+      await lockAppointmentParties({ application, session: transactionSession });
+
       if (sameSchedule(appointment, normalizedSchedule)) {
         return {
           appointment,
@@ -725,6 +768,12 @@ class AppointmentService {
       const application = await loadApplication(appointment.jobApplication, transactionSession);
 
       assertApplicationCanInterview(application);
+
+      await lockAppointmentParties({
+        application,
+        userId: normalizedRespondedBy,
+        session: transactionSession,
+      });
 
       appointment.responseStatus = responseStatus;
 

@@ -12,6 +12,8 @@ const {
   runWithOptionalTransaction: runServiceTransaction,
 } = require("./helpers/transactionHelper");
 
+const { createServiceError } = require("./helpers/serviceErrorHelper");
+
 const logger = require("../utils/logger");
 
 const MAX_IDEMPOTENCY_KEY_LENGTH = 160;
@@ -35,17 +37,13 @@ class ShiftProfessionalReviewService {
   /* ─────────────────────────────── ERRORS / TRANSACTIONS ─────────────────────────────── */
 
   static createError({ message, code, statusCode = 400, details = null }) {
-    const error = new Error(message);
-
-    error.name = "ShiftProfessionalReviewServiceError";
-    error.code = code;
-    error.statusCode = statusCode;
-
-    if (details && typeof details === "object") {
-      error.details = details;
-    }
-
-    return error;
+    return createServiceError({
+      name: "ShiftProfessionalReviewServiceError",
+      message,
+      code,
+      statusCode,
+      details,
+    });
   }
 
   static async runWithOptionalTransaction(options = {}, callback) {

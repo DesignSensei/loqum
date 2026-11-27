@@ -1,0 +1,57 @@
+<!-- views/admin/financial-obligations/show.ejs -->
+
+<div id="adminFinancialObligationDetails" data-csrf-token="<%= csrfToken %>">
+  <%- include("./partials/obligation-header") %>
+
+  <% if (!environmentMatches) { %>
+  <div class="alert alert-warning">
+    This obligation belongs to another Paystack environment. Financial actions are disabled.
+  </div>
+  <% } %>
+
+  <div id="financialActionFeedback" class="alert d-none mb-6" role="alert" aria-live="polite"></div>
+
+  <ul class="nav nav-tabs nav-line-tabs nav-line-tabs-2x fw-bold mb-8" role="tablist">
+    <li class="nav-item">
+      <button type="button" class="nav-link active" data-bs-toggle="tab" data-bs-target="#overview">
+        Overview
+      </button>
+    </li>
+
+    <li class="nav-item">
+      <button type="button" class="nav-link" data-bs-toggle="tab" data-bs-target="#executions">
+        Execution History
+      </button>
+    </li>
+
+    <li class="nav-item">
+      <button type="button" class="nav-link" data-bs-toggle="tab" data-bs-target="#evidence">
+        Provider Evidence
+      </button>
+    </li>
+
+    <li class="nav-item">
+      <button type="button" class="nav-link" data-bs-toggle="tab" data-bs-target="#timeline">
+        Recorded Timeline
+      </button>
+    </li>
+
+    <li class="nav-item">
+      <button type="button" class="nav-link" data-bs-toggle="tab" data-bs-target="#actions">
+        Administrative Actions
+      </button>
+    </li>
+  </ul>
+
+  <div class="tab-content">
+    <%- include("./partials/overview") %>
+
+    <%- include("./partials/execution-history") %>
+
+    <%- include("./partials/provider-evidence") %>
+
+    <%- include("./partials/timeline") %>
+
+    <%- include("./partials/administrative-actions") %>
+  </div>
+</div>

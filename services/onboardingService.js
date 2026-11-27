@@ -1029,6 +1029,14 @@ class OnboardingService {
           user: userId,
         }).session(session);
 
+        if (profile && profile.accountStatus === "closed") {
+          throw this.createError({
+            message: "A closed profile cannot be reused for onboarding.",
+            code: "ONBOARDING_CLOSED_PROFILE",
+            statusCode: 409,
+          });
+        }
+
         if (profile) {
           profile.set(profileData);
         } else {
@@ -1295,6 +1303,14 @@ class OnboardingService {
         profile = await EmployerProfile.findOne({
           user: userId,
         }).session(session);
+
+        if (profile && profile.accountStatus === "closed") {
+          throw this.createError({
+            message: "A closed profile cannot be reused for onboarding.",
+            code: "ONBOARDING_CLOSED_PROFILE",
+            statusCode: 409,
+          });
+        }
 
         if (profile) {
           if (profile.businessName !== preparedCAC.registeredBusinessName) {

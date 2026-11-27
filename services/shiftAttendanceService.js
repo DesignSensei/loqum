@@ -6,6 +6,7 @@ const mongoose = require("mongoose");
 const Shift = require("../models/Shift");
 const ShiftOccurrence = require("../models/ShiftOccurrence");
 const Branch = require("../models/Branch");
+const ProfessionalProfile = require("../models/ProfessionalProfile");
 
 const PlatformSettingsService = require("./platformSettingsService");
 const ShiftOccurrenceClaimService = require("./shiftOccurrenceClaimService");
@@ -882,6 +883,30 @@ class ShiftAttendanceService {
         code: "PROFESSIONAL_NOT_ASSIGNED_TO_OCCURRENCE",
         statusCode: 403,
       });
+    }
+
+    if (session) {
+      if (!session.inTransaction()) {
+        throw this.createError({
+          message: "An active transaction is required for attendance updates.",
+          code: "ACTIVE_TRANSACTION_REQUIRED",
+          statusCode: 500,
+        });
+      }
+
+      const locked = await ProfessionalProfile.updateOne(
+        { _id: normalizedProfessionalProfileId, accountStatus: { $ne: "closed" } },
+        { $inc: { __v: 1 } },
+        { session, timestamps: false }
+      );
+
+      if (locked.modifiedCount !== 1) {
+        throw this.createError({
+          message: "The professional profile is no longer available.",
+          code: "PROFESSIONAL_PROFILE_UNAVAILABLE",
+          statusCode: 409,
+        });
+      }
     }
 
     return {

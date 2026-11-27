@@ -251,7 +251,12 @@ class SubscriptionPaymentService {
     }
   }
 
-  static async serializePaymentPreparation({ subscriptionId, employerProfileId, session }) {
+  static async serializePaymentPreparation({
+    subscriptionId,
+    employerProfileId,
+    session,
+    historicalReceipt = false,
+  }) {
     if (!session || typeof session.inTransaction !== "function" || !session.inTransaction()) {
       throw this.createError({
         message: "Payment preparation requires an active transaction.",
@@ -263,6 +268,13 @@ class SubscriptionPaymentService {
     // Coordinate payment-attempt checks with other preparations and lifecycle
     // changes. A real write detects stale snapshots; preserve driver errors so
     // the transaction owner retries all reads/checks, not just this update.
+    if (!historicalReceipt) {
+      await SubscriptionService.lockBusinessOutsideClosure({
+        employerProfileId,
+        session,
+      });
+    }
+
     const result = await Subscription.updateOne(
       { _id: subscriptionId, business: employerProfileId },
       { $inc: { __v: 1 } },
@@ -2173,6 +2185,11 @@ class SubscriptionPaymentService {
     currentTime,
     session,
   }) {
+    await SubscriptionService.lockBusinessOutsideClosure({
+      employerProfileId,
+      session,
+    });
+
     const existingPayment = await this.getPaymentByReference(paymentReference, session);
 
     if (existingPayment) {
@@ -2628,6 +2645,7 @@ class SubscriptionPaymentService {
   static async finalizePaystackPayment({
     reference,
     providerEventId = null,
+    providerEventRecordId = null,
     currentTime = new Date(),
   }) {
     const normalizedReference = String(reference || "").trim();
@@ -2660,7 +2678,9 @@ class SubscriptionPaymentService {
       };
     }
 
-    this.assertExistingPaymentReusable(existingPayment);
+    if (existingPayment.paymentStatus === "refunded") {
+      this.assertExistingPaymentReusable(existingPayment);
+    }
 
     const verifiedPayment = await PaystackService.verifyTransaction(normalizedReference);
 
@@ -2669,6 +2689,7 @@ class SubscriptionPaymentService {
       .toLowerCase();
 
     if (verifiedStatus !== "success") {
+      this.assertExistingPaymentReusable(existingPayment);
       if (PAYSTACK_DEFINITIVE_FAILURE_STATUSES.includes(verifiedStatus)) {
         const failedResult = await this.failPaystackAttempt({
           paymentId: existingPayment._id,
@@ -2751,7 +2772,9 @@ class SubscriptionPaymentService {
         };
       }
 
-      this.assertExistingPaymentReusable(payment);
+      if (payment.paymentStatus === "refunded") {
+        this.assertExistingPaymentReusable(payment);
+      }
 
       const currentTransaction = await this.applySession(
         Transaction.findById(payment.paymentTransaction),
@@ -2780,7 +2803,48 @@ class SubscriptionPaymentService {
         subscriptionId: payment.subscription,
         employerProfileId: payment.business,
         session,
+        historicalReceipt: true,
       });
+
+      const business = await EmployerProfile.findOneAndUpdate(
+        {
+          _id: payment.business,
+          accountStatus: {
+            $in: ["active", "restricted", "suspended", "closing", "closed"],
+          },
+        },
+        { $inc: { __v: 1 } },
+        { new: true, session, timestamps: false }
+      ).select("accountStatus");
+
+      if (
+        !business ||
+        ["closing", "closed"].includes(business.accountStatus) ||
+        payment.paymentStatus !== "pending"
+      ) {
+        // Record the independently verified liability in this transaction.
+        // Do not complete a platform credit or reactivate the original purchase.
+        const FinancialObligationService = require("./financialObligationService");
+        const result = await FinancialObligationService.recordHistoricalCommercialPayment(
+          {
+            kind: "subscription",
+            paymentId: payment._id,
+            verifiedPayment,
+            providerEventId: providerEventRecordId,
+            currentTime: finalizedAt,
+          },
+          { session }
+        );
+
+        return {
+          payment,
+          paymentTransaction: currentTransaction,
+          financialObligation: result.obligation,
+          reconciliationRequired: true,
+          paid: false,
+          idempotent: result.idempotent === true,
+        };
+      }
 
       const completedCredit = await WalletService.completePendingExternalCredit(
         {
@@ -2822,6 +2886,31 @@ class SubscriptionPaymentService {
         idempotent: completedCredit.idempotent === true,
       };
     });
+
+    if (financialResult.financialObligation) {
+      // The obligation has committed. An internal provider-event processor
+      // can link the durable disposition without reporting a paid purchase.
+      if (providerEventRecordId) return financialResult;
+
+      const obligation = financialResult.financialObligation;
+      const error = this.createError({
+        message: "Verified payment recorded for financial reconciliation. No purchase entitlement was granted.",
+        code: "SUBSCRIPTION_PAYMENT_HISTORICAL_RECEIPT_REVIEW_REQUIRED",
+        statusCode: 409,
+        details: {
+          reconciliationRequired: obligation.status !== "settled",
+          financialObligationId: String(obligation._id),
+          financialObligationStatus: obligation.status,
+          providerReference: normalizedReference,
+          paymentId: String(financialResult.payment._id),
+          businessId: String(obligation.employer),
+          amount: obligation.amount,
+          currency: obligation.currency,
+        },
+      });
+      error.retryable = false;
+      throw error;
+    }
 
     const applicationResult = await this.attemptApplicationAfterPayment({
       paymentId: financialResult.payment._id,

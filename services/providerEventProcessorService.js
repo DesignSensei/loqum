@@ -3,17 +3,23 @@
 const mongoose = require("mongoose");
 
 const Transaction = require("../models/Transaction");
+const DVA = require("../models/DVA");
 const Wallet = require("../models/Wallet");
 const EmployerRefundBatch = require("../models/EmployerRefundBatch");
 
 const DVAService = require("./dvaService");
+const PaystackService = require("./paystackService");
+const PaystackEventNormalizerService = require("./paystackEventNormalizerService");
 const ProviderEventService = require("./providerEventService");
 const ShiftFundingService = require("./shiftFundingService");
 const WalletFundingService = require("./walletFundingService");
 const WalletWithdrawalService = require("./walletWithdrawalService");
+const FinancialObligationService = require("./financialObligationService");
 const EmployerRefundBatchService = require("./employerRefundBatchService");
 const JobPublicationPaymentService = require("./jobPublicationPaymentService");
 const SubscriptionPaymentService = require("./subscriptionPaymentService");
+
+const { createServiceError } = require("./helpers/serviceErrorHelper");
 
 const money = require("../utils/money");
 
@@ -46,29 +52,13 @@ const NON_RETRYABLE_SUBSCRIPTION_APPLICATION_CODES = Object.freeze([
 ]);
 
 /**
- * PROVIDER EVENT ORCHESTRATION
+ * Dispatches verified provider events to their authoritative services.
  *
- * This service owns provider-event dispatch, processing ownership handoff and
- * retry classification. It does not become the financial authority for the
- * work it triggers.
+ * Owns processing claims, historical routing and retry classification.
+ * Financial execution remains with the delegated services.
  *
- * Financial authority remains with:
- *
- * - ShiftFundingService for Shift Checkout routing, BASE application/return and
- *   overtime top-up finalization;
- * - WalletFundingService for employer wallet credits;
- * - JobPublicationPaymentService for PAYG permanent-Job publication purchases;
- * - SubscriptionPaymentService for subscription purchase, immediate plan-change
- *   and renewal payments;
- * - EmployerRefundBatchService for employer refund execution state; and
- * - WalletWithdrawalService for withdrawal completion/reversal.
- *
- * A ProviderEvent is marked processed only after its delegated operation has
- * reached a durable terminal outcome. BASE Checkout funding is terminal only
- * when it is applied to the Shift or truthfully returned to the employer wallet.
- * Overtime Checkout funding is terminal only when the top-up is durably applied
- * to its Shift occurrence. Provider credit alone never hides an unresolved
- * application or integrity obligation.
+ * Events are marked processed only after a durable financial outcome.
+ * Unresolved payment and application obligations remain recoverable.
  */
 class ProviderEventProcessorService {
   static eventCategories = {
@@ -371,22 +361,17 @@ class ProviderEventProcessorService {
     statusCode = 500,
     retryable = null,
     details = null,
+    cause = null,
   }) {
-    const error = new Error(message);
-
-    error.name = "ProviderEventProcessingError";
-    error.code = code;
-    error.statusCode = statusCode;
-
-    if (typeof retryable === "boolean") {
-      error.retryable = retryable;
-    }
-
-    if (details !== null && details !== undefined) {
-      error.details = details;
-    }
-
-    return error;
+    return createServiceError({
+      name: "ProviderEventProcessingError",
+      message,
+      code,
+      statusCode,
+      retryable,
+      details,
+      cause,
+    });
   }
 
   static hasShiftFundingRecoveryMarker(error) {
@@ -951,122 +936,185 @@ class ProviderEventProcessorService {
 
   /* ─────────────────────────────── WITHDRAWAL LOOKUP ─────────────────────────────── */
 
-  static async findWithdrawalTransactionForProviderEvent(providerEvent, options = {}) {
-    const withdrawalTransactionId =
-      ProviderEventProcessorService.getWithdrawalTransactionId(providerEvent);
+  static async resolveWithdrawalRouting(providerEvent, options = {}) {
+    const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
+    const references = [
+      providerEvent.providerReference,
+      payload.paystackTransferReference,
+      payload.transferReference,
+      payload.providerReference,
+    ]
+      .map(ProviderEventProcessorService.cleanString)
+      .filter(Boolean);
 
-    const baseFilter = {
-      type: "withdrawal",
-      purpose: "withdrawal",
-      direction: "debit",
-      paymentRail: "paystack_transfer",
-      provider: "paystack",
-    };
-
-    if (withdrawalTransactionId) {
-      if (!mongoose.Types.ObjectId.isValid(withdrawalTransactionId)) {
-        throw ProviderEventProcessorService.createProcessingError({
-          message: "Provider withdrawal event contains an invalid withdrawal transaction ID.",
-          code: "INVALID_WITHDRAWAL_PROVIDER_TRANSACTION_ID",
-          statusCode: 422,
-          retryable: false,
-        });
-      }
-
-      const query = Transaction.findOne({
-        ...baseFilter,
-        _id: withdrawalTransactionId,
-      });
-
-      if (options.session) {
-        query.session(options.session);
-      }
-
-      const transaction = await query;
-
-      if (!transaction) {
-        throw ProviderEventProcessorService.createProcessingError({
-          message: "Provider withdrawal transaction ID does not resolve to a Paystack withdrawal.",
-          code: "WITHDRAWAL_PROVIDER_TRANSACTION_ID_MISMATCH",
-          statusCode: 409,
-          retryable: false,
-          details: {
-            withdrawalTransactionId: String(withdrawalTransactionId),
-          },
-        });
-      }
-
-      ProviderEventProcessorService.assertWithdrawalProviderEventMatchesTransaction({
-        providerEvent,
-        withdrawalTransaction: transaction,
-      });
-
-      return transaction;
-    }
-
-    const paystackTransferCode =
-      ProviderEventProcessorService.getPaystackTransferCode(providerEvent);
-
-    const paystackTransferReference =
-      ProviderEventProcessorService.getPaystackTransferReference(providerEvent);
-
-    const orFilters = [];
-
-    if (paystackTransferCode) {
-      orFilters.push({
-        paystackTransferCode,
-      });
-
-      orFilters.push({
-        "metadata.paystackTransferCode": paystackTransferCode,
-      });
-    }
-
-    if (paystackTransferReference) {
-      orFilters.push({
-        paystackTransferReference,
-      });
-
-      orFilters.push({
-        "metadata.paystackTransferReference": paystackTransferReference,
-      });
-    }
-
-    if (!orFilters.length) {
+    if (
+      providerEvent.provider !== "paystack" ||
+      !["transfer.success", "transfer.failed", "transfer.reversed"].includes(
+        providerEvent.eventName
+      ) ||
+      !references.length ||
+      new Set(references).size !== 1
+    ) {
       throw ProviderEventProcessorService.createProcessingError({
-        message: "Withdrawal transaction lookup value is required.",
-        code: "WITHDRAWAL_PROVIDER_RECONCILIATION_IDENTITY_REQUIRED",
-        statusCode: 422,
+        message: "Paystack Transfer requires one consistent provider reference.",
+        code: "WITHDRAWAL_PROVIDER_TRANSFER_REFERENCE_REQUIRED",
+        statusCode: 409,
         retryable: false,
       });
     }
 
-    const query = Transaction.findOne({
-      ...baseFilter,
-      $or: orFilters,
-    });
+    const reference = references[0];
 
-    if (options.session) {
-      query.session(options.session);
-    }
+    const query = Transaction.find({
+      type: "withdrawal",
+      purpose: "withdrawal",
+      direction: "debit",
+      provider: "paystack",
+      paymentRail: "paystack_transfer",
+      paystackTransferReference: reference,
+    }).limit(2);
 
-    const transaction = await query;
+    if (options.session) query.session(options.session);
+    const transactions = await query;
 
-    if (!transaction) {
+    if (!transactions.length) {
+      // Non-withdrawal transfers remain recorded for their own reconciliation.
       throw ProviderEventProcessorService.createProcessingError({
-        message: "Withdrawal transaction was not found for provider event.",
+        message: "No ordinary withdrawal matches this provider Transfer reference.",
         code: "WITHDRAWAL_TRANSACTION_NOT_FOUND_FOR_PROVIDER_EVENT",
         statusCode: 404,
-        retryable: true,
+        retryable: /^lq_withdrawal_[a-f0-9]{24}$/.test(reference),
       });
     }
 
+    if (transactions.length !== 1) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Provider Transfer reference resolves to multiple withdrawals.",
+        code: "WITHDRAWAL_PROVIDER_REFERENCE_AMBIGUOUS",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
+    const withdrawalTransaction = transactions[0];
+
+    for (const id of [
+      payload.withdrawalTransactionId,
+      payload.transactionId,
+      providerEvent.transaction,
+    ]) {
+      if (id && String(id) !== String(withdrawalTransaction._id)) {
+        throw ProviderEventProcessorService.createProcessingError({
+          message: "Provider Transfer reference conflicts with the linked transaction.",
+          code: "WITHDRAWAL_PROVIDER_TRANSACTION_ID_MISMATCH",
+          statusCode: 409,
+          retryable: false,
+        });
+      }
+    }
+
+    const walletQuery = Wallet.findById(withdrawalTransaction.wallet);
+    if (options.session) walletQuery.session(options.session);
+    const wallet = await walletQuery;
+
+    const ownerType = wallet?.ownerType;
+    const metadata = withdrawalTransaction.metadata || {};
+    const employer = ownerType === "employer" ? wallet.employer : null;
+    const professional = ownerType === "professional" ? wallet.professional : null;
+
+    if (
+      !wallet ||
+      !["employer", "professional"].includes(ownerType) ||
+      metadata.ownerType !== ownerType ||
+      (ownerType === "employer" &&
+        (!employer ||
+          wallet.professional ||
+          String(metadata.employerProfileId) !== String(employer) ||
+          metadata.professionalProfileId)) ||
+      (ownerType === "professional" &&
+        (!professional ||
+          wallet.employer ||
+          String(metadata.professionalProfileId) !== String(professional) ||
+          metadata.employerProfileId)) ||
+      !withdrawalTransaction.bankAccount ||
+      wallet.countryCode !== withdrawalTransaction.countryCode ||
+      wallet.currency !== withdrawalTransaction.currency
+    ) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Withdrawal does not match its historical wallet and owner.",
+        code: "WITHDRAWAL_PROVIDER_WALLET_OWNERSHIP_MISMATCH",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
+    const suffix = providerEvent.eventName === "transfer.success" ? "payout" : "reversal";
+    const eventCategory = `${ownerType}_withdrawal_${suffix}`;
+
+    if (
+      providerEvent.eventCategory !== "transfer_unresolved" &&
+      providerEvent.eventCategory !== eventCategory
+    ) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Provider Transfer classification conflicts with the original wallet.",
+        code: "WITHDRAWAL_PROVIDER_CATEGORY_MISMATCH",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
+    for (const [actual, expected] of [
+      [providerEvent.employer, employer],
+      [providerEvent.professional, professional],
+      [providerEvent.wallet, wallet._id],
+      [providerEvent.bankAccount, withdrawalTransaction.bankAccount],
+      [payload.employerProfileId, employer],
+      [payload.professionalProfileId, professional],
+      [payload.ownerType, ownerType],
+    ]) {
+      if (actual && (!expected || String(actual) !== String(expected))) {
+        throw ProviderEventProcessorService.createProcessingError({
+          message: "Provider Transfer link conflicts with its original withdrawal.",
+          code: "WITHDRAWAL_PROVIDER_OWNER_MISMATCH",
+          statusCode: 409,
+          retryable: false,
+        });
+      }
+    }
+
+    return {
+      withdrawalTransaction,
+      routing: {
+        eventCategory,
+        employer,
+        professional,
+        wallet: wallet._id,
+        transaction: withdrawalTransaction._id,
+        bankAccount: withdrawalTransaction.bankAccount,
+        normalizedPayload: {
+          eventCategory,
+          ownerType,
+          employerProfileId: employer ? String(employer) : null,
+          professionalProfileId: professional ? String(professional) : null,
+          withdrawalTransactionId: String(withdrawalTransaction._id),
+          transactionId: String(withdrawalTransaction._id),
+        },
+      },
+    };
+  }
+
+  static async findWithdrawalTransactionForProviderEvent(providerEvent, options = {}) {
+    const { withdrawalTransaction } = await ProviderEventProcessorService.resolveWithdrawalRouting(
+      providerEvent,
+      options
+    );
+
     ProviderEventProcessorService.assertWithdrawalProviderEventMatchesTransaction({
       providerEvent,
-      withdrawalTransaction: transaction,
+      withdrawalTransaction,
     });
 
-    return transaction;
+    return withdrawalTransaction;
   }
 
   static getWithdrawalOwnerContext({ withdrawalTransaction, providerEvent }) {
@@ -1075,24 +1123,25 @@ class ProviderEventProcessorService {
     const employer = ProviderEventProcessorService.getRecordId(metadata.employerProfileId);
     const professional = ProviderEventProcessorService.getRecordId(metadata.professionalProfileId);
     const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
-    const invalid = (message) => {
-      throw ProviderEventProcessorService.createProcessingError({
-        message,
-        code: "WITHDRAWAL_PROVIDER_OWNER_MISMATCH",
-        statusCode: 409,
-        retryable: false,
-      });
-    };
-
     if (
       !["employer", "professional"].includes(ownerType) ||
       (ownerType === "employer" && (!employer || metadata.professionalProfileId)) ||
       (ownerType === "professional" && (!professional || metadata.employerProfileId))
     ) {
-      invalid("Withdrawal transaction contains an invalid owner identity.");
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Withdrawal transaction contains an invalid owner identity.",
+        code: "WITHDRAWAL_PROVIDER_OWNER_MISMATCH",
+        statusCode: 409,
+        retryable: false,
+      });
     }
     if (payload.ownerType && payload.ownerType !== ownerType) {
-      invalid("Provider withdrawal owner type does not match the transaction.");
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Provider withdrawal owner type does not match the transaction.",
+        code: "WITHDRAWAL_PROVIDER_OWNER_MISMATCH",
+        statusCode: 409,
+        retryable: false,
+      });
     }
     for (const [field, expected] of [
       ["employer", employer],
@@ -1104,7 +1153,12 @@ class ProviderEventProcessorService {
           value !== "" &&
           (!expected || String(value._id || value) !== String(expected))
         ) {
-          invalid("Provider withdrawal profile does not match the transaction.");
+          throw ProviderEventProcessorService.createProcessingError({
+            message: "Provider withdrawal profile does not match the transaction.",
+            code: "WITHDRAWAL_PROVIDER_OWNER_MISMATCH",
+            statusCode: 409,
+            retryable: false,
+          });
         }
       }
     }
@@ -1272,6 +1326,33 @@ class ProviderEventProcessorService {
       });
     }
 
+    const expectedRecipientCode = ProviderEventProcessorService.cleanString(
+      withdrawalTransaction.metadata?.paystackRecipientCode
+    );
+    const providerRecipientCode = ProviderEventProcessorService.cleanString(payload.recipientCode);
+
+    if (
+      !expectedRecipientCode ||
+      !providerRecipientCode ||
+      expectedRecipientCode !== providerRecipientCode
+    ) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Transfer recipient does not match the recorded withdrawal recipient.",
+        code: "WITHDRAWAL_PROVIDER_RECIPIENT_MISMATCH",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
+    if (providerEvent.countryCode !== withdrawalTransaction.countryCode) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Provider withdrawal country does not match the original withdrawal.",
+        code: "WITHDRAWAL_PROVIDER_COUNTRY_MISMATCH",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
     const transactionMetadata = withdrawalTransaction.metadata || {};
 
     const transactionEmployer = ProviderEventProcessorService.cleanString(
@@ -1427,12 +1508,10 @@ class ProviderEventProcessorService {
       });
     }
 
-    /*
-     * DVA assignment reconciliation owns its own durable state transition.
-     *
-     * Do not let an external transaction roll back the event state while
-     * its associated DVA update has already been committed.
-     */
+    // DVA assignment reconciliation owns its own durable state transition.
+    //
+    // Do not let an external transaction roll back the event state while
+    // its associated DVA update has already been committed.
     if (
       options.session &&
       ProviderEventProcessorService.isCategory(
@@ -1455,6 +1534,34 @@ class ProviderEventProcessorService {
       ])
     ) {
       ProviderEventProcessorService.assertIndependentFinalization(options);
+    }
+
+    if (
+      options.session &&
+      ProviderEventProcessorService.isCategory(
+        providerEvent,
+        ProviderEventProcessorService.eventCategories.employerWalletFunding
+      )
+    ) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "DVA funding processing does not accept an external session.",
+        code: "DVA_FUNDING_EXTERNAL_SESSION_NOT_SUPPORTED",
+        statusCode: 500,
+        retryable: false,
+      });
+    }
+
+    if (
+      options.session &&
+      providerEvent.provider === "paystack" &&
+      ["transfer.failed", "transfer.reversed"].includes(providerEvent.eventName)
+    ) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Withdrawal reversal processing does not accept an external session.",
+        code: "WITHDRAWAL_REVERSAL_EXTERNAL_SESSION_NOT_SUPPORTED",
+        statusCode: 500,
+        retryable: false,
+      });
     }
 
     const processingResult = await ProviderEventService.markProcessing(
@@ -1502,7 +1609,7 @@ class ProviderEventProcessorService {
     }
 
     try {
-      /* ---------- DVA ASSIGNMENT ---------- */
+      // DVA assignment
 
       if (
         ProviderEventProcessorService.isCategory(
@@ -1520,7 +1627,7 @@ class ProviderEventProcessorService {
         );
       }
 
-      /* ---------- EMPLOYER REFUNDS ---------- */
+      // Employer refunds
 
       if (
         ProviderEventProcessorService.isCategory(
@@ -1538,7 +1645,7 @@ class ProviderEventProcessorService {
         );
       }
 
-      /* ---------- SHIFT CHECKOUT PAYMENTS ---------- */
+      // Shift checkout payments
 
       if (
         ProviderEventProcessorService.isCategory(
@@ -1556,7 +1663,7 @@ class ProviderEventProcessorService {
         );
       }
 
-      /* ---------- JOB PUBLICATION PAYMENTS ---------- */
+      // Job publication payments
 
       if (
         ProviderEventProcessorService.isCategory(
@@ -1574,7 +1681,7 @@ class ProviderEventProcessorService {
         );
       }
 
-      /* ---------- SUBSCRIPTION PAYMENTS ---------- */
+      // Subscription payments
 
       if (
         ProviderEventProcessorService.isCategory(
@@ -1592,7 +1699,7 @@ class ProviderEventProcessorService {
         );
       }
 
-      /* ---------- EMPLOYER WALLET FUNDING ---------- */
+      // Employer wallet funding
 
       if (
         ProviderEventProcessorService.isCategory(
@@ -1610,7 +1717,51 @@ class ProviderEventProcessorService {
         );
       }
 
-      /* ---------- WITHDRAWAL PAYOUT ---------- */
+      // Historical obligation payouts never use ordinary withdrawal execution.
+      if (
+        providerEvent.provider === "paystack" &&
+        ["transfer.success", "transfer.failed", "transfer.reversed"].includes(providerEvent.eventName)
+      ) {
+        const reference =
+          ProviderEventProcessorService.getPaystackTransferReference(providerEvent);
+
+        if (reference && /^lq_obligation_[a-f0-9]{24}(?:_[2-9]|_[1-9][0-9])?$/.test(reference)) {
+          ProviderEventProcessorService.assertIndependentFinalization(options);
+
+          const PayoutService = require("./financialObligationPayoutService");
+
+          return await PayoutService.reconcileFromProviderEvent({
+            providerEventRecordId: providerEvent._id,
+            processingClaimId,
+            reference,
+          });
+        }
+      }
+
+      // Resolve and link withdrawal ownership
+
+      if (
+        providerEvent.provider === "paystack" &&
+        ["transfer.success", "transfer.failed", "transfer.reversed"].includes(
+          providerEvent.eventName
+        )
+      ) {
+        const { routing } = await ProviderEventProcessorService.resolveWithdrawalRouting(
+          providerEvent,
+          options
+        );
+
+        providerEvent = await ProviderEventService.linkWithdrawalRouting(
+          {
+            providerEventRecordId: providerEvent._id,
+            processingClaimId,
+            routing,
+          },
+          options
+        );
+      }
+
+      // Withdrawal payout
 
       if (
         ProviderEventProcessorService.isCategory(
@@ -1628,7 +1779,7 @@ class ProviderEventProcessorService {
         );
       }
 
-      /* ---------- WITHDRAWAL REVERSAL ---------- */
+      // Withdrawal reversal
 
       if (
         ProviderEventProcessorService.isCategory(
@@ -1646,7 +1797,7 @@ class ProviderEventProcessorService {
         );
       }
 
-      /* ---------- UNHANDLED PROVIDER EVENTS ---------- */
+      // Unhandled provider events
 
       const ignoredResult = await ProviderEventService.markIgnored(
         {
@@ -1668,7 +1819,7 @@ class ProviderEventProcessorService {
         ignored: true,
       };
     } catch (error) {
-      /* ---------- PROCESSING CLAIM LOST ---------- */
+      // Processing claim lost
 
       if (ProviderEventProcessorService.isProcessingClaimError(error)) {
         return ProviderEventProcessorService.getProcessingClaimLostResult(
@@ -1678,10 +1829,13 @@ class ProviderEventProcessorService {
         );
       }
 
-      /* ---------- RETRY CLASSIFICATION ---------- */
+      // Retry classification
 
       const shiftFundingRecoveryRequired =
-        ProviderEventProcessorService.isShiftFundingRecoveryError(error);
+        ProviderEventProcessorService.isCategory(
+          providerEvent,
+          ProviderEventProcessorService.eventCategories.shiftCheckoutPayment
+        ) && ProviderEventProcessorService.isShiftFundingRecoveryError(error);
 
       const retryable = ProviderEventProcessorService.isRetryableProcessingError(error);
 
@@ -1741,25 +1895,83 @@ class ProviderEventProcessorService {
   /* ─────────────────────────────── PAYSTACK DVA ASSIGNMENT ─────────────────────────────── */
 
   static async processDVAAssignmentEvent(providerEvent, processingClaimId, options = {}) {
-    const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
+    // DVA assignment reconciliation performs independent database updates
+    // and may perform external provider operations. It must not execute
+    // inside an externally owned database transaction.
+
+    if (options.session) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "DVA assignment processing does not accept an external session.",
+
+        code: "DVA_ASSIGNMENT_EXTERNAL_SESSION_NOT_SUPPORTED",
+
+        statusCode: 500,
+
+        retryable: false,
+      });
+    }
+
+    if (!providerEvent?._id) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Provider event identity is required.",
+
+        code: "DVA_ASSIGNMENT_EVENT_REQUIRED",
+
+        statusCode: 422,
+
+        retryable: false,
+      });
+    }
+
+    // Reload the verified event and validate the active processing claim.
+
+    const currentEvent = await ProviderEventService.getProviderEventById(providerEvent._id);
+
+    if (
+      currentEvent.provider !== "paystack" ||
+      currentEvent.eventCategory !== "dva_assignment" ||
+      currentEvent.isVerified !== true
+    ) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "A verified Paystack DVA assignment event is required.",
+
+        code: "DVA_ASSIGNMENT_EVENT_NOT_VERIFIED",
+
+        statusCode: 422,
+
+        retryable: false,
+      });
+    }
+
+    ProviderEventService.assertActiveProcessingClaim(currentEvent, processingClaimId);
+
+    const payload = ProviderEventProcessorService.getNormalizedPayload(currentEvent);
 
     const currentTime = ProviderEventProcessorService.getOperationCurrentTime(options);
 
     const eventName = ProviderEventProcessorService.cleanString(
-      providerEvent.eventName
+      currentEvent.eventName
     )?.toLowerCase();
 
     if (
-      providerEvent.provider !== "paystack" ||
       !["dedicatedaccount.assign.success", "dedicatedaccount.assign.failed"].includes(eventName)
     ) {
       throw ProviderEventProcessorService.createProcessingError({
         message: "Unsupported Paystack dedicated-account assignment event.",
+
         code: "UNSUPPORTED_PAYSTACK_DVA_ASSIGNMENT_EVENT",
+
         statusCode: 422,
+
         retryable: false,
       });
     }
+
+    const expectedOutcome = eventName === "dedicatedaccount.assign.success" ? "success" : "failed";
+
+    const expectedStatus = expectedOutcome === "success" ? "active" : "failed";
+
+    // Require sufficient provider identity to resolve the assignment.
 
     const customerId = ProviderEventProcessorService.cleanString(payload.paystackCustomerId);
 
@@ -1775,83 +1987,398 @@ class ProviderEventProcessorService {
 
     if (!customerId && !customerCode && !customerEmail && !dedicatedAccountId) {
       throw ProviderEventProcessorService.createProcessingError({
-        message:
-          "Paystack DVA assignment webhook contains no provider customer or account identity.",
+        message: "Paystack DVA assignment contains no usable provider identity.",
+
         code: "PAYSTACK_DVA_ASSIGNMENT_IDENTITY_REQUIRED",
+
         statusCode: 422,
+
         retryable: false,
       });
     }
 
+    // DVA assignment is not a financial movement and must not
+    // carry unrelated financial relationships.
+
+    if (
+      currentEvent.transaction ||
+      currentEvent.financialObligation ||
+      currentEvent.professional ||
+      currentEvent.bankAccount ||
+      currentEvent.shift ||
+      currentEvent.shiftApplication ||
+      currentEvent.employerRefundBatch ||
+      currentEvent.employerRefundBatchLineId
+    ) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "DVA assignment contains unrelated financial relationships.",
+
+        code: "PAYSTACK_DVA_ASSIGNMENT_RELATIONSHIP_CONFLICT",
+
+        statusCode: 409,
+
+        retryable: false,
+      });
+    }
+
+    const eventMarker = ProviderEventProcessorService.getProviderEventMarker(currentEvent);
+
+    // Delegate assignment reconciliation to the authoritative DVA service.
+
     const result = await DVAService.applyPaystackAssignmentEvent({
       eventName,
+
       normalizedPayload: payload,
-      rawPayload: providerEvent.rawPayload,
-      providerEventRecordId: providerEvent._id,
-      providerEventMarker: ProviderEventProcessorService.getProviderEventMarker(providerEvent),
+
+      rawPayload: currentEvent.rawPayload,
+
+      providerEventRecordId: currentEvent._id,
+
+      providerEventMarker: eventMarker,
+
+      expectedOwnership: {
+        dva: currentEvent.dva || null,
+
+        employer: currentEvent.employer || null,
+
+        wallet: currentEvent.wallet || null,
+      },
+
       currentTime,
     });
 
-    if (!result?.dva?._id || !["active", "failed"].includes(result.dva.status)) {
+    const resolvedDVA = result?.dva;
+
+    if (
+      !resolvedDVA?._id ||
+      !resolvedDVA.employer ||
+      !resolvedDVA.wallet ||
+      result.assignmentOutcome !== expectedOutcome
+    ) {
       throw ProviderEventProcessorService.createProcessingError({
-        message: "Paystack DVA assignment has not reached a durable terminal state.",
+        message: "Paystack DVA assignment has not reached a valid durable outcome.",
+
         code: "PAYSTACK_DVA_ASSIGNMENT_FINALIZATION_PENDING",
+
         statusCode: 503,
+
         retryable: true,
       });
     }
 
-    if (
-      (eventName === "dedicatedaccount.assign.success" && result.dva.status !== "active") ||
-      (eventName === "dedicatedaccount.assign.failed" && result.dva.status !== "failed")
-    ) {
-      throw ProviderEventProcessorService.createProcessingError({
-        message: "Paystack DVA webhook outcome conflicts with the resolved DVA status.",
-        code: "PAYSTACK_DVA_ASSIGNMENT_STATE_MISMATCH",
-        statusCode: 409,
-        retryable: false,
-      });
+    const historical = result.historicalAssignmentReconciled === true;
+
+    // A normal assignment must reach its expected terminal state.
+
+    if (!historical) {
+      if (resolvedDVA.status !== expectedStatus || resolvedDVA.retirementStartedAt) {
+        throw ProviderEventProcessorService.createProcessingError({
+          message: "DVA assignment outcome conflicts with the resolved DVA lifecycle state.",
+
+          code: "PAYSTACK_DVA_ASSIGNMENT_STATE_MISMATCH",
+
+          statusCode: 409,
+
+          retryable: true,
+        });
+      }
     }
 
-    const dva = result.dva;
+    // Historical assignments require confirmed provider unassignment
+    // without changing the DVA's retirement status.
 
-    const processedResult = await ProviderEventService.markProcessed(
-      {
-        providerEventRecordId: providerEvent._id,
-        processingClaimId,
-        employer: dva.employer,
-        wallet: dva.wallet,
-        dva: dva._id,
+    const evidence = historical ? result.historicalReconciliation : null;
 
-        normalizedPayload: {
-          ...payload,
-          employerProfileId: String(dva.employer),
-          dvaId: String(dva._id),
-          paystackCustomerCode: dva.paystackCustomerCode || customerCode || null,
-          paystackDedicatedAccountId: dva.paystackDedicatedAccountId || dedicatedAccountId || null,
-        },
+    if (historical) {
+      if (
+        !["retiring", "deactivated"].includes(resolvedDVA.status) ||
+        !resolvedDVA.retirementStartedAt ||
+        resolvedDVA.retirementResolution !== "provider_unassigned" ||
+        !resolvedDVA.retirementConfirmedAt ||
+        result.retirementResolution !== "provider_unassigned" ||
+        result.resolutionSource !== "verified_historical_provider_unassignment" ||
+        !evidence ||
+        evidence.assigned !== false ||
+        evidence.providerMode !== resolvedDVA.metadata?.assignmentMode ||
+        String(evidence.providerEventRecordId) !== String(currentEvent._id) ||
+        String(evidence.providerEventMarker) !== String(eventMarker) ||
+        String(evidence.dedicatedAccountId) !== String(resolvedDVA.paystackDedicatedAccountId) ||
+        String(evidence.customerId) !== String(resolvedDVA.paystackCustomerId) ||
+        evidence.customerCode !== resolvedDVA.paystackCustomerCode ||
+        evidence.accountNumber !== resolvedDVA.accountNumber
+      ) {
+        throw ProviderEventProcessorService.createProcessingError({
+          message:
+            "Historical DVA assignment does not contain valid retirement reconciliation evidence.",
 
-        metadata: {
-          processor: "ProviderEventProcessorService",
-          dvaAssignmentStatus: dva.status,
-          idempotentDVAAssignment: result.idempotent === true,
-          resolutionSource: result.resolutionSource || null,
-        },
+          code: "PAYSTACK_DVA_HISTORICAL_OUTCOME_INVALID",
 
-        currentTime,
-      },
-      {
-        session: options.session,
+          statusCode: 409,
+
+          retryable: false,
+        });
       }
-    );
 
-    return {
-      providerEvent: processedResult.providerEvent,
-      dva,
-      processed: true,
-      dvaAssignmentStatus: dva.status,
-      idempotentDVAAssignment: result.idempotent === true,
-    };
+      const evidenceTime = new Date(evidence.verifiedAt);
+
+      if (
+        !evidence.verifiedAt ||
+        Number.isNaN(evidenceTime.getTime()) ||
+        evidenceTime < resolvedDVA.retirementConfirmedAt
+      ) {
+        throw ProviderEventProcessorService.createProcessingError({
+          message: "Historical DVA reconciliation has an invalid verification timestamp.",
+
+          code: "PAYSTACK_DVA_HISTORICAL_VERIFICATION_TIME_INVALID",
+
+          statusCode: 409,
+
+          retryable: false,
+        });
+      }
+    }
+
+    // Revalidate the durable DVA outcome and complete the provider event
+    // inside a database transaction.
+
+    return ProviderEventService.runWithOptionalTransaction({}, async (session) => {
+      const finalEvent = await ProviderEventService.getProviderEventById(currentEvent._id, {
+        session,
+      });
+
+      ProviderEventService.assertActiveProcessingClaim(finalEvent, processingClaimId);
+
+      if (
+        finalEvent.isVerified !== true ||
+        finalEvent.provider !== "paystack" ||
+        finalEvent.eventCategory !== "dva_assignment" ||
+        finalEvent.eventName !== eventName
+      ) {
+        throw ProviderEventProcessorService.createProcessingError({
+          message: "Provider event identity changed during DVA assignment processing.",
+
+          code: "PAYSTACK_DVA_ASSIGNMENT_EVENT_CONFLICT",
+
+          statusCode: 409,
+
+          retryable: false,
+        });
+      }
+
+      const dva = await DVA.findById(resolvedDVA._id).session(session);
+
+      // Revalidate the original employer, wallet and market.
+
+      if (
+        !dva ||
+        String(dva.employer) !== String(resolvedDVA.employer) ||
+        String(dva.wallet) !== String(resolvedDVA.wallet) ||
+        dva.provider !== "paystack" ||
+        dva.countryCode !== finalEvent.countryCode ||
+        dva.currency !== finalEvent.currency
+      ) {
+        throw ProviderEventProcessorService.createProcessingError({
+          message: "Original DVA ownership could not be confirmed during event completion.",
+
+          code: "PAYSTACK_DVA_ASSIGNMENT_OWNERSHIP_CONFLICT",
+
+          statusCode: 409,
+
+          retryable: false,
+        });
+      }
+
+      // Do not overwrite previously established event relationships.
+
+      for (const [field, expected] of Object.entries({
+        employer: dva.employer,
+
+        wallet: dva.wallet,
+
+        dva: dva._id,
+      })) {
+        if (finalEvent[field] && String(finalEvent[field]) !== String(expected)) {
+          throw ProviderEventProcessorService.createProcessingError({
+            message: `DVA assignment conflicts with its existing ${field} relationship.`,
+
+            code: "PAYSTACK_DVA_ASSIGNMENT_OWNERSHIP_CONFLICT",
+
+            statusCode: 409,
+
+            retryable: false,
+          });
+        }
+      }
+
+      if (historical) {
+        // Confirm the historical retirement evidence remains unchanged.
+
+        const confirmation = dva.metadata?.retirementConfirmation;
+
+        if (
+          !["retiring", "deactivated"].includes(dva.status) ||
+          !dva.retirementStartedAt ||
+          dva.retirementResolution !== "provider_unassigned" ||
+          !dva.retirementConfirmedAt ||
+          new Date(dva.retirementConfirmedAt).getTime() !==
+            new Date(resolvedDVA.retirementConfirmedAt).getTime() ||
+          confirmation?.assigned !== false ||
+          confirmation?.mode !== evidence.providerMode ||
+          dva.isDefault === true ||
+          String(dva.paystackDedicatedAccountId) !== String(evidence.dedicatedAccountId) ||
+          String(dva.paystackCustomerId) !== String(evidence.customerId) ||
+          dva.paystackCustomerCode !== evidence.customerCode ||
+          dva.accountNumber !== evidence.accountNumber
+        ) {
+          throw ProviderEventProcessorService.createProcessingError({
+            message: "Historical DVA retirement changed before event completion.",
+
+            code: "PAYSTACK_DVA_HISTORICAL_OUTCOME_CHANGED",
+
+            statusCode: 409,
+
+            retryable: true,
+          });
+        }
+      } else {
+        // If retirement began after ordinary assignment processing,
+        // retry through the historical reconciliation workflow.
+
+        if (dva.status !== expectedStatus || dva.retirementStartedAt) {
+          throw ProviderEventProcessorService.createProcessingError({
+            message: "DVA lifecycle changed before assignment event completion.",
+
+            code: "PAYSTACK_DVA_ASSIGNMENT_STATE_CHANGED",
+
+            statusCode: 409,
+
+            retryable: true,
+          });
+        }
+
+        // Confirm that provider identifiers have not changed.
+
+        for (const field of [
+          "paystackDedicatedAccountId",
+          "paystackCustomerId",
+          "paystackCustomerCode",
+          "accountNumber",
+        ]) {
+          if (String(dva[field] ?? "") !== String(resolvedDVA[field] ?? "")) {
+            throw ProviderEventProcessorService.createProcessingError({
+              message: "DVA provider identity changed before event completion.",
+
+              code: "PAYSTACK_DVA_ASSIGNMENT_IDENTITY_CHANGED",
+
+              statusCode: 409,
+
+              retryable: true,
+            });
+          }
+        }
+      }
+
+      // Preserve the original provider payload and record the resolved
+      // identifiers and assignment outcome separately.
+
+      const originalPayload = finalEvent.normalizedPayload || {};
+
+      const normalizedOutcome = {
+        ...originalPayload,
+
+        employerProfileId: String(dva.employer),
+
+        walletId: String(dva.wallet),
+
+        dvaId: String(dva._id),
+
+        resolvedPaystackCustomerId:
+          dva.paystackCustomerId != null ? String(dva.paystackCustomerId) : null,
+
+        resolvedPaystackCustomerCode: dva.paystackCustomerCode || null,
+
+        resolvedPaystackDedicatedAccountId:
+          dva.paystackDedicatedAccountId != null ? String(dva.paystackDedicatedAccountId) : null,
+
+        assignmentOutcome: expectedOutcome,
+
+        dvaAssignmentStatus: dva.status,
+
+        historicalAssignmentReconciled: historical,
+
+        retirementResolution: historical ? dva.retirementResolution : null,
+
+        retirementConfirmedAt: historical ? dva.retirementConfirmedAt : null,
+      };
+
+      const completedAt = new Date(
+        Math.max(
+          Date.now(),
+
+          currentTime.getTime(),
+
+          historical ? new Date(evidence.verifiedAt).getTime() : 0
+        )
+      );
+
+      // Mark the verified event processed without changing DVA status
+      // or creating any wallet transaction.
+
+      const processedResult = await ProviderEventService.markProcessed(
+        {
+          providerEventRecordId: finalEvent._id,
+
+          processingClaimId,
+
+          employer: dva.employer,
+
+          wallet: dva.wallet,
+
+          dva: dva._id,
+
+          normalizedPayload: normalizedOutcome,
+
+          metadata: {
+            processor: "ProviderEventProcessorService",
+
+            dvaAssignmentStatus: dva.status,
+
+            assignmentOutcome: expectedOutcome,
+
+            idempotentDVAAssignment: result.idempotent === true,
+
+            historicalAssignmentReconciled: historical,
+
+            resolutionSource: result.resolutionSource || null,
+
+            retirementResolution: historical ? dva.retirementResolution : null,
+
+            historicalAssignmentReconciliation: historical ? evidence : null,
+          },
+
+          currentTime: completedAt,
+        },
+        { session }
+      );
+
+      return {
+        providerEvent: processedResult.providerEvent,
+
+        dva,
+
+        processed: true,
+
+        dvaAssignmentStatus: dva.status,
+
+        assignmentOutcome: expectedOutcome,
+
+        historicalAssignmentReconciled: historical,
+
+        retirementResolution: historical ? dva.retirementResolution : null,
+
+        idempotentDVAAssignment: result.idempotent === true,
+      };
+    });
   }
 
   /* ─────────────────────────────── EMPLOYER PAYSTACK REFUND ─────────────────────────────── */
@@ -1882,7 +2409,7 @@ class ProviderEventProcessorService {
       providerEvent.employerRefundBatchLineId
     );
 
-    /* ---------- VALIDATE REFUND RECONCILIATION IDENTITY ---------- */
+    // Validate refund reconciliation identity
 
     if (
       !linkedBatchId &&
@@ -1900,7 +2427,58 @@ class ProviderEventProcessorService {
       });
     }
 
-    /* ---------- RESOLVE REFUND EXECUTION ---------- */
+    // Historical obligations are separate from shift refund batches.
+    const FinancialObligation = require("../models/FinancialObligation");
+    const RefundService = require("./financialObligationRefundService");
+
+    const candidates = [];
+
+    if (providerRefundId) {
+      candidates.push({ "refundExecution.providerRefundId": providerRefundId });
+    }
+
+    if (refundTraceKey) {
+      candidates.push({ "refundExecution.traceKey": refundTraceKey });
+    }
+
+    if (originalTransactionReference) {
+      candidates.push({ providerReference: originalTransactionReference });
+    }
+
+    if (payload.originalTransactionProviderId) {
+      candidates.push({
+        providerTransactionId: String(payload.originalTransactionProviderId)
+      });
+    }
+
+    if (candidates.length) {
+      const obligations = await FinancialObligation.find({
+        provider: "paystack",
+        providerMode: PaystackService.getMode(),
+        type: {
+          $in: ["retired_dva_funding", "historical_commercial_payment"]
+        },
+        refundExecution: { $ne: null },
+        $or: candidates,
+      }).limit(2);
+
+      if (obligations.length > 1 || (obligations.length && (linkedBatchId || linkedLineId))) {
+        throw new Error("Ambiguous historical refund routing.");
+      }
+
+      if (obligations.length) {
+        ProviderEventProcessorService.assertIndependentFinalization(options);
+
+        return RefundService.reconcileFromProviderEvent({
+          obligationId: obligations[0]._id,
+          providerRefundId,
+          providerEventRecordId: providerEvent._id,
+          processingClaimId,
+        });
+      }
+    }
+
+    // Resolve refund execution
 
     const execution = await ProviderEventProcessorService.resolveEmployerRefundExecution(
       providerEvent,
@@ -1909,7 +2487,7 @@ class ProviderEventProcessorService {
       }
     );
 
-    /* ---------- VALIDATE REFUND AGAINST EXECUTION ---------- */
+    // Validate refund against execution
 
     ProviderEventProcessorService.assertEmployerRefundEventMatchesExecution({
       providerEvent,
@@ -1934,7 +2512,7 @@ class ProviderEventProcessorService {
           "Paystack reported that the employer refund failed."
         : null;
 
-    /* ---------- LINK PROVIDER EVENT TO REFUND EXECUTION ---------- */
+    // Link provider event to refund execution
 
     await ProviderEventService.linkEmployerRefundExecution(
       {
@@ -1952,7 +2530,7 @@ class ProviderEventProcessorService {
       }
     );
 
-    /* ---------- SYNCHRONIZE PAYSTACK REFUND STATUS ---------- */
+    // Synchronize paystack refund status
 
     const syncResult = await EmployerRefundBatchService.syncPaystackRefundStatus({
       batchId,
@@ -1965,7 +2543,7 @@ class ProviderEventProcessorService {
       currentTime,
     });
 
-    /* ---------- MARK PROVIDER EVENT PROCESSED ---------- */
+    // Mark provider event processed
 
     const processedResult = await ProviderEventService.markProcessed(
       {
@@ -2378,6 +2956,42 @@ class ProviderEventProcessorService {
 
   /* ─────────────────────────────── PAYG JOB PUBLICATION PAYMENT ─────────────────────────────── */
 
+  static async completeHistoricalCommercialEvent(providerEvent, processingClaimId, paymentResult, currentTime) {
+    const obligation = paymentResult.financialObligation;
+
+    if (!obligation?._id || paymentResult.paid !== false ||
+        obligation.type !== "historical_commercial_payment") {
+      throw new Error("Invalid historical commercial payment disposition.");
+    }
+
+    const result = await ProviderEventService.runWithOptionalTransaction({}, async (session) =>
+      ProviderEventService.markProcessed({
+        providerEventRecordId: providerEvent._id,
+        processingClaimId,
+        financialObligation: obligation._id,
+        transaction: obligation.commercialTransaction,
+        employer: obligation.employer,
+        wallet: obligation.wallet,
+        metadata: {
+          processor: "ProviderEventProcessorService",
+          idempotentFinancialObligation: paymentResult.idempotent === true,
+        },
+        currentTime,
+      }, { session })
+    );
+
+    return {
+      providerEvent: result.providerEvent,
+      payment: paymentResult.payment,
+      transaction: paymentResult.paymentTransaction,
+      financialObligation: obligation,
+      historicalFinancialObligation: true,
+      reconciliationRequired: obligation.status !== "settled",
+      processed: true,
+      paid: false,
+    };
+  }
+
   static async processJobPublicationPaymentEvent(providerEvent, processingClaimId, options = {}) {
     ProviderEventProcessorService.assertIndependentFinalization(options);
     const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
@@ -2402,8 +3016,15 @@ class ProviderEventProcessorService {
     const paymentResult = await JobPublicationPaymentService.finalizePaystackPayment({
       reference,
       providerEventId,
+      providerEventRecordId: providerEvent._id,
       currentTime,
     });
+
+    if (paymentResult?.financialObligation) {
+      return ProviderEventProcessorService.completeHistoricalCommercialEvent(
+        providerEvent, processingClaimId, paymentResult, currentTime
+      );
+    }
 
     if (paymentResult?.paid !== true || !paymentResult?.payment?._id) {
       throw ProviderEventProcessorService.createProcessingError({
@@ -2561,8 +3182,15 @@ class ProviderEventProcessorService {
     const paymentResult = await SubscriptionPaymentService.finalizePaystackPayment({
       reference,
       providerEventId,
+      providerEventRecordId: providerEvent._id,
       currentTime,
     });
+
+    if (paymentResult?.financialObligation) {
+      return ProviderEventProcessorService.completeHistoricalCommercialEvent(
+        providerEvent, processingClaimId, paymentResult, currentTime
+      );
+    }
 
     if (paymentResult?.paid !== true || !paymentResult?.payment?._id) {
       throw ProviderEventProcessorService.createProcessingError({
@@ -2662,6 +3290,7 @@ class ProviderEventProcessorService {
         details: {
           paymentCaptured: true,
           paymentId: String(payment._id),
+          paymentKind,
           reference,
           applicationReason,
         },
@@ -2841,155 +3470,672 @@ class ProviderEventProcessorService {
     };
   }
 
-  /* ─────────────────────────────── EMPLOYER WALLET FUNDING ─────────────────────────────── */
-
-  static async processEmployerWalletFundingEvent(providerEvent, processingClaimId, options = {}) {
+  static async verifyDVAFundingPayment(providerEvent) {
     const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
 
-    const currentTime = ProviderEventProcessorService.getOperationCurrentTime(options);
-
-    const employerProfileId =
-      payload.employerProfileId || payload.employer || providerEvent.employer;
-
-    const dvaId = payload.dvaId || payload.dva || providerEvent.dva;
-
-    const rawAmount =
-      payload.amount !== null && payload.amount !== undefined && payload.amount !== ""
-        ? payload.amount
-        : providerEvent.amount;
-
-    const rawProviderFee =
-      payload.providerFee !== null &&
-      payload.providerFee !== undefined &&
-      payload.providerFee !== ""
-        ? payload.providerFee
-        : providerEvent.providerFee;
-
-    const rawNetAmount =
-      payload.netAmount !== null && payload.netAmount !== undefined && payload.netAmount !== ""
-        ? payload.netAmount
-        : providerEvent.netAmount;
-
-    const amount = ProviderEventProcessorService.normalizeRequiredPositiveMinorUnitAmount(
-      rawAmount,
-      "wallet funding amount"
-    );
-
-    const providerFee = ProviderEventProcessorService.normalizeOptionalMinorUnitAmount(
-      rawProviderFee,
-      "wallet funding provider fee"
-    );
-
-    const netAmount = ProviderEventProcessorService.normalizeOptionalMinorUnitAmount(
-      rawNetAmount,
-      "wallet funding net amount"
-    );
-
-    const currency =
-      ProviderEventProcessorService.cleanString(
-        payload.currency || providerEvent.currency || "NGN"
-      )?.toUpperCase() || "NGN";
-
-    const providerReference = ProviderEventProcessorService.cleanString(
-      payload.providerReference || providerEvent.providerReference
-    );
-
-    const providerEventId = ProviderEventProcessorService.cleanString(
-      payload.providerEventId || providerEvent.providerEventId
-    );
-
-    if (!employerProfileId) {
+    if (
+      providerEvent.provider !== "paystack" ||
+      providerEvent.eventName !== "charge.success" ||
+      providerEvent.eventCategory !== "employer_wallet_funding" ||
+      providerEvent.isVerified !== true ||
+      providerEvent.countryCode !== "NG" ||
+      providerEvent.currency !== "NGN"
+    ) {
       throw ProviderEventProcessorService.createProcessingError({
-        message: "Employer profile ID is required to process wallet funding event.",
-        code: "EMPLOYER_WALLET_FUNDING_EMPLOYER_REQUIRED",
-        statusCode: 422,
+        message: "Invalid Paystack DVA funding event.",
+        code: "INVALID_PAYSTACK_DVA_FUNDING_EVENT",
+        statusCode: 409,
         retryable: false,
       });
     }
 
-    if (!dvaId) {
+    const conflicts = payload.dvaFundingIdentityConflicts;
+
+    if (conflicts != null && (!Array.isArray(conflicts) || conflicts.length)) {
       throw ProviderEventProcessorService.createProcessingError({
-        message: "DVA ID is required to process wallet funding event.",
-        code: "EMPLOYER_WALLET_FUNDING_DVA_REQUIRED",
-        statusCode: 422,
+        message: "DVA funding contains unresolved identity conflicts.",
+        code: "DVA_FUNDING_IDENTITY_CONFLICT",
+        statusCode: 409,
         retryable: false,
       });
     }
 
-    if (!providerReference) {
+    const reference = ProviderEventProcessorService.cleanString(providerEvent.providerReference);
+
+    if (
+      !reference ||
+      [payload.providerReference, payload.paystackReference].some(
+        (value) => value != null && value !== reference
+      )
+    ) {
       throw ProviderEventProcessorService.createProcessingError({
-        message: "Provider reference is required to process wallet funding event.",
-        code: "EMPLOYER_WALLET_FUNDING_PROVIDER_REFERENCE_REQUIRED",
-        statusCode: 422,
+        message: "DVA funding requires one consistent payment reference.",
+        code: "DVA_FUNDING_REFERENCE_MISMATCH",
+        statusCode: 409,
         retryable: false,
       });
     }
 
-    const fundingResult = await WalletFundingService.creditEmployerWalletFromDvaFunding(
-      {
-        employerProfileId,
-        dvaId,
-        amount,
-        currency,
-        provider: providerEvent.provider,
-        providerReference,
-        providerEventId,
-        providerFee,
-        netAmount,
-        metadata: {
-          providerEventRecordId: String(providerEvent._id),
-          providerEventKey: providerEvent.eventKey,
-          sourceEventName: providerEvent.eventName,
-        },
-      },
-      options
-    );
+    const signedPayload = providerEvent.rawPayload;
 
-    if (!fundingResult?.transaction?._id || !fundingResult?.wallet?._id) {
+    if (
+      !signedPayload ||
+      signedPayload.event !== "charge.success" ||
+      signedPayload.data?.reference !== reference
+    ) {
       throw ProviderEventProcessorService.createProcessingError({
-        message: "Employer wallet funding did not return a durable transaction and wallet.",
-        code: "EMPLOYER_WALLET_FUNDING_RESULT_INCOMPLETE",
-        statusCode: 500,
+        message: "Original DVA funding evidence does not match the event.",
+        code: "DVA_FUNDING_RAW_EVIDENCE_MISMATCH",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
+    const original = PaystackEventNormalizerService.getDVAFundingDetails(signedPayload);
+
+    if (!original || original.identityConflicts.length) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Original DVA payment identity could not be established.",
+        code: "DVA_FUNDING_ORIGINAL_IDENTITY_INVALID",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
+    const verified = await PaystackService.verifyTransaction(reference);
+
+    if (verified.status !== "success") {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Paystack has not confirmed successful DVA funding.",
+        code: "DVA_FUNDING_PROVIDER_SUCCESS_UNCONFIRMED",
+        statusCode: 503,
         retryable: true,
       });
     }
 
-    const processedResult = await ProviderEventService.markProcessed(
-      {
-        providerEventRecordId: providerEvent._id,
-        processingClaimId,
-        transaction: fundingResult.transaction._id,
-        wallet: fundingResult.wallet._id,
-        employer: employerProfileId,
-        dva: dvaId,
-        normalizedPayload: {
-          ...payload,
-          employerProfileId: String(employerProfileId),
-          dvaId: String(dvaId),
-          amount,
-          providerFee,
-          netAmount,
-          currency,
-          providerReference,
-          providerEventId,
-        },
-        metadata: {
-          processor: "ProviderEventProcessorService",
-          walletFundingTransactionId: String(fundingResult.transaction._id),
-          idempotentWalletFunding: Boolean(fundingResult.idempotent),
-        },
-        currentTime,
-      },
-      options
+    const mode = PaystackService.getMode();
+
+    if (
+      !["test", "live"].includes(mode) ||
+      verified.domain !== mode ||
+      (payload.domain && payload.domain !== mode)
+    ) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "DVA payment belongs to a different Paystack environment.",
+        code: "DVA_FUNDING_PROVIDER_MODE_MISMATCH",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
+    if (
+      verified.reference !== reference ||
+      verified.currency !== providerEvent.currency ||
+      verified.amount !== providerEvent.amount
+    ) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Verified Paystack payment does not match the recorded event.",
+        code: "DVA_FUNDING_PROVIDER_PAYMENT_MISMATCH",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
+    const verifiedPayload = {
+      event: "charge.success",
+      data: verified.raw,
+    };
+
+    if (!PaystackEventNormalizerService.hasDedicatedNubanChannel(verifiedPayload)) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Verified payment is not a confirmed DVA payment.",
+        code: "DVA_FUNDING_PROVIDER_CHANNEL_UNCONFIRMED",
+        statusCode: 503,
+        retryable: true,
+      });
+    }
+
+    const confirmed = PaystackEventNormalizerService.getDVAFundingDetails(verifiedPayload);
+
+    if (!confirmed || confirmed.identityConflicts.length) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Verified DVA payment contains incomplete or conflicting evidence.",
+        code: "DVA_FUNDING_VERIFIED_IDENTITY_INVALID",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
+    if (
+      !original.paystackTransactionId ||
+      !verified.id ||
+      String(original.paystackTransactionId) !== String(verified.id)
+    ) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Paystack payment transaction IDs do not match.",
+        code: "DVA_FUNDING_PROVIDER_TRANSACTION_MISMATCH",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
+    const identity = {};
+
+    const fields = [
+      "paystackCustomerId",
+      "paystackCustomerCode",
+      "paystackDedicatedAccountId",
+      "accountNumber",
+      "bankId",
+      "bankCode",
+      "bankSlug",
+      "providerSlug",
+    ];
+
+    // Combine compatible provider evidence without replacing conflicts.
+    for (const field of fields) {
+      const recorded = payload[field];
+      const received = original[field];
+      const verifiedValue = confirmed[field];
+
+      const values = [recorded, received, verifiedValue]
+        .filter((value) => value != null)
+        .map(String);
+
+      if (new Set(values).size > 1) {
+        throw ProviderEventProcessorService.createProcessingError({
+          message: `DVA funding contains conflicting ${field}.`,
+          code: "DVA_FUNDING_PROVIDER_IDENTITY_MISMATCH",
+          statusCode: 409,
+          retryable: false,
+        });
+      }
+
+      identity[field] = verifiedValue ?? received ?? null;
+    }
+
+    const confirmedCustomer =
+      (original.paystackCustomerId != null &&
+        confirmed.paystackCustomerId != null &&
+        String(original.paystackCustomerId) === String(confirmed.paystackCustomerId)) ||
+      (original.paystackCustomerCode &&
+        confirmed.paystackCustomerCode &&
+        original.paystackCustomerCode === confirmed.paystackCustomerCode);
+
+    if (!confirmedCustomer) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "The original Paystack customer could not be confirmed.",
+        code: "DVA_FUNDING_PROVIDER_CUSTOMER_UNCONFIRMED",
+        statusCode: 503,
+        retryable: true,
+      });
+    }
+
+    if (!original.accountNumber && !original.paystackDedicatedAccountId) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "DVA funding contains no original receiving account identity.",
+        code: "DVA_FUNDING_DESTINATION_REQUIRED",
+        statusCode: 503,
+        retryable: true,
+      });
+    }
+
+    const providerFee = ProviderEventProcessorService.normalizeOptionalMinorUnitAmount(
+      verified.fees,
+      "verified DVA funding fee"
     );
 
+    if (providerFee === null || providerFee > verified.amount) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Paystack DVA funding fees could not be confirmed.",
+        code: "DVA_FUNDING_PROVIDER_FEE_UNCONFIRMED",
+        statusCode: 503,
+        retryable: true,
+      });
+    }
+
+    const netAmount = verified.amount - providerFee;
+
+    if (
+      (providerEvent.providerFee != null && providerEvent.providerFee !== providerFee) ||
+      (providerEvent.netAmount != null && providerEvent.netAmount !== netAmount)
+    ) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Verified DVA funding fees do not match the recorded event.",
+        code: "DVA_FUNDING_PROVIDER_FEE_MISMATCH",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
     return {
-      providerEvent: processedResult.providerEvent,
-      wallet: fundingResult.wallet,
-      transaction: fundingResult.transaction,
-      processed: true,
-      idempotentWalletFunding: Boolean(fundingResult.idempotent),
+      providerReference: reference,
+      paystackTransactionId: String(verified.id),
+      countryCode: providerEvent.countryCode,
+      currency: verified.currency,
+      amount: verified.amount,
+      providerFee,
+      netAmount,
+      mode,
+      identity,
     };
+  }
+
+  static async resolveDVAFundingRouting(providerEvent, payment, options = {}) {
+    const identity = payment.identity || {};
+
+    const hasCustomerIdentity = Boolean(
+      identity.paystackCustomerId || identity.paystackCustomerCode
+    );
+
+    const hasReceivingAccountIdentity = Boolean(
+      identity.paystackDedicatedAccountId ||
+      (identity.accountNumber &&
+        (identity.bankId || identity.bankCode || identity.bankSlug || identity.providerSlug))
+    );
+
+    if (!hasCustomerIdentity || !hasReceivingAccountIdentity) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "DVA funding requires confirmed customer and receiving account identity.",
+        code: "DVA_FUNDING_ROUTING_IDENTITY_INCOMPLETE",
+        statusCode: 503,
+        retryable: true,
+      });
+    }
+
+    const conditions = [];
+
+    const addNumericIdentity = (field, value) => {
+      if (value == null) return;
+
+      const normalized = Number(value);
+
+      if (!Number.isSafeInteger(normalized) || normalized <= 0) {
+        throw ProviderEventProcessorService.createProcessingError({
+          message: `Invalid DVA funding ${field}.`,
+          code: "INVALID_DVA_FUNDING_PROVIDER_IDENTITY",
+          statusCode: 409,
+          retryable: false,
+        });
+      }
+
+      conditions.push({
+        [field]: normalized,
+      });
+    };
+
+    addNumericIdentity("paystackDedicatedAccountId", identity.paystackDedicatedAccountId);
+
+    addNumericIdentity("paystackCustomerId", identity.paystackCustomerId);
+
+    if (identity.paystackCustomerCode) {
+      conditions.push({
+        paystackCustomerCode: identity.paystackCustomerCode,
+      });
+    }
+
+    if (identity.accountNumber) {
+      const accountIdentity = {
+        accountNumber: identity.accountNumber,
+      };
+
+      let hasBankIdentity = false;
+
+      for (const field of ["bankId", "bankCode", "bankSlug", "providerSlug"]) {
+        if (identity[field] != null && identity[field] !== "") {
+          accountIdentity[field] = identity[field];
+          hasBankIdentity = true;
+        }
+      }
+
+      if (hasBankIdentity) {
+        conditions.push(accountIdentity);
+      }
+    }
+
+    if (!conditions.length) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "DVA funding requires provider account identity.",
+        code: "DVA_FUNDING_ROUTING_IDENTITY_REQUIRED",
+        statusCode: 503,
+        retryable: true,
+      });
+    }
+
+    // Search all DVA generations, including retired accounts.
+    const query = DVA.find({
+      provider: "paystack",
+      countryCode: payment.countryCode,
+      currency: payment.currency,
+      $or: conditions,
+    }).limit(2);
+
+    if (options.session) {
+      query.session(options.session);
+    }
+
+    const matches = await query;
+
+    if (!matches.length) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "No historical DVA matches the verified payment.",
+        code: "DVA_FUNDING_HISTORICAL_ACCOUNT_NOT_FOUND",
+        statusCode: 503,
+        retryable: true,
+      });
+    }
+
+    if (matches.length !== 1) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "DVA funding matches multiple historical accounts.",
+        code: "DVA_FUNDING_HISTORICAL_ACCOUNT_AMBIGUOUS",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
+    const dva = matches[0];
+
+    if (dva.metadata?.assignmentMode !== payment.mode) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Historical DVA belongs to a different provider environment.",
+        code: "DVA_FUNDING_ACCOUNT_MODE_MISMATCH",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
+    // All available provider identifiers must match the same DVA.
+    for (const field of [
+      "paystackDedicatedAccountId",
+      "paystackCustomerId",
+      "paystackCustomerCode",
+      "accountNumber",
+      "bankId",
+      "bankCode",
+      "bankSlug",
+      "providerSlug",
+    ]) {
+      if (
+        identity[field] != null &&
+        (dva[field] == null || String(dva[field]) !== String(identity[field]))
+      ) {
+        throw ProviderEventProcessorService.createProcessingError({
+          message: `Historical DVA ${field} does not match the payment.`,
+          code: "DVA_FUNDING_HISTORICAL_IDENTITY_MISMATCH",
+          statusCode: 409,
+          retryable: false,
+        });
+      }
+    }
+
+    if (!dva.employer || !dva.wallet || !dva.ownerUser) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Historical DVA contains incomplete ownership.",
+        code: "DVA_FUNDING_HISTORICAL_OWNERSHIP_INCOMPLETE",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
+    const walletQuery = Wallet.findById(dva.wallet);
+
+    if (options.session) {
+      walletQuery.session(options.session);
+    }
+
+    const wallet = await walletQuery;
+
+    if (
+      !wallet ||
+      wallet.ownerType !== "employer" ||
+      !wallet.employer ||
+      wallet.professional ||
+      String(wallet.employer) !== String(dva.employer) ||
+      wallet.countryCode !== dva.countryCode ||
+      wallet.currency !== dva.currency
+    ) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Historical DVA does not match its original wallet.",
+        code: "DVA_FUNDING_HISTORICAL_WALLET_MISMATCH",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
+    const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
+
+    // Previously established ownership must remain unchanged.
+    for (const [actual, expected] of [
+      [providerEvent.employer, dva.employer],
+      [providerEvent.wallet, wallet._id],
+      [providerEvent.dva, dva._id],
+      [payload.employerProfileId, dva.employer],
+      [payload.walletId, wallet._id],
+      [payload.dvaId, dva._id],
+    ]) {
+      if (actual != null && String(actual) !== String(expected)) {
+        throw ProviderEventProcessorService.createProcessingError({
+          message: "DVA funding conflicts with previously resolved ownership.",
+          code: "DVA_FUNDING_EXISTING_OWNERSHIP_MISMATCH",
+          statusCode: 409,
+          retryable: false,
+        });
+      }
+    }
+
+    return {
+      dva,
+      wallet,
+
+      routing: {
+        employer: dva.employer,
+        wallet: wallet._id,
+        dva: dva._id,
+        providerReference: payment.providerReference,
+      },
+    };
+  }
+
+  /* ─────────────────────────────── EMPLOYER WALLET FUNDING ─────────────────────────────── */
+
+  static async processEmployerWalletFundingEvent(providerEvent, processingClaimId, options = {}) {
+    const currentTime = ProviderEventProcessorService.getOperationCurrentTime(options);
+
+    if (options.session) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "DVA funding must own its verification and financial transactions.",
+        code: "DVA_FUNDING_EXTERNAL_SESSION_NOT_SUPPORTED",
+        statusCode: 500,
+        retryable: false,
+      });
+    }
+
+    // Verify externally before opening the financial transaction.
+
+    const payment = await ProviderEventProcessorService.verifyDVAFundingPayment(providerEvent);
+
+    const { routing } = await ProviderEventProcessorService.resolveDVAFundingRouting(
+      providerEvent,
+      payment
+    );
+
+    // Preserve historical ownership independently.
+
+    const linkedEvent = await ProviderEventService.linkDVAFundingRouting({
+      providerEventRecordId: providerEvent._id,
+      processingClaimId,
+      routing,
+    });
+
+    return ProviderEventService.runWithOptionalTransaction({}, async (session) => {
+      const currentEvent = await ProviderEventService.getProviderEventById(linkedEvent._id, {
+        session,
+      });
+
+      ProviderEventService.assertActiveProcessingClaim(currentEvent, processingClaimId);
+
+      const { dva, wallet } = await ProviderEventProcessorService.resolveDVAFundingRouting(
+        currentEvent,
+        payment,
+        { session }
+      );
+
+      const fundingKey = WalletFundingService.buildFundingIdempotencyKey({
+        provider: "paystack",
+        providerReference: payment.providerReference,
+      });
+
+      const existingFunding = await Transaction.findOne({
+        idempotencyKey: fundingKey,
+      }).session(session);
+
+      const retiredDVA =
+        ["retiring", "deactivated"].includes(dva.status) || Boolean(dva.retirementStartedAt);
+
+      // Historical financial obligation
+
+      if (retiredDVA && !existingFunding) {
+        const obligationResult = await FinancialObligationService.recordRetiredDVAFunding(
+          {
+            providerEventRecordId: currentEvent._id,
+            processingClaimId,
+            payment,
+            currentTime,
+          },
+          { session }
+        );
+
+        const obligation = obligationResult.obligation;
+
+        if (!obligation?._id) {
+          throw ProviderEventProcessorService.createProcessingError({
+            message: "Historical DVA funding did not produce a financial obligation.",
+            code: "DVA_FUNDING_OBLIGATION_RESULT_INCOMPLETE",
+            statusCode: 500,
+            retryable: true,
+          });
+        }
+
+        const processedResult = await ProviderEventService.markProcessed(
+          {
+            providerEventRecordId: currentEvent._id,
+            processingClaimId,
+
+            financialObligation: obligation._id,
+            employer: dva.employer,
+            wallet: wallet._id,
+            dva: dva._id,
+
+            metadata: {
+              processor: "ProviderEventProcessorService",
+              historicalFinancialObligation: true,
+              financialObligationType: obligation.type,
+              financialObligationId: String(obligation._id),
+              idempotentFinancialObligation: obligationResult.idempotent === true,
+            },
+
+            currentTime,
+          },
+          { session }
+        );
+
+        return {
+          providerEvent: processedResult.providerEvent,
+          wallet,
+          transaction: null,
+          financialObligation: obligation,
+          processed: true,
+          historicalFinancialObligation: true,
+          idempotentFinancialObligation: obligationResult.idempotent === true,
+        };
+      }
+
+      // Normal funding or completed replay
+
+      if (currentEvent.providerFee == null || currentEvent.netAmount == null) {
+        throw ProviderEventProcessorService.createProcessingError({
+          message: "DVA payment requires reconciliation of recorded provider fees.",
+          code: "DVA_FUNDING_RECORDED_FEES_INCOMPLETE",
+          statusCode: 409,
+          retryable: false,
+          details: {
+            providerEventRecordId: String(currentEvent._id),
+            providerReference: payment.providerReference,
+            verifiedProviderFee: payment.providerFee,
+            verifiedNetAmount: payment.netAmount,
+          },
+        });
+      }
+
+      const fundingResult = await WalletFundingService.creditEmployerWalletFromDvaFunding(
+        {
+          employerProfileId: dva.employer,
+          dvaId: dva._id,
+
+          amount: payment.amount,
+          currency: payment.currency,
+
+          provider: "paystack",
+          providerReference: payment.providerReference,
+          providerEventId: currentEvent.providerEventId,
+
+          providerFee: payment.providerFee,
+          netAmount: payment.netAmount,
+
+          metadata: {
+            providerEventRecordId: String(currentEvent._id),
+            providerEventKey: currentEvent.eventKey,
+            sourceEventName: currentEvent.eventName,
+            paystackTransactionId: payment.paystackTransactionId,
+            verifiedProviderMode: payment.mode,
+          },
+        },
+        { session }
+      );
+
+      if (
+        !fundingResult?.transaction?._id ||
+        !fundingResult?.wallet?._id ||
+        String(fundingResult.wallet._id) !== String(wallet._id)
+      ) {
+        throw ProviderEventProcessorService.createProcessingError({
+          message: "DVA funding did not return its original wallet and transaction.",
+          code: "DVA_FUNDING_RESULT_INCOMPLETE",
+          statusCode: 500,
+          retryable: true,
+        });
+      }
+
+      const processedResult = await ProviderEventService.markProcessed(
+        {
+          providerEventRecordId: currentEvent._id,
+          processingClaimId,
+
+          transaction: fundingResult.transaction._id,
+          wallet: fundingResult.wallet._id,
+          employer: dva.employer,
+          dva: dva._id,
+
+          metadata: {
+            processor: "ProviderEventProcessorService",
+            walletFundingTransactionId: String(fundingResult.transaction._id),
+            idempotentWalletFunding: fundingResult.idempotent === true,
+          },
+
+          currentTime,
+        },
+        { session }
+      );
+
+      return {
+        providerEvent: processedResult.providerEvent,
+        wallet: fundingResult.wallet,
+        transaction: fundingResult.transaction,
+        processed: true,
+        idempotentWalletFunding: fundingResult.idempotent === true,
+      };
+    });
   }
 
   /* ─────────────────────────────── WITHDRAWAL PAYOUT ─────────────────────────────── */
@@ -3109,6 +4255,178 @@ class ProviderEventProcessorService {
   /* ─────────────────────────────── WITHDRAWAL REVERSAL ─────────────────────────────── */
 
   static async processWithdrawalReversalEvent(providerEvent, processingClaimId, options = {}) {
+    if (options.session) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Withdrawal reversal must own its financial transaction.",
+        code: "WITHDRAWAL_REVERSAL_EXTERNAL_SESSION_NOT_SUPPORTED",
+        statusCode: 500,
+        retryable: false,
+      });
+    }
+
+    const currentTime = ProviderEventProcessorService.getOperationCurrentTime(options);
+
+    const withdrawal =
+      await ProviderEventProcessorService.findWithdrawalTransactionForProviderEvent(providerEvent);
+
+    const originalWallet = await Wallet.findById(withdrawal.wallet);
+
+    if (!originalWallet) {
+      throw ProviderEventProcessorService.createProcessingError({
+        message: "Original withdrawal wallet was not found.",
+        code: "WITHDRAWAL_REVERSAL_WALLET_NOT_FOUND",
+        statusCode: 409,
+        retryable: false,
+      });
+    }
+
+    let verification = null;
+
+    // External reversal verification
+
+    if (originalWallet.status === "closed" && withdrawal.status === "completed") {
+      if (providerEvent.eventName !== "transfer.reversed") {
+        throw ProviderEventProcessorService.createProcessingError({
+          message: "Completed withdrawals require confirmed reversal evidence.",
+          code: "WITHDRAWAL_REVERSAL_NOT_CONFIRMED",
+          statusCode: 409,
+          retryable: false,
+        });
+      }
+
+      verification = await FinancialObligationService.verifyClosedWalletWithdrawalReversal({
+        withdrawalTransactionId: withdrawal._id,
+      });
+    }
+
+    // Atomic financial disposition
+
+    return ProviderEventService.runWithOptionalTransaction({}, async (session) => {
+      const currentEvent = await ProviderEventService.getProviderEventById(providerEvent._id, {
+        session,
+      });
+
+      ProviderEventService.assertActiveProcessingClaim(currentEvent, processingClaimId);
+
+      const currentWithdrawal =
+        await ProviderEventProcessorService.findWithdrawalTransactionForProviderEvent(
+          currentEvent,
+          { session }
+        );
+
+      const wallet = await Wallet.findById(currentWithdrawal.wallet).session(session);
+
+      if (!wallet) {
+        throw ProviderEventProcessorService.createProcessingError({
+          message: "Original withdrawal wallet was not found.",
+          code: "WITHDRAWAL_REVERSAL_WALLET_NOT_FOUND",
+          statusCode: 409,
+          retryable: false,
+        });
+      }
+
+      const ownerContext = ProviderEventProcessorService.getWithdrawalOwnerContext({
+        withdrawalTransaction: currentWithdrawal,
+        providerEvent: currentEvent,
+      });
+
+      ProviderEventProcessorService.assertWithdrawalCategoryMatchesOwner({
+        providerEvent: currentEvent,
+        ownerType: ownerContext.ownerType,
+      });
+
+      // Closed-wallet obligation
+
+      if (wallet.status === "closed" && currentWithdrawal.status === "completed") {
+        if (!verification) {
+          throw ProviderEventProcessorService.createProcessingError({
+            message: "Withdrawal requires renewed historical reversal verification.",
+            code: "WITHDRAWAL_REVERSAL_VERIFICATION_REQUIRED",
+            statusCode: 503,
+            retryable: true,
+          });
+        }
+
+        const obligationResult =
+          await FinancialObligationService.recordClosedWalletWithdrawalReversal(
+            {
+              providerEventRecordId: currentEvent._id,
+              processingClaimId,
+              verification,
+            },
+            { session }
+          );
+
+        const obligation = obligationResult.obligation;
+
+        if (!obligation?._id) {
+          throw ProviderEventProcessorService.createProcessingError({
+            message: "Closed-wallet reversal did not produce a financial obligation.",
+            code: "WITHDRAWAL_REVERSAL_OBLIGATION_RESULT_INCOMPLETE",
+            statusCode: 500,
+            retryable: true,
+          });
+        }
+
+        const processedResult = await ProviderEventService.markProcessed(
+          {
+            providerEventRecordId: currentEvent._id,
+            processingClaimId,
+
+            financialObligation: obligation._id,
+            transaction: currentWithdrawal._id,
+
+            wallet: wallet._id,
+            employer: ownerContext.employer,
+            professional: ownerContext.professional,
+            bankAccount: currentWithdrawal.bankAccount,
+
+            metadata: {
+              processor: "ProviderEventProcessorService",
+              historicalFinancialObligation: true,
+              financialObligationType: obligation.type,
+              financialObligationId: String(obligation._id),
+              withdrawalReversalCredited: false,
+              withdrawalReservationReleased: false,
+              idempotentFinancialObligation: obligationResult.idempotent === true,
+            },
+
+            currentTime,
+          },
+          { session }
+        );
+
+        return {
+          providerEvent: processedResult.providerEvent,
+          wallet,
+          transaction: null,
+          originalTransaction: currentWithdrawal,
+          financialObligation: obligation,
+          processed: true,
+          ownerType: ownerContext.ownerType,
+          historicalFinancialObligation: true,
+          idempotentFinancialObligation: obligationResult.idempotent === true,
+        };
+      }
+
+      // Normal reversal or completed replay
+
+      return ProviderEventProcessorService.processWalletWithdrawalReversalEvent(
+        currentEvent,
+        processingClaimId,
+        {
+          session,
+          currentTime,
+        }
+      );
+    });
+  }
+
+  static async processWalletWithdrawalReversalEvent(
+    providerEvent,
+    processingClaimId,
+    options = {}
+  ) {
     const payload = ProviderEventProcessorService.getNormalizedPayload(providerEvent);
 
     const currentTime = ProviderEventProcessorService.getOperationCurrentTime(options);
@@ -3152,6 +4470,7 @@ class ProviderEventProcessorService {
           providerEventRecordId: String(providerEvent._id),
           providerEventKey: providerEvent.eventKey,
           sourceEventName: providerEvent.eventName,
+          paystackStatus: payload.paystackStatus || null,
           providerReference: providerEvent.providerReference,
           providerEventId: providerEvent.providerEventId,
           paystackTransferReference,

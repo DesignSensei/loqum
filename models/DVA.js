@@ -3,21 +3,10 @@
 const mongoose = require("mongoose");
 
 /**
- * DVA MODEL:
- *
- * Stores employer Paystack Dedicated Virtual Account details.
- *
- * DVA is a payment rail, not the wallet.
- *
- * Current payment direction:
- * - DVA is for employer wallet funding only.
- * - DVA should not directly fund a shift.
- * - DVA should not directly credit escrow.
- * - Money received through DVA is reconciled into the employer wallet.
- *
- * Paystack Checkout is separate:
- * - Paystack Checkout can fund a specific shift directly into escrow.
- * - That flow should not use this DVA model.
+ * Paystack DVA for employer wallet funding.
+ * A DVA is a payment rail, not a wallet.
+ * Direct Shift funding uses Paystack Checkout.
+ * Retired DVAs retain their historical financial identity.
  */
 
 const dvaSchema = new mongoose.Schema(
@@ -35,6 +24,7 @@ const dvaSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "EmployerProfile",
       required: true,
+      immutable: true,
       index: true,
     },
 
@@ -42,6 +32,7 @@ const dvaSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Wallet",
       required: true,
+      immutable: true,
       index: true,
     },
 
@@ -77,7 +68,6 @@ const dvaSchema = new mongoose.Schema(
       trim: true,
       lowercase: true,
       default: null,
-      // Example: titan-paystack, wema-bank.
     },
 
     // --- BANK DETAILS ---
@@ -85,14 +75,12 @@ const dvaSchema = new mongoose.Schema(
     bankId: {
       type: Number,
       default: null,
-      // Example: 629 for Paystack-Titan provider.
     },
 
     bankName: {
       type: String,
       trim: true,
       default: null,
-      // Example: Paystack-Titan, Wema Bank.
     },
 
     bankCode: {
@@ -133,13 +121,11 @@ const dvaSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: null,
-      // Example: CUS_xxxxxxxxxxxx.
     },
 
     paystackDedicatedAccountId: {
       type: Number,
       default: null,
-      // Paystack's internal dedicated account ID.
     },
 
     paystackReference: {
@@ -152,7 +138,7 @@ const dvaSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["pending", "active", "failed", "deactivated"],
+      enum: ["pending", "active", "failed", "retiring", "deactivated"],
       default: "pending",
       required: true,
       index: true,
@@ -185,6 +171,24 @@ const dvaSchema = new mongoose.Schema(
       default: null,
     },
 
+    // --- RETIREMENT ---
+
+    retirementStartedAt: {
+      type: Date,
+      default: null,
+    },
+
+    retirementResolution: {
+      type: String,
+      enum: ["provider_unassigned", "assignment_never_created", null],
+      default: null,
+    },
+
+    retirementConfirmedAt: {
+      type: Date,
+      default: null,
+    },
+
     deactivatedAt: {
       type: Date,
       default: null,
@@ -195,7 +199,7 @@ const dvaSchema = new mongoose.Schema(
       default: null,
     },
 
-    // --- RAW PROVIDER DATA ---
+    // --- PROVIDER METADATA ---
 
     metadata: {
       type: mongoose.Schema.Types.Mixed,
@@ -209,7 +213,7 @@ const dvaSchema = new mongoose.Schema(
 
 // --- INDEXES ---
 
-// One DVA per employer wallet per provider/country/currency for launch.
+// One DVA per wallet, provider, country and currency.
 dvaSchema.index(
   {
     wallet: 1,
@@ -220,7 +224,7 @@ dvaSchema.index(
   { unique: true }
 );
 
-// Prevent duplicate Paystack dedicated account records.
+// Dedicated account IDs remain unique after retirement.
 dvaSchema.index(
   { provider: 1, paystackDedicatedAccountId: 1 },
   {
@@ -231,7 +235,7 @@ dvaSchema.index(
   }
 );
 
-// Prevent the same bank account from being assigned twice by the same provider.
+// Preserve historical bank account identity.
 dvaSchema.index(
   { provider: 1, bankId: 1, accountNumber: 1 },
   {
@@ -243,8 +247,7 @@ dvaSchema.index(
   }
 );
 
-// Prevent duplicate accounts when Paystack supplies a provider slug
-// but does not supply a numeric bank ID.
+// Alternative bank identity when no numeric bank ID is supplied.
 dvaSchema.index(
   {
     provider: 1,
@@ -306,6 +309,8 @@ dvaSchema.pre("validate", function () {
     this.paystackCustomerCode = String(this.paystackCustomerCode).trim();
   }
 
+  // --- ACTIVE DVA ---
+
   if (this.status === "active") {
     if (
       !this.accountNumber ||
@@ -316,7 +321,7 @@ dvaSchema.pre("validate", function () {
       !this.paystackCustomerCode
     ) {
       throw new Error(
-        "Active DVA must have account number, account name, bank name, provider slug, Paystack dedicated account ID, and Paystack customer code."
+        "Active DVA requires complete bank details, dedicated account ID and customer code."
       );
     }
 
@@ -326,8 +331,9 @@ dvaSchema.pre("validate", function () {
 
     this.failedAt = null;
     this.failureReason = null;
-    this.deactivatedAt = null;
   }
+
+  // --- FAILED ASSIGNMENT ---
 
   if (this.status === "failed") {
     if (!this.failedAt) {
@@ -339,10 +345,84 @@ dvaSchema.pre("validate", function () {
     }
   }
 
-  if (this.status === "deactivated") {
-    if (!this.deactivatedAt) {
-      this.deactivatedAt = new Date();
+  // --- RETIREMENT LIFECYCLE ---
+
+  const isRetiring = this.status === "retiring";
+  const isDeactivated = this.status === "deactivated";
+
+  const hasRetirementResolution = Boolean(this.retirementResolution);
+  const hasRetirementConfirmation = Boolean(this.retirementConfirmedAt);
+
+  if (isRetiring || isDeactivated) {
+    this.isDefault = false;
+
+    if (!this.retirementStartedAt) {
+      this.invalidate("retirementStartedAt", "DVA retirement requires a start time.");
     }
+  } else if (
+    this.retirementStartedAt ||
+    this.retirementResolution ||
+    this.retirementConfirmedAt ||
+    this.deactivatedAt
+  ) {
+    this.invalidate("status", "A DVA with retirement history cannot return to normal operation.");
+  }
+
+  if (hasRetirementResolution !== hasRetirementConfirmation) {
+    this.invalidate(
+      "retirementResolution",
+      "Retirement resolution and confirmation must be recorded together."
+    );
+  }
+
+  if (this.retirementResolution === "provider_unassigned" && !this.paystackDedicatedAccountId) {
+    this.invalidate(
+      "paystackDedicatedAccountId",
+      "Provider unassignment requires the dedicated account ID."
+    );
+  }
+
+  if (
+    this.retirementResolution === "assignment_never_created" &&
+    (this.activatedAt || this.paystackDedicatedAccountId || this.accountNumber)
+  ) {
+    this.invalidate(
+      "retirementResolution",
+      "An existing dedicated account requires provider unassignment."
+    );
+  }
+
+  if (isDeactivated) {
+    if (!hasRetirementResolution || !hasRetirementConfirmation) {
+      this.invalidate(
+        "retirementConfirmedAt",
+        "DVA deactivation requires verified retirement resolution."
+      );
+    }
+
+    if (!this.deactivatedAt) {
+      this.invalidate("deactivatedAt", "DVA deactivation requires a completion time.");
+    }
+  } else if (this.deactivatedAt) {
+    this.invalidate("deactivatedAt", "Only a deactivated DVA may have a deactivation time.");
+  }
+
+  // --- RETIREMENT TIMESTAMP ORDER ---
+
+  if (
+    this.retirementStartedAt &&
+    this.retirementConfirmedAt &&
+    this.retirementConfirmedAt < this.retirementStartedAt
+  ) {
+    this.invalidate("retirementConfirmedAt", "Retirement confirmation cannot precede initiation.");
+  }
+
+  if (
+    this.retirementConfirmedAt &&
+    this.deactivatedAt &&
+    this.deactivatedAt < this.retirementConfirmedAt
+  ) {
+    this.invalidate("deactivatedAt", "Deactivation cannot precede retirement confirmation.");
   }
 });
 

@@ -7,6 +7,8 @@ const ProfessionalProfile = require("../models/ProfessionalProfile");
 const BankAccount = require("../models/BankAccount");
 const Wallet = require("../models/Wallet");
 const Transaction = require("../models/Transaction");
+const FinancialObligation = require("../models/FinancialObligation");
+const User = require("../models/User");
 
 const WalletService = require("./walletService");
 const NotificationService = require("./notificationService");
@@ -31,7 +33,7 @@ const WITHDRAWAL_STATUSES = [
 const MAX_REASON_LENGTH = 300;
 
 class WalletWithdrawalService {
-  /* ─────────────────────────────── ERRORS / NORMALIZATION ─────────────────────────────── */
+  /* ---------- ERRORS / NORMALIZATION ---------- */
 
   static createError({ message, code, statusCode = 400, details = null, cause = null }) {
     const error = createServiceError({
@@ -106,7 +108,7 @@ class WalletWithdrawalService {
 
     if (reason.length > MAX_REASON_LENGTH) {
       throw WalletWithdrawalService.createError({
-        message: `Withdrawal reason cannot exceed ` + `${MAX_REASON_LENGTH} characters.`,
+        message: `Withdrawal reason cannot exceed ${MAX_REASON_LENGTH} characters.`,
         code: "WITHDRAWAL_REASON_TOO_LONG",
       });
     }
@@ -141,14 +143,10 @@ class WalletWithdrawalService {
     const sourceEventName =
       WalletWithdrawalService.cleanString(cleanMetadata.sourceEventName)?.toLowerCase() || null;
 
-    if (["transfer.failed", "transfer.reversed"].includes(sourceEventName)) {
-      return true;
-    }
-
-    return false;
+    return ["transfer.failed", "transfer.reversed"].includes(sourceEventName);
   }
 
-  /* ─────────────────────────────── OWNER CONFIGURATION ─────────────────────────────── */
+  /* ---------- OWNER CONFIGURATION ---------- */
 
   static getOwnerConfig(ownerType) {
     const normalized = WalletWithdrawalService.cleanOwnerType(ownerType);
@@ -178,7 +176,7 @@ class WalletWithdrawalService {
     };
   }
 
-  /* ─────────────────────────────── LOADERS ─────────────────────────────── */
+  /* ---------- LOADERS ---------- */
 
   static async getProfile({ ownerType, ownerProfileId }, options = {}) {
     const config = WalletWithdrawalService.getOwnerConfig(ownerType);
@@ -362,7 +360,7 @@ class WalletWithdrawalService {
 
     if (typeof creator !== "function") {
       throw WalletWithdrawalService.createError({
-        message: `${config.walletCreatorName} is not ` + "available on WalletService.",
+        message: `${config.walletCreatorName} is not available on WalletService.`,
         code: "WITHDRAWAL_WALLET_CREATOR_NOT_AVAILABLE",
         statusCode: 500,
       });
@@ -404,7 +402,7 @@ class WalletWithdrawalService {
     return transaction;
   }
 
-  /* ─────────────────────────────── AMOUNTS / IDEMPOTENCY ─────────────────────────────── */
+  /* ---------- AMOUNTS / IDEMPOTENCY ---------- */
 
   static buildWithdrawalIdempotencyKey({ ownerType, ownerProfileId, requestReference }) {
     const normalizedOwnerType = WalletWithdrawalService.cleanOwnerType(ownerType);
@@ -420,7 +418,7 @@ class WalletWithdrawalService {
       });
     }
 
-    return `withdrawal:${normalizedOwnerType}:` + `${profileId}:${reference}`;
+    return `withdrawal:${normalizedOwnerType}:${profileId}:${reference}`;
   }
 
   static validateWithdrawalAmount({ wallet, amount }) {
@@ -482,7 +480,7 @@ class WalletWithdrawalService {
       normalizedProviderFee = money.normalizeMinorUnitAmount(providerFee ?? 0, "Provider fee");
 
       normalizedNetAmount =
-        netAmount === null || netAmount === undefined
+        netAmount == null
           ? amount
           : money.normalizePositiveMinorUnitAmount(netAmount, "Net amount");
     } catch (error) {
@@ -509,24 +507,15 @@ class WalletWithdrawalService {
       });
     }
 
-    /*
-     * amount is the wallet debit.
-     * netAmount is the bank payout.
-     *
-     * They do not have to satisfy:
-     *
-     * amount = providerFee + netAmount
-     *
-     * because Loqum may bear the provider fee rather than
-     * deducting that fee from the wallet owner's payout.
-     */
+    // LOQUM may bear provider fees separately from the wallet debit.
+
     return {
       normalizedProviderFee,
       normalizedNetAmount,
     };
   }
 
-  /* ─────────────────────────────── TRANSACTION VALIDATION ─────────────────────────────── */
+  /* ---------- TRANSACTION VALIDATION ---------- */
 
   static assertWithdrawalTransaction(transaction) {
     const valid =
@@ -617,27 +606,22 @@ class WalletWithdrawalService {
         availableBalance: -amount,
         pendingBalance: amount,
       },
-
       processing: {
         availableBalance: -amount,
         pendingBalance: amount,
       },
-
       completed: {
         availableBalance: 0,
         pendingBalance: -amount,
       },
-
       reversed: {
         availableBalance: 0,
         pendingBalance: -amount,
       },
-
       failed: {
         availableBalance: amount,
         pendingBalance: -amount,
       },
-
       cancelled: {
         availableBalance: amount,
         pendingBalance: -amount,
@@ -680,6 +664,56 @@ class WalletWithdrawalService {
     return true;
   }
 
+  /* ---------- FINANCIAL OBLIGATION PROTECTION ---------- */
+
+  static async assertNoHistoricalWithdrawalObligation(withdrawal, session) {
+    if (!session?.inTransaction?.()) {
+      throw new Error("Withdrawal reconciliation requires an active transaction.");
+    }
+
+    const obligation = await FinancialObligation.findOne({
+      type: "closed_wallet_withdrawal_reversal",
+      withdrawalTransaction: withdrawal._id,
+    })
+      .select("_id status")
+      .session(session);
+
+    const metadata = withdrawal.metadata || {};
+
+    if (
+      obligation ||
+      metadata.financialObligationId ||
+      metadata.providerReversalDisposition === "financial_obligation"
+    ) {
+      throw WalletWithdrawalService.createError({
+        message:
+          "Withdrawal has a historical financial obligation and cannot receive a wallet reversal.",
+        code: "WITHDRAWAL_FINANCIAL_OBLIGATION_EXISTS",
+        statusCode: 409,
+        details: {
+          withdrawalTransactionId: String(withdrawal._id),
+          financialObligationId: obligation?._id
+            ? String(obligation._id)
+            : metadata.financialObligationId || null,
+          financialObligationStatus: obligation?.status || null,
+        },
+      });
+    }
+
+    if (
+      metadata.providerReversalDisposition != null &&
+      (metadata.providerReversalDisposition !== "wallet_credit" || withdrawal.status !== "reversed")
+    ) {
+      throw WalletWithdrawalService.createError({
+        message: "Withdrawal has an inconsistent reversal disposition.",
+        code: "WITHDRAWAL_REVERSAL_DISPOSITION_CONFLICT",
+        statusCode: 409,
+      });
+    }
+  }
+
+  /* ---------- PROVIDER IDENTIFIERS ---------- */
+
   static resolveTransferCode(transaction, suppliedCode, metadata = {}) {
     const codes = [
       transaction.paystackTransferCode,
@@ -717,7 +751,7 @@ class WalletWithdrawalService {
     return transaction.metadata?.employerProfileId || null;
   }
 
-  /* ─────────────────────────────── CREATE REQUEST ─────────────────────────────── */
+  /* ---------- CREATE REQUEST ---------- */
 
   static async createWithdrawalRequest(
     {
@@ -753,6 +787,26 @@ class WalletWithdrawalService {
 
     const cleanMetadata = WalletWithdrawalService.normalizeMetadata(metadata);
 
+    /* ---------- SYSTEM-CONTROLLED METADATA ---------- */
+
+    for (const field of [
+      "financialObligationId",
+      "providerReversalDisposition",
+      "providerReversalStatus",
+      "providerReversalVerifiedAt",
+      "reversalTransactionId",
+      "paystackMode",
+      "paystackRecipientCode",
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(cleanMetadata, field)) {
+        throw WalletWithdrawalService.createError({
+          message: `Withdrawal request cannot supply ${field}.`,
+          code: "WITHDRAWAL_RESERVED_METADATA_FIELD",
+          statusCode: 400,
+        });
+      }
+    }
+
     if (!requestRef) {
       throw WalletWithdrawalService.createError({
         message: "Withdrawal request reference is required.",
@@ -764,12 +818,9 @@ class WalletWithdrawalService {
       const profile = await WalletWithdrawalService.getProfile(
         {
           ownerType: config.ownerType,
-
           ownerProfileId: profileId,
         },
-        {
-          session,
-        }
+        { session }
       );
 
       if (!profile.user || String(profile.user) !== String(actorUserId)) {
@@ -780,11 +831,34 @@ class WalletWithdrawalService {
         });
       }
 
+      /* ---------- ACCOUNT ELIGIBILITY ---------- */
+
+      const actor = await User.findById(actorUserId)
+        .select("_id role accountStatus")
+        .session(session)
+        .lean();
+
+      if (!actor || actor.role !== config.ownerType || actor.accountStatus === "closed") {
+        throw WalletWithdrawalService.createError({
+          message: "This user account is not eligible to request a withdrawal.",
+          code: "WITHDRAWAL_USER_ACCOUNT_INELIGIBLE",
+          statusCode: 403,
+        });
+      }
+
+      if (profile.accountStatus === "closed") {
+        throw WalletWithdrawalService.createError({
+          message: "A closed profile cannot request a withdrawal.",
+          code: "WITHDRAWAL_PROFILE_CLOSED",
+          statusCode: 409,
+        });
+      }
+
+      /* ---------- IDEMPOTENT REQUEST ---------- */
+
       const idempotencyKey = WalletWithdrawalService.buildWithdrawalIdempotencyKey({
         ownerType: config.ownerType,
-
         ownerProfileId: profile._id,
-
         requestReference: requestRef,
       });
 
@@ -795,16 +869,19 @@ class WalletWithdrawalService {
 
       if (existingTransaction) {
         const existingWallet = await Wallet.findById(existingTransaction.wallet).session(session);
+
         const normalizedAmount = money.normalizePositiveMinorUnitAmount(
           amount,
           "Withdrawal amount"
         );
+
         const { normalizedProviderFee, normalizedNetAmount } =
           WalletWithdrawalService.validateWithdrawalFeeAmounts({
             amount: normalizedAmount,
             providerFee,
             netAmount,
           });
+
         const result = {
           wallet: existingWallet,
           transaction: existingTransaction,
@@ -815,14 +892,18 @@ class WalletWithdrawalService {
           result,
           config,
           profile,
-          // An omitted bank account means the account selected on the first attempt.
-          bankAccount: { _id: accountId || existingTransaction.bankAccount },
+
+          bankAccount: {
+            _id: accountId || existingTransaction.bankAccount,
+          },
+
           userId: actorUserId,
           amount: normalizedAmount,
           providerFee: normalizedProviderFee,
           netAmount: normalizedNetAmount,
           requestReference: requestRef,
         });
+
         WalletService.assertTransactionWallet(existingTransaction, existingWallet);
 
         return {
@@ -831,28 +912,23 @@ class WalletWithdrawalService {
         };
       }
 
+      /* ---------- BANK ACCOUNT / WALLET ---------- */
+
       const bankAccount = await WalletWithdrawalService.getActiveBankAccount(
         {
           ownerType: config.ownerType,
-
           ownerProfileId: profile._id,
-
           bankAccountId: accountId,
         },
-        {
-          session,
-        }
+        { session }
       );
 
       const wallet = await WalletWithdrawalService.getOrCreateOwnerWallet(
         {
           ownerType: config.ownerType,
-
           profile,
         },
-        {
-          session,
-        }
+        { session }
       );
 
       WalletService.assertWalletIsActive(wallet);
@@ -865,22 +941,12 @@ class WalletWithdrawalService {
       const { normalizedProviderFee, normalizedNetAmount } =
         WalletWithdrawalService.validateWithdrawalFeeAmounts({
           amount: normalizedAmount,
-
           providerFee,
-
           netAmount,
         });
 
-      /*
-       * Reserve the requested value before any provider call:
-       *
-       * availableBalance -= amount
-       * pendingBalance   += amount
-       *
-       * The value has not left the wallet yet. PaystackTransferService later
-       * persists the deterministic Transfer reference and crosses the provider
-       * boundary before POST /transfer.
-       */
+      /* ---------- RESERVE WITHDRAWAL FUNDS ---------- */
+
       const result = await WalletService.createPendingExternalDebit(
         {
           walletId: wallet._id,
@@ -888,26 +954,20 @@ class WalletWithdrawalService {
           amount: normalizedAmount,
 
           type: "withdrawal",
-
           purpose: "withdrawal",
-
           paymentRail: "paystack_transfer",
-
           provider: "paystack",
 
           idempotencyKey,
-
           paystackTransferReference: null,
 
           bankAccount: bankAccount._id,
 
           providerFee: normalizedProviderFee,
-
           netAmount: normalizedNetAmount,
 
           initiatedBy: {
             role: config.ownerType,
-
             userId: actorUserId,
           },
 
@@ -930,63 +990,47 @@ class WalletWithdrawalService {
             requestReference: requestRef,
           },
         },
-        {
-          session,
-        }
+        { session }
       );
 
       WalletWithdrawalService.assertWithdrawalMatchesRequest({
         result,
-
         config,
-
         profile,
-
         bankAccount,
-
         userId: actorUserId,
-
         amount: normalizedAmount,
-
         providerFee: normalizedProviderFee,
-
         netAmount: normalizedNetAmount,
-
         requestReference: requestRef,
       });
+
+      /* ---------- SUBMISSION NOTIFICATION ---------- */
 
       if (config.ownerType === "employer" && result.idempotent !== true) {
         await NotificationService.notifyEmployerWithdrawalSubmitted(
           {
             recipientUser: profile.user,
-
             employer: profile._id,
 
             wallet: result.wallet,
-
             transaction: result.transaction,
 
             amount: result.transaction.amount,
-
             currency: result.transaction.currency,
 
             metadata: {
               source: "wallet_withdrawal_service",
-
               withdrawalTransactionId: String(result.transaction._id),
-
               idempotent: false,
             },
           },
-          {
-            session,
-          }
+          { session }
         );
       }
 
       return {
         ...result,
-
         providerSubmissionRequired: result.transaction.status === "pending",
       };
     });
@@ -998,21 +1042,17 @@ class WalletWithdrawalService {
         ownerType: "employer",
 
         userId: payload.userId,
-
         ownerProfileId: payload.employerProfileId,
 
         bankAccountId: payload.bankAccountId ?? null,
 
         amount: payload.amount,
-
         requestReference: payload.requestReference,
 
         providerFee: payload.providerFee ?? 0,
-
         netAmount: payload.netAmount ?? null,
 
         description: payload.description ?? null,
-
         metadata: payload.metadata ?? {},
       },
       options
@@ -1025,39 +1065,27 @@ class WalletWithdrawalService {
         ownerType: "professional",
 
         userId: payload.userId,
-
         ownerProfileId: payload.professionalProfileId,
 
         bankAccountId: payload.bankAccountId ?? null,
 
         amount: payload.amount,
-
         requestReference: payload.requestReference,
 
         providerFee: payload.providerFee ?? 0,
-
         netAmount: payload.netAmount ?? null,
 
         description: payload.description ?? null,
-
         metadata: payload.metadata ?? {},
       },
       options
     );
   }
 
-  /* ─────────────────────────────── PROVIDER SUBMISSION ─────────────────────────────── */
+  /* ---------- PROVIDER SUBMISSION ---------- */
 
   static async markWithdrawalSubmittedToProvider(
-    {
-      withdrawalTransactionId,
-
-      paystackTransferCode,
-
-      currentTime = new Date(),
-
-      metadata = {},
-    },
+    { withdrawalTransactionId, paystackTransferCode, currentTime = new Date(), metadata = {} },
     options = {}
   ) {
     const transferCode = WalletWithdrawalService.cleanString(paystackTransferCode);
@@ -1148,23 +1176,20 @@ class WalletWithdrawalService {
         };
       }
 
-      transaction.paystackTransferCode = transferCode;
+      await WalletService.assertWithdrawalLifecycleIntegrity(transaction, cleanMetadata, session);
 
+      transaction.paystackTransferCode = transferCode;
       transaction.paystackStatus = "pending";
 
       transaction.metadata = {
         ...(transaction.metadata || {}),
-
         ...cleanMetadata,
-
         providerSubmissionAt: submittedAt,
       };
 
       transaction.markModified("metadata");
 
-      await transaction.save({
-        session,
-      });
+      await transaction.save({ session });
 
       return {
         transaction,
@@ -1174,18 +1199,14 @@ class WalletWithdrawalService {
     });
   }
 
-  /* ─────────────────────────────── PROVIDER COMPLETION ─────────────────────────────── */
+  /* ---------- PROVIDER COMPLETION ---------- */
 
   static async markWithdrawalCompleted(
     {
       withdrawalTransactionId,
-
       paystackTransferCode = null,
-
       providerEventId = null,
-
       currentTime = new Date(),
-
       metadata = {},
     },
     options = {}
@@ -1257,45 +1278,27 @@ class WalletWithdrawalService {
         });
       }
 
-      if (!transaction.paystackTransferCode) {
-        transaction.paystackTransferCode = transferCode;
+      await WalletService.assertWithdrawalLifecycleIntegrity(transaction, cleanMetadata, session);
 
-        transaction.metadata = {
-          ...(transaction.metadata || {}),
+      const completionMetadata = {
+        ...cleanMetadata,
 
-          ...cleanMetadata,
-
-          providerTransferCodeRecoveredAt: completedAt,
-        };
-
-        transaction.markModified("metadata");
-
-        await transaction.save({
-          session,
-        });
-      } else if (transaction.paystackTransferCode !== transferCode) {
-        throw WalletWithdrawalService.createError({
-          message: "Successful withdrawal contains a conflicting Paystack transfer code.",
-          code: "WITHDRAWAL_TRANSFER_CODE_CONFLICT",
-          statusCode: 409,
-        });
-      }
+        ...(!transaction.paystackTransferCode
+          ? {
+              providerTransferCodeRecoveredAt: completedAt,
+            }
+          : {}),
+      };
 
       const completedResult = await WalletService.completePendingExternalDebit(
         {
           transactionId: transaction._id,
-
           paystackTransferCode: transferCode,
-
           providerEventId: eventId,
-
-          metadata: cleanMetadata,
-
+          metadata: completionMetadata,
           currentTime: completedAt,
         },
-        {
-          session,
-        }
+        { session }
       );
 
       const completedTransaction = completedResult.transaction;
@@ -1318,43 +1321,34 @@ class WalletWithdrawalService {
         await NotificationService.notifyEmployerWithdrawalCompleted(
           {
             recipientUser,
-
             employer,
 
             wallet,
-
             transaction: completedTransaction,
 
             amount: completedTransaction.amount,
-
             currency: completedTransaction.currency,
 
             metadata: {
               source: "wallet_withdrawal_service",
-
               withdrawalTransactionId: String(completedTransaction._id),
             },
           },
-          {
-            session,
-          }
+          { session }
         );
       }
 
       return {
         wallet,
-
         transaction: completedTransaction,
-
         alreadyCompleted: completedResult.idempotent === true,
-
         idempotent: completedResult.idempotent === true,
       };
     });
   }
 
-  // Restore a completed debit only after a confirmed provider reversal.
-  // The original debit remains intact; the credit is a separate ledger entry.
+  /* ---------- COMPLETED WITHDRAWAL REVERSAL ---------- */
+
   static async reverseCompletedWithdrawal(
     {
       withdrawalTransactionId,
@@ -1367,19 +1361,24 @@ class WalletWithdrawalService {
     options = {}
   ) {
     const reversedAt = WalletWithdrawalService.normalizeCurrentTime(currentTime);
+
     const reason = WalletWithdrawalService.normalizeReason(reversalReason, "Withdrawal reversed.");
+
     const evidence = WalletWithdrawalService.normalizeMetadata(metadata);
+
     const statuses = [
       evidence.paystackTransferStatus,
       evidence.providerTransferStatus,
       evidence.paystackStatus,
     ]
-      .map((v) => WalletWithdrawalService.cleanString(v)?.toLowerCase())
+      .map((value) => WalletWithdrawalService.cleanString(value)?.toLowerCase())
       .filter(Boolean);
+
     const eventName = WalletWithdrawalService.cleanString(evidence.sourceEventName)?.toLowerCase();
+
     if (
       (!statuses.includes("reversed") && eventName !== "transfer.reversed") ||
-      statuses.some((v) => v !== "reversed") ||
+      statuses.some((value) => value !== "reversed") ||
       (eventName && eventName !== "transfer.reversed")
     ) {
       throw WalletWithdrawalService.createError({
@@ -1394,26 +1393,42 @@ class WalletWithdrawalService {
         withdrawalTransactionId,
         session
       );
+
       WalletWithdrawalService.assertWithdrawalTransaction(withdrawal);
+
+      /* ---------- HISTORICAL OBLIGATION GUARD ---------- */
+
+      await WalletWithdrawalService.assertNoHistoricalWithdrawalObligation(withdrawal, session);
+
       WalletWithdrawalService.resolveTransferCode(withdrawal, paystackTransferCode, evidence);
+
       if (!["completed", "reversed"].includes(withdrawal.status)) {
         throw new Error(
           "Only completed or already reversed withdrawals use the reversal-credit flow."
         );
       }
+
       for (const reference of [evidence.paystackTransferReference, evidence.providerReference]) {
         if (reference != null && reference !== withdrawal.paystackTransferReference) {
           throw new Error("Provider reversal reference does not match the withdrawal.");
         }
       }
+
       const wallet = await Wallet.findById(withdrawal.wallet).session(session);
+
       WalletService.assertTransactionWallet(withdrawal, wallet);
+
       const amount = WalletService.normalizePositiveMinorUnitAmount(
         withdrawal.amount,
         "Reversal credit amount"
       );
+
       const key = `withdrawal-reversal:${withdrawal._id}`;
+
       const existing = await WalletService.getExistingTransactionByIdempotencyKey(key, session);
+
+      /* ---------- COMPLETED REVERSAL REPLAY ---------- */
+
       if (withdrawal.status === "reversed") {
         if (
           !existing ||
@@ -1430,11 +1445,15 @@ class WalletWithdrawalService {
           String(existing.bankAccount) !== String(withdrawal.bankAccount) ||
           existing.balanceDelta?.availableBalance !== amount ||
           existing.balanceDelta?.pendingBalance !== 0 ||
-          existing.balanceDelta?.outstandingBalance !== 0
+          existing.balanceDelta?.outstandingBalance !== 0 ||
+          withdrawal.metadata?.providerReversalDisposition !== "wallet_credit" ||
+          String(withdrawal.metadata?.reversalTransactionId || "") !== String(existing._id)
         ) {
           throw new Error("Reversed withdrawal has no consistent reversal credit.");
         }
+
         WalletService.assertTransactionWallet(existing, wallet);
+
         return {
           wallet,
           transaction: existing,
@@ -1443,11 +1462,29 @@ class WalletWithdrawalService {
           reversed: true,
         };
       }
-      if (existing)
+
+      if (existing) {
         throw new Error(
           "Completed withdrawal already has a reversal credit; reconciliation is required."
         );
+      }
+
+      /* ---------- CLOSED WALLET GUARD ---------- */
+
+      if (wallet.status === "closed") {
+        const error = WalletWithdrawalService.createError({
+          message: "Closed wallet requires historical withdrawal reversal reconciliation.",
+          code: "CLOSED_WALLET_REVERSAL_RECONCILIATION_REQUIRED",
+          statusCode: 409,
+        });
+
+        error.retryable = true;
+
+        throw error;
+      }
+
       WalletService.assertWalletCanReconcile(wallet);
+
       if (
         !withdrawal.completedAt ||
         reversedAt < withdrawal.completedAt ||
@@ -1455,67 +1492,113 @@ class WalletWithdrawalService {
       ) {
         throw new Error("Reversal time cannot precede completion or the latest wallet movement.");
       }
+
+      /* ---------- CALCULATE REVERSAL CREDIT ---------- */
+
       const before = WalletService.getBalanceSnapshot(wallet);
+
       const after = {
         ...before,
+
         availableBalance: WalletService.normalizeMinorUnitAmount(
           before.availableBalance + amount,
           "Available balance after reversal"
         ),
       };
+
       const lifetimeCredit = WalletService.normalizeMinorUnitAmount(
         WalletService.normalizeMinorUnitAmount(wallet.lifetimeCredit, "Existing lifetime credit") +
           amount,
         "Lifetime credit after reversal"
       );
+
+      /* ---------- CREATE SEPARATE LEDGER CREDIT ---------- */
+
       const [credit] = await Transaction.create(
         [
           {
             reference: `LQ-WITHDRAWAL-REVERSAL-${withdrawal._id}`,
+
             idempotencyKey: key,
+
             provider: "internal",
+
             type: "withdrawal_reversal",
             purpose: "withdrawal_reversal",
             direction: "credit",
+
             wallet: wallet._id,
             bankAccount: withdrawal.bankAccount,
+
             relatedTransaction: withdrawal._id,
+
             amount,
             netAmount: amount,
             providerFee: 0,
+
             countryCode: wallet.countryCode,
             currency: wallet.currency,
+
             balanceBefore: before,
             balanceAfter: after,
-            balanceDelta: { availableBalance: amount, pendingBalance: 0, outstandingBalance: 0 },
+
+            balanceDelta: {
+              availableBalance: amount,
+              pendingBalance: 0,
+              outstandingBalance: 0,
+            },
+
             paymentRail: "system_action",
             status: "completed",
+
             createdAt: reversedAt,
             completedAt: reversedAt,
-            initiatedBy: { role: "system", userId: null },
+
+            initiatedBy: {
+              role: "system",
+              userId: null,
+            },
+
             description: reason,
+
             metadata: {
               ...evidence,
+
               originalWithdrawalId: String(withdrawal._id),
+
               providerReversalEventId: WalletWithdrawalService.cleanString(providerEventId),
             },
           },
         ],
         { session }
       );
+
+      /* ---------- UPDATE WALLET ---------- */
+
       wallet.availableBalance = after.availableBalance;
       wallet.lifetimeCredit = lifetimeCredit;
       wallet.lastTransactionAt = reversedAt;
+
       await wallet.save({ session });
+
+      /* ---------- PERSIST REVERSAL DISPOSITION ---------- */
+
       withdrawal.status = "reversed";
       withdrawal.paystackStatus = "reversed";
+
       withdrawal.reversedAt = reversedAt;
       withdrawal.reversalReason = reason;
+
       withdrawal.metadata = {
         ...(withdrawal.metadata || {}),
+
         reversalTransactionId: String(credit._id),
+
+        providerReversalDisposition: "wallet_credit",
       };
+
       await withdrawal.save({ session });
+
       return {
         wallet,
         transaction: credit,
@@ -1526,20 +1609,15 @@ class WalletWithdrawalService {
     });
   }
 
-  /* ─────────────────────────────── FAILED WITHDRAWAL RESTORATION ─────────────────────────────── */
+  /* ---------- FAILED WITHDRAWAL RESTORATION ---------- */
 
   static async reverseFailedWithdrawal(
     {
       withdrawalTransactionId,
-
       paystackTransferCode = null,
-
       providerEventId = null,
-
       reversalReason = "Withdrawal failed. Wallet balance restored.",
-
       currentTime = new Date(),
-
       metadata = {},
     },
     options = {}
@@ -1563,6 +1641,10 @@ class WalletWithdrawalService {
 
       WalletWithdrawalService.assertWithdrawalTransaction(withdrawal);
 
+      /* ---------- HISTORICAL OBLIGATION GUARD ---------- */
+
+      await WalletWithdrawalService.assertNoHistoricalWithdrawalObligation(withdrawal, session);
+
       const transferCode = WalletWithdrawalService.resolveTransferCode(
         withdrawal,
         paystackTransferCode,
@@ -1577,6 +1659,8 @@ class WalletWithdrawalService {
         });
       }
 
+      /* ---------- FAILED WITHDRAWAL REPLAY ---------- */
+
       if (withdrawal.status === "failed") {
         const wallet = await Wallet.findById(withdrawal.wallet).session(session);
 
@@ -1590,18 +1674,15 @@ class WalletWithdrawalService {
 
         return {
           wallet,
-
           transaction: withdrawal,
-
           originalTransaction: withdrawal,
-
           idempotent: true,
-
           released: true,
-
           cancelledBeforeProvider: false,
         };
       }
+
+      /* ---------- CANCELLED WITHDRAWAL REPLAY ---------- */
 
       if (withdrawal.status === "cancelled") {
         const wallet = await Wallet.findById(withdrawal.wallet).session(session);
@@ -1616,18 +1697,15 @@ class WalletWithdrawalService {
 
         return {
           wallet,
-
           transaction: withdrawal,
-
           originalTransaction: withdrawal,
-
           idempotent: true,
-
           released: true,
-
           cancelledBeforeProvider: true,
         };
       }
+
+      /* ---------- RELEASE RESERVED FUNDS ---------- */
 
       let releaseResult;
 
@@ -1640,15 +1718,12 @@ class WalletWithdrawalService {
 
             metadata: {
               ...cleanMetadata,
-
               withdrawalReleaseSource: "wallet_withdrawal_service",
             },
 
             currentTime: restoredAt,
           },
-          {
-            session,
-          }
+          { session }
         );
       } else if (withdrawal.status === "processing") {
         if (
@@ -1669,20 +1744,16 @@ class WalletWithdrawalService {
             failureReason: reason,
 
             paystackTransferCode: transferCode,
-
             providerEventId: eventId,
 
             metadata: {
               ...cleanMetadata,
-
               withdrawalReleaseSource: "wallet_withdrawal_service",
             },
 
             currentTime: restoredAt,
           },
-          {
-            session,
-          }
+          { session }
         );
       } else {
         throw WalletWithdrawalService.createError({
@@ -1691,6 +1762,8 @@ class WalletWithdrawalService {
           statusCode: 409,
         });
       }
+
+      /* ---------- RESTORATION NOTIFICATION ---------- */
 
       const releasedTransaction = releaseResult.transaction;
 
@@ -1711,15 +1784,12 @@ class WalletWithdrawalService {
         await NotificationService.notifyEmployerWithdrawalReversed(
           {
             recipientUser,
-
             employer,
 
             wallet,
-
             transaction: releasedTransaction,
 
             amount: releasedTransaction.amount,
-
             currency: releasedTransaction.currency,
 
             metadata: {
@@ -1730,23 +1800,16 @@ class WalletWithdrawalService {
               releaseStatus: releasedTransaction.status,
             },
           },
-          {
-            session,
-          }
+          { session }
         );
       }
 
       return {
         wallet,
-
         transaction: releasedTransaction,
-
         originalTransaction: releasedTransaction,
-
         idempotent: releaseResult.idempotent === true,
-
         released: true,
-
         cancelledBeforeProvider: releasedTransaction.status === "cancelled",
       };
     });

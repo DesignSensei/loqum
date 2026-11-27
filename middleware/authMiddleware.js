@@ -1,5 +1,7 @@
 // middleware/authMiddleware.js
 
+const User = require("../models/User");
+
 const {
   getHomeRoute,
   getOnboardingRoute,
@@ -8,7 +10,17 @@ const {
 } = require("../utils/routeHelper");
 
 function hasAuthenticatedUser(req) {
-  return typeof req.isAuthenticated === "function" && req.isAuthenticated() && Boolean(req.user);
+  const authenticated =
+    typeof req.isAuthenticated === "function" &&
+    req.isAuthenticated() &&
+    Boolean(req.user) &&
+    req.user.accountStatus !== "closed";
+
+  if (!authenticated && req.session) {
+    delete req.session.user;
+  }
+
+  return authenticated;
 }
 
 function expectsJSON(req) {
@@ -125,16 +137,48 @@ exports.isVerified = (req, res, next) => {
 
 // ───────────────────── PENDING OTP AUTHENTICATION ─────────────────────
 
-exports.hasPendingAuth = (req, res, next) => {
-  if (req.session?.otpContext?.userId && req.session.otpContext.email) {
-    return next();
-  }
+exports.hasPendingAuth = async (req, res, next) => {
+  try {
+    const context = req.session?.otpContext;
 
-  if (hasAuthenticatedUser(req)) {
-    return res.redirect(getPostAuthRedirect(req.user));
-  }
+    if (context) {
+      const userId = String(context.userId || "");
 
-  return requireLogin(req, res);
+      const email = String(context.email || "")
+        .trim()
+        .toLowerCase();
+
+      if (
+        /^[a-f0-9]{24}$/i.test(userId) &&
+        email &&
+        !email.endsWith("@closed.loqum.invalid")
+      ) {
+        const user = await User.findOne({
+          _id: userId,
+          email,
+          accountStatus: {
+            $in: ["active", "restricted"],
+          },
+        })
+          .select("_id")
+          .lean();
+
+        if (user) {
+          return next();
+        }
+      }
+
+      delete req.session.otpContext;
+    }
+
+    if (hasAuthenticatedUser(req)) {
+      return res.redirect(getPostAuthRedirect(req.user));
+    }
+
+    return requireLogin(req, res);
+  } catch (error) {
+    return next(error);
+  }
 };
 
 // ───────────────────── INCOMPLETE ONBOARDING ─────────────────────
@@ -180,18 +224,10 @@ exports.isAccountAllowed = (req, res, next) => {
     return requireLogin(req, res);
   }
 
-  /*
-   * Fail closed.
-   *
-   * Only an explicitly active account may
-   * continue to protected application routes.
-   *
-   * A missing, null or unrecognized account
-   * status must not be treated as active.
-   *
-   * User.accountStatus defaults to "active"
-   * when an account is created.
-   */
+  // Fail closed. Only explicitly active accounts may access
+  // protected application routes.
+  // Missing or unknown statuses are not treated as active.
+  // Closed accounts cannot regain access to historical accounts.
 
   const accountStatus = req.user.accountStatus;
 
@@ -220,12 +256,15 @@ exports.isAccountAllowed = (req, res, next) => {
       title: "Account Unavailable",
       message: "This account can no longer access the platform.",
     },
+
+    closed: {
+      title: "Account Closed",
+      message:
+        "This LOQUM account has been closed and can no longer be accessed. You may register again if eligible.",
+    },
   };
 
-  /*
-   * Unknown account statuses are denied rather
-   * than falling through to next().
-   */
+  // Unknown account statuses are denied rather than falling through.
 
   const restriction = blockedStatuses[accountStatus] || {
     title: "Account Unavailable",

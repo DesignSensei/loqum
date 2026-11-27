@@ -1,0 +1,19 @@
+<a href="/admin/financial-obligations" class="btn btn-sm btn-light mb-6">
+    Back to Financial Obligations
+  </a>
+
+  <div class="card card-flush mb-8">
+    <div class="card-body d-flex justify-content-between flex-wrap gap-4">
+      <div>
+        <div class="text-muted fw-semibold mb-2"><%= item.type %></div>
+        <h1 class="fw-bold fs-2x mb-3"><%= item.amount %></h1>
+        <div class="fw-semibold"><%= item.owner %></div>
+        <div class="text-muted text-break"><%= item.reference %></div>
+      </div>
+
+      <div>
+        <span class="badge <%= item.statusClass %>"><%= item.status %></span>
+        <div class="text-muted mt-3">Execution: <%= item.execution %></div>
+      </div>
+    </div>
+  </div>

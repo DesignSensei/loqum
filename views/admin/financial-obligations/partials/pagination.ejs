@@ -1,0 +1,13 @@
+<div class="d-flex justify-content-between flex-wrap gap-3 mt-6">
+        <a href="<%= firstUrl %>" class="btn btn-sm btn-light">First Page</a>
+
+        <div class="d-flex gap-3">
+          <% if (previousUrl) { %>
+            <a href="<%= previousUrl %>" class="btn btn-sm btn-light-primary">Previous</a>
+          <% } %>
+
+          <% if (nextUrl) { %>
+            <a href="<%= nextUrl %>" class="btn btn-sm btn-light-primary">Next</a>
+          <% } %>
+        </div>
+      </div>

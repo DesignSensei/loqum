@@ -25,6 +25,15 @@ const LEGAL_NAME_FIELDS = [
 ];
 
 const IDENTITY_FIELDS = [...LEGAL_NAME_FIELDS, "role"];
+const CLOSED_EMAIL_SUFFIX = "@closed.loqum.invalid";
+
+function closedAccountEmail(id) {
+  return String(id) + CLOSED_EMAIL_SUFFIX;
+}
+
+function isReservedClosureEmail(email) {
+  return typeof email === "string" && email.trim().toLowerCase().endsWith(CLOSED_EMAIL_SUFFIX);
+}
 
 function isValidLegalName(value) {
   return (
@@ -167,7 +176,7 @@ const userSchema = new mongoose.Schema(
       type: String,
 
       required: function () {
-        return this.authProvider === "local";
+        return this.authProvider === "local" && this.accountStatus !== "closed";
       },
 
       select: false,
@@ -242,8 +251,15 @@ const userSchema = new mongoose.Schema(
 
     accountStatus: {
       type: String,
-      enum: ["active", "restricted", "suspended", "deactivated", "banned"],
+      enum: ["active", "restricted", "suspended", "deactivated", "banned", "closed"],
       default: "active",
+    },
+
+    // ───────────────────── ACCOUNT CLOSURE ─────────────────────
+
+    closedAt: {
+      type: Date,
+      default: null,
     },
 
     // ───────────────────── ONBOARDING STATUS ─────────────────────
@@ -292,6 +308,135 @@ const userSchema = new mongoose.Schema(
     optimisticConcurrency: true,
   }
 );
+
+// ───────────────────── ACCOUNT CLOSURE PROTECTION ─────────────────────
+
+userSchema.pre("validate", function validateAccountClosure() {
+  if (this.accountStatus !== "closed") {
+    if (this.closedAt) this.invalidate("closedAt", "Only closed accounts may have a closure timestamp.");
+    if (isReservedClosureEmail(this.email)) this.invalidate("email", "This email namespace is reserved.");
+    return;
+  }
+
+  if (this.isNew) this.invalidate("accountStatus", "New accounts cannot be created closed.");
+  if (!(this.closedAt instanceof Date) || !Number.isFinite(this.closedAt.getTime()) ||
+      (this.createdAt && this.closedAt < this.createdAt)) {
+    this.invalidate("closedAt", "A valid account closure timestamp is required.");
+  }
+
+  if (this.email !== closedAccountEmail(this._id)) {
+    this.invalidate("email", "Closed accounts require a released registration identity.");
+  }
+
+  for (const field of [
+    "password",
+    "googleId",
+    "otp",
+    "otpExpiry",
+    "otpLastSentAt",
+    "resetPasswordToken",
+    "resetPasswordExpiry"
+  ]) {
+    if (this[field] != null) {
+      this.invalidate(field, "Closed accounts cannot retain authentication credentials.");
+    }
+  }
+
+  if (this.isVerified || this.twoFactorEnabled || this.otpAttempts !== 0) {
+    this.invalidate("accountStatus", "Closed accounts cannot retain active security settings.");
+  }
+});
+
+userSchema.pre("save", async function protectAccountClosure() {
+  if (this.isNew) return;
+
+  const previous = await this.constructor.findById(this._id)
+    .select("accountStatus closedAt")
+    .session(this.$session())
+    .lean();
+
+  if (!previous) {
+    throw new Error("Original account was not found.");
+  }
+
+  if (previous.accountStatus === "closed" && this.isModified()) {
+    throw new Error("Closed accounts cannot be modified or reopened.");
+  }
+
+  if (this.accountStatus === "closed" && previous.accountStatus !== "closed") {
+    if (previous.accountStatus !== "active" || !this.$session()?.inTransaction?.()) {
+      throw new Error("Account closure requires an active account and transaction.");
+    }
+
+    // Hidden credentials must be explicitly loaded before they are cleared.
+
+    for (const field of [
+      "password",
+      "otp",
+      "otpExpiry",
+      "resetPasswordToken",
+      "resetPasswordExpiry"
+    ]) {
+      if (!this.isSelected(field)) {
+        throw new Error("Load all authentication credentials before closure.");
+      }
+    }
+  }
+});
+
+// Low-level closure primitive; callers must establish eligibility first.
+
+userSchema.statics.closeForAccountClosure = async function (
+  { userId, currentTime = new Date() } = {},
+  { session } = {}
+) {
+  if (!session?.inTransaction?.() || !mongoose.isValidObjectId(userId)) {
+    throw new Error("Account closure requires a valid user and active transaction.");
+  }
+
+  const user = await this.findById(userId)
+    .select("+password +otp +otpExpiry +resetPasswordToken +resetPasswordExpiry")
+    .session(session);
+
+  if (!user) {
+    throw new Error("User not found.");
+  }
+
+  if (user.accountStatus === "closed") {
+    return user;
+  }
+
+  if (
+    user.accountStatus !== "active" ||
+    !["employer", "professional"].includes(user.role)
+  ) {
+    throw new Error("This account requires manual closure review.");
+  }
+
+  user.accountStatus = "closed";
+  user.closedAt = currentTime;
+  user.email = closedAccountEmail(user._id);
+
+  for (const field of [
+    "password",
+    "googleId",
+    "otp",
+    "otpExpiry",
+    "otpLastSentAt",
+    "resetPasswordToken",
+    "resetPasswordExpiry"
+  ]) {
+    user.set(field, undefined);
+  }
+
+  user.isVerified = false;
+  user.twoFactorEnabled = false;
+  user.otpAttempts = 0;
+
+  await user.save({ session });
+
+  return user;
+};
 
 // ───────────────────── PROFESSIONAL LEGAL NAME VALIDATION ─────────────────────
 
@@ -471,6 +616,57 @@ function assertSafeIdentityUpdate(filter, update, options = {}, operation) {
   }
   if (!update) return false;
 
+  // Closure is a document-only transition.
+  // Query writes cannot reopen closed accounts.
+
+  for (const [operator, values] of Object.entries(update)) {
+    const entries = operator.startsWith("$")
+      ? Object.entries(values || {})
+      : [[operator, values]];
+
+    for (const [path, value] of entries) {
+      const root = String(path).split(".")[0];
+
+      const target = operator === "$rename"
+        ? String(value).split(".")[0]
+        : null;
+
+      if (
+        root === "closedAt" ||
+        target === "closedAt" ||
+        target === "accountStatus" ||
+        (
+          root === "accountStatus" &&
+          (
+            !["$set", "$setOnInsert", path].includes(operator) ||
+            ![
+              "active",
+              "restricted",
+              "suspended",
+              "deactivated",
+              "banned"
+            ].includes(value)
+          )
+        )
+      ) {
+        throw new Error("Account closure fields require document save().");
+      }
+
+      if (
+        target === "email" ||
+        (
+          root === "email" &&
+          (
+            !["$set", "$setOnInsert", path].includes(operator) ||
+            isReservedClosureEmail(value)
+          )
+        )
+      ) {
+        throw new Error("Invalid registration email update.");
+      }
+    }
+  }
+
   const touchesIdentity = (path) => IDENTITY_FIELDS.includes(String(path).split(".")[0]);
   const changed = [];
   for (const [operator, values] of Object.entries(update)) {
@@ -536,6 +732,13 @@ userSchema.pre(
     if (assertSafeIdentityUpdate(this.getFilter(), this.getUpdate(), this.getOptions(), this.op)) {
       this.setOptions({ runValidators: true });
     }
+
+    this.setQuery({
+      $and: [
+        this.getFilter(),
+        { accountStatus: { $ne: "closed" } }
+      ]
+    });
   }
 );
 
@@ -553,6 +756,13 @@ userSchema.pre("bulkWrite", function (operations) {
           operation[name],
           name
         );
+
+        operation[name].filter = {
+          $and: [
+            operation[name].filter,
+            { accountStatus: { $ne: "closed" } }
+          ],
+        };
       }
     }
   }
@@ -583,7 +793,7 @@ userSchema.pre("save", async function () {
 
 // Compare a supplied password against its stored bcrypt hash.
 userSchema.methods.comparePassword = async function (candidatePassword) {
-  if (!this.password) {
+  if (this.accountStatus === "closed" || !this.password) {
     return false;
   }
 

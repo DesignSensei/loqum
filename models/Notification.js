@@ -98,6 +98,20 @@ const notificationSchema = new mongoose.Schema(
       default: null,
     },
 
+    // --- SUBSCRIPTION RELATIONSHIPS ---
+
+    relatedSubscription: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Subscription",
+      default: null,
+    },
+
+    relatedSubscriptionPayment: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "SubscriptionPayment",
+      default: null,
+    },
+
     // --- SHIFT RELATIONSHIPS ---
 
     relatedShift: {
@@ -234,6 +248,27 @@ notificationSchema.index({
   relatedAppointment: 1,
   createdAt: -1,
 });
+
+notificationSchema.index({
+  relatedSubscription: 1,
+  type: 1,
+  createdAt: -1,
+});
+
+notificationSchema.index(
+  {
+    recipientUser: 1,
+    "metadata.subscriptionNotificationKey": 1,
+  },
+  {
+    unique: true,
+    partialFilterExpression: {
+      "metadata.subscriptionNotificationKey": {
+        $type: "string",
+      },
+    },
+  }
+);
 
 notificationSchema.pre("validate", function validateNotificationContract() {
   const hasEmployer = Boolean(this.employer);

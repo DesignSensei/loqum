@@ -6,6 +6,7 @@ const SubscriptionPayment = require("../models/SubscriptionPayment");
 const EmployerProfile = require("../models/EmployerProfile");
 
 const SubscriptionJobLifecycleService = require("./subscriptionJobLifecycleService");
+const NotificationService = require("./notificationService");
 
 const { SUBSCRIPTION_BILLING_CYCLES } = require("../constants/employerMonetization");
 
@@ -1155,6 +1156,12 @@ class SubscriptionService {
         retainedPublicationIds: retainedIds,
       });
 
+      if (subscription.autoRenewalEnabled === true) {
+        subscription.autoRenewalEnabled = false;
+        subscription.autoRenewalDisabledAt = appliedAt;
+        subscription.autoRenewalDisabledBy = null;
+      }
+
       subscription.plan = pending.targetPlan;
       subscription.planSnapshot = targetPlanSnapshot;
       subscription.status = "active";
@@ -1591,12 +1598,55 @@ class SubscriptionService {
         }
       );
 
+      if (subscription.autoRenewalEnabled === true) {
+        subscription.autoRenewalEnabled = false;
+        subscription.autoRenewalDisabledAt = expiredAt;
+        subscription.autoRenewalDisabledBy = null;
+      }
+
       subscription.status = "expired";
       subscription.endedAt = expiredAt;
       subscription.cancelAtPeriodEnd = false;
       subscription.pendingPlanChange = null;
 
       await subscription.save(this.saveOptions(session));
+
+      const notificationEmployer =
+        await this.applySession(
+          EmployerProfile.findOne({
+            _id: subscription.business,
+
+            accountStatus: {
+              $in: [
+                "active",
+                "restricted",
+                "suspended",
+              ],
+            },
+          }).select("user"),
+          session
+        );
+
+      if (notificationEmployer?.user) {
+        await NotificationService.notifyEmployerSubscriptionEvent(
+          {
+            recipientUser:
+              notificationEmployer.user,
+
+            employer:
+              subscription.business,
+
+            subscription,
+
+            type:
+              "subscription_expired",
+
+            periodEnd:
+              expiredAt,
+          },
+          { session }
+        );
+      }
 
       const events = [...(lifecycle.events || [])];
 
@@ -1645,15 +1695,26 @@ class SubscriptionService {
 
     const requestedAt = this.normalizeCurrentTime(currentTime);
 
+    const normalizedEmployerProfileId = this.normalizeObjectId(
+      employerProfileId,
+      "employer profile ID"
+    );
+
     const normalizedRequestedByUserId = this.normalizeObjectId(
       requestedByUserId,
       "cancellation-request user ID"
     );
 
     return this.runWithOptionalTransaction(options, async (session) => {
+      // Coordinate cancellation with payment preparation and business closure.
+      await this.lockBusinessOutsideClosure({
+        employerProfileId: normalizedEmployerProfileId,
+        session,
+      });
+
       const subscription = await this.getSubscription({
         subscriptionId,
-        employerProfileId,
+        employerProfileId: normalizedEmployerProfileId,
         session,
       });
 
@@ -1703,6 +1764,52 @@ class SubscriptionService {
             paymentReference: subscription.pendingPlanChange.paymentReference,
           },
         });
+      }
+
+      // Prevent cancellation from invalidating a purchased or unresolved renewal.
+      const outstandingRenewal = await this.applySession(
+        SubscriptionPayment.findOne({
+          business: normalizedEmployerProfileId,
+          subscription: subscription._id,
+          paymentKind: "renewal",
+          $or: [
+            { paymentStatus: "pending" },
+            {
+              paymentStatus: "paid",
+              appliedAt: null,
+            },
+          ],
+        }).select(
+          "_id paymentReference paymentStatus periodStart periodEnd"
+        ),
+        session
+      );
+
+      if (outstandingRenewal) {
+        const paid = outstandingRenewal.paymentStatus === "paid";
+
+        throw this.createError({
+          message: paid
+            ? "Your next billing period has already been paid for. Cancellation can be scheduled after that renewal takes effect."
+            : "An outstanding renewal payment must be resolved before cancellation can be scheduled.",
+          code: paid
+            ? "SUBSCRIPTION_CANCELLATION_BLOCKED_BY_PAID_RENEWAL"
+            : "SUBSCRIPTION_CANCELLATION_BLOCKED_BY_PENDING_RENEWAL",
+          statusCode: 409,
+          details: {
+            paymentId: String(outstandingRenewal._id),
+            paymentReference: outstandingRenewal.paymentReference,
+            paymentStatus: outstandingRenewal.paymentStatus,
+            periodStart: outstandingRenewal.periodStart || null,
+            periodEnd: outstandingRenewal.periodEnd || null,
+          },
+        });
+      }
+
+      if (subscription.autoRenewalEnabled === true) {
+        subscription.autoRenewalEnabled = false;
+        subscription.autoRenewalDisabledAt = requestedAt;
+        subscription.autoRenewalDisabledBy = normalizedRequestedByUserId;
       }
 
       subscription.cancelAtPeriodEnd = true;
@@ -1806,6 +1913,12 @@ class SubscriptionService {
           session,
         }
       );
+
+      if (subscription.autoRenewalEnabled === true) {
+        subscription.autoRenewalEnabled = false;
+        subscription.autoRenewalDisabledAt = cancelledAt;
+        subscription.autoRenewalDisabledBy = null;
+      }
 
       subscription.status = "cancelled";
       subscription.cancelledAt = cancelledAt;

@@ -1,0 +1,16 @@
+<!-- views/admin/subscription-plans/index.ejs -->
+
+<div class="content flex-column-fluid" id="kt_content">
+  <%- include("partials/summary") %>
+
+  <div class="card mb-8">
+    <%- include("partials/filters") %>
+
+    <div class="card-body">
+      <%- include("partials/plans-table") %>
+      <%- include("partials/pagination") %>
+    </div>
+  </div>
+
+  <%- include("partials/plan-form-modal") %>
+</div>

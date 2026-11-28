@@ -1,0 +1,22 @@
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mt-6">
+  <div class="text-muted fs-7">
+    Page <%= planView.pagination.page %>
+    <% if (planView.pagination.totalPages > 0) { %>
+      of <%= planView.pagination.totalPages %>
+    <% } %>
+  </div>
+
+  <div class="d-flex gap-2">
+    <% if (planView.pagination.hasPrevious) { %>
+    <a class="btn btn-sm btn-light" href="<%= planView.pagination.previousUrl %>">
+      Previous
+    </a>
+    <% } %>
+
+    <% if (planView.pagination.hasNext) { %>
+    <a class="btn btn-sm btn-light-primary" href="<%= planView.pagination.nextUrl %>">
+      Next
+    </a>
+    <% } %>
+  </div>
+</div>

@@ -1,0 +1,26 @@
+<form method="GET" action="/admin/subscriptions" class="row g-4 mb-6">
+  <div class="col-md-4">
+    <label class="form-label">Subscription reference</label>
+    <input class="form-control" name="reference"
+      value="<%= subscriptionView.filters.reference %>">
+  </div>
+  <div class="col-md-4">
+    <label class="form-label">Business ID</label>
+    <input class="form-control" name="businessId" maxlength="24"
+      value="<%= subscriptionView.filters.businessId %>">
+  </div>
+  <div class="col-md-4">
+    <label class="form-label">Status</label>
+    <select class="form-select" name="status">
+      <option value="">All</option>
+      <option value="pending" <%= subscriptionView.filters.status === "pending" ? "selected" : "" %>>Pending</option>
+      <option value="active" <%= subscriptionView.filters.status === "active" ? "selected" : "" %>>Active</option>
+      <option value="expired" <%= subscriptionView.filters.status === "expired" ? "selected" : "" %>>Expired</option>
+      <option value="cancelled" <%= subscriptionView.filters.status === "cancelled" ? "selected" : "" %>>Cancelled</option>
+    </select>
+  </div>
+  <div class="col-12">
+    <button class="btn btn-primary">Filter</button>
+    <a href="/admin/subscriptions" class="btn btn-light">Reset</a>
+  </div>
+</form>

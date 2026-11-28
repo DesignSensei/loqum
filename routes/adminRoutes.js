@@ -20,6 +20,7 @@ const adminController = require("../controllers/adminController");
 const adminShiftClaimController = require("../controllers/adminShiftClaimController");
 
 const adminPlatformSettingsController = require("../controllers/adminPlatformSettingsController");
+const adminSubscriptionPlanController = require("../controllers/adminSubscriptionPlanController");
 
 const adminShiftController = require("../controllers/adminShiftController");
 const adminShiftApplicationController = require("../controllers/adminShiftApplicationController");
@@ -180,6 +181,50 @@ router.post(
   attachAdminEmployerContext,
   requireAdminEmployerContext,
   adminShiftController.cancelOnEmployerBehalf
+);
+
+// Employer subscription oversight
+
+const adminSubscriptionController = require("../controllers/adminSubscriptionController");
+
+router.get("/subscriptions", adminSubscriptionController.getSubscriptions);
+router.get("/subscriptions/:subscriptionId", adminSubscriptionController.getSubscription);
+
+// Subscription plan administration
+
+router.get(
+  "/subscription-plans",
+  adminSubscriptionPlanController.getPlansPage
+);
+
+router.get(
+  "/subscription-plans/data",
+  adminSubscriptionPlanController.listPlans
+);
+
+router.get(
+  "/subscription-plans/:planId/data",
+  adminSubscriptionPlanController.getPlan
+);
+
+router.post(
+  "/subscription-plans",
+  adminSubscriptionPlanController.createDraft
+);
+
+router.post(
+  "/subscription-plans/:planId/update",
+  adminSubscriptionPlanController.updateDraft
+);
+
+router.post(
+  "/subscription-plans/:planId/activate",
+  adminSubscriptionPlanController.activatePlan
+);
+
+router.post(
+  "/subscription-plans/:planId/retire",
+  adminSubscriptionPlanController.retirePlan
 );
 
 // Platform settings

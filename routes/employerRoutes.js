@@ -492,6 +492,7 @@ router.post(
 
 router.post(
   "/billing/subscriptions/initialize-checkout",
+  canManageWallet,
   employerBillingController.initializeInitialSubscriptionCheckout
 );
 
@@ -505,6 +506,7 @@ router.post(
 
 router.post(
   "/billing/subscriptions/:subscriptionId/plan-change/initialize-checkout",
+  canManageWallet,
   employerBillingController.initializeSubscriptionPlanChangeCheckout
 );
 
@@ -518,13 +520,31 @@ router.post(
 
 router.post(
   "/billing/subscriptions/:subscriptionId/renew/initialize-checkout",
+  canManageWallet,
   employerBillingController.initializeSubscriptionRenewalCheckout
+);
+
+// ───────────────────── SUBSCRIPTION PAYMENT RECOVERY ─────────────────────
+
+router.post(
+  "/billing/subscription-payments/:paymentId/verify",
+  canManageWallet,
+  employerBillingController.verifySubscriptionPayment
+);
+
+// ───────────────────── AUTOMATIC RENEWAL ─────────────────────
+
+router.post(
+  "/billing/subscriptions/:subscriptionId/automatic-renewal",
+  canManageWallet,
+  employerBillingController.updateSubscriptionAutomaticRenewal
 );
 
 // ───────────────────── SUBSCRIPTION CANCELLATION ─────────────────────
 
 router.post(
   "/billing/subscriptions/:subscriptionId/cancel",
+  canManageWallet,
   employerBillingController.requestSubscriptionCancellation
 );
 

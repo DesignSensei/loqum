@@ -2,6 +2,16 @@
 
 const crypto = require("crypto");
 
+const AUTOMATIC_WALLET_RENEWAL_TOKEN = Symbol(
+  "automatic-wallet-renewal"
+);
+
+const AUTOMATIC_WALLET_RENEWAL_WINDOW_MS =
+  24 * 60 * 60 * 1000;
+
+const AUTOMATIC_WALLET_RENEWAL_KEY_PREFIX =
+  "subscription-auto-wallet-renew:";
+
 const EmployerProfile = require("../models/EmployerProfile");
 const Subscription = require("../models/Subscription");
 const SubscriptionPayment = require("../models/SubscriptionPayment");
@@ -9,6 +19,7 @@ const Transaction = require("../models/Transaction");
 
 const SubscriptionService = require("./subscriptionService");
 const WalletService = require("./walletService");
+const NotificationService = require("./notificationService");
 const PaystackService = require("./paystackService");
 
 const { createServiceError } = require("./helpers/serviceErrorHelper");
@@ -1493,9 +1504,55 @@ class SubscriptionPaymentService {
 
   /* ─────────────────────────────── WALLET PAYMENTS ─────────────────────────────── */
 
+  static assertConfirmedPurchaseTerms({
+    expectedPriceMinor,
+    expectedCurrency,
+    expectedPlanId,
+    planSnapshot,
+    planId,
+  }) {
+    const validPrice =
+      typeof expectedPriceMinor === "number" ||
+      (
+        typeof expectedPriceMinor === "string" &&
+        /^\d+$/.test(expectedPriceMinor.trim())
+      );
+
+    const confirmedPrice = Number(expectedPriceMinor);
+
+    if (
+      !validPrice ||
+      !Number.isSafeInteger(confirmedPrice) ||
+      confirmedPrice <= 0 ||
+      typeof expectedCurrency !== "string" ||
+      !/^[A-Z]{3}$/.test(expectedCurrency.trim().toUpperCase()) ||
+      typeof expectedPlanId !== "string" ||
+      !/^[a-fA-F0-9]{24}$/.test(expectedPlanId)
+    ) {
+      throw this.createError({
+        message: "Valid purchase confirmation details are required. Refresh the billing page.",
+        code: "SUBSCRIPTION_PURCHASE_CONFIRMATION_REQUIRED",
+        statusCode: 400,
+      });
+    }
+
+    if (
+      confirmedPrice !== planSnapshot?.priceMinor ||
+      expectedCurrency.trim().toUpperCase() !== planSnapshot?.currency ||
+      expectedPlanId.toLowerCase() !== String(planId).toLowerCase()
+    ) {
+      throw this.createError({
+        message: "The subscription terms have changed. Refresh the billing page and review the current plan and price.",
+        code: "SUBSCRIPTION_PURCHASE_TERMS_CHANGED",
+        statusCode: 409,
+      });
+    }
+  }
+
   static async purchaseFromWallet(
     {
       paymentKind,
+      automaticRenewalToken = null,
       employerProfileId,
       employerContext = null,
       planId = null,
@@ -1503,13 +1560,32 @@ class SubscriptionPaymentService {
       retainedPublicationIds = [],
       initiatedByUserId,
       idempotencyKey,
+      expectedPriceMinor,
+      expectedCurrency,
+      expectedPlanId,
       currentTime = new Date(),
     },
     options = {}
   ) {
     this.assertOwnTransactionBoundary(options);
 
-    this.assertCanManageSubscription(employerContext);
+    const automaticRenewal =
+      automaticRenewalToken === AUTOMATIC_WALLET_RENEWAL_TOKEN;
+
+    if (automaticRenewal) {
+      if (paymentKind !== "renewal") {
+        throw this.createError({
+          message:
+            "Automatic payments support subscription renewals only.",
+          code: "INVALID_AUTOMATIC_RENEWAL_KIND",
+          statusCode: 400,
+        });
+      }
+    } else {
+      this.assertCanManageSubscription(employerContext);
+
+      this.assertManualPaymentKeyAllowed(idempotencyKey);
+    }
 
     const normalizedPaymentKind = this.normalizePaymentKind(paymentKind);
 
@@ -1518,10 +1594,12 @@ class SubscriptionPaymentService {
       "employer profile ID"
     );
 
-    const normalizedInitiatedByUserId = this.normalizeObjectId(
-      initiatedByUserId,
-      "initiated-by user ID"
-    );
+    const normalizedInitiatedByUserId = automaticRenewal
+      ? null
+      : this.normalizeObjectId(
+          initiatedByUserId,
+          "initiated-by user ID"
+        );
 
     const normalizedPlanId = ["initial_purchase", "plan_change"].includes(normalizedPaymentKind)
       ? this.normalizeObjectId(planId, "subscription plan ID")
@@ -1542,7 +1620,7 @@ class SubscriptionPaymentService {
       });
     }
 
-    const paidAt = this.normalizeCurrentTime(currentTime);
+    let paidAt = this.normalizeCurrentTime(currentTime);
 
     const paymentReference = this.buildPaymentReference({
       idempotencyKey,
@@ -1565,6 +1643,14 @@ class SubscriptionPaymentService {
             subscriptionId: normalizedSubscriptionId,
           });
 
+          this.assertConfirmedPurchaseTerms({
+            expectedPriceMinor,
+            expectedCurrency,
+            expectedPlanId,
+            planSnapshot: existingPayment.planSnapshot,
+            planId: existingPayment.plan,
+          });
+
           this.assertExistingPaymentReusable(existingPayment);
 
           if (existingPayment.paymentStatus === "paid") {
@@ -1585,6 +1671,10 @@ class SubscriptionPaymentService {
               paymentReference,
             },
           });
+        }
+
+        if (automaticRenewal) {
+          paidAt = new Date();
         }
 
         const context =
@@ -1618,6 +1708,59 @@ class SubscriptionPaymentService {
                   session,
                 });
 
+        // Confirm terms before creating a payment or moving money.
+        this.assertConfirmedPurchaseTerms({
+          expectedPriceMinor,
+          expectedCurrency,
+          expectedPlanId,
+          planSnapshot: context.planSnapshot,
+          planId: context.planId,
+        });
+
+        if (automaticRenewal) {
+          const subscription = context.subscription;
+
+          const business = await this.applySession(
+            EmployerProfile.findOne({
+              _id: normalizedEmployerProfileId,
+              accountStatus: "active",
+            }).select("_id"),
+            session
+          );
+
+          const confirmedAt = new Date();
+
+          this.assertAutomaticWalletRenewalAllowed({
+            subscription,
+            business,
+            currentTime: confirmedAt,
+          });
+
+          const expectedReference =
+            this.buildPaymentReference({
+              idempotencyKey:
+                this.buildAutomaticWalletRenewalKey({
+                  subscriptionId: subscription._id,
+                  billingCycleKey:
+                    context.targetPeriod.billingCycleKey,
+                }),
+
+              paymentKind: "renewal",
+            });
+
+          if (expectedReference !== paymentReference) {
+            throw this.createError({
+              message:
+                "The subscription renewal period has changed.",
+              code:
+                "SUBSCRIPTION_AUTOMATIC_RENEWAL_PERIOD_CHANGED",
+              statusCode: 409,
+            });
+          }
+
+          paidAt = confirmedAt;
+        }
+
         const payment = new SubscriptionPayment(
           this.buildPaymentPayload({
             paymentReference,
@@ -1628,8 +1771,6 @@ class SubscriptionPaymentService {
           })
         );
 
-        await payment.save(this.saveOptions(session));
-
         const employerWallet = await WalletService.createEmployerWalletIfMissing(
           context.employerProfile,
           { session }
@@ -1639,7 +1780,78 @@ class SubscriptionPaymentService {
           { session }
         );
 
+        if (automaticRenewal) {
+          paidAt = new Date();
+
+          if (
+            paidAt >= new Date(
+              context.targetPeriod.periodStart
+            )
+          ) {
+            throw this.createError({
+              message:
+                "The subscription renewal period has ended.",
+              code:
+                "SUBSCRIPTION_PAYMENT_RENEWAL_PERIOD_ENDED",
+              statusCode: 409,
+            });
+          }
+        }
+
         if (Number(employerWallet.availableBalance || 0) < Number(context.amount)) {
+          if (automaticRenewal) {
+            const availableBalance =
+              Number(employerWallet.availableBalance || 0);
+
+            const notification =
+              await NotificationService.notifyEmployerSubscriptionEvent(
+                {
+                  recipientUser:
+                    context.employerProfile.user,
+
+                  employer:
+                    context.subscription.business,
+
+                  subscription:
+                    context.subscription,
+
+                  wallet:
+                    employerWallet,
+
+                  type:
+                    "subscription_renewal_insufficient_balance",
+
+                  periodEnd:
+                    context.targetPeriod.periodStart,
+
+                  availableBalance,
+                },
+                { session }
+              );
+
+            return {
+              paid: false,
+              applied: false,
+              pending: false,
+
+              insufficientBalance: true,
+
+              requiredAmount:
+                context.amount,
+
+              availableBalance,
+
+              shortfall:
+                context.amount - availableBalance,
+
+              currency:
+                context.currency,
+
+              notificationId:
+                String(notification._id),
+            };
+          }
+
           throw this.createError({
             message:
               "The employer wallet does not have enough available balance for this subscription payment.",
@@ -1652,6 +1864,10 @@ class SubscriptionPaymentService {
             },
           });
         }
+
+        await payment.save(
+          this.saveOptions(session)
+        );
 
         const idempotencyKeys = this.buildWalletIdempotencyKeys(paymentReference);
 
@@ -1666,7 +1882,7 @@ class SubscriptionPaymentService {
             debitIdempotencyKey: idempotencyKeys.debitIdempotencyKey,
             creditIdempotencyKey: idempotencyKeys.creditIdempotencyKey,
             initiatedBy: {
-              role: "employer",
+              role: automaticRenewal ? "system" : "employer",
               userId: normalizedInitiatedByUserId,
             },
             description: `Subscription ${normalizedPaymentKind} ${paymentReference}.`,
@@ -1677,6 +1893,19 @@ class SubscriptionPaymentService {
               paymentReference,
               paymentKind: normalizedPaymentKind,
               paymentMethod: "wallet",
+              automaticRenewal,
+
+              ...(automaticRenewal
+                ? {
+                    autoRenewalConsentedAt:
+                      context.subscription.autoRenewalConsent.consentedAt,
+
+                    autoRenewalConsentedBy: String(
+                      context.subscription.autoRenewalConsent.consentedBy
+                    ),
+                  }
+                : {}),
+
               subscriptionPlanId: String(context.planId),
               planCode: context.planSnapshot.code,
               planVersion: context.planSnapshot.version,
@@ -1697,6 +1926,36 @@ class SubscriptionPaymentService {
         payment.paidAt = paidAt;
 
         await payment.save(this.saveOptions(session));
+
+        if (automaticRenewal) {
+          await NotificationService.notifyEmployerSubscriptionEvent(
+            {
+              recipientUser:
+                context.employerProfile.user,
+
+              employer:
+                context.subscription.business,
+
+              subscription:
+                context.subscription,
+
+              payment,
+
+              wallet:
+                transferResult.debit.wallet,
+
+              transaction:
+                transferResult.debit.transaction,
+
+              type:
+                "subscription_automatic_renewal_paid",
+
+              periodEnd:
+                context.targetPeriod.periodStart,
+            },
+            { session }
+          );
+        }
 
         return {
           payment,
@@ -1721,6 +1980,10 @@ class SubscriptionPaymentService {
       }
 
       throw error;
+    }
+
+    if (financialResult.insufficientBalance === true) {
+      return financialResult;
     }
 
     const applicationResult = await this.attemptApplicationAfterPayment({
@@ -2182,6 +2445,9 @@ class SubscriptionPaymentService {
     initiatedByUserId,
     paymentReference,
     callbackUrl,
+    expectedPriceMinor,
+    expectedCurrency,
+    expectedPlanId,
     currentTime,
     session,
   }) {
@@ -2200,6 +2466,14 @@ class SubscriptionPaymentService {
         paymentMethod: "paystack_checkout",
         planId: ["initial_purchase", "plan_change"].includes(paymentKind) ? planId : null,
         subscriptionId: ["plan_change", "renewal"].includes(paymentKind) ? subscriptionId : null,
+      });
+
+      this.assertConfirmedPurchaseTerms({
+        expectedPriceMinor,
+        expectedCurrency,
+        expectedPlanId,
+        planSnapshot: existingPayment.planSnapshot,
+        planId: existingPayment.plan,
       });
 
       this.assertExistingPaymentReusable(existingPayment);
@@ -2313,6 +2587,15 @@ class SubscriptionPaymentService {
               session,
             });
 
+    // Confirm authoritative terms before preparing checkout.
+    this.assertConfirmedPurchaseTerms({
+      expectedPriceMinor,
+      expectedCurrency,
+      expectedPlanId,
+      planSnapshot: context.planSnapshot,
+      planId: context.planId,
+    });
+
     const customerEmail = String(context.employerProfile.businessEmail || "")
       .trim()
       .toLowerCase();
@@ -2425,6 +2708,9 @@ class SubscriptionPaymentService {
       retainedPublicationIds = [],
       initiatedByUserId,
       idempotencyKey,
+      expectedPriceMinor,
+      expectedCurrency,
+      expectedPlanId,
       callbackUrl = null,
       currentTime = new Date(),
     },
@@ -2433,6 +2719,8 @@ class SubscriptionPaymentService {
     this.assertOwnTransactionBoundary(options);
 
     this.assertCanManageSubscription(employerContext);
+
+    this.assertManualPaymentKeyAllowed(idempotencyKey);
 
     PaystackService.assertConfigured();
 
@@ -2485,6 +2773,9 @@ class SubscriptionPaymentService {
         initiatedByUserId: normalizedInitiatedByUserId,
         paymentReference,
         callbackUrl,
+        expectedPriceMinor,
+        expectedCurrency,
+        expectedPlanId,
         currentTime: initializedAt,
         session,
       });
@@ -2925,451 +3216,418 @@ class SubscriptionPaymentService {
     };
   }
 
-  /* ─────────────────────────────── REUSABLE PAYSTACK AUTHORIZATION ─────────────────────────────── */
+  /* ─────────────────────────────── EMPLOYER PAYMENT RECOVERY ─────────────────────────────── */
 
-  static async getReusableAuthorizationPayment(subscriptionId, session = null) {
-    const normalizedSubscriptionId = this.normalizeObjectId(subscriptionId, "subscription ID");
-
-    return this.applySession(
-      SubscriptionPayment.findOne({
-        subscription: normalizedSubscriptionId,
-        paymentStatus: "paid",
-        "providerAuthorization.reusable": true,
-        "providerAuthorization.authorizationCode": {
-          $type: "string",
-        },
-        "providerAuthorization.email": {
-          $type: "string",
-        },
-      }).sort({
-        appliedAt: -1,
-        paidAt: -1,
-        createdAt: -1,
-      }),
-      session
-    );
-  }
-
-  static async prepareAuthorizationRenewal({
+  static async verifyEmployerPayment({
     employerProfileId,
-    subscriptionId,
-    currentTime,
-    session,
-  }) {
-    await this.serializePaymentPreparation({ subscriptionId, employerProfileId, session });
-
-    const subscription = await SubscriptionService.getSubscription({
-      subscriptionId,
-      employerProfileId,
-      session,
-    });
-
-    const targetPeriod = this.resolveRenewalTarget({
-      subscription,
-      currentTime,
-    });
-
-    const idempotencyKey = this.buildAutomaticRenewalIdempotencyKey({
-      subscriptionId: subscription._id,
-      billingCycleKey: targetPeriod.billingCycleKey,
-    });
-
-    const paymentReference = this.buildPaymentReference({
-      idempotencyKey,
-      paymentKind: "renewal",
-    });
-
-    const existingPayment = await this.getPaymentByReference(paymentReference, session);
-
-    if (existingPayment) {
-      this.assertExistingPaymentMatches({
-        payment: existingPayment,
-        employerProfileId,
-        paymentKind: "renewal",
-        paymentMethod: "paystack_authorization",
-        subscriptionId,
-      });
-
-      this.assertExistingPaymentReusable(existingPayment);
-
-      const transaction = await this.applySession(
-        Transaction.findById(existingPayment.paymentTransaction),
-        session
-      );
-
-      if (!transaction) {
-        throw this.createError({
-          message: "The authorization renewal is missing its platform-wallet payment Transaction.",
-          code: "SUBSCRIPTION_PAYMENT_TRANSACTION_NOT_FOUND",
-          statusCode: 500,
-        });
-      }
-
-      return {
-        payment: existingPayment,
-        transaction,
-        existing: true,
-        alreadyPaid: existingPayment.paymentStatus === "paid",
-        paymentReference,
-      };
-    }
-
-    await this.assertNoOtherPaidFutureRenewal({
-      subscriptionId: subscription._id,
-      paymentReference,
-      session,
-    });
-
-    await this.assertNoOtherOpenPaymentForPeriod({
-      subscriptionId: subscription._id,
-      paymentKind: "renewal",
-      billingCycleKey: targetPeriod.billingCycleKey,
-      paymentReference,
-      session,
-    });
-
-    const authorizationPayment = await this.getReusableAuthorizationPayment(
-      subscription._id,
-      session
-    );
-
-    if (!authorizationPayment) {
-      throw this.createError({
-        message: "No reusable Paystack authorization is available for this subscription.",
-        code: "SUBSCRIPTION_REUSABLE_PAYSTACK_AUTHORIZATION_NOT_FOUND",
-        statusCode: 409,
-      });
-    }
-
-    const employerProfile = await this.getEmployerProfile(employerProfileId, session);
-
-    const planSnapshot = this.clonePlanSnapshot(subscription.planSnapshot);
-
-    const context = {
-      employerProfile,
-      subscription,
-      planId: subscription.plan,
-      planSnapshot,
-      amount: planSnapshot.priceMinor,
-      countryCode: this.normalizeCountryCode(planSnapshot.countryCode),
-      currency: this.normalizeCurrency(planSnapshot.currency),
-      targetPeriod,
-      events: [],
-    };
-
-    const platformWallet = await WalletService.createPlatformWallet(
-      {
-        countryCode: context.countryCode,
-        currency: context.currency,
-      },
-      {
-        session,
-      }
-    );
-
-    const providerReference = paymentReference;
-
-    const sourceAuthorization = authorizationPayment.providerAuthorization?.toObject
-      ? authorizationPayment.providerAuthorization.toObject()
-      : authorizationPayment.providerAuthorization;
-
-    const pendingCredit = await WalletService.createPendingExternalCredit(
-      {
-        walletId: platformWallet._id,
-        amount: context.amount,
-        type: SUBSCRIPTION_PAYMENT_TYPE,
-        purpose: SUBSCRIPTION_PAYMENT_PURPOSE,
-        paymentRail: "paystack_checkout",
-        provider: "paystack",
-        reference: providerReference,
-        idempotencyKey: this.buildPaystackCreditIdempotencyKey(paymentReference),
-        paystackReference: providerReference,
-        initiatedBy: {
-          role: "system",
-          userId: null,
-        },
-        description: `Paystack authorization subscription renewal ${paymentReference}.`,
-        metadata: {
-          employerProfileId: String(employerProfileId),
-          subscriptionId: String(subscription._id),
-          paymentReference,
-          paymentKind: "renewal",
-          paymentMethod: "paystack_authorization",
-          subscriptionPlanId: String(subscription.plan),
-          planCode: planSnapshot.code,
-          planVersion: planSnapshot.version,
-          billingCycleKey: targetPeriod.billingCycleKey,
-          periodStart: targetPeriod.periodStart,
-          periodEnd: targetPeriod.periodEnd,
-          customerEmail: sourceAuthorization.email,
-          authorizationSourcePaymentId: String(authorizationPayment._id),
-          authorizationPreparedAt: currentTime,
-        },
-      },
-      {
-        session,
-      }
-    );
-
-    const payment = new SubscriptionPayment(
-      this.buildPaymentPayload({
-        paymentReference,
-        context,
-        initiatedByUserId: null,
-        paymentKind: "renewal",
-        paymentMethod: "paystack_authorization",
-        paymentTransaction: pendingCredit.transaction._id,
-        paymentProvider: "paystack",
-        providerReference,
-        providerStatus: "pending",
-        providerAuthorization: sourceAuthorization,
-      })
-    );
-
-    await payment.save(this.saveOptions(session));
-
-    pendingCredit.transaction.metadata = {
-      ...(pendingCredit.transaction.metadata || {}),
-      subscriptionPaymentId: String(payment._id),
-    };
-
-    pendingCredit.transaction.markModified("metadata");
-
-    await pendingCredit.transaction.save(this.saveOptions(session));
-
-    return {
-      payment,
-      transaction: pendingCredit.transaction,
-      existing: false,
-      alreadyPaid: false,
-      paymentReference,
-      authorization: sourceAuthorization,
-      amount: context.amount,
-      currency: context.currency,
-      customerEmail: sourceAuthorization.email,
-    };
-  }
-
-  static async chargeRenewalWithStoredAuthorization({
-    employerProfileId,
-    subscriptionId,
+    employerContext = null,
+    paymentId,
     currentTime = new Date(),
   }) {
-    PaystackService.assertConfigured();
+    this.assertCanManageSubscription(employerContext);
 
     const normalizedEmployerProfileId = this.normalizeObjectId(
       employerProfileId,
       "employer profile ID"
     );
 
-    const normalizedSubscriptionId = this.normalizeObjectId(subscriptionId, "subscription ID");
+    const normalizedPaymentId = this.normalizeObjectId(
+      paymentId,
+      "subscription payment ID"
+    );
 
-    const chargedAt = this.normalizeCurrentTime(currentTime);
+    const verifiedAt = this.normalizeCurrentTime(currentTime);
 
-    const preparation = await this.runWithOptionalTransaction({}, async (session) => {
-      return this.prepareAuthorizationRenewal({
-        employerProfileId: normalizedEmployerProfileId,
-        subscriptionId: normalizedSubscriptionId,
-        currentTime: chargedAt,
-        session,
-      });
+    // Scope the payment lookup to the current employer business.
+    const payment = await SubscriptionPayment.findOne({
+      _id: normalizedPaymentId,
+      business: normalizedEmployerProfileId,
     });
 
-    if (preparation.alreadyPaid) {
+    if (!payment) {
+      throw this.createError({
+        message: "Subscription payment not found.",
+        code: "SUBSCRIPTION_PAYMENT_NOT_FOUND",
+        statusCode: 404,
+      });
+    }
+
+    // Completed application does not need another provider request.
+    if (payment.paymentStatus === "paid" && payment.appliedAt) {
+      return {
+        payment,
+        paid: true,
+        applied: true,
+        idempotent: true,
+        application: {
+          applied: true,
+          reason: "already_applied",
+        },
+        applicationError: null,
+      };
+    }
+
+    // Money already received must not be charged again.
+    // Recover only the existing lifecycle application.
+    if (payment.paymentStatus === "paid") {
       const applicationResult = await this.attemptApplicationAfterPayment({
-        paymentId: preparation.payment._id,
-        currentTime: chargedAt,
+        paymentId: payment._id,
+        currentTime: verifiedAt,
       });
 
+      const currentPayment = await this.getPayment(payment._id);
+
       return {
-        payment: preparation.payment,
-        paid: true,
-        pending: false,
+        payment: currentPayment,
+        paid: currentPayment.paymentStatus === "paid",
+        applied: Boolean(currentPayment.appliedAt),
         idempotent: true,
         application: applicationResult.application,
         applicationError: applicationResult.applicationError,
       };
     }
 
-    if (preparation.existing) {
+    // Terminal local payment states do not authorize another charge.
+    if (["failed", "cancelled", "refunded"].includes(payment.paymentStatus)) {
       return {
-        payment: preparation.payment,
-        paymentTransaction: preparation.transaction,
+        payment,
         paid: false,
-        pending: true,
+        applied: false,
         idempotent: true,
-        reconciliationRequired: true,
+        application: null,
+        applicationError: null,
       };
     }
 
-    try {
-      const response = await PaystackService.request({
-        method: "post",
-        path: "/transaction/charge_authorization",
-        data: {
-          email: preparation.customerEmail,
-          amount: String(preparation.amount),
-          authorization_code: preparation.authorization.authorizationCode,
-          reference: preparation.payment.providerReference,
-          currency: preparation.currency,
-          metadata: JSON.stringify({
-            purpose: SUBSCRIPTION_PAYMENT_PURPOSE,
-            paymentRail: "paystack_checkout",
-            paymentReference: preparation.payment.paymentReference,
-            subscriptionPaymentId: String(preparation.payment._id),
-            subscriptionId: String(preparation.payment.subscription),
-            employerProfileId: String(preparation.payment.business),
-            subscriptionPlanId: String(preparation.payment.plan),
-            paymentKind: "renewal",
-            paymentMethod: "paystack_authorization",
-            billingCycleKey: preparation.payment.billingCycleKey,
-          }),
-          queue: true,
-        },
-      });
-
-      const providerData = response?.data || {};
-
-      const returnedReference = String(providerData.reference || "").trim();
-
-      const providerStatus = String(providerData.status || "")
-        .trim()
-        .toLowerCase();
-
-      await Transaction.updateOne(
-        {
-          _id: preparation.transaction._id,
-          status: {
-            $in: ["pending", "processing"],
-          },
-        },
-        {
-          $set: {
-            "metadata.authorizationChargeRequestedAt": chargedAt,
-            "metadata.authorizationChargeProviderStatus": providerStatus || null,
-          },
-        }
-      );
-
-      if (returnedReference && returnedReference !== preparation.payment.providerReference) {
-        await Transaction.updateOne(
-          {
-            _id: preparation.transaction._id,
-          },
-          {
-            $set: {
-              "metadata.authorizationChargeReferenceMismatchAt": chargedAt,
-              "metadata.authorizationChargeReturnedReference": returnedReference,
-            },
-          }
-        );
-
-        throw this.createError({
-          message:
-            "Paystack returned an unexpected reference for the recurring subscription charge. Reconciliation is required.",
-          code: "SUBSCRIPTION_AUTHORIZATION_REFERENCE_MISMATCH",
-          statusCode: 409,
-          details: {
-            expectedReference: preparation.payment.providerReference,
-            returnedReference,
-          },
-        });
-      }
-
-      if (PAYSTACK_DEFINITIVE_FAILURE_STATUSES.includes(providerStatus)) {
-        const failedResult = await this.failPaystackAttempt({
-          paymentId: preparation.payment._id,
-          transactionId: preparation.transaction._id,
-          failureReason: `Paystack authorization charge status: ${providerStatus}.`,
-          failedAt: chargedAt,
-          metadata: {
-            authorizationChargeFailedAt: chargedAt,
-            authorizationChargeProviderStatus: providerStatus,
-          },
-        });
-
-        return {
-          payment: failedResult.payment,
-          paid: false,
-          pending: false,
-          failed: true,
-          idempotent: false,
-          periodEndResult: failedResult.periodEndResult,
-        };
-      }
-
-      if (providerStatus === "success") {
-        return this.finalizePaystackPayment({
-          reference: preparation.payment.providerReference,
-          currentTime: chargedAt,
-        });
-      }
-
+    // Wallet payments are local financial operations.
+    // Never perform an external verification or charge for them.
+    if (payment.paymentMethod === "wallet") {
       return {
-        payment: preparation.payment,
-        paymentTransaction: preparation.transaction,
+        payment,
         paid: false,
-        pending: true,
-        failed: false,
-        idempotent: false,
-        providerStatus: providerStatus || null,
+        applied: false,
+        idempotent: true,
+        application: null,
+        applicationError: null,
       };
+    }
+
+    if (
+      payment.paymentProvider !== "paystack" ||
+      !payment.providerReference
+    ) {
+      throw this.createError({
+        message: "The payment requires financial reconciliation.",
+        code: "SUBSCRIPTION_PAYMENT_PROVIDER_REFERENCE_REQUIRED",
+        statusCode: 409,
+      });
+    }
+
+    // Verify only the provider reference already owned by this payment.
+    // The existing finalizer controls receipt processing and application.
+    try {
+      return await this.finalizePaystackPayment({
+        reference: payment.providerReference,
+        currentTime: verifiedAt,
+      });
     } catch (error) {
-      if (error.code === "SUBSCRIPTION_AUTHORIZATION_REFERENCE_MISMATCH") {
+      // Return the recorded failure state after definitive verification.
+      // Uncertain or historical receipts remain reconciliation matters.
+      if (error.code !== "SUBSCRIPTION_PAYMENT_PAYSTACK_FAILED") {
         throw error;
       }
 
-      const definitiveFailure = this.isDefinitiveProviderFailure(error);
+      const currentPayment = await this.getPayment(payment._id);
 
-      if (definitiveFailure) {
-        const failedResult = await this.failPaystackAttempt({
-          paymentId: preparation.payment._id,
-          transactionId: preparation.transaction._id,
-          failureReason: error.message,
-          failedAt: chargedAt,
-          metadata: {
-            authorizationChargeFailedAt: chargedAt,
-            authorizationChargeErrorCode: error.code || null,
-          },
-        });
-
-        return {
-          payment: failedResult.payment,
-          paid: false,
-          pending: false,
-          failed: true,
-          idempotent: false,
-          periodEndResult: failedResult.periodEndResult,
-          providerError: {
-            code: error.code || null,
-            message: error.message,
-          },
-        };
+      if (currentPayment.paymentStatus !== "failed") {
+        throw error;
       }
 
-      await Transaction.updateOne(
-        {
-          _id: preparation.transaction._id,
-          status: {
-            $in: ["pending", "processing"],
-          },
-        },
-        {
-          $set: {
-            "metadata.authorizationChargeUncertainAt": chargedAt,
-            "metadata.authorizationChargeError": String(
-              error.message || "Paystack authorization charge status is uncertain."
-            ).slice(0, 300),
-            "metadata.authorizationChargeErrorCode": error.code || null,
-          },
-        }
-      );
-
-      throw error;
+      return {
+        payment: currentPayment,
+        paid: false,
+        applied: false,
+        idempotent: true,
+        application: null,
+        applicationError: null,
+      };
     }
   }
 
-  /* ─────────────────────────────── DUE PAYMENT APPLICATION ─────────────────────────────── */
+  /* ─────────────────────────────── REUSABLE PAYSTACK AUTHORIZATION ─────────────────────────────── */
+
+  /* ───────────────────── AUTOMATIC WALLET RENEWAL ───────────────────── */
+
+  static assertManualPaymentKeyAllowed(idempotencyKey) {
+    const key = String(idempotencyKey || "").trim();
+
+    if (key.startsWith(AUTOMATIC_WALLET_RENEWAL_KEY_PREFIX)) {
+      throw this.createError({
+        message: "This payment reference namespace is reserved.",
+        code: "RESERVED_SUBSCRIPTION_PAYMENT_KEY",
+        statusCode: 400,
+      });
+    }
+  }
+
+  static buildAutomaticWalletRenewalKey({
+    subscriptionId,
+    billingCycleKey,
+  }) {
+    return (
+      AUTOMATIC_WALLET_RENEWAL_KEY_PREFIX +
+      String(subscriptionId) +
+      ":" +
+      String(billingCycleKey)
+    );
+  }
+
+  static assertAutomaticWalletRenewalAllowed({
+    subscription,
+    business,
+    currentTime,
+  }) {
+    const consent = subscription?.autoRenewalConsent;
+
+    const start = new Date(
+      subscription?.currentPeriodStart || 0
+    );
+
+    const end = new Date(
+      subscription?.currentPeriodEnd || 0
+    );
+
+    if (
+      !business ||
+      !subscription ||
+      subscription.status !== "active" ||
+      subscription.autoRenewalEnabled !== true ||
+      subscription.cancelAtPeriodEnd ||
+      subscription.pendingPlanChange ||
+      !subscription.currentPeriodStart ||
+      !subscription.currentPeriodEnd ||
+      currentTime < start ||
+      currentTime >= end ||
+      end.getTime() - currentTime.getTime() >
+        AUTOMATIC_WALLET_RENEWAL_WINDOW_MS ||
+      !consent ||
+      !consent.consentedAt ||
+      !consent.consentedBy ||
+      String(consent.plan) !== String(subscription.plan) ||
+      consent.priceMinor !== subscription.planSnapshot.priceMinor ||
+      consent.currency !== subscription.planSnapshot.currency
+    ) {
+      throw this.createError({
+        message:
+          "Automatic wallet renewal is not currently authorized.",
+        code:
+          "SUBSCRIPTION_AUTOMATIC_RENEWAL_NOT_ALLOWED",
+        statusCode: 409,
+      });
+    }
+  }
+
+  static async updateAutomaticRenewalPreference({
+    employerProfileId,
+    subscriptionId,
+    employerContext = null,
+    requestedByUserId,
+    enabled,
+    expectedPriceMinor,
+    expectedCurrency,
+    expectedPlanId,
+    currentTime = new Date(),
+  }) {
+    this.assertCanManageSubscription(employerContext);
+
+    if (enabled !== true && enabled !== false) {
+      throw this.createError({
+        message:
+          "A valid automatic renewal preference is required.",
+        code: "INVALID_AUTOMATIC_RENEWAL_PREFERENCE",
+        statusCode: 400,
+      });
+    }
+
+    const businessId = this.normalizeObjectId(
+      employerProfileId,
+      "employer profile ID"
+    );
+
+    const normalizedSubscriptionId = this.normalizeObjectId(
+      subscriptionId,
+      "subscription ID"
+    );
+
+    const userId = this.normalizeObjectId(
+      requestedByUserId,
+      "automatic renewal consent user ID"
+    );
+
+    const changedAt = this.normalizeCurrentTime(currentTime);
+
+    return this.runWithOptionalTransaction(
+      {},
+      async (session) => {
+        await this.serializePaymentPreparation({
+          subscriptionId: normalizedSubscriptionId,
+          employerProfileId: businessId,
+          session,
+        });
+
+        const subscription =
+          await SubscriptionService.getSubscription({
+            subscriptionId: normalizedSubscriptionId,
+            employerProfileId: businessId,
+            session,
+          });
+
+        if (!enabled) {
+          if (subscription.autoRenewalEnabled === true) {
+            subscription.autoRenewalEnabled = false;
+
+            subscription.autoRenewalDisabledAt =
+              changedAt;
+
+            subscription.autoRenewalDisabledBy =
+              userId;
+
+            await subscription.save(
+              this.saveOptions(session)
+            );
+          }
+
+          return {
+            enabled: false,
+          };
+        }
+
+        const business = await this.applySession(
+          EmployerProfile.findOne({
+            _id: businessId,
+            accountStatus: "active",
+          }).select("_id"),
+          session
+        );
+
+        if (
+          !business ||
+          subscription.status !== "active" ||
+          !subscription.currentPeriodStart ||
+          !subscription.currentPeriodEnd ||
+          changedAt < new Date(subscription.currentPeriodStart) ||
+          changedAt >= new Date(subscription.currentPeriodEnd) ||
+          subscription.cancelAtPeriodEnd ||
+          subscription.pendingPlanChange
+        ) {
+          throw this.createError({
+            message:
+              "Automatic renewal cannot be enabled for this subscription.",
+            code:
+              "SUBSCRIPTION_AUTOMATIC_RENEWAL_NOT_ALLOWED",
+            statusCode: 409,
+          });
+        }
+
+        this.assertConfirmedPurchaseTerms({
+          expectedPriceMinor,
+          expectedCurrency,
+          expectedPlanId,
+          planSnapshot: subscription.planSnapshot,
+          planId: subscription.plan,
+        });
+
+        if (subscription.autoRenewalEnabled === true) {
+          return {
+            enabled: true,
+          };
+        }
+
+        subscription.autoRenewalEnabled = true;
+
+        subscription.autoRenewalConsent = {
+          consentedAt: changedAt,
+          consentedBy: userId,
+          plan: subscription.plan,
+          priceMinor: subscription.planSnapshot.priceMinor,
+          currency: subscription.planSnapshot.currency,
+        };
+
+        subscription.autoRenewalDisabledAt = null;
+        subscription.autoRenewalDisabledBy = null;
+
+        await subscription.save(
+          this.saveOptions(session)
+        );
+
+        return {
+          enabled: true,
+        };
+      }
+    );
+  }
+
+  static async renewAutomaticallyFromWallet({
+    employerProfileId,
+    subscriptionId,
+    currentTime = new Date(),
+  }) {
+    const now = this.normalizeCurrentTime(currentTime);
+
+    const subscription =
+      await SubscriptionService.getSubscription({
+        subscriptionId,
+        employerProfileId,
+      });
+
+    const business = await EmployerProfile.findOne({
+      _id: subscription.business,
+      accountStatus: "active",
+    }).select("_id");
+
+    this.assertAutomaticWalletRenewalAllowed({
+      subscription,
+      business,
+      currentTime: now,
+    });
+
+    const targetPeriod = this.resolveRenewalTarget({
+      subscription,
+      currentTime: now,
+    });
+
+    const idempotencyKey =
+      this.buildAutomaticWalletRenewalKey({
+        subscriptionId: subscription._id,
+        billingCycleKey: targetPeriod.billingCycleKey,
+      });
+
+    return this.purchaseFromWallet({
+      paymentKind: "renewal",
+
+      employerProfileId: subscription.business,
+      subscriptionId: subscription._id,
+
+      initiatedByUserId: null,
+
+      automaticRenewalToken:
+        AUTOMATIC_WALLET_RENEWAL_TOKEN,
+
+      idempotencyKey,
+      currentTime: now,
+
+      expectedPriceMinor:
+        subscription.planSnapshot.priceMinor,
+
+      expectedCurrency:
+        subscription.planSnapshot.currency,
+
+      expectedPlanId:
+        String(subscription.plan),
+    });
+  }
+
+  /* ───────────────────── DUE PAYMENT APPLICATION ───────────────────── */
 
   static async applyDuePaidPayments({
     currentTime = new Date(),

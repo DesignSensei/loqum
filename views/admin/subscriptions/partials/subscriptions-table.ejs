@@ -1,0 +1,29 @@
+<div class="table-responsive">
+  <table class="table align-middle table-row-dashed fs-7 gy-5">
+    <thead>
+      <tr class="text-muted fw-bold">
+        <th>Employer</th><th>Reference</th><th>Plan</th>
+        <th>Status</th><th>Period end</th><th>Payment attention</th><th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      <% subscriptionView.subscriptions.forEach((item) => { %>
+      <tr>
+        <td><%= item.businessName %><div class="text-muted"><%= item.businessId %></div></td>
+        <td><%= item.reference %></td>
+        <td><%= item.planName %> - v<%= item.version %></td>
+        <td>
+          <span class="badge <%= item.badge %>"><%= item.status %></span>
+          <div class="text-muted"><%= item.entitlement %></div>
+        </td>
+        <td><%= item.end %></td>
+        <td><%= item.attention %></td>
+        <td><a href="<%= item.url %>" class="btn btn-sm btn-light-primary">View</a></td>
+      </tr>
+      <% }); %>
+    </tbody>
+  </table>
+</div>
+<% if (!subscriptionView.subscriptions.length) { %>
+<p class="text-muted">No matching subscriptions.</p>
+<% } %>

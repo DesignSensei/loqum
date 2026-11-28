@@ -1,0 +1,53 @@
+<div class="card mb-7">
+  <div class="card-body">
+    <h2><%= subscriptionView.subscription.businessName %></h2>
+    <p><%= subscriptionView.subscription.reference %></p>
+
+    <span class="badge <%= subscriptionView.subscription.badge %>">
+      <%= subscriptionView.subscription.status %>
+    </span>
+
+    <dl class="row gy-3 mt-5">
+      <dt class="col-md-4">Purchased plan</dt>
+      <dd class="col-md-8"><%= subscriptionView.subscription.planName %> - v<%= subscriptionView.subscription.version %></dd>
+      <dt class="col-md-4">Market</dt>
+      <dd class="col-md-8"><%= subscriptionView.subscription.market %></dd>
+      <dt class="col-md-4">Price</dt>
+      <dd class="col-md-8"><%= subscriptionView.subscription.price %></dd>
+      <dt class="col-md-4">Billing cycle</dt>
+      <dd class="col-md-8"><%= subscriptionView.subscription.cycle %></dd>
+      <dt class="col-md-4">Entitlement</dt>
+      <dd class="col-md-8"><%= subscriptionView.subscription.entitlement %></dd>
+      <dt class="col-md-4">Paid period</dt>
+      <dd class="col-md-8"><%= subscriptionView.subscription.start %> - <%= subscriptionView.subscription.end %></dd>
+      <dt class="col-md-4">Purchased Job slots</dt>
+      <dd class="col-md-8"><%= subscriptionView.subscription.purchasedSlots %></dd>
+      <dt class="col-md-4">Effective slot capacity</dt>
+      <dd class="col-md-8"><%= subscriptionView.subscription.effectiveSlots %></dd>
+      <dt class="col-md-4">BASE platform fee</dt>
+      <dd class="col-md-8"><%= subscriptionView.subscription.fee %></dd>
+      <dt class="col-md-4">Renewal count</dt>
+      <dd class="col-md-8"><%= subscriptionView.subscription.renewalCount %></dd>
+      <dt class="col-md-4">Cancellation</dt>
+      <dd class="col-md-8"><%= subscriptionView.subscription.cancellation %></dd>
+      <dt class="col-md-4">Cancellation requested</dt>
+      <dd class="col-md-8"><%= subscriptionView.subscription.cancellationRequestedAt %></dd>
+      <dt class="col-md-4">Ended at</dt>
+      <dd class="col-md-8"><%= subscriptionView.subscription.endedAt %></dd>
+      <dt class="col-md-4">Features</dt>
+      <dd class="col-md-8">
+        <% subscriptionView.subscription.features.forEach((feature) => { %>
+        <span class="badge badge-light-primary me-1"><%= feature %></span>
+        <% }); %>
+      </dd>
+    </dl>
+
+    <% if (subscriptionView.subscription.pendingChange) { %>
+    <div class="notice bg-light-warning rounded p-5">
+      Pending <%= subscriptionView.subscription.pendingChange.type %>:
+      <%= subscriptionView.subscription.pendingChange.target %>
+      <div><%= subscriptionView.subscription.pendingChange.reference %></div>
+    </div>
+    <% } %>
+  </div>
+</div>

@@ -1,6 +1,7 @@
 // services/employerBillingService.js
 
 const EmployerProfile = require("../models/EmployerProfile");
+const EmployerMember = require("../models/EmployerMember");
 const Transaction = require("../models/Transaction");
 const ShiftOccurrence = require("../models/ShiftOccurrence");
 const BankAccount = require("../models/BankAccount");
@@ -81,6 +82,63 @@ class EmployerBillingService {
 
     if (profile.accountStatus === "closed") {
       throw new Error("This business account has been closed.");
+    }
+
+    return profile;
+  }
+
+  /* ---------- Resolve authorized billing-page access ---------- */
+
+  static async getEmployerProfileForBillingView({
+    userId,
+    employerProfile,
+  }) {
+    if (!userId || !employerProfile?._id) {
+      throw Object.assign(
+        new Error("Employer billing access is unavailable."),
+        { statusCode: 403 }
+      );
+    }
+
+    const profile = await EmployerProfile.findOne({
+      _id: employerProfile._id,
+      accountStatus: { $ne: "closed" },
+    });
+
+    if (!profile) {
+      throw Object.assign(
+        new Error("Employer billing access is unavailable."),
+        { statusCode: 403 }
+      );
+    }
+
+    // Preserve primary employer access.
+    if (String(profile.user) === String(userId)) {
+      return profile;
+    }
+
+    // Delegated access ends when business closure begins.
+    if (profile.accountStatus === "closing") {
+      throw Object.assign(
+        new Error("Employer billing access is unavailable."),
+        { statusCode: 403 }
+      );
+    }
+
+    // Recheck current membership instead of trusting a profile ID.
+    const member = await EmployerMember.findOne({
+      business: profile._id,
+      user: userId,
+      accountStatus: "active",
+      isCurrent: true,
+      role: { $in: ["admin", "branch_manager"] },
+    }).select("_id").lean();
+
+    if (!member) {
+      throw Object.assign(
+        new Error("You do not have permission to view this employer's billing."),
+        { statusCode: 403 }
+      );
     }
 
     return profile;
@@ -1659,6 +1717,126 @@ class EmployerBillingService {
     };
   }
 
+  /* ---------- Get subscription payment history ---------- */
+
+  static async getSubscriptionPaymentHistory({
+    employerProfileId,
+    currentTime = new Date(),
+  }) {
+    const now = EmployerBillingService.normalizeCurrentTime(currentTime);
+
+    const recentLimit = 20;
+    const outstandingLimit = 50;
+
+    const fields = [
+      "_id",
+      "paymentReference",
+      "paymentKind",
+      "paymentMethod",
+      "paymentStatus",
+      "plan",
+      "planSnapshot",
+      "billingCycleKey",
+      "periodStart",
+      "periodEnd",
+      "paidAt",
+      "appliedAt",
+      "failedAt",
+      "createdAt",
+    ].join(" ");
+
+    const sort = {
+      createdAt: -1,
+      _id: -1,
+    };
+
+    const [recentPayments, outstandingPayments] =
+      await Promise.all([
+        SubscriptionPayment.find({
+          business: employerProfileId,
+        })
+          .select(fields)
+          .sort(sort)
+          .limit(recentLimit)
+          .lean(),
+
+        SubscriptionPayment.find({
+          business: employerProfileId,
+          $or: [
+            { paymentStatus: "pending" },
+            {
+              paymentStatus: "paid",
+              appliedAt: null,
+            },
+          ],
+        })
+          .select(fields)
+          .sort(sort)
+          .limit(outstandingLimit + 1)
+          .lean(),
+      ]);
+
+    const selectedPayments = new Map();
+
+    for (const payment of outstandingPayments.slice(0, outstandingLimit)) {
+      selectedPayments.set(String(payment._id), payment);
+    }
+
+    for (const payment of recentPayments) {
+      selectedPayments.set(String(payment._id), payment);
+    }
+
+    const payments = [...selectedPayments.values()].map((payment) => {
+      const view = EmployerBillingService.buildSubscriptionPaymentView(
+        payment,
+        now
+      );
+
+      const canVerify =
+        (
+          payment.paymentStatus === "pending" &&
+          ["paystack_checkout", "paystack_authorization"].includes(
+            payment.paymentMethod
+          )
+        ) ||
+        (
+          payment.paymentStatus === "paid" &&
+          !payment.appliedAt &&
+          !view.scheduled
+        );
+
+      return {
+        id: view.id,
+        paymentReference: view.paymentReference,
+        paymentKindLabel: view.paymentKindLabel,
+        paymentMethodLabel: view.paymentMethodLabel,
+        paymentStatusLabel: view.paymentStatusLabel,
+        paymentStatusBadgeClass: view.paymentStatusBadgeClass,
+        applicationStatusLabel: view.applicationStatusLabel,
+        planName: view.planName,
+        billingCycle: view.billingCycle,
+        amountDisplay: view.amountDisplay,
+        createdAtDisplay: view.createdAtDisplay,
+        paidAtDisplay: view.paidAtDisplay,
+        periodStartDisplay: view.periodStartDisplay,
+        canVerify,
+        verificationUrl: canVerify
+          ? "/employer/billing/subscription-payments/" +
+            view.id +
+            "/verify"
+          : null,
+      };
+    });
+
+    return {
+      payments,
+      hasPayments: payments.length > 0,
+      recentLimit,
+      hasMoreOutstanding:
+        outstandingPayments.length > outstandingLimit,
+    };
+  }
+
   /* ---------- Get active subscription-funded publications ---------- */
 
   static async getSubscriptionPublicationViews({ employerProfileId, subscriptionId }) {
@@ -1784,6 +1962,10 @@ class EmployerBillingService {
 
         canCancel: false,
 
+        cancellationBlockedByRenewal: false,
+
+        cancellationRestrictionMessage: null,
+
         subscription: null,
 
         activePublications: [],
@@ -1822,16 +2004,66 @@ class EmployerBillingService {
 
     const effectiveStatus = lifecycleBoundaryPassed ? "expired" : storedStatus;
 
-    const [payments, activePublications] = await Promise.all([
-      SubscriptionPayment.find({
-        subscription: subscription._id,
+    const paymentScope = {
+      business: employerProfileId,
+      subscription: subscription._id,
+    };
+
+    const outstandingPaymentFilter = {
+      $or: [
+        { paymentStatus: "pending" },
+        {
+          paymentStatus: "paid",
+          appliedAt: null,
+        },
+      ],
+    };
+
+    const paymentSort = {
+      createdAt: -1,
+      _id: -1,
+    };
+
+    const findSubscriptionPayment = (filter = {}) =>
+      SubscriptionPayment.findOne({
+        ...paymentScope,
+        ...filter,
       })
-        .sort({
-          createdAt: -1,
-          _id: -1,
-        })
-        .limit(20)
-        .lean(),
+        .sort(paymentSort)
+        .lean();
+
+    const pendingPlanChangeReference =
+      subscription.pendingPlanChange?.paymentReference || null;
+
+    const [
+      latestPayment,
+      latestRenewalPayment,
+      outstandingRenewalPayment,
+      pendingPlanChangePayment,
+      activePublications,
+    ] = await Promise.all([
+      findSubscriptionPayment(),
+
+      findSubscriptionPayment({
+        paymentKind: "renewal",
+      }),
+
+      findSubscriptionPayment({
+        paymentKind: "renewal",
+        ...outstandingPaymentFilter,
+      }),
+
+      pendingPlanChangeReference
+        ? findSubscriptionPayment({
+            paymentKind: "plan_change",
+            paymentReference: String(
+              pendingPlanChangeReference
+            ).toUpperCase(),
+          })
+        : findSubscriptionPayment({
+            paymentKind: "plan_change",
+            ...outstandingPaymentFilter,
+          }),
 
       active
         ? EmployerBillingService.getSubscriptionPublicationViews({
@@ -1841,48 +2073,27 @@ class EmployerBillingService {
         : Promise.resolve([]),
     ]);
 
-    const outstandingRenewalPayment =
-      payments.find(
-        (payment) =>
-          payment.paymentKind === "renewal" &&
-          (payment.paymentStatus === "pending" ||
-            (payment.paymentStatus === "paid" && !payment.appliedAt))
-      ) || null;
-
-    const latestRenewalPayment =
-      payments.find((payment) => payment.paymentKind === "renewal") || null;
-
-    const pendingPlanChangePayment = subscription.pendingPlanChange?.paymentReference
-      ? payments.find(
-          (payment) =>
-            payment.paymentKind === "plan_change" &&
-            String(payment.paymentReference || "").toUpperCase() ===
-              String(subscription.pendingPlanChange.paymentReference || "").toUpperCase()
-        ) || null
-      : payments.find(
-          (payment) =>
-            payment.paymentKind === "plan_change" &&
-            (payment.paymentStatus === "pending" ||
-              (payment.paymentStatus === "paid" && !payment.appliedAt))
-        ) || null;
-
-    const latestPayment = payments[0] || null;
-
     const planSnapshot = subscription.planSnapshot || {};
 
     const planCurrency = planSnapshot.currency || "NGN";
 
     const priceMinor = Number(planSnapshot.priceMinor || 0);
 
-    const activeJobSlots = Number(planSnapshot.benefits?.activeJobSlots || 0);
+    const activeJobSlots = active
+      ? Number(planSnapshot.benefits?.activeJobSlots || 0)
+      : 0;
 
     const occupiedJobSlots = activePublications.length;
 
     const remainingJobSlots = Math.max(activeJobSlots - occupiedJobSlots, 0);
 
-    const remainingJobSlotsLabel = `${remainingJobSlots} slot${remainingJobSlots === 1 ? "" : "s"} currently available.`;
+    const remainingJobSlotsLabel = active
+      ? `${remainingJobSlots} slot${remainingJobSlots === 1 ? "" : "s"} currently available.`
+      : "No active subscription slots available.";
 
-    const basePlatformFeeRate = planSnapshot.benefits?.basePlatformFeeRate ?? null;
+    const basePlatformFeeRate = active
+      ? planSnapshot.benefits?.basePlatformFeeRate ?? null
+      : null;
 
     const basePlatformFeePercentDisplay =
       basePlatformFeeRate === null ? null : `${(Number(basePlatformFeeRate) * 100).toFixed(2)}%`;
@@ -1965,7 +2176,23 @@ class EmployerBillingService {
     const canChangePlan =
       active && !cancellationScheduled && !planChangePending && !renewalOutstanding;
 
-    const canCancel = active && !cancellationScheduled && !planChangePending;
+    const cancellationBlockedByRenewal =
+      active &&
+      !cancellationScheduled &&
+      Boolean(outstandingRenewalPayment);
+
+    const cancellationRestrictionMessage =
+      cancellationBlockedByRenewal
+        ? outstandingRenewalPayment.paymentStatus === "paid"
+          ? "Your next billing period has already been paid for. You can schedule cancellation after that renewal takes effect."
+          : "Resolve the outstanding renewal payment before scheduling cancellation. Use Check payment status below."
+        : null;
+
+    const canCancel =
+      active &&
+      !cancellationScheduled &&
+      !planChangePending &&
+      !cancellationBlockedByRenewal;
 
     const canSubscribe = ["cancelled", "expired"].includes(storedStatus);
 
@@ -2048,6 +2275,20 @@ class EmployerBillingService {
 
       renewalCount: Number(subscription.renewalCount || 0),
 
+      automaticRenewalVisible: active,
+
+      automaticRenewalEnabled:
+        active &&
+        subscription.autoRenewalEnabled === true,
+
+      automaticRenewalCanEnable:
+        active &&
+        subscription.autoRenewalEnabled !== true &&
+        !subscription.cancelAtPeriodEnd &&
+        !subscription.pendingPlanChange,
+
+      automaticRenewalPaymentMethod: "LOQUM wallet",
+
       cancelAtPeriodEnd: subscription.cancelAtPeriodEnd === true,
 
       cancellationScheduled,
@@ -2084,6 +2325,10 @@ class EmployerBillingService {
 
       canCancel,
 
+      cancellationBlockedByRenewal,
+
+      cancellationRestrictionMessage,
+
       subscription,
     };
   }
@@ -2099,7 +2344,10 @@ class EmployerBillingService {
   }) {
     const now = EmployerBillingService.normalizeCurrentTime(currentTime);
 
-    const profile = await EmployerBillingService.getEmployerProfileForUser(userId, employerProfile);
+    const profile = await EmployerBillingService.getEmployerProfileForBillingView({
+      userId,
+      employerProfile,
+    });
 
     const wallet = await WalletService.createEmployerWalletIfMissing(profile);
 
@@ -2115,6 +2363,7 @@ class EmployerBillingService {
       withdrawalBankSetup,
       subscription,
       subscriptionPlans,
+      subscriptionPaymentHistory,
     ] = await Promise.all([
       DVAService.getEmployerDVAStatus({
         employerProfileId: profile._id,
@@ -2155,6 +2404,11 @@ class EmployerBillingService {
         countryCode: profile.countryCode,
         currency: profile.currency,
       }),
+
+      EmployerBillingService.getSubscriptionPaymentHistory({
+        employerProfileId: profile._id,
+        currentTime: now,
+      }),
     ]);
 
     const changeableSubscriptionPlans = subscriptionPlans.filter(
@@ -2189,6 +2443,8 @@ class EmployerBillingService {
       subscriptionPlans,
 
       changeableSubscriptionPlans,
+
+      subscriptionPaymentHistory,
 
       paymentsDue,
 

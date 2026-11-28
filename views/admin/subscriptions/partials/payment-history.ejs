@@ -1,0 +1,57 @@
+<div class="card mb-7">
+  <div class="card-body">
+    <h3>Payment History</h3>
+    <p>Outstanding: <%= subscriptionView.outstanding %></p>
+    <p>Requires attention: <%= subscriptionView.attention %></p>
+
+    <form method="GET" action="<%= subscriptionView.subscription.url %>" class="d-flex gap-3 mb-5">
+      <select class="form-select w-auto" name="paymentFilter">
+        <option value="">All payments</option>
+        <option value="outstanding" <%= subscriptionView.paymentFilter === "outstanding" ? "selected" : "" %>>Outstanding</option>
+        <option value="attention" <%= subscriptionView.paymentFilter === "attention" ? "selected" : "" %>>Requires attention</option>
+      </select>
+      <button class="btn btn-primary">Filter</button>
+    </form>
+
+    <div class="table-responsive">
+      <table class="table table-row-dashed align-middle fs-7 gy-5">
+        <thead>
+          <tr class="text-muted fw-bold">
+            <th>Payment</th><th>Amount</th><th>Method</th>
+            <th>Status</th><th>Application</th>
+            <th>Provider / Transaction</th><th>Timing</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% subscriptionView.payments.forEach((item) => { %>
+          <tr>
+            <td><%= item.kind %><div><%= item.plan %></div><div><%= item.reference %></div></td>
+            <td><%= item.amount %></td>
+            <td><%= item.method %></td>
+            <td><span class="badge <%= item.badge %>"><%= item.status %></span></td>
+            <td><%= item.application %></td>
+            <td class="text-break">
+              <%= item.providerReference %>
+              <div><%= item.providerStatus %></div>
+              <div><%= item.transactionId %></div>
+            </td>
+            <td>
+              <div>Created: <%= item.created %></div>
+              <div>Paid: <%= item.paid %></div>
+              <div>Applied: <%= item.applied %></div>
+              <div>Start: <%= item.start %></div>
+              <div>End: <%= item.end %></div>
+            </td>
+          </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+
+    <% if (!subscriptionView.payments.length) { %>
+    <p class="text-muted">No matching payments.</p>
+    <% } %>
+
+    <%- include("pagination") %>
+  </div>
+</div>

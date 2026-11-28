@@ -34,38 +34,72 @@ var EmployerBilling = (function () {
     );
   }
 
-  function getPaymentStatus(response) {
-    return response?.data?.payment?.paymentStatus || null;
-  }
-
-  function getSubscriptionStatus(response) {
-    return response?.data?.application?.lifecycle?.subscription?.status || null;
+  function getSubscriptionPaymentResult(response) {
+    return response?.data?.data || {};
   }
 
   function isPaymentCompleted(response) {
-    return getPaymentStatus(response) === "paid";
+    var result = getSubscriptionPaymentResult(response);
+    var status = result.payment?.paymentStatus || null;
+
+    if (["failed", "cancelled", "refunded"].includes(status)) {
+      return false;
+    }
+
+    return (
+      result.paid === true ||
+      result.alreadyPaid === true ||
+      status === "paid"
+    );
   }
 
   function getSubscriptionPaymentAlert(response, fallbackMessage) {
-    var subscriptionStatus = getSubscriptionStatus(response);
+    var result = getSubscriptionPaymentResult(response);
+    var payment = result.payment || {};
+    var application = result.application || {};
 
-    if (isPaymentCompleted(response)) {
-      if (subscriptionStatus === "active") {
-        return {
-          text: "Payment completed and subscription activated successfully.",
-          icon: "success",
-        };
-      }
-
+    if (!isPaymentCompleted(response)) {
       return {
-        text: "Payment completed. Subscription activation is being processed.",
+        text:
+          "Payment remains unresolved. Check its status before starting another purchase.",
+        icon: "warning",
+      };
+    }
+
+    if (result.applicationError) {
+      return {
+        text:
+          "Payment completed, but the subscription update is pending. Do not pay again for this purchase.",
         icon: "info",
       };
     }
 
+    if (
+      result.applied === true ||
+      application.applied === true ||
+      Boolean(payment.appliedAt)
+    ) {
+      return {
+        text: fallbackMessage || "Payment completed and subscription updated.",
+        icon: "success",
+      };
+    }
+
+    if (
+      payment.paymentKind === "renewal" &&
+      application.reason === "billing_period_not_started"
+    ) {
+      return {
+        text:
+          "Renewal payment completed. It will take effect when the current billing period ends.",
+        icon: "success",
+      };
+    }
+
     return {
-      text: response.data.message || fallbackMessage,
-      icon: "success",
+      text:
+        "Payment completed. Your subscription update is still being processed. Do not pay again.",
+      icon: "info",
     };
   }
 
@@ -491,13 +525,72 @@ var EmployerBilling = (function () {
     });
   }
 
-  function submitSubscriptionPaymentForm({
+  async function submitSubscriptionPaymentForm({
     form,
     submitButton,
     idempotencyPrefix,
     successMessage,
   }) {
     var paymentFlow = form?.dataset?.paymentFlow || "wallet";
+
+    if (!form || !submitButton || submitButton.disabled) return;
+
+    var confirmedPrice = form.dataset.confirmPrice;
+
+    if (!confirmedPrice) {
+      showAlert({
+        text: "Purchase price is unavailable. Refresh the billing page.",
+        icon: "warning",
+      });
+      return;
+    }
+
+    setButtonLoading(submitButton, true);
+
+    var message =
+      "Confirm subscription payment of " +
+      confirmedPrice +
+      (paymentFlow === "checkout"
+        ? " through Paystack?"
+        : " from your employer wallet?");
+
+    var confirmed;
+
+    try {
+      if (window.Swal) {
+        var result = await Swal.fire({
+          text: message,
+          icon: "question",
+          showCancelButton: true,
+          confirmButtonText: "Confirm payment",
+          cancelButtonText: "Cancel",
+          buttonsStyling: false,
+          customClass: {
+            confirmButton: "btn btn-primary",
+            cancelButton: "btn btn-light",
+          },
+        });
+
+        confirmed = result.isConfirmed;
+      } else {
+        confirmed = window.confirm(message);
+      }
+    } catch (error) {
+      setButtonLoading(submitButton, false);
+
+      showAlert({
+        text: "Payment confirmation could not be completed.",
+        icon: "error",
+      });
+
+      return;
+    }
+
+    if (!confirmed) {
+      setButtonLoading(submitButton, false);
+      return;
+    }
+
 
     ensureIdempotencyKey(form, idempotencyPrefix);
     setButtonLoading(submitButton, true);
@@ -620,6 +713,117 @@ var EmployerBilling = (function () {
       },
     }).then(function (result) {
       return result.isConfirmed;
+    });
+  }
+
+  function handleSubscriptionAutomaticRenewal() {
+    var form = document.querySelector(
+      "#kt_subscription_automatic_renewal_form"
+    );
+
+    if (!form) return;
+
+    var submitButton = form.querySelector(
+      'button[type="submit"]'
+    );
+
+    if (!submitButton) return;
+
+    var busy = false;
+
+    form.addEventListener("submit", async function (event) {
+      event.preventDefault();
+
+      if (busy) return;
+
+      busy = true;
+
+      setButtonLoading(submitButton, true);
+
+      try {
+        var data = Object.fromEntries(
+          new FormData(form)
+        );
+
+        var enabling =
+          data.enabled === "true";
+
+        var message = enabling
+          ? "Authorize LOQUM to deduct " +
+            form.dataset.renewalPrice +
+            " from your wallet for each " +
+            form.dataset.billingCycle.toLowerCase() +
+            " subscription renewal. Payment may be collected " +
+            "within 24 hours before expiry. " +
+            "You can disable automatic renewal at any time."
+          : "Disable automatic renewal? Your existing paid benefits " +
+            "will remain unchanged. No new automatic deductions " +
+            "will be initiated after this preference is saved.";
+
+        var confirmed;
+
+        if (window.Swal) {
+          var result = await Swal.fire({
+            title: enabling
+              ? "Enable automatic renewal?"
+              : "Disable automatic renewal?",
+
+            text: message,
+
+            icon: "question",
+
+            showCancelButton: true,
+
+            confirmButtonText: enabling
+              ? "Enable automatic renewal"
+              : "Disable automatic renewal",
+
+            cancelButtonText:
+              "Cancel",
+
+            buttonsStyling: false,
+
+            customClass: {
+              confirmButton: "btn btn-primary",
+              cancelButton: "btn btn-light",
+            },
+          });
+
+          confirmed = result.isConfirmed;
+        } else {
+          confirmed = window.confirm(message);
+        }
+
+        if (!confirmed) return;
+
+        var response = await axios.post(
+          form.action,
+          data
+        );
+
+        await showAlert({
+          text:
+            response.data.message ||
+            "Automatic renewal preference updated.",
+
+          icon: "success",
+        });
+
+        window.location.reload();
+      } catch (error) {
+        await showAlert({
+          text: getErrorMessage(
+            error,
+            "Unable to update automatic renewal."
+          ),
+
+          icon: "error",
+        });
+      } finally {
+        busy = false;
+
+        setButtonLoading(submitButton, false);
+      }
     });
   }
 
@@ -771,6 +975,18 @@ var EmployerBilling = (function () {
       planIdInput.value = triggerButton.dataset.planId || "";
     }
 
+    subscriptionPlanChangeForm.elements.namedItem(
+      "expectedPriceMinor"
+    ).value = triggerButton.dataset.planPriceMinor || "";
+
+    subscriptionPlanChangeForm.elements.namedItem(
+      "expectedCurrency"
+    ).value = triggerButton.dataset.planCurrency || "";
+
+    subscriptionPlanChangeForm.elements.namedItem(
+      "expectedPlanId"
+    ).value = triggerButton.dataset.planId || "";
+
     if (planName) {
       planName.textContent = triggerButton.dataset.planName || "Selected plan";
     }
@@ -881,13 +1097,12 @@ var EmployerBilling = (function () {
           if (isPaymentCompleted(response)) {
             setButtonLoading(submitButton, false);
 
-            showAlert({
-              text:
-                getSubscriptionStatus(response) === "active"
-                  ? "Payment completed and subscription activated successfully."
-                  : "Payment completed. Subscription activation is being processed.",
-              icon: "success",
-            }).then(function () {
+            showAlert(
+              getSubscriptionPaymentAlert(
+                response,
+                "Subscription plan changed successfully."
+              )
+            ).then(function () {
               window.location.href = response.data.redirectUrl || "/employer/billing#subscription";
             });
 
@@ -961,6 +1176,64 @@ var EmployerBilling = (function () {
         resetPlanChangeSelection(false);
       });
     }
+  }
+
+  function handleSubscriptionPaymentRecovery() {
+    document
+      .querySelectorAll(".js-subscription-payment-verify-form")
+      .forEach(function (form) {
+        form.addEventListener("submit", function (event) {
+          event.preventDefault();
+
+          var button = form.querySelector('button[type="submit"]');
+
+          if (!button || button.disabled) return;
+
+          setButtonLoading(button, true);
+
+          var data = Object.fromEntries(new FormData(form));
+
+          axios
+            .post(form.action, data)
+            .then(function (response) {
+              var result = getSubscriptionPaymentResult(response);
+              var status = result.payment?.paymentStatus;
+
+              var alertConfig;
+
+              if (["failed", "cancelled", "refunded"].includes(status)) {
+                alertConfig = {
+                  text:
+                    response.data.message ||
+                    "Payment status updated.",
+                  icon: "info",
+                };
+              } else {
+                alertConfig = getSubscriptionPaymentAlert(
+                  response,
+                  "Payment verified and subscription updated."
+                );
+              }
+
+              // Keep the action disabled until the display is refreshed.
+              return showAlert(alertConfig).then(function () {
+                window.location.hash = "subscription-payments";
+                window.location.reload();
+              });
+            })
+            .catch(function (error) {
+              setButtonLoading(button, false);
+
+              showAlert({
+                text: getErrorMessage(
+                  error,
+                  "Unable to confirm the payment status. Do not make another payment until this attempt is resolved."
+                ),
+                icon: "warning",
+              });
+            });
+        });
+      });
   }
 
   function handleCopyTextButtons() {
@@ -1043,8 +1316,10 @@ var EmployerBilling = (function () {
       handleWalletWithdrawalSubmission();
       handleSubscriptionPurchaseSubmission();
       handleSubscriptionRenewalSubmission();
+      handleSubscriptionAutomaticRenewal();
       handleSubscriptionCancellation();
       handleSubscriptionPlanChange();
+      handleSubscriptionPaymentRecovery();
       handleCopyTextButtons();
     },
   };

@@ -9,7 +9,7 @@ const SubscriptionPaymentService = require("../services/subscriptionPaymentServi
 const logger = require("../utils/logger");
 
 const DEFAULT_INTERVAL_MINUTES = 5;
-const DEFAULT_RENEWAL_LEAD_MINUTES = 10;
+const DEFAULT_RENEWAL_LEAD_MINUTES = 24 * 60;
 const DEFAULT_APPLICATION_LIMIT = 100;
 const DEFAULT_RENEWAL_LIMIT = 100;
 const DEFAULT_BOUNDARY_LIMIT = 100;
@@ -130,7 +130,7 @@ class SubscriptionLifecycleScheduler {
           paymentId: String(payment._id),
           paid: result.paid === true,
           applied: result.application?.applied === true,
-          reconciliationRequired: Boolean(result.applicationError),
+          reconciliationRequired: Boolean(result.reconciliationRequired || result.applicationError),
           code: result.applicationError?.code || null,
         });
       } catch (error) {
@@ -218,6 +218,7 @@ class SubscriptionLifecycleScheduler {
       select: "_id business currentPeriodEnd",
       filter: {
         status: "active",
+        autoRenewalEnabled: true,
         cancelAtPeriodEnd: false,
         pendingPlanChange: null,
         currentPeriodStart: { $type: "date", $lte: currentTime },
@@ -283,13 +284,32 @@ class SubscriptionLifecycleScheduler {
       const employerProfileId = String(candidate.business);
 
       try {
-        const renewalResult = await SubscriptionPaymentService.chargeRenewalWithStoredAuthorization(
-          {
-            employerProfileId,
+        const renewalResult = await SubscriptionPaymentService.renewAutomaticallyFromWallet({
+          employerProfileId,
+          subscriptionId,
+          currentTime,
+        });
+
+        if (renewalResult?.insufficientBalance === true) {
+          result.unavailable.push({
             subscriptionId,
-            currentTime,
-          }
-        );
+            employerProfileId,
+
+            reason: "SUBSCRIPTION_WALLET_BALANCE_INSUFFICIENT",
+
+            requiredAmount: renewalResult.requiredAmount,
+
+            availableBalance: renewalResult.availableBalance,
+
+            shortfall: renewalResult.shortfall,
+
+            currency: renewalResult.currency,
+
+            notificationId: renewalResult.notificationId || null,
+          });
+
+          continue;
+        }
 
         if (renewalResult?.paid === true) {
           result.paid.push({
@@ -325,7 +345,12 @@ class SubscriptionLifecycleScheduler {
       } catch (error) {
         if (
           [
-            "SUBSCRIPTION_REUSABLE_PAYSTACK_AUTHORIZATION_NOT_FOUND",
+            "SUBSCRIPTION_WALLET_BALANCE_INSUFFICIENT",
+            "SUBSCRIPTION_AUTOMATIC_RENEWAL_NOT_ALLOWED",
+            "SUBSCRIPTION_AUTOMATIC_RENEWAL_PERIOD_CHANGED",
+            "SUBSCRIPTION_PAYMENT_RENEWAL_PERIOD_ENDED",
+            "SUBSCRIPTION_PAYMENT_RENEWAL_BLOCKED_BY_CANCELLATION",
+            "SUBSCRIPTION_PAYMENT_RENEWAL_BLOCKED_BY_PLAN_CHANGE",
             "SUBSCRIPTION_FUTURE_RENEWAL_ALREADY_PAID",
             "SUBSCRIPTION_PAYMENT_ATTEMPT_ALREADY_OPEN",
           ].includes(error.code)

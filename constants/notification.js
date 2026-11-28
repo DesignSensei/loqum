@@ -19,7 +19,7 @@ exports.NOTIFICATION_STATUSES = Object.freeze(["unread", "read", "archived"]);
 
 exports.FINANCE_NOTIFICATION_TYPES = Object.freeze([
   // Employer wallet
-  "wallet_funded",
+  "subscription_renewal_insufficient_balance", "subscription_automatic_renewal_paid", "subscription_expired", "wallet_funded",
   "withdrawal_submitted",
   "withdrawal_completed",
   "withdrawal_reversed",

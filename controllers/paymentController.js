@@ -206,7 +206,11 @@ function resolveSubscriptionCallbackState(result) {
     };
   }
 
-  if (result?.applied === true) {
+  if (
+    result?.applied === true ||
+    result?.payment?.appliedAt ||
+    result?.application?.payment?.appliedAt
+  ) {
     return {
       paymentStatus: "success",
       paymentKind,

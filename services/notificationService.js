@@ -177,6 +177,8 @@ class NotificationService {
 
       relatedWallet = null,
       relatedTransaction = null,
+      relatedSubscription = null,
+      relatedSubscriptionPayment = null,
       relatedShift = null,
       relatedOccurrence = null,
       relatedClaim = null,
@@ -235,6 +237,8 @@ class NotificationService {
 
       relatedWallet,
       relatedTransaction,
+      relatedSubscription,
+      relatedSubscriptionPayment,
       relatedShift,
       relatedOccurrence,
       relatedClaim,
@@ -281,6 +285,8 @@ class NotificationService {
 
       relatedWallet = null,
       relatedTransaction = null,
+      relatedSubscription = null,
+      relatedSubscriptionPayment = null,
       relatedShift = null,
       relatedOccurrence = null,
       relatedClaim = null,
@@ -330,6 +336,8 @@ class NotificationService {
 
         relatedWallet,
         relatedTransaction,
+        relatedSubscription,
+        relatedSubscriptionPayment,
         relatedShift,
         relatedOccurrence,
         relatedClaim,
@@ -1048,6 +1056,244 @@ class NotificationService {
           currency,
 
           source: "employer_withdrawal_reversed",
+        },
+      },
+      options
+    );
+  }
+
+  /* ─────────────────────────────── EMPLOYER SUBSCRIPTIONS ─────────────────────────────── */
+
+  static async notifyEmployerSubscriptionEvent(
+    {
+      recipientUser,
+      employer,
+      subscription,
+      payment = null,
+      wallet = null,
+      transaction = null,
+      type,
+      periodEnd,
+      availableBalance = null,
+    },
+    options = {}
+  ) {
+    if (!recipientUser || !employer || !subscription?._id) {
+      throw new Error(
+        "Employer subscription notification identity is required."
+      );
+    }
+
+    if (String(subscription.business) !== String(employer)) {
+      throw new Error(
+        "Subscription notification business mismatch."
+      );
+    }
+
+    const normalizedType =
+      NotificationService.normalizeType(type);
+
+    NotificationService.assertTypeMatchesCategory({
+      category: "finance",
+      type: normalizedType,
+    });
+
+    const boundary = new Date(periodEnd);
+
+    if (Number.isNaN(boundary.getTime())) {
+      throw new Error(
+        "Subscription notification billing boundary is invalid."
+      );
+    }
+
+    const planSnapshot = subscription.planSnapshot;
+
+    if (
+      !planSnapshot ||
+      !Number.isSafeInteger(planSnapshot.priceMinor) ||
+      planSnapshot.priceMinor <= 0 ||
+      !planSnapshot.currency
+    ) {
+      throw new Error(
+        "Subscription notification plan snapshot is invalid."
+      );
+    }
+
+    const amount = planSnapshot.priceMinor;
+    const currency = planSnapshot.currency;
+
+    const amountDisplay =
+      money.formatMoney(amount, currency);
+
+    const planName =
+      NotificationService.cleanString(planSnapshot.name) ||
+      "Your subscription";
+
+    let title;
+    let message;
+
+    const metadata = {
+      source: "subscription_lifecycle",
+
+      subscriptionId:
+        String(subscription._id),
+
+      subscriptionPlanId:
+        String(subscription.plan),
+
+      billingBoundary:
+        boundary,
+
+      amount,
+      currency,
+      amountDisplay,
+    };
+
+    if (
+      normalizedType ===
+      "subscription_renewal_insufficient_balance"
+    ) {
+      if (
+        !Number.isSafeInteger(availableBalance) ||
+        availableBalance < 0 ||
+        availableBalance >= amount
+      ) {
+        throw new Error(
+          "A valid subscription renewal shortfall is required."
+        );
+      }
+
+      const shortfall =
+        amount - availableBalance;
+
+      const shortfallDisplay =
+        money.formatMoney(shortfall, currency);
+
+      title =
+        "Insufficient wallet balance for renewal";
+
+      message =
+        "Your " + planName +
+        " subscription requires " + amountDisplay +
+        " for automatic renewal. Please add at least " +
+        shortfallDisplay +
+        " to your wallet before the current subscription expires.";
+
+      metadata.availableBalance =
+        availableBalance;
+
+      metadata.shortfall =
+        shortfall;
+
+      metadata.shortfallDisplay =
+        shortfallDisplay;
+    } else if (
+      normalizedType ===
+      "subscription_automatic_renewal_paid"
+    ) {
+      if (
+        !payment?._id ||
+        payment.paymentStatus !== "paid" ||
+        payment.paymentKind !== "renewal" ||
+        payment.paymentMethod !== "wallet" ||
+        String(payment.subscription) !==
+          String(subscription._id) ||
+        String(payment.business) !==
+          String(employer) ||
+        new Date(payment.periodStart).getTime() !==
+          boundary.getTime()
+      ) {
+        throw new Error(
+          "A valid paid automatic renewal is required."
+        );
+      }
+
+      title =
+        "Automatic renewal payment successful";
+
+      message =
+        amountDisplay +
+        " has been deducted from your LOQUM wallet " +
+        "to renew your " + planName +
+        " subscription. Your next paid billing period " +
+        "will begin when your current period ends.";
+
+      metadata.subscriptionPaymentId =
+        String(payment._id);
+
+      metadata.nextPeriodStart =
+        payment.periodStart;
+
+      metadata.nextPeriodEnd =
+        payment.periodEnd;
+    } else if (
+      normalizedType === "subscription_expired"
+    ) {
+      if (
+        subscription.status !== "expired" ||
+        !subscription.endedAt ||
+        new Date(subscription.endedAt).getTime() !==
+          boundary.getTime()
+      ) {
+        throw new Error(
+          "A confirmed subscription expiry is required."
+        );
+      }
+
+      title =
+        "Subscription expired";
+
+      message =
+        "Your " + planName +
+        " subscription has expired. Subscription benefits " +
+        "are no longer available. Visit Billing & Wallet " +
+        "to purchase a new subscription.";
+    } else {
+      throw new Error(
+        "Unsupported subscription notification type."
+      );
+    }
+
+    const notificationKey =
+      NotificationService.buildNotificationKey(
+        "subscription",
+        subscription._id,
+        normalizedType,
+        boundary.toISOString()
+      );
+
+    return NotificationService.createNotificationOnce(
+      {
+        notificationKey,
+        recipientUser,
+        employer,
+
+        category: "finance",
+        type: normalizedType,
+
+        title,
+        message,
+
+        actionUrl:
+          "/employer/billing#subscription",
+
+        relatedSubscription:
+          subscription._id,
+
+        relatedSubscriptionPayment:
+          payment?._id || null,
+
+        relatedWallet:
+          wallet?._id || null,
+
+        relatedTransaction:
+          transaction?._id || null,
+
+        metadata: {
+          ...metadata,
+
+          subscriptionNotificationKey:
+            notificationKey,
         },
       },
       options

@@ -1,0 +1,141 @@
+<!-- views/employer/billing/partials/subscription-payment-history.ejs -->
+
+<div class="card mb-8" id="subscription-payments">
+  <div class="card-header border-0 pt-6">
+    <div class="card-title flex-column">
+      <h3 class="fw-bold mb-1 fs-2">Subscription Payments</h3>
+
+      <div class="text-muted fs-7">
+        Recent payments and outstanding subscription payment activity.
+      </div>
+    </div>
+  </div>
+
+  <div class="card-body pt-0">
+    <% if (!billingView.subscriptionPaymentHistory.hasPayments) { %>
+
+    <div class="notice d-flex bg-light rounded border border-dashed p-5">
+      <div class="text-muted fs-7">
+        No subscription payments yet.
+      </div>
+    </div>
+
+    <% } else { %>
+
+    <% if (billingView.subscriptionPaymentHistory.hasMoreOutstanding) { %>
+    <div class="notice d-flex bg-light-warning border border-warning border-dashed rounded p-5 mb-5">
+      <div class="text-muted fs-7">
+        Additional unresolved subscription payments exist.
+        Contact support for assistance with older outstanding records.
+      </div>
+    </div>
+    <% } %>
+
+    <div class="table-responsive">
+      <table class="table align-middle table-row-dashed fs-7 gy-5">
+        <thead>
+          <tr class="text-start text-muted fw-bold fs-8 text-uppercase">
+            <th class="min-w-175px">Payment</th>
+            <th class="min-w-125px">Amount</th>
+            <th class="min-w-125px">Payment method</th>
+            <th class="min-w-125px">Status</th>
+            <th class="min-w-125px">Application</th>
+            <th class="min-w-150px">Date</th>
+            <th class="text-end min-w-150px">Action</th>
+          </tr>
+        </thead>
+
+        <tbody class="text-gray-700 fw-semibold">
+          <% billingView.subscriptionPaymentHistory.payments.forEach((payment) => { %>
+          <tr>
+            <td>
+              <div class="fw-bold text-gray-900">
+                <%= payment.planName || "Subscription" %>
+              </div>
+
+              <div class="text-muted fs-8 mt-1">
+                <%= payment.paymentKindLabel %>
+              </div>
+
+              <div class="text-muted fs-8 mt-1 text-break">
+                <%= payment.paymentReference %>
+              </div>
+            </td>
+
+            <td>
+              <div class="fw-bold text-gray-900">
+                <%= payment.amountDisplay %>
+              </div>
+
+              <% if (payment.billingCycle) { %>
+              <div class="text-muted fs-8">
+                <%= payment.billingCycle %>
+              </div>
+              <% } %>
+            </td>
+
+            <td>
+              <%= payment.paymentMethodLabel %>
+            </td>
+
+            <td>
+              <span class="badge <%= payment.paymentStatusBadgeClass %>">
+                <%= payment.paymentStatusLabel %>
+              </span>
+            </td>
+
+            <td>
+              <%= payment.applicationStatusLabel || "-" %>
+            </td>
+
+            <td>
+              <%= payment.createdAtDisplay %>
+            </td>
+
+            <td class="text-end">
+              <% if (canManageSubscription && payment.canVerify) { %>
+
+              <form
+                class="js-subscription-payment-verify-form mb-0"
+                method="POST"
+                action="<%= payment.verificationUrl %>"
+              >
+                <input
+                  type="hidden"
+                  name="_csrf"
+                  value="<%= csrfToken %>"
+                />
+
+                <button
+                  type="submit"
+                  class="btn btn-sm btn-light-primary"
+                >
+                  <span class="indicator-label">
+                    Check payment status
+                  </span>
+
+                  <span class="indicator-progress">
+                    Checking...
+                    <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+                  </span>
+                </button>
+              </form>
+
+              <% } else { %>
+              <span class="text-muted">-</span>
+              <% } %>
+            </td>
+          </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="text-muted fs-8 mt-4">
+      Showing recent payments and outstanding payment records.
+      Checking payment status does not create another charge.
+    </div>
+
+    <% } %>
+  </div>
+</div>

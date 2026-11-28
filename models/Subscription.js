@@ -465,6 +465,64 @@ const subscriptionSchema = new mongoose.Schema(
 
     // --- CANCELLATION / ENDING ---
 
+    autoRenewalEnabled: {
+      type: Boolean,
+      default: false,
+      required: true,
+    },
+
+    autoRenewalConsent: {
+      type: new mongoose.Schema(
+        {
+          consentedAt: {
+            type: Date,
+            required: true,
+          },
+
+          consentedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            required: true,
+          },
+
+          plan: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "SubscriptionPlan",
+            required: true,
+          },
+
+          priceMinor: {
+            type: Number,
+            required: true,
+            min: 1,
+            validate: Number.isSafeInteger,
+          },
+
+          currency: {
+            type: String,
+            required: true,
+            uppercase: true,
+            trim: true,
+            match: /^[A-Z]{3}$/,
+          },
+        },
+        { _id: false }
+      ),
+
+      default: null,
+    },
+
+    autoRenewalDisabledAt: {
+      type: Date,
+      default: null,
+    },
+
+    autoRenewalDisabledBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
     cancelAtPeriodEnd: {
       type: Boolean,
       default: false,
@@ -500,6 +558,27 @@ const subscriptionSchema = new mongoose.Schema(
 /* ─────────────────────────────── VALIDATION ─────────────────────────────── */
 
 subscriptionSchema.pre("validate", function validateSubscriptionLifecycle() {
+
+  if (this.autoRenewalEnabled === true) {
+    const consent = this.autoRenewalConsent;
+
+    if (
+      this.status !== "active" ||
+      this.cancelAtPeriodEnd ||
+      !consent ||
+      !consent.consentedAt ||
+      !consent.consentedBy ||
+      String(consent.plan) !== String(this.plan) ||
+      consent.priceMinor !== this.planSnapshot?.priceMinor ||
+      consent.currency !== this.planSnapshot?.currency
+    ) {
+      this.invalidate(
+        "autoRenewalEnabled",
+        "Automatic renewal requires valid consent for the current active plan."
+      );
+    }
+  }
+
   const hasCurrentPeriodStart = Boolean(this.currentPeriodStart);
   const hasCurrentPeriodEnd = Boolean(this.currentPeriodEnd);
 

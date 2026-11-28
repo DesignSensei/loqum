@@ -1,0 +1,137 @@
+<div class="modal fade" id="kt_subscription_plan_modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered mw-700px">
+    <div class="modal-content">
+
+      <form id="kt_subscription_plan_form" method="POST" action="/admin/subscription-plans">
+
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+        <input type="hidden" name="expectedRevision" value="" />
+
+        <div class="modal-header">
+          <h2 class="fw-bold" id="subscription_plan_modal_title">
+            Create subscription plan
+          </h2>
+
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+
+        <div class="modal-body p-8">
+          <div class="row g-5">
+
+            <div class="col-md-6">
+              <label class="form-label required">Plan code</label>
+              <input class="form-control" name="code" maxlength="80" required />
+              <div class="form-text">
+                Use distinct codes for monthly and yearly products.
+              </div>
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label required">Plan name</label>
+              <input class="form-control" name="name" maxlength="120" required />
+            </div>
+
+            <div class="col-12">
+              <label class="form-label">Description</label>
+              <textarea class="form-control" name="description" maxlength="1000" rows="3"></textarea>
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label required">Country code</label>
+              <input class="form-control" name="countryCode" maxlength="2" minlength="2" placeholder="NG" required />
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label required">Currency</label>
+              <input class="form-control" name="currency" maxlength="3" minlength="3" placeholder="NGN" required />
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label required">Billing cycle</label>
+              <select class="form-select" name="billingCycle" required>
+                <option value="monthly">Monthly</option>
+                <option value="yearly">Yearly</option>
+              </select>
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label required">Price in minor units</label>
+              <input
+                type="number"
+                class="form-control"
+                name="priceMinor"
+                min="1"
+                max="9007199254740991"
+                step="1"
+                required
+              />
+              <div class="form-text">
+                For NGN, 500000 kobo means NGN 5,000.
+              </div>
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label required">Concurrent Job slots</label>
+              <input
+                type="number"
+                class="form-control"
+                name="activeJobSlots"
+                min="0"
+                max="9007199254740991"
+                step="1"
+                value="0"
+                required
+              />
+            </div>
+
+            <div class="col-md-6">
+              <label class="form-label">Subscriber BASE platform fee rate</label>
+              <input
+                type="number"
+                class="form-control"
+                name="basePlatformFeeRate"
+                min="0"
+                max="1"
+                step="any"
+                placeholder="0.10"
+              />
+              <div class="form-text">
+                0.10 means 10%. Leave blank to use the standard fee.
+              </div>
+            </div>
+
+            <div class="col-12">
+              <label class="form-label">Additional feature keys</label>
+              <textarea class="form-control" name="featureKeys" rows="3"></textarea>
+              <div class="form-text">
+                Enter one supported feature key per line.
+              </div>
+            </div>
+
+          </div>
+
+          <div class="notice d-flex bg-light-warning rounded border-warning border-dashed p-4 mt-6">
+            <div class="text-muted fs-7">
+              Saving creates or updates a draft. Activation is a separate action.
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">
+            Cancel
+          </button>
+
+          <button type="submit" class="btn btn-primary" id="kt_subscription_plan_submit">
+            <span class="indicator-label">Save draft</span>
+            <span class="indicator-progress">
+              Saving...
+              <span class="spinner-border spinner-border-sm align-middle ms-2"></span>
+            </span>
+          </button>
+        </div>
+
+      </form>
+    </div>
+  </div>
+</div>

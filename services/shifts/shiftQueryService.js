@@ -79,6 +79,7 @@ const FacilityPermitVerificationService = require("../facilityPermitVerification
 
 const ShiftScheduleService = require("./shiftScheduleService");
 const ShiftPricingService = require("./shiftPricingService");
+const ShiftPostingRateService = require("./shiftPostingRateService");
 const ShiftViewService = require("./shiftViewService");
 
 const { SHIFTS_PER_PAGE, SHIFT_STATUS_FILTERS } = require("../../constants/shiftPresentation");
@@ -1249,16 +1250,35 @@ class ShiftQueryService {
 
       canOpenPostShiftModal = branchOptions.some((branch) => branch.isSelectable === true);
 
+      const rateSnapshots = await ShiftPostingRateService.resolve({
+        pricing,
+        employerProfile: profile,
+        currentTime: normalizedCurrentTime,
+      });
+
       pricingView = {
         countryCode: pricing.countryCode,
 
         currency: platformCurrency,
 
-        platformFeeRate: pricing.platformFeeRate,
+        // Existing frontend fields represent the applied BASE rate.
+        platformFeeRate: rateSnapshots.basePlatformFeeRate,
 
-        platformFeePercent: Number((pricing.platformFeeRate * 100).toFixed(2)),
+        platformFeePercent: Number(
+          (rateSnapshots.basePlatformFeeRate * 100).toFixed(2)
+        ),
 
-        platformFeeLabel: `${(pricing.platformFeeRate * 100).toFixed(2)}%`,
+        platformFeeLabel: `${(rateSnapshots.basePlatformFeeRate * 100).toFixed(2)}%`,
+
+        standardBasePlatformFeeRate:
+          rateSnapshots.standardBasePlatformFeeRate,
+
+        basePlatformFeeRate: rateSnapshots.basePlatformFeeRate,
+
+        overtimePlatformFeeRate: rateSnapshots.overtimePlatformFeeRate,
+
+        basePlatformFeeBenefitSource:
+          rateSnapshots.basePlatformFeeBenefitSource,
 
         cancellationPolicy: {
           ...cancellationPolicy,

@@ -17,6 +17,7 @@ const EmployerDelinquencyService = require("../employerDelinquencyService");
 
 const ShiftScheduleService = require("./shiftScheduleService");
 const ShiftPricingService = require("./shiftPricingService");
+const ShiftPostingRateService = require("./shiftPostingRateService");
 
 const {
   MILLISECONDS_PER_MINUTE,
@@ -210,23 +211,6 @@ class ShiftCreationService {
     }
 
     return count;
-  }
-
-  static resolvePostingRateSnapshots(pricing) {
-    // The supplied settings contract exposes one standard country rate.
-    // No subscription resolver or separate OT configuration exists here yet.
-    const standardRate = ShiftPricingService.normalizeFinancialRate(
-      pricing.platformFeeRate,
-      "platformFeeRate"
-    );
-
-    return {
-      standardBasePlatformFeeRate: standardRate,
-      basePlatformFeeRate: standardRate,
-      overtimePlatformFeeRate: standardRate,
-      basePlatformFeeBenefitSource: "standard",
-      basePlatformFeeSubscription: null,
-    };
   }
 
   static assertSafeCapacity(schedule, requiredProfessionals) {
@@ -1125,7 +1109,12 @@ class ShiftCreationService {
       });
     }
 
-    const rateSnapshots = ShiftCreationService.resolvePostingRateSnapshots(pricing);
+    const rateSnapshots = await ShiftPostingRateService.resolve({
+      pricing,
+      employerProfile: profile,
+      currentTime: normalizedCurrentTime,
+      session,
+    });
 
     const requiredProfessionals = ShiftCreationService.normalizeRequiredProfessionals(
       shiftData.requiredProfessionals
@@ -1299,6 +1288,42 @@ class ShiftCreationService {
         );
 
         ShiftCreationService.assertBusinessCanPostShifts(currentProfile);
+
+        // Reject concurrent changes to the employer market.
+        if (
+          currentProfile.countryCode !== profile.countryCode ||
+          currentProfile.currency !== profile.currency
+        ) {
+          throw createShiftError({
+            message: "The employer pricing market has changed. Refresh and try again.",
+            code: "SHIFT_PRICING_MARKET_CHANGED",
+            statusCode: 409,
+          });
+        }
+
+        // Recheck subscription pricing after acquiring the business fence.
+        const confirmedRateSnapshots =
+          await ShiftPostingRateService.resolve({
+            pricing,
+            employerProfile: currentProfile,
+            currentTime: normalizedCurrentTime,
+            session: transactionSession,
+          });
+
+        if (
+          !ShiftPostingRateService.snapshotsMatch(
+            rateSnapshots,
+            confirmedRateSnapshots
+          )
+        ) {
+          throw createShiftError({
+            message:
+              "Your subscription pricing has changed. Refresh the page and review the updated Shift cost.",
+            code: "SHIFT_SUBSCRIPTION_PRICING_CHANGED",
+            statusCode: 409,
+          });
+        }
+
 
         await ShiftCreationService.getActiveBranch({
           branchId: branch._id,

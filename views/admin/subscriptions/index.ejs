@@ -1,0 +1,18 @@
+<div class="content flex-column-fluid">
+  <div class="card mb-7">
+    <div class="card-body">
+      <h2 class="fw-bold">Employer Subscriptions</h2>
+      <p class="text-muted">Monitor purchased periods and payments.</p>
+      <div class="fs-2hx fw-bold"><%= subscriptionView.pagination.total %></div>
+      <div class="text-muted">Matching subscription records</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-body">
+      <%- include("partials/filters") %>
+      <%- include("partials/subscriptions-table") %>
+      <%- include("partials/pagination") %>
+    </div>
+  </div>
+</div>

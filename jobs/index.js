@@ -95,7 +95,7 @@ exports.startBackgroundJobs = function startBackgroundJobs() {
 
     SubscriptionLifecycleScheduler.start({
       intervalMinutes: 5,
-      renewalLeadMinutes: 10,
+      renewalLeadMinutes: 24 * 60,
       applicationLimit: 100,
       renewalLimit: 100,
       boundaryLimit: 100,

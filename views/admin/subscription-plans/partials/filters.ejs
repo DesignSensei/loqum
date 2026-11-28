@@ -1,0 +1,69 @@
+<div class="card-header border-0 pt-6">
+  <div class="card-title">
+    <h3 class="fw-bold mb-0">Plan register</h3>
+  </div>
+</div>
+
+<div class="px-7 pb-4">
+  <form
+    method="GET"
+    action="/admin/subscription-plans"
+    class="row g-4 align-items-end"
+  >
+    <div class="col-lg-3 col-md-6">
+      <label class="form-label">Plan code</label>
+      <input
+        class="form-control"
+        name="code"
+        value="<%= planView.filters.code %>"
+        placeholder="Exact plan code"
+      />
+    </div>
+
+    <div class="col-lg-2 col-md-6">
+      <label class="form-label">Status</label>
+      <select class="form-select" name="status">
+        <option value="">All</option>
+        <option value="draft" <%= planView.filters.status === "draft" ? "selected" : "" %>>Draft</option>
+        <option value="active" <%= planView.filters.status === "active" ? "selected" : "" %>>Active</option>
+        <option value="retired" <%= planView.filters.status === "retired" ? "selected" : "" %>>Retired</option>
+      </select>
+    </div>
+
+    <div class="col-lg-2 col-md-6">
+      <label class="form-label">Country</label>
+      <input
+        class="form-control"
+        name="countryCode"
+        maxlength="2"
+        value="<%= planView.filters.countryCode %>"
+        placeholder="NG"
+      />
+    </div>
+
+    <div class="col-lg-2 col-md-6">
+      <label class="form-label">Currency</label>
+      <input
+        class="form-control"
+        name="currency"
+        maxlength="3"
+        value="<%= planView.filters.currency %>"
+        placeholder="NGN"
+      />
+    </div>
+
+    <div class="col-lg-3 col-md-6">
+      <label class="form-label">Billing cycle</label>
+      <select class="form-select" name="billingCycle">
+        <option value="">All</option>
+        <option value="monthly" <%= planView.filters.billingCycle === "monthly" ? "selected" : "" %>>Monthly</option>
+        <option value="yearly" <%= planView.filters.billingCycle === "yearly" ? "selected" : "" %>>Yearly</option>
+      </select>
+    </div>
+
+    <div class="col-12 d-flex gap-3">
+      <button type="submit" class="btn btn-primary">Apply filters</button>
+      <a href="/admin/subscription-plans" class="btn btn-light">Reset</a>
+    </div>
+  </form>
+</div>

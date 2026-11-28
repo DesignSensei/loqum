@@ -1,0 +1,48 @@
+<div class="card mb-7">
+  <div class="card-body p-7">
+    <div class="d-flex justify-content-between align-items-start flex-wrap gap-5">
+      <div>
+        <h2 class="fw-bold text-gray-900 mb-2">Subscription Plans</h2>
+        <div class="text-muted fs-7">
+          Manage commercial plans, benefits and product versions.
+        </div>
+      </div>
+
+      <button
+        type="button"
+        class="btn btn-primary js-plan-create"
+        data-bs-toggle="modal"
+        data-bs-target="#kt_subscription_plan_modal"
+      >
+        Create plan
+      </button>
+    </div>
+
+    <div class="row g-5 mt-4">
+      <div class="col-md-6">
+        <div class="bg-light rounded border border-dashed p-5">
+          <div class="text-muted fs-7 mb-2">Matching plans</div>
+          <div class="fs-2hx fw-bold">
+            <%= planView.summary.total %>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-md-6">
+        <div class="bg-light-primary rounded border border-dashed p-5">
+          <div class="text-primary fs-7 mb-2">Displayed plans</div>
+          <div class="fs-2hx fw-bold">
+            <%= planView.summary.displayed %>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notice d-flex bg-light rounded border border-dashed p-5 mt-6">
+      <div class="text-muted fs-7">
+        Only draft plans can be edited. Retiring a plan prevents new
+        purchases but preserves existing purchased subscription terms.
+      </div>
+    </div>
+  </div>
+</div>

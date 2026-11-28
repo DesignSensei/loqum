@@ -124,18 +124,178 @@ function getIdempotencyKey(req) {
   return headerKey || bodyKey;
 }
 
+function projectSubscriptionPaymentResult(result = {}) {
+  // Prefer the payment returned after lifecycle application.
+  const payment =
+    result.application?.payment ||
+    result.payment ||
+    null;
+
+  const paymentStatus = payment?.paymentStatus || null;
+
+  const paid = paymentStatus === "paid";
+
+  const applied = paid && Boolean(
+    result.applied === true ||
+    result.application?.applied === true ||
+    payment?.appliedAt
+  );
+
+  return {
+    paid,
+
+    applied,
+
+    alreadyPaid: paid && result.alreadyPaid === true,
+
+    idempotent: result.idempotent === true,
+
+    reused: result.reused === true,
+
+    payment: payment
+      ? {
+          id: String(payment._id || payment.id),
+
+          paymentReference: payment.paymentReference || null,
+
+          subscriptionId: payment.subscription
+            ? String(payment.subscription)
+            : null,
+
+          paymentKind: payment.paymentKind || null,
+
+          paymentMethod: payment.paymentMethod || null,
+
+          paymentStatus,
+
+          amountMinor: payment.planSnapshot?.priceMinor ?? null,
+
+          currency: payment.planSnapshot?.currency || null,
+
+          paidAt: payment.paidAt || null,
+
+          appliedAt: payment.appliedAt || null,
+
+          periodStart: payment.periodStart || null,
+
+          periodEnd: payment.periodEnd || null,
+        }
+      : null,
+
+    checkout: result.checkout?.authorizationUrl
+      ? {
+          authorizationUrl: result.checkout.authorizationUrl,
+          reference: result.checkout.reference || null,
+        }
+      : null,
+
+    application: result.application
+      ? {
+          applied,
+          reason: result.application.reason || null,
+        }
+      : null,
+
+    applicationError: result.applicationError
+      ? {
+          code:
+            result.applicationError.code ||
+            "SUBSCRIPTION_PAYMENT_APPLICATION_FAILED",
+          message:
+            "Payment application requires further processing.",
+        }
+      : null,
+  };
+}
+
 function subscriptionPaymentMessage(result) {
-  if (result.paid !== true)
+  const state = projectSubscriptionPaymentResult(result);
+
+  switch (state.payment?.paymentStatus) {
+    case "failed":
+      return "The subscription payment failed.";
+
+    case "cancelled":
+      return "The subscription payment was cancelled.";
+
+    case "refunded":
+      return "The subscription payment has been refunded.";
+  }
+
+  if (!state.paid) {
     return "Payment is unresolved. Check its status before starting another purchase.";
-  if (result.applied === true) return "Payment completed and subscription updated.";
+  }
+
+  if (state.applied) {
+    return "Payment completed and subscription updated.";
+  }
+
   if (
-    !result.applicationError &&
-    result.payment?.paymentKind === "renewal" &&
-    result.application?.reason === "billing_period_not_started"
+    !state.applicationError &&
+    state.payment?.paymentKind === "renewal" &&
+    state.application?.reason === "billing_period_not_started"
   ) {
     return "Renewal payment completed. It will take effect at the billing boundary.";
   }
+
   return "Payment completed, but the subscription update is pending. Do not pay again for this purchase.";
+}
+
+function handleSubscriptionJsonError({
+  res,
+  error,
+  logContext,
+  fallbackMessage,
+  fallbackCode,
+}) {
+  const operationalError = isCommercialOperationalError(error);
+
+  const requestedStatus = Number(error?.statusCode);
+
+  const statusCode =
+    operationalError &&
+    Number.isInteger(requestedStatus) &&
+    requestedStatus >= 400 &&
+    requestedStatus <= 599
+      ? requestedStatus
+      : 500;
+
+  const candidateCode = String(error?.code || "");
+
+  const code =
+    operationalError &&
+    /^[A-Z][A-Z0-9_]{0,119}$/.test(candidateCode)
+      ? candidateCode
+      : fallbackCode;
+
+  // Do not send provider responses, raw errors, authorization
+  // records or internal transaction metadata to the browser.
+  const canDisplayMessage =
+    operationalError &&
+    statusCode < 500 &&
+    error.name !== "PaystackServiceError";
+
+  const message = canDisplayMessage
+    ? error.message || fallbackMessage
+    : fallbackMessage;
+
+  if (statusCode >= 500) {
+    logger.error(
+      logContext + " failed: " + code
+    );
+  } else {
+    logger.warn(
+      logContext + " rejected: " + code
+    );
+  }
+
+  setNoStoreHeaders(res);
+
+  return res.status(statusCode).json({
+    success: false,
+    message,
+    code,
+  });
 }
 
 function normalizeWithdrawalAmountToMinorUnit(value) {
@@ -251,6 +411,10 @@ exports.getBilling = async (req, res, next) => {
       csrfToken: req.csrfToken(),
 
       billingView,
+
+      canManageSubscription:
+        req.employerContext?.isPrimaryEmployer === true ||
+        req.employerContext?.isBusinessAdmin === true,
 
       scripts: `
           \<script src="/js/employer/billing.js">\</script>
@@ -713,6 +877,12 @@ exports.purchaseInitialSubscriptionFromWallet = async (req, res) => {
     assertCanManageWallet(req);
 
     const result = await SubscriptionPaymentService.purchaseInitialFromWallet({
+      expectedPriceMinor: req.body?.expectedPriceMinor,
+
+      expectedCurrency: req.body?.expectedCurrency,
+
+      expectedPlanId: req.body?.expectedPlanId,
+
       employerProfileId: employerProfile._id,
 
       employerContext: req.employerContext || null,
@@ -731,14 +901,14 @@ exports.purchaseInitialSubscriptionFromWallet = async (req, res) => {
     return res.status(result.idempotent ? 200 : 201).json({
       success: true,
 
-      data: result,
+      data: projectSubscriptionPaymentResult(result),
 
       message: subscriptionPaymentMessage(result),
 
       redirectUrl: `${EMPLOYER_BILLING_URL}` + "?subscription=payment-completed#subscription",
     });
   } catch (error) {
-    return handleCommercialJsonError({
+    return handleSubscriptionJsonError({
       res,
 
       error,
@@ -762,6 +932,12 @@ exports.initializeInitialSubscriptionCheckout = async (req, res) => {
     const callbackUrl = buildAbsoluteUrl(req, PAYSTACK_SUBSCRIPTION_CALLBACK_PATH);
 
     const result = await SubscriptionPaymentService.initializeInitialPaystackCheckout({
+      expectedPriceMinor: req.body?.expectedPriceMinor,
+
+      expectedCurrency: req.body?.expectedCurrency,
+
+      expectedPlanId: req.body?.expectedPlanId,
+
       employerProfileId: employerProfile._id,
 
       employerContext: req.employerContext || null,
@@ -782,12 +958,12 @@ exports.initializeInitialSubscriptionCheckout = async (req, res) => {
     return res.status(200).json({
       success: true,
 
-      data: result,
+      data: projectSubscriptionPaymentResult(result),
 
       billingUrl: EMPLOYER_BILLING_URL,
     });
   } catch (error) {
-    return handleCommercialJsonError({
+    return handleSubscriptionJsonError({
       res,
 
       error,
@@ -816,6 +992,12 @@ exports.purchaseSubscriptionPlanChangeFromWallet = async (req, res) => {
     assertCanManageWallet(req);
 
     const result = await SubscriptionPaymentService.purchasePlanChangeFromWallet({
+      expectedPriceMinor: req.body?.expectedPriceMinor,
+
+      expectedCurrency: req.body?.expectedCurrency,
+
+      expectedPlanId: req.body?.expectedPlanId,
+
       employerProfileId: employerProfile._id,
 
       employerContext: req.employerContext || null,
@@ -838,7 +1020,7 @@ exports.purchaseSubscriptionPlanChangeFromWallet = async (req, res) => {
     return res.status(result.idempotent ? 200 : 201).json({
       success: true,
 
-      data: result,
+      data: projectSubscriptionPaymentResult(result),
 
       message: subscriptionPaymentMessage(result),
 
@@ -846,7 +1028,7 @@ exports.purchaseSubscriptionPlanChangeFromWallet = async (req, res) => {
         `${EMPLOYER_BILLING_URL}` + "?subscription=plan-change-payment-completed#subscription",
     });
   } catch (error) {
-    return handleCommercialJsonError({
+    return handleSubscriptionJsonError({
       res,
 
       error,
@@ -873,6 +1055,12 @@ exports.initializeSubscriptionPlanChangeCheckout = async (req, res) => {
     const callbackUrl = buildAbsoluteUrl(req, PAYSTACK_SUBSCRIPTION_CALLBACK_PATH);
 
     const result = await SubscriptionPaymentService.initializePlanChangePaystackCheckout({
+      expectedPriceMinor: req.body?.expectedPriceMinor,
+
+      expectedCurrency: req.body?.expectedCurrency,
+
+      expectedPlanId: req.body?.expectedPlanId,
+
       employerProfileId: employerProfile._id,
 
       employerContext: req.employerContext || null,
@@ -897,12 +1085,12 @@ exports.initializeSubscriptionPlanChangeCheckout = async (req, res) => {
     return res.status(200).json({
       success: true,
 
-      data: result,
+      data: projectSubscriptionPaymentResult(result),
 
       billingUrl: EMPLOYER_BILLING_URL,
     });
   } catch (error) {
-    return handleCommercialJsonError({
+    return handleSubscriptionJsonError({
       res,
 
       error,
@@ -931,6 +1119,12 @@ exports.purchaseSubscriptionRenewalFromWallet = async (req, res) => {
     assertCanManageWallet(req);
 
     const result = await SubscriptionPaymentService.purchaseRenewalFromWallet({
+      expectedPriceMinor: req.body?.expectedPriceMinor,
+
+      expectedCurrency: req.body?.expectedCurrency,
+
+      expectedPlanId: req.body?.expectedPlanId,
+
       employerProfileId: employerProfile._id,
 
       employerContext: req.employerContext || null,
@@ -949,7 +1143,7 @@ exports.purchaseSubscriptionRenewalFromWallet = async (req, res) => {
     return res.status(result.idempotent ? 200 : 201).json({
       success: true,
 
-      data: result,
+      data: projectSubscriptionPaymentResult(result),
 
       message: subscriptionPaymentMessage(result),
 
@@ -957,7 +1151,7 @@ exports.purchaseSubscriptionRenewalFromWallet = async (req, res) => {
         `${EMPLOYER_BILLING_URL}` + "?subscription=renewal-payment-completed#subscription",
     });
   } catch (error) {
-    return handleCommercialJsonError({
+    return handleSubscriptionJsonError({
       res,
 
       error,
@@ -982,6 +1176,12 @@ exports.initializeSubscriptionRenewalCheckout = async (req, res) => {
     const callbackUrl = buildAbsoluteUrl(req, PAYSTACK_SUBSCRIPTION_CALLBACK_PATH);
 
     const result = await SubscriptionPaymentService.initializeRenewalPaystackCheckout({
+      expectedPriceMinor: req.body?.expectedPriceMinor,
+
+      expectedCurrency: req.body?.expectedCurrency,
+
+      expectedPlanId: req.body?.expectedPlanId,
+
       employerProfileId: employerProfile._id,
 
       employerContext: req.employerContext || null,
@@ -1002,12 +1202,12 @@ exports.initializeSubscriptionRenewalCheckout = async (req, res) => {
     return res.status(200).json({
       success: true,
 
-      data: result,
+      data: projectSubscriptionPaymentResult(result),
 
       billingUrl: EMPLOYER_BILLING_URL,
     });
   } catch (error) {
-    return handleCommercialJsonError({
+    return handleSubscriptionJsonError({
       res,
 
       error,
@@ -1022,6 +1222,91 @@ exports.initializeSubscriptionRenewalCheckout = async (req, res) => {
 };
 
 /* ─────────────────────────────── SUBSCRIPTION MANAGEMENT ─────────────────────────────── */
+
+exports.updateSubscriptionAutomaticRenewal = async (req, res) => {
+  setNoStoreHeaders(res);
+
+  try {
+    const employerProfile =
+      getEmployerProfileFromRequest(req);
+
+    const rawEnabled = req.body?.enabled;
+
+    if (
+      rawEnabled !== true &&
+      rawEnabled !== false &&
+      rawEnabled !== "true" &&
+      rawEnabled !== "false"
+    ) {
+      return res.status(400).json({
+        success: false,
+
+        message:
+          "A valid automatic renewal preference is required.",
+      });
+    }
+
+    const result =
+      await SubscriptionPaymentService.updateAutomaticRenewalPreference({
+        subscriptionId:
+          req.params.subscriptionId,
+
+        employerProfileId:
+          employerProfile._id,
+
+        employerContext:
+          req.employerContext || null,
+
+        requestedByUserId:
+          req.user._id,
+
+        enabled:
+          rawEnabled === true ||
+          rawEnabled === "true",
+
+        expectedPriceMinor:
+          req.body?.expectedPriceMinor,
+
+        expectedCurrency:
+          req.body?.expectedCurrency,
+
+        expectedPlanId:
+          req.body?.expectedPlanId,
+
+        currentTime:
+          new Date(),
+      });
+
+    return res.status(200).json({
+      success: true,
+
+      message: result.enabled
+        ? "Automatic wallet renewal has been enabled."
+        : "Automatic renewal has been disabled.",
+
+      data: {
+        enabled: result.enabled,
+      },
+
+      redirectUrl:
+        "/employer/billing#subscription",
+    });
+  } catch (error) {
+    return handleCommercialJsonError({
+      res,
+      error,
+
+      logContext:
+        "Employer automatic renewal preference",
+
+      fallbackMessage:
+        "The automatic renewal preference could not be updated.",
+
+      fallbackCode:
+        "SUBSCRIPTION_AUTOMATIC_RENEWAL_UPDATE_FAILED",
+    });
+  }
+};
 
 exports.requestSubscriptionCancellation = async (req, res) => {
   try {
@@ -1059,6 +1344,50 @@ exports.requestSubscriptionCancellation = async (req, res) => {
       fallbackMessage: "The subscription cancellation request could not be completed.",
 
       fallbackCode: "SUBSCRIPTION_CANCELLATION_REQUEST_FAILED",
+    });
+  }
+};
+
+/* ─────────────────────────────── SUBSCRIPTION PAYMENT RECOVERY ─────────────────────────────── */
+
+exports.verifySubscriptionPayment = async (req, res) => {
+  try {
+    const employerProfile = getEmployerProfileFromRequest(req);
+
+    const result = await SubscriptionPaymentService.verifyEmployerPayment({
+      employerProfileId: employerProfile._id,
+
+      employerContext: req.employerContext || null,
+
+      paymentId: req.params.paymentId,
+
+      currentTime: new Date(),
+    });
+
+    setNoStoreHeaders(res);
+
+    return res.status(200).json({
+      success: true,
+
+      data: projectSubscriptionPaymentResult(result),
+
+      message: subscriptionPaymentMessage(result),
+
+      redirectUrl: EMPLOYER_BILLING_URL + "#subscription",
+    });
+  } catch (error) {
+    return handleSubscriptionJsonError({
+      res,
+
+      error,
+
+      logContext: "Employer subscription payment verification",
+
+      fallbackMessage:
+        "Payment verification is unavailable. Check again before making another payment.",
+
+      fallbackCode:
+        "SUBSCRIPTION_PAYMENT_VERIFICATION_FAILED",
     });
   }
 };

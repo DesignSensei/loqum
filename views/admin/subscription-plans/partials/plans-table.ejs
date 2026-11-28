@@ -1,0 +1,110 @@
+<% if (!planView.plans.length) { %>
+
+<div class="notice d-flex bg-light rounded border border-dashed p-6">
+  <div class="text-muted">No matching subscription plans found.</div>
+</div>
+
+<% } else { %>
+
+<div class="table-responsive">
+  <table class="table align-middle table-row-dashed fs-7 gy-5">
+    <thead>
+      <tr class="text-muted fw-bold fs-8 text-uppercase">
+        <th class="min-w-175px">Plan</th>
+        <th>Market</th>
+        <th class="min-w-150px">Price (minor units)</th>
+        <th>Job slots</th>
+        <th>BASE fee</th>
+        <th>Status</th>
+        <th class="min-w-150px">Updated</th>
+        <th class="text-end min-w-225px">Actions</th>
+      </tr>
+    </thead>
+
+    <tbody>
+      <% planView.plans.forEach((plan) => { %>
+      <tr>
+        <td>
+          <div class="fw-bold text-gray-900"><%= plan.name %></div>
+          <div class="text-muted fs-8"><%= plan.code %></div>
+          <div class="text-muted fs-8">Version <%= plan.version %></div>
+        </td>
+
+        <td><%= plan.marketDisplay %></td>
+
+        <td>
+          <div class="fw-bold"><%= plan.priceDisplay %></div>
+          <div class="text-muted fs-8"><%= plan.billingCycleDisplay %></div>
+        </td>
+
+        <td><%= plan.benefits.activeJobSlots %></td>
+        <td><%= plan.feeDisplay %></td>
+
+        <td>
+          <span class="badge <%= plan.statusBadgeClass %>">
+            <%= plan.statusLabel %>
+          </span>
+        </td>
+
+        <td><%= plan.updatedAtDisplay %></td>
+
+        <td>
+          <div class="d-flex justify-content-end flex-wrap gap-2">
+
+            <% if (plan.canEdit) { %>
+            <button
+              type="button"
+              class="btn btn-sm btn-light-primary js-plan-edit"
+              data-plan="<%= plan.formData %>"
+              data-bs-toggle="modal"
+              data-bs-target="#kt_subscription_plan_modal"
+            >
+              Edit
+            </button>
+            <% } %>
+
+            <button
+              type="button"
+              class="btn btn-sm btn-light js-plan-version"
+              data-plan="<%= plan.formData %>"
+              data-bs-toggle="modal"
+              data-bs-target="#kt_subscription_plan_modal"
+            >
+              New version
+            </button>
+
+            <% if (plan.canActivate) { %>
+            <button
+              type="button"
+              class="btn btn-sm btn-light-success js-plan-command"
+              data-command="activate"
+              data-plan-id="<%= plan.id %>"
+              data-revision="<%= plan.revision %>"
+              data-plan-name="<%= plan.name %>"
+            >
+              Activate
+            </button>
+            <% } %>
+
+            <% if (plan.canRetire) { %>
+            <button
+              type="button"
+              class="btn btn-sm btn-light-danger js-plan-command"
+              data-command="retire"
+              data-plan-id="<%= plan.id %>"
+              data-revision="<%= plan.revision %>"
+              data-plan-name="<%= plan.name %>"
+            >
+              Retire
+            </button>
+            <% } %>
+
+          </div>
+        </td>
+      </tr>
+      <% }); %>
+    </tbody>
+  </table>
+</div>
+
+<% } %>

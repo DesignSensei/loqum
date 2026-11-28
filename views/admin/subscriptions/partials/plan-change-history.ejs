@@ -1,0 +1,32 @@
+<div class="card mb-7">
+  <div class="card-body">
+    <h3>Plan Change History</h3>
+    <p class="text-muted">
+      <%= subscriptionView.historyCount %> changes. Showing the latest 50.
+    </p>
+
+    <div class="table-responsive">
+      <table class="table table-row-dashed fs-7 gy-5">
+        <thead>
+          <tr class="text-muted fw-bold">
+            <th>Type</th><th>From plan</th><th>To plan</th>
+            <th>Payment</th><th>Effective</th><th>Applied</th><th>Retained Jobs</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% subscriptionView.history.forEach((item) => { %>
+          <tr>
+            <td><%= item.type %></td>
+            <td><%= item.from %></td>
+            <td><%= item.to %></td>
+            <td><%= item.reference %></td>
+            <td><%= item.effective %></td>
+            <td><%= item.applied %></td>
+            <td><%= item.retained %></td>
+          </tr>
+          <% }); %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
